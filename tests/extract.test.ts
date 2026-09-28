@@ -301,6 +301,84 @@ console.log("frontmatter detection (NRL-7)");
 	);
 }
 
+console.log("wikilinks and embeds (NRL-6)");
+{
+	const spokenOf = (src: string, opts = OPTS): string => extractChunks(src, opts).map((c) => c.text).join(" ");
+
+	// Every non-space spoken char must be the raw char it claims to come from.
+	const lockstep = (src: string): boolean =>
+		extractChunks(src, OPTS).every(
+			(k) =>
+				k.sourceIndex.length === k.text.length &&
+				[...k.text].every((ch, i) => ch === " " || src[k.sourceIndex[i]!] === ch),
+		);
+
+	const plain = "See [[Some Note]] today please.";
+	check("[[Note]] speaks the target", spokenOf(plain) === "See Some Note today please.", `got: ${JSON.stringify(spokenOf(plain))}`);
+
+	const alias = "Read [[Some Note|the alias]] now please.";
+	const aliasSpoken = spokenOf(alias);
+	check("[[Note|alias]] speaks the alias only", aliasSpoken === "Read the alias now please.", `got: ${JSON.stringify(aliasSpoken)}`);
+	check("[[Note|alias]] target and pipe absent", !aliasSpoken.includes("Some Note") && !aliasSpoken.includes("|"), `got: ${JSON.stringify(aliasSpoken)}`);
+
+	const emptyAlias = spokenOf("Read [[Some Note|]] now please.");
+	check("[[Note|]] falls back to the target", emptyAlias === "Read Some Note now please.", `got: ${JSON.stringify(emptyAlias)}`);
+
+	const headings: Record<string, string> = {
+		"Go to [[Note#Section]] for more detail.": "Go to Note Section for more detail.",
+		"Go to [[#Section]] for more detail.": "Go to Section for more detail.",
+		"Go to [[Note#A#B]] for more detail.": "Go to Note A B for more detail.",
+		"Go to [[Note#^abc123]] for more detail.": "Go to Note for more detail.",
+		"Go to [[#^abc123]] for more detail.": "Go to for more detail.",
+	};
+	for (const [src, want] of Object.entries(headings)) {
+		const got = spokenOf(src);
+		check(`${JSON.stringify(src)} speaks ${JSON.stringify(want)}`, got === want, `got: ${JSON.stringify(got)}`);
+		check(`${JSON.stringify(src)} never speaks # or ^`, !got.includes("#") && !got.includes("^"), `got: ${JSON.stringify(got)}`);
+	}
+	// The tag branch must not eat #Section, whatever stripTags says.
+	const tagsOff = spokenOf("Go to [[Note#Section]] for more detail.", { ...OPTS, stripTags: false });
+	check("[[Note#Section]] with stripTags off", tagsOff === "Go to Note Section for more detail.", `got: ${JSON.stringify(tagsOff)}`);
+
+	const embed = "Before ![[Some Note]] after the embed.";
+	const embedSpoken = spokenOf(embed);
+	check("![[Note]] is dropped cleanly", embedSpoken === "Before after the embed.", `got: ${JSON.stringify(embedSpoken)}`);
+	check("![[Note]] leaves no stray bracket or target", !embedSpoken.includes("]") && !embedSpoken.includes("Some Note"), `got: ${JSON.stringify(embedSpoken)}`);
+
+	const unterminated = spokenOf("An open [[wikilink never closes here.");
+	check("unterminated [[ drops the brackets and reads on", unterminated === "An open wikilink never closes here.", `got: ${JSON.stringify(unterminated)}`);
+
+	// NRL-8 owns callouts; a single bracket must still take the old path.
+	const callout = spokenOf("[!note] Callout body text here.");
+	check("single-bracket [!note] path unchanged", callout === "!note Callout body text here.", `got: ${JSON.stringify(callout)}`);
+
+	// Offsets: a word after a wikilink maps to its true raw offset.
+	const off = "See [[Some Note|alias]] today.";
+	const oc = extractChunks(off, OPTS)[0]!;
+	check(
+		"word after a wikilink maps to its raw offset",
+		oc.sourceIndex[oc.text.indexOf("today")] === off.indexOf("today"),
+		`got: ${oc.sourceIndex[oc.text.indexOf("today")]} want ${off.indexOf("today")}`,
+	);
+	check(
+		"alias chars map to the raw alias",
+		oc.sourceIndex[oc.text.indexOf("alias")] === off.indexOf("alias"),
+		`got: ${oc.sourceIndex[oc.text.indexOf("alias")]} want ${off.indexOf("alias")}`,
+	);
+	const eo = extractChunks(embed, OPTS)[0]!;
+	check(
+		"word after an embed maps to its raw offset",
+		eo.sourceIndex[eo.text.indexOf("after")] === embed.indexOf("after"),
+		`got: ${eo.sourceIndex[eo.text.indexOf("after")]} want ${embed.indexOf("after")}`,
+	);
+
+	const fixtures = [plain, alias, off, embed, "Read [[Some Note|]] now please.", "An open [[wikilink never closes here.",
+		"[!note] Callout body text here.", "Line one [[A|b]] and\n![[img.png]] then [[C#D]] end.", ...Object.keys(headings)];
+	for (const src of fixtures) {
+		check(`sourceIndex lockstep for ${JSON.stringify(src)}`, lockstep(src));
+	}
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);

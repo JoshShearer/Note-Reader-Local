@@ -64,6 +64,62 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 			continue;
 		}
 
+		// Obsidian embed `![[...]]`: dropped. Must precede the image branch, which
+		// would stop at the first `]` of `]]` and speak the second. Whether embeds
+		// should be spoken is a setting that extract does not read yet (NRL-21).
+		if (ch === "!" && raw[i + 1] === "[" && raw[i + 2] === "[") {
+			const close = raw.indexOf("]]", i + 3);
+			if (close !== -1) {
+				i = close + 2;
+				pushSpace(rawStart + i);
+				continue;
+			}
+			// Unterminated: drop the `!` and let the `[[` branch drop the brackets.
+			i += 1;
+			continue;
+		}
+
+		// Obsidian wikilink `[[target|alias]]`: speak the alias, else the target.
+		// Only a double bracket lands here, so a single `[` (including callouts
+		// like `[!note]`) still reaches the link branch below.
+		if (ch === "[" && raw[i + 1] === "[") {
+			const close = raw.indexOf("]]", i + 2);
+			if (close === -1) {
+				// No closer on this line (wikilinks never span lines). Drop just the
+				// brackets so the rest of the line is still read as prose.
+				pushSpace(rawStart + i);
+				i += 2;
+				continue;
+			}
+			const innerStart = i + 2;
+			const pipe = raw.indexOf("|", innerStart);
+			const hasAlias = pipe !== -1 && pipe < close && raw.slice(pipe + 1, close).trim() !== "";
+			pushSpace(rawStart + i);
+			if (hasAlias) {
+				// The alias is display text the author wrote, so nested markup in
+				// it is stripped the same way as a markdown link label.
+				const inner = cleanLine(raw.slice(pipe + 1, close), rawStart + pipe + 1, opts);
+				for (let k = 0; k < inner.text.length; k++) {
+					emit(inner.text[k]!, inner.index[k] ?? rawStart + pipe + 1);
+				}
+			} else {
+				// The target is a path, not prose, so it is emitted directly rather
+				// than re-cleaned: the tag branch would otherwise eat `#Section`
+				// when stripTags is on. A `#` separates note from heading and is
+				// read as a pause. `#^id` is a block id, opaque and unspeakable.
+				const targetEnd = pipe !== -1 && pipe < close ? pipe : close;
+				for (let k = innerStart; k < targetEnd; k++) {
+					const c = raw[k]!;
+					if (c === "#" && raw[k + 1] === "^") break;
+					if (c === "#" || /\s/.test(c)) pushSpace(rawStart + k);
+					else emit(c, rawStart + k);
+				}
+			}
+			i = close + 2;
+			pushSpace(rawStart + i);
+			continue;
+		}
+
 		// Image: dropped entirely, alt text is not prose.
 		if (ch === "!" && raw[i + 1] === "[") {
 			const close = raw.indexOf("]", i + 2);
