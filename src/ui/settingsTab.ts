@@ -392,9 +392,9 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		const settings = this.plugin.settings;
 		const save = () => this.plugin.saveSettings();
 
-		// One switch for both code keys until the UI splits them: v0 had a
-		// single "Code" setting, and a second toggle for inline code would do
-		// nothing until extraction reads skipInlineCode.
+		// One switch for both code keys. Extraction reads them separately, so
+		// splitting this into two toggles is purely a UI choice, deferred until
+		// NRL-8 (indented code) and the exclusions work settle what "code" covers.
 		new Setting(containerEl)
 			.setName("Code")
 			.setDesc("Skip inline code and fenced code blocks.")
@@ -411,7 +411,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		// unchanged even though the switch now reads the other way.
 		new Setting(containerEl)
 			.setName("Speak bare links")
-			.setDesc("Read bare URLs aloud. Link labels are always read.")
+			.setDesc("Read the site name of bare URLs aloud (example.com), not the full address. Link labels are always read.")
 			.addToggle((toggle) =>
 				toggle.setValue(settings.speakUrls).onChange(async (value) => {
 					settings.speakUrls = value;

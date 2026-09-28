@@ -202,8 +202,9 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		const chunks = extractChunks(current.source, {
 			stripTags: this.settings.skipTags,
-			skipUrls: !this.settings.speakUrls,
-			skipCode: this.settings.skipCodeBlocks,
+			speakUrls: this.settings.speakUrls,
+			skipCodeBlocks: this.settings.skipCodeBlocks,
+			skipInlineCode: this.settings.skipInlineCode,
 			skipTables: this.settings.skipTables,
 			skipHeadings: this.settings.skipHeadings,
 		});

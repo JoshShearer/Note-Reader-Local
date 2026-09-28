@@ -302,6 +302,12 @@ imageAltText: true
 embeds: false
 ```
 
+When spoken, these are reduced as follows:
+
+- A bare URL (`https://...`, `http://...` or `www....`) is spoken as its host only: no scheme, no userinfo (credentials such as `user:secret@` are never spoken), no leading `www.`, no port, path, query or fragment. `See https://example.com/a/b?c=d now.` is spoken as `See example.com now.` Markdown links (`[label](url)`) and wikilinks are unaffected by the URL setting; their label is always spoken (ADR 0003).
+- Fenced code blocks are spoken verbatim, one paragraph per block, with whitespace runs collapsed. The fence lines and any info string (e.g. `js`) are never spoken. Indented code blocks are not yet recognised (NRL-8).
+- Inline code is spoken verbatim without the backticks. Its content is not treated as markdown.
+
 ---
 
 ### R-M10 — Speech Segmentation
