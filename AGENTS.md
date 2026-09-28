@@ -108,8 +108,7 @@ The working tree passes its gates, and an audit against `srs.md` found 2 of 16 M
 requirements fully met. The gap is tracked in Linear. Notable reproduced defects, so you
 do not rediscover them:
 
-- `extract.ts` speaks `[` and `]` for wikilinks, loses embed content, and returns **zero
-  chunks** when line 1 is `---` (a horizontal rule is parsed as frontmatter).
+- `extract.ts` speaks `[` and `]` for wikilinks and loses embed content.
 - `ExtractOptions.skipCode` and `.skipUrls` are never read by `extract.ts`. `main.ts`
   fills them from `skipCodeBlocks` and `!speakUrls`, and the settings tab renders them as
   the Code and Speak bare links toggles, so both toggles do nothing. `skipInlineCode`,
