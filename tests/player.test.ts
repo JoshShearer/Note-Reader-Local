@@ -165,8 +165,9 @@ const SRC = Array.from(
 function chunksOf(src: string): SpeechChunk[] {
 	return extractChunks(src, {
 		stripTags: true,
-		skipUrls: true,
-		skipCode: true,
+		speakUrls: false,
+		skipCodeBlocks: true,
+		skipInlineCode: true,
 		skipTables: true,
 		skipHeadings: false,
 	});

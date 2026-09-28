@@ -56,9 +56,20 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 			continue;
 		}
 
-		// Inline code: dropped entirely.
+		// Inline code: dropped unless skipInlineCode is off, in which case the
+		// content is read verbatim. Code is not markdown, so it is not re-cleaned:
+		// `a_b` or `#x` inside backticks mean exactly what they say. A backtick
+		// with no closer is dropped alone in both positions, so a stray one never
+		// swallows the rest of the line.
 		if (ch === "`") {
 			const close = raw.indexOf("`", i + 1);
+			if (close !== -1 && !opts.skipInlineCode) {
+				pushSpace(rawStart + i);
+				for (let k = i + 1; k < close; k++) {
+					if (/\s/.test(raw[k]!)) pushSpace(rawStart + k);
+					else emit(raw[k]!, rawStart + k);
+				}
+			}
 			i = close === -1 ? i + 1 : close + 1;
 			pushSpace(rawStart + i);
 			continue;
@@ -164,13 +175,39 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 			continue;
 		}
 
-		// Bare URLs: dropped.
+		// Bare URLs: dropped, or with speakUrls on, reduced to the host. A path
+		// or query read aloud is noise, and the host is the part a listener can
+		// recognise; see docs/adr/0003. Markdown links and wikilinks never reach
+		// here, their branches above consume them first.
 		if (
 			(ch === "h" || ch === "w") &&
 			/^(https?:\/\/|www\.)/i.test(raw.slice(i, i + 8))
 		) {
 			let end = i;
 			while (end < raw.length && !/\s/.test(raw[end]!)) end += 1;
+			if (opts.speakUrls) {
+				const url = raw.slice(i, end);
+				const scheme = /^(?:https?:\/\/)?/i.exec(url)![0].length;
+				// Userinfo (`user:secret@`) is credentials and must never be
+				// read aloud. The authority ends at the first "/", "?" or "#";
+				// the host starts after the last "@" before that, since a
+				// password may itself contain "@". An "@" in a path or query
+				// is not userinfo and is left alone.
+				const authEnd = url.slice(scheme).search(/[/?#]/);
+				const authority = url.slice(scheme, authEnd === -1 ? url.length : scheme + authEnd);
+				const at = authority.lastIndexOf("@");
+				const hostStart = at === -1 ? scheme : scheme + at + 1;
+				const prefix = hostStart + /^(?:www\.)?/i.exec(url.slice(hostStart))![0].length;
+				let hostEnd = prefix;
+				while (hostEnd < url.length && /[\p{L}\p{N}.-]/u.test(url[hostEnd]!)) hostEnd += 1;
+				// A sentence period glued to the URL ("see https://x.com.") would
+				// otherwise be read as part of the host.
+				while (hostEnd > prefix && /[.-]/.test(url[hostEnd - 1]!)) hostEnd -= 1;
+				if (hostEnd > prefix) {
+					pushSpace(rawStart + i);
+					for (let k = prefix; k < hostEnd; k++) emit(url[k]!, rawStart + i + k);
+				}
+			}
 			i = end;
 			pushSpace(rawStart + i);
 			continue;
@@ -215,6 +252,36 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 
 interface StripOptions {
 	stripTags: boolean;
+	skipInlineCode: boolean;
+	speakUrls: boolean;
+}
+
+/**
+ * A code line emitted as written. Code is not markdown, so nothing is stripped;
+ * only whitespace runs collapse, since indentation is not speech. Every char
+ * keeps its true raw offset.
+ */
+function verbatimLine(raw: string, rawStart: number): Cleaned {
+	const chars: string[] = [];
+	const index: number[] = [];
+	for (let k = 0; k < raw.length; k++) {
+		const c = raw[k]!;
+		if (/\s/.test(c)) {
+			if (chars.length > 0 && chars[chars.length - 1] !== " ") {
+				chars.push(" ");
+				index.push(rawStart + k);
+			}
+			continue;
+		}
+		chars.push(c);
+		index.push(rawStart + k);
+	}
+	// A trailing space would double up with the paragraph join space.
+	if (chars[chars.length - 1] === " ") {
+		chars.pop();
+		index.pop();
+	}
+	return { text: chars.join(""), index };
 }
 
 /** Split cleaned text into sentence-ish pieces with offsets preserved. */
@@ -388,10 +455,18 @@ function detectFrontmatter(lines: string[]): { endLine: number } | null {
 	return null;
 }
 
+/**
+ * Key names and polarity match the stored Settings, so the call site passes
+ * them straight through. A negation at the boundary is how skipUrls and
+ * speakUrls drifted apart once already.
+ */
 export interface ExtractOptions {
 	stripTags: boolean;
-	skipUrls: boolean;
-	skipCode: boolean;
+	/** Bare URLs are spoken as their host only (docs/adr/0003). */
+	speakUrls: boolean;
+	/** Fenced code blocks. Indented code is not parsed yet (NRL-8). */
+	skipCodeBlocks: boolean;
+	skipInlineCode: boolean;
 	skipTables: boolean;
 	skipHeadings: boolean;
 }
@@ -431,6 +506,24 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		paraIndex = [];
 	};
 
+	const appendToParagraph = (cleaned: Cleaned, start: number): void => {
+		if (paraText === "") {
+			paraText = cleaned.text;
+			paraIndex = cleaned.index;
+			paraStart = start;
+		} else {
+			// Same join convention as mergeShort: the space between the two
+			// lines is synthetic, so it is attributed to the character right
+			// before whatever comes next.
+			const gap = sourceOffsetOfSpace(
+				(paraIndex[paraIndex.length - 1] ?? paraStart) + 1,
+				cleaned.index[0] ?? start,
+			);
+			paraText = `${paraText} ${cleaned.text}`;
+			paraIndex = [...paraIndex, gap, ...cleaned.index];
+		}
+	};
+
 	for (let lineNo = 0; lineNo < lines.length; lineNo++) {
 		const raw = lines[lineNo]!;
 		const lineStart = rawOffset;
@@ -447,12 +540,18 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		// them, so every later sourceIndex entry is still a true raw offset.
 		if (frontmatter && lineNo <= frontmatter.endLine) continue;
 
+		// The fence line itself, including an info string like "js", is never
+		// spoken. Flushing at both fences paces a spoken block as one paragraph.
 		if (FENCE.test(raw)) {
 			flushParagraph();
 			inFence = !inFence;
 			continue;
 		}
-		if (inFence) continue;
+		if (inFence) {
+			if (opts.skipCodeBlocks || raw.trim() === "") continue;
+			appendToParagraph(verbatimLine(raw, lineStart), lineStart);
+			continue;
+		}
 		if (HR.test(raw)) {
 			flushParagraph();
 			continue;
@@ -493,6 +592,8 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 
 		const cleaned = cleanLine(body, lineStart + prefixChars, {
 			stripTags: opts.stripTags,
+			skipInlineCode: opts.skipInlineCode,
+			speakUrls: opts.speakUrls,
 		});
 		if (cleaned.text.trim() === "") continue;
 
@@ -502,21 +603,7 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 			continue;
 		}
 
-		if (paraText === "") {
-			paraText = cleaned.text;
-			paraIndex = cleaned.index;
-			paraStart = lineStart + prefixChars;
-		} else {
-			// Same join convention as mergeShort: the space between the two
-			// lines is synthetic, so it is attributed to the character right
-			// before whatever comes next.
-			const gap = sourceOffsetOfSpace(
-				(paraIndex[paraIndex.length - 1] ?? paraStart) + 1,
-				cleaned.index[0] ?? lineStart + prefixChars,
-			);
-			paraText = `${paraText} ${cleaned.text}`;
-			paraIndex = [...paraIndex, gap, ...cleaned.index];
-		}
+		appendToParagraph(cleaned, lineStart + prefixChars);
 	}
 
 	flushParagraph();

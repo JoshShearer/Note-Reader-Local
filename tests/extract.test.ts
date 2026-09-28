@@ -2,8 +2,9 @@ import { extractChunks } from "../src/text/extract.ts";
 
 const OPTS = {
 	stripTags: true,
-	skipUrls: true,
-	skipCode: true,
+	speakUrls: false,
+	skipCodeBlocks: true,
+	skipInlineCode: true,
 	skipTables: true,
 	skipHeadings: false,
 };
@@ -181,19 +182,19 @@ console.log("headings and list items are not folded into surrounding prose");
 	check("after text present", chunks.some((c) => c.text.includes("Prose after")));
 }
 
-console.log("skipTables (not skipCode) governs whether table rows are dropped");
+console.log("skipTables (not the code toggles) governs whether table rows are dropped");
 {
 	const src = ["Before table.", "| a | b |", "| - | - |", "After table."].join("\n");
 
-	const tablesSkipped = extractChunks(src, { ...OPTS, skipCode: false, skipTables: true });
+	const tablesSkipped = extractChunks(src, { ...OPTS, skipCodeBlocks: false, skipInlineCode: false, skipTables: true });
 	check(
-		"table dropped when skipTables is true, regardless of skipCode",
+		"table dropped when skipTables is true, regardless of the code toggles",
 		!tablesSkipped.some((c) => c.text.includes("|")),
 	);
 
-	const tablesKept = extractChunks(src, { ...OPTS, skipCode: true, skipTables: false });
+	const tablesKept = extractChunks(src, { ...OPTS, skipCodeBlocks: true, skipInlineCode: true, skipTables: false });
 	check(
-		"table kept when skipTables is false, regardless of skipCode",
+		"table kept when skipTables is false, regardless of the code toggles",
 		tablesKept.some((c) => c.text.includes("|")),
 		`got: ${tablesKept.map((c) => c.text).join(" | ")}`,
 	);
@@ -376,6 +377,129 @@ console.log("wikilinks and embeds (NRL-6)");
 		"[!note] Callout body text here.", "Line one [[A|b]] and\n![[img.png]] then [[C#D]] end.", ...Object.keys(headings)];
 	for (const src of fixtures) {
 		check(`sourceIndex lockstep for ${JSON.stringify(src)}`, lockstep(src));
+	}
+}
+
+console.log("code and bare URL toggles (NRL-10)");
+{
+	const spokenWith = (src: string, opts: typeof OPTS): string =>
+		extractChunks(src, opts).map((c) => c.text).join(" ");
+	const lockstepWith = (src: string, opts: typeof OPTS): boolean =>
+		extractChunks(src, opts).every(
+			(k) =>
+				k.sourceIndex.length === k.text.length &&
+				[...k.text].every((ch, i) => ch === " " || src[k.sourceIndex[i]!] === ch),
+		);
+	// Offset of the spoken `word` in the first chunk that contains it.
+	const offsetOf = (src: string, opts: typeof OPTS, word: string): number | undefined => {
+		const k = extractChunks(src, opts).find((c) => c.text.includes(word));
+		return k ? k.sourceIndex[k.text.indexOf(word)] : undefined;
+	};
+	const codeOn = { ...OPTS, skipCodeBlocks: false, skipInlineCode: false };
+	const urlsOn = { ...OPTS, speakUrls: true };
+
+	// Inline code.
+	const inline = "Call `git commit` to save.";
+	const inlineSpoken = spokenWith(inline, { ...OPTS, skipInlineCode: false });
+	check("skipInlineCode false speaks the code", inlineSpoken === "Call git commit to save.", `got: ${JSON.stringify(inlineSpoken)}`);
+	const inlineDropped = spokenWith(inline, { ...OPTS, skipInlineCode: true });
+	check("skipInlineCode true drops the code", inlineDropped === "Call to save.", `got: ${JSON.stringify(inlineDropped)}`);
+	const inlineRepro = "Call `git commit` now to save.";
+	for (const [label, opts] of [["off", { ...OPTS, skipInlineCode: false }], ["on", OPTS]] as const) {
+		const got = offsetOf(inlineRepro, opts, "now");
+		check(`word after inline code maps to its raw offset (skip ${label})`, got === inlineRepro.indexOf("now"), `got: ${got}`);
+	}
+	const codeOff = offsetOf(inlineRepro, { ...OPTS, skipInlineCode: false }, "git");
+	check("inline code chars map to the raw code", codeOff === inlineRepro.indexOf("git"), `got: ${codeOff}`);
+	for (const opts of [OPTS, { ...OPTS, skipInlineCode: false }]) {
+		const got = spokenWith("An open ` tick here.", opts);
+		check(`unterminated backtick is dropped (skipInlineCode ${opts.skipInlineCode})`, got === "An open tick here.", `got: ${JSON.stringify(got)}`);
+	}
+
+	// Fenced code.
+	const fenced = ["Intro line.", "", "```js", "const answer = 42;", "", "  return   answer;", "```", "", "After."].join("\n");
+	const fencedSpoken = spokenWith(fenced, { ...OPTS, skipCodeBlocks: false });
+	check(
+		"skipCodeBlocks false speaks the block content",
+		fencedSpoken === "Intro line. const answer = 42; return answer; After.",
+		`got: ${JSON.stringify(fencedSpoken)}`,
+	);
+	check("fence line and info string never spoken", !fencedSpoken.includes("`") && !/\bjs\b/.test(fencedSpoken), `got: ${JSON.stringify(fencedSpoken)}`);
+	const tildes = spokenWith("Before.\n~~~\nlet y = 2;\n~~~\nAfter.", { ...OPTS, skipCodeBlocks: false });
+	check("~~~ fences speak content too", tildes === "Before. let y = 2; After.", `got: ${JSON.stringify(tildes)}`);
+	const fencedDropped = spokenWith(fenced, { ...OPTS, skipCodeBlocks: true });
+	check("skipCodeBlocks true drops the block", fencedDropped === "Intro line. After.", `got: ${JSON.stringify(fencedDropped)}`);
+	const retOff = offsetOf(fenced, { ...OPTS, skipCodeBlocks: false }, "return");
+	check("fenced content maps to its raw offset", retOff === fenced.indexOf("return"), `got: ${retOff}`);
+	for (const opts of [OPTS, { ...OPTS, skipCodeBlocks: false }]) {
+		const got = offsetOf(fenced, opts, "After");
+		check(`prose after a fence maps to its raw offset (skipCodeBlocks ${opts.skipCodeBlocks})`, got === fenced.indexOf("After"), `got: ${got}`);
+	}
+
+	// Bare URLs.
+	const urlCases: Array<[string, string, string]> = [
+		["See https://example.com/a/b?c=d now.", "See example.com now.", "See now."],
+		["Visit www.example.com today.", "Visit example.com today.", "Visit today."],
+		["https://www.example.com/x?y#z", "example.com", ""],
+		["Go to http://localhost:8080/path now.", "Go to localhost now.", "Go to now."],
+	];
+	for (const [src, speak, drop] of urlCases) {
+		const on = spokenWith(src, urlsOn);
+		check(`speakUrls true: ${JSON.stringify(src)} -> ${JSON.stringify(speak)}`, on === speak, `got: ${JSON.stringify(on)}`);
+		const off = spokenWith(src, OPTS);
+		check(`speakUrls false: ${JSON.stringify(src)} -> ${JSON.stringify(drop)}`, off === drop, `got: ${JSON.stringify(off)}`);
+	}
+	const glued = spokenWith("Read it at https://example.com.", urlsOn);
+	check("trailing period glued to a URL is not part of the host", glued === "Read it at example.com", `got: ${JSON.stringify(glued)}`);
+	const urlRepro = "See https://example.com/x now please.";
+	for (const opts of [OPTS, urlsOn]) {
+		const got = offsetOf(urlRepro, opts, "now");
+		check(`word after a URL maps to its raw offset (speakUrls ${opts.speakUrls})`, got === urlRepro.indexOf("now"), `got: ${got}`);
+	}
+	const hostOff = offsetOf(urlRepro, urlsOn, "example.com");
+	check("host chars map to the raw host", hostOff === urlRepro.indexOf("example.com"), `got: ${hostOff}`);
+	const wwwSrc = "Visit www.example.com today.";
+	const wwwOff = offsetOf(wwwSrc, urlsOn, "example.com");
+	check("host after www. maps to the raw host", wwwOff === wwwSrc.indexOf("example.com"), `got: ${wwwOff}`);
+
+	// Userinfo is credentials. Speaking it would read a username, or a
+	// password, aloud; only the host after the last "@" of the authority may
+	// be spoken.
+	const userinfoCases: Array<[string, string]> = [
+		["Log in at https://user@example.com/ now.", "Log in at example.com now."],
+		["Log in at https://user:secret@example.com/ now.", "Log in at example.com now."],
+		["Log in at https://user:secret@www.example.com:8443/x now.", "Log in at example.com now."],
+		["Log in at https://user:p@ss@example.com/ now.", "Log in at example.com now."],
+	];
+	for (const [src, speak] of userinfoCases) {
+		const on = spokenWith(src, urlsOn);
+		check(`userinfo dropped: ${JSON.stringify(src)} -> ${JSON.stringify(speak)}`, on === speak, `got: ${JSON.stringify(on)}`);
+		check(`neither user nor secret spoken: ${JSON.stringify(src)}`, !/user|secret|ss/.test(on), `got: ${JSON.stringify(on)}`);
+		const hostAt = offsetOf(src, urlsOn, "example.com");
+		check(`host after userinfo maps to the raw host: ${JSON.stringify(src)}`, hostAt === src.lastIndexOf("example.com"), `got: ${hostAt}`);
+		check(`sourceIndex lockstep with userinfo: ${JSON.stringify(src)}`, lockstepWith(src, urlsOn));
+	}
+	// An "@" after the authority is path or query, not userinfo.
+	const atInPath = spokenWith("See https://example.com/@someone now.", urlsOn);
+	check("@ in the path does not move the host", atInPath === "See example.com now.", `got: ${JSON.stringify(atInPath)}`);
+	const atInQuery = spokenWith("See https://example.com?to=a@b.org now.", urlsOn);
+	check("@ in the query does not move the host", atInQuery === "See example.com now.", `got: ${JSON.stringify(atInQuery)}`);
+
+	// Markdown links and wikilinks are handled before the URL branch.
+	for (const opts of [OPTS, urlsOn]) {
+		const link = spokenWith("See [the docs](https://example.com/page) now.", opts);
+		check(`[label](url) unchanged (speakUrls ${opts.speakUrls})`, link === "See the docs now.", `got: ${JSON.stringify(link)}`);
+		const wiki = spokenWith("See [[Some Note]] today please.", opts);
+		check(`wikilink unchanged (speakUrls ${opts.speakUrls})`, wiki === "See Some Note today please.", `got: ${JSON.stringify(wiki)}`);
+	}
+
+	const fixtures = [inline, inlineRepro, "An open ` tick here.", fenced, "Before.\n~~~\nlet y = 2;\n~~~\nAfter.",
+		...urlCases.map(([src]) => src), "Read it at https://example.com.", urlRepro,
+		"See [the docs](https://example.com/page) now."];
+	for (const src of fixtures) {
+		for (const opts of [OPTS, codeOn, urlsOn]) {
+			check(`sourceIndex lockstep for ${JSON.stringify(src)} (${JSON.stringify({ c: opts.skipCodeBlocks, u: opts.speakUrls })})`, lockstepWith(src, opts));
+		}
 	}
 }
 

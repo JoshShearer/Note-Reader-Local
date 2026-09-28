@@ -66,8 +66,9 @@ console.log("word timings cover the sentence");
 	const EXPECTED_WORDS = 9; // The quick brown fox jumps over a lazy dog.
 	const chunks = extractChunks(src, {
 		stripTags: true,
-		skipUrls: true,
-		skipCode: true,
+		speakUrls: false,
+		skipCodeBlocks: true,
+		skipInlineCode: true,
 		skipTables: true,
 		skipHeadings: false,
 	});
