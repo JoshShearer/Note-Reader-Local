@@ -1,5 +1,5 @@
 ---
-description: Run a set of Linear tickets end to end - pre-flight triage for clarifying questions, then start, plan, implement, ship, verify, merge and finish per ticket in fresh subagents, pausing only where a human is genuinely required.
+description: Run a set of Linear tickets end to end, fully autonomously - pre-flight triage, then start, plan, implement, ship, automated verify, merge and finish per ticket in fresh subagents. Never waits on a human; anything that needs one blocks that ticket and is reported at the end.
 ---
 
 Conventions: `.claude/linear.md`. Rules and gates: `AGENTS.md`.
@@ -11,17 +11,18 @@ table before the first run.
 
 | Fact | Consequence |
 |---|---|
-| **There is no CI.** No `.github/`, no workflow, no hook. `.git/hooks` holds only samples. | The Verify phase has nothing to poll. It runs the gates itself and then drives real Obsidian. Do not write a `gh pr checks` loop; it will wait forever on a PR that no runner ever touches. |
-| **Only a human can confirm speech.** Whether a voice sounds right, whether highlighting tracks the words, whether a pause actually pauses - none of it is observable from a test runner. | **Every ticket pauses once, at Verify.** This is structural, not a flag. It is the analogue of ShroomSpy's merge gate. |
-| **A green suite is not a working feature** (`AGENTS.md` rule 11). The 5 suites run in bare Node against fakes. | No phase may report a user-facing change as done on `npm test` alone. Ship marks it `NOT VERIFIED IN OBSIDIAN`; Verify is what clears that. |
-| **Bugs must be reproduced before they are fixed** (`AGENTS.md` rule 12). | Implement begins by reproducing, not by editing. If the repro fails, the ticket pauses rather than proceeding on a guess. |
+| **The run is fully autonomous.** The owner tests features by using the app and files new tickets for what they find. | No phase waits for a reply. Verify is automated, merge is automatic. Anything that would have needed a human blocks **that ticket only**, and the run moves on to the next one. Everything blocked or decided on the owner's behalf is listed in the end-of-run report. |
+| **There is no CI.** No `.github/`, no workflow, no hook. `.git/hooks` holds only samples. | The Verify phase has nothing to poll. It runs the gates and the probes itself. Do not write a `gh pr checks` loop; it will wait forever on a PR that no runner ever touches. |
+| **A green suite is not a working feature** (`AGENTS.md` rule 11). The suites run in bare Node against fakes. | Automated Verify also runs the real bundled module against the ticket's acceptance inputs, and drives real Obsidian over CDP when it is reachable. Nothing a human did not observe is ever described as "verified in Obsidian". PRs carry `NOT VERIFIED IN OBSIDIAN`, and Linear comments say so plainly. |
+| **Bugs must be reproduced before they are fixed** (`AGENTS.md` rule 12). | Implement begins by reproducing, not by editing. If the repro fails, the ticket blocks rather than proceeding on a guess. |
 | **One deploy slot.** `npm run deploy` writes to one fixed folder in `~/Documents/Notes`. | Tickets run strictly one at a time. Never parallelise this command, and do not start a second run in a worktree while one is live. |
-| **Base branch is `main`.** It is the only branch; `origin/HEAD` resolves correctly here. | Unlike ShroomSpy, no special casing. Still assert it rather than assuming. |
-| **Nine defects are already reproduced** and listed in `AGENTS.md` "Known state", with exact triggering inputs. | Phase 0 must not ask for a repro for one of those. It is already written down. |
+| **A deploy is not live until Obsidian restarts.** On 2026-09-28 two tickets were "passed" against a stale in-memory build after an in-app reload. | Finish deploys `main` so the owner's vault always has the latest merged build, and the end-of-run report tells them to **fully quit and relaunch** Obsidian. A deploy never counts as evidence that the code ran. |
+| **Base branch is `main`.** It is the only branch; `origin/HEAD` resolves correctly here. | No special casing. Still assert it rather than assuming. |
+| **Reproduced defects are listed** in `AGENTS.md` "Known state", with exact triggering inputs. | Phase 0 must not ask for a repro for one of those. It is already written down. |
 
 `gh` is installed and authenticated as `JoshShearer`. There is no permission classifier blocking
-`gh pr merge` in this repo, so merge automation is available, but it is **off by default** - see
-`--auto-merge`.
+`gh pr merge` in this repo, and no required review, so merge automation works. Never self-approve a
+PR to get around a review requirement if one is ever added; block the ticket instead.
 
 ## Tracker: Linear
 
@@ -40,7 +41,9 @@ identifier, re-run the discovery block in `.claude/linear.md`: someone renamed t
 
 Quality, not speed. The subagent that just spent its context writing a fix is the worst possible
 judge of whether that fix is sound. Fresh context per phase means each phase reads only the state
-file and the repo, the way a different person picking the work up would.
+file and the repo, the way a different person picking the work up would. With no human gate, this
+separation is the main defence against a plausible-looking wrong fix, so do not merge phases to
+save time.
 
 This orchestrating conversation stays alive for the whole run and never does the work: read state
 -> spawn one subagent for exactly one phase of one ticket -> receive a short summary -> write it to
@@ -56,18 +59,19 @@ ticket id, and an instruction to read `.claude/pipeline-state.json` for context.
 
 Argument: `$ARGUMENTS`
 
-- A comma-separated list of ids, e.g. `NRL-12,NRL-14,NRL-19`.
+- A comma-separated list of ids, e.g. `NRL-12,NRL-14,NRL-19`. Bare numbers mean `NRL-<n>`.
 - `all` - auto-discover assigned, not-done issues via `list_issues`, priority order. Drop anything
   in a blocked or cancelled state.
 - `--build` - run `npm run build` in every Ship phase. Default is to build only when the diff
   touches `src/engines/onnx/`, `esbuild.config.mjs`, `manifest.json`, or `package.json`.
-- `--auto-merge` - squash-merge a PR once its Verify phase recorded a PASS **in Obsidian**. Without
-  this flag, merge is a pause. The flag never skips the Verify pause, only the merge one.
+- `--no-merge` - stop each ticket after automated Verify with its PR open, instead of merging.
+  Later tickets then branch from a `main` that lacks earlier fixes, so use it for a single ticket
+  or for unrelated tickets only.
 - `--resume` - re-validate `.claude/pipeline-state.json` against Linear and git before continuing.
-  Auto-invoked if the state file has in-progress tickets and no flag was given; ask before
-  overwriting an incomplete run.
+  Auto-invoked if the state file has in-progress tickets and no flag was given.
 
-If no argument is given, ask which tickets to run rather than guessing.
+If no argument is given, ask which tickets to run. That is the only question this command asks
+before its work starts.
 
 ## Step 0: Establish facts, every run
 
@@ -79,69 +83,81 @@ git rev-parse --abbrev-ref HEAD
 node --version
 ```
 
-Assert before starting:
+Assert before starting. These are the only conditions that stop the whole run, because nothing has
+been touched yet and continuing could destroy someone's work:
 
-- The working tree is clean. A dirty tree means a previous run or a manual edit is in flight; ask.
-- You are on `main` and it is synced with `origin/main`.
+- The working tree is clean. A dirty tree means a previous run or a manual edit is in flight: stop
+  and report what is dirty. Do not stash or discard it.
+- You are on `main` and it is synced with `origin/main`. If `main` is only behind, fast-forward it.
 - `node_modules` exists. If not, `npm ci`.
 - The cwd is the primary repo, not a `note-reader-local-nrl-*` worktree. This command owns the
   deploy slot for its whole run and should hold it from one place.
+- If the state file holds an in-progress run and `--resume` was not given, resume it rather than
+  overwriting it, and say so in the first message. Starting fresh would orphan an in-flight branch
+  and PR.
 
-Then read, in this order: `AGENTS.md` (the 14 non-negotiables and the Known-state defect list),
+Then read, in this order: `AGENTS.md` (the non-negotiables and the Known-state defect list),
 `.claude/linear.md`, and the commands this pipeline delegates to - `start-issue.md`, `ship.md`,
-`verify.md`, `finish.md`, `check-constraints.md`, `critique.md`. Do not reimplement their
-contents here; call them.
+`finish.md`, `check-constraints.md`, `critique.md`. Do not reimplement their contents here; call
+them. `verify.md` is the interactive, human-driven check and is **not** used by this command.
 
 ## Phase 0: Pre-flight triage, before any ticket's Phase 1
 
-Without this, "needs a human decision" is discovered after a branch exists and Linear already
-says In Progress. Churn for a ticket that then sits blocked.
+Without this, "needs a decision" is discovered after a branch exists and Linear already says In
+Progress.
 
 1. Fetch every ticket in scope with `get_issue`.
 2. Spawn **one** fresh subagent for the whole batch. Read-only, no reason to isolate per ticket.
    Its prompt:
 
-   > For each of these tickets [list with full descriptions], in `<repo-root>`: grep and read the
-   > files each ticket actually names, do not judge by title. Return a table with ticket id,
-   > judgment (simple / complex / needs-decomposition), the `srs.md` requirement ID it closes if
-   > any, and whether it is one of the nine already-reproduced defects in the `AGENTS.md` Known
-   > state list. For anything not simple, give one crisp clarifying question whose answer resolves
-   > the ambiguity: "sentence highlight in addition to word, or instead of it?", not "what should
-   > we do about highlighting?". Flag any ticket that cannot be finished inside this repo, or that
-   > needs a device this machine does not have - an Android phone for R-M03, a second GPU, a
-   > non-Linux desktop. Make no changes of any kind.
+   > For each of these tickets, in `<repo-root>`: fetch the full description with `get_issue`,
+   > including any "Decisions" section, which records answers the owner already gave. Grep and
+   > read the files each ticket actually names; do not judge by title. Return a table with ticket
+   > id, judgment (simple / complex / needs-decomposition), the `srs.md` requirement ID it closes
+   > if any, whether it is one of the `AGENTS.md` Known-state defects, and whether it would amend
+   > `srs.md`. Flag inter-ticket dependencies and file overlap for the given run order.
+   >
+   > For every open question the Decisions section does not answer, give the question, **your
+   > recommended answer, and one line of reasoning**. Prefer the answer that matches the ticket's
+   > stated principles, `srs.md`, and how Obsidian itself behaves. Mark a question `unresolvable`
+   > only if no defensible default exists: the ticket contradicts itself, it needs the owner's
+   > product intent with nothing to infer it from, it cannot be finished inside this repo, or it
+   > needs hardware this machine lacks (an Android phone for R-M03, a second GPU, a non-Linux
+   > desktop). Make no changes of any kind.
 
-3. Present the batch result in **one** message: which tickets are clear, and, grouped up front,
-   every clarifying question for the rest.
-4. Wait for the reply. This is an ordinary turn, not `--resume`; nothing is on disk yet.
-5. Write each answer into that ticket's `clarification` field in `.claude/pipeline-state.json`
-   (create it now, every in-scope ticket `pending` at phase `start`). Unanswered becomes
-   `blocked` with the question as `blockedReason`, excluded from the run, holding nothing up.
-6. Begin Phase 1 for the first non-blocked ticket.
+3. Create the state file now, every in-scope ticket `pending` at phase `start`. For each question
+   with a recommendation, write it into that ticket's `clarification` with `decidedBy: "pipeline"`,
+   and post it to the Linear issue with `create_comment` as "Decided by /run-tickets (owner may
+   override): <question> -> <answer>, because <reason>." For each `unresolvable` ticket, set
+   `status: "blocked"` with the question as `blockedReason`. It is excluded from the run and holds
+   nothing up.
+4. Print the triage table and the decisions taken in **one** message, then continue immediately
+   with Phase 1 for the first non-blocked ticket. Do not wait for a reply.
 
 Special cases Phase 0 must handle:
 
-- **A ticket with no requirement ID and no clear acceptance criteria** is not ready. Ask.
-- **A ticket for a known defect** already has its repro in `AGENTS.md`. Do not ask for one; copy it
-  into `reproduction` in the state file.
-- **A ticket that would touch `srs.md`** is a spec amendment and needs an ADR per `AGENTS.md`. Flag
-  it so Plan expects one.
+- **A ticket with no requirement ID and no clear acceptance criteria** cannot be finished safely.
+  Block it.
+- **A ticket for a known defect** already has its repro in `AGENTS.md`. Copy it into
+  `reproduction` in the state file.
+- **A ticket that would amend `srs.md`** needs an ADR per `AGENTS.md`. Record that in
+  `clarification` so Plan requires one; the ADR and the `srs.md` edit ship in the ticket's own PR.
 
 ## The 7 phases
 
 | # | Phase | Delegates to | What the fresh subagent does |
 |---|---|---|---|
 | 1 | Start | `start-issue.md` | Branch off `main`, Linear to In Progress, snapshot the issue into state |
-| 2 | Plan | this file | Judge complexity using Phase 0's answer if present; genuinely new complexity pauses |
+| 2 | Plan | this file | Write the plan using Phase 0's decisions; genuinely new ambiguity is decided or blocks |
 | 3 | Implement | this file | Reproduce first for bugs, then fix, then run the gates itself |
 | 4 | Ship | `ship.md` | Gates, `check-constraints`, `critique`, commit, push, PR against `main` |
-| 5 | Verify | `verify.md` | **Always a pause.** Deploy, drive real Obsidian, record what was observed |
-| 6 | Merge | this file | Pause by default; squash-merge if `--auto-merge` and Verify passed |
-| 7 | Finish | `finish.md` | Cleanup, Linear to Done, `main` synced, docs corrected if a defect is gone |
+| 5 | Verify | this file | Automated: gates on the PR head, bundled probes of every acceptance input, CDP smoke if reachable |
+| 6 | Merge | this file | Squash-merge once Verify recorded `pass` (skipped with `--no-merge`) |
+| 7 | Finish | `finish.md` | Cleanup, Linear to Done, `main` synced and deployed, docs corrected if a defect is gone |
 
 **Sequencing is not optional.** Tickets run one at a time, fully through phase 7, before the next
 one's phase 1. Branches come off `main`, and `main` only carries ticket N's fix once ticket N's
-Finish has pulled it.
+Finish has pulled it. A blocked ticket stops where it is; the next ticket starts from `main`.
 
 ## State file: `.claude/pipeline-state.json`
 
@@ -152,7 +168,7 @@ Machine-local, gitignored, never committed.
   "runId": "2026-09-28T14:00:00Z",
   "baseBranch": "main",
   "buildGate": false,
-  "autoMerge": false,
+  "merge": true,
   "tickets": [
     {
       "id": "NRL-19",
@@ -165,12 +181,12 @@ Machine-local, gitignored, never committed.
       "branch": "fix/nrl-19-wikilink-brackets",
       "phase": "implement",
       "status": "in_progress",
-      "clarification": { "question": null, "answer": null },
+      "clarification": { "question": null, "answer": null, "decidedBy": null },
       "planNote": null,
       "reproConfirmed": false,
       "implementationSummary": null,
       "prNumber": null, "prUrl": null, "commitSha": null,
-      "obsidianVerdict": null, "obsidianNotes": null,
+      "verifyVerdict": null, "verifyNotes": null,
       "blockedReason": null,
       "history": [{ "phase": "start", "at": "2026-09-28T14:01:00Z", "result": "branch created" }]
     }
@@ -178,126 +194,174 @@ Machine-local, gitignored, never committed.
 }
 ```
 
-`status`: `pending` | `in_progress` | `awaiting_verify` | `awaiting_merge` | `blocked` | `done`.
+`status`: `pending` | `in_progress` | `blocked` | `done`.
 `phase`: `start` | `plan` | `implement` | `ship` | `verify` | `merge` | `finish`.
-`obsidianVerdict`: `null` | `pass` | `fail`.
+`verifyVerdict`: `null` | `pass` | `fail`. It records the **automated** Verify only.
+`clarification.decidedBy`: `null` | `"owner"` (from the ticket's Decisions section) | `"pipeline"`.
 
-Add `.claude/pipeline-state.json` to `.gitignore` if it is not already there.
+Add `.claude/pipeline-state.json` to `.gitignore` if it is not already there. Timestamps come from
+`date -u +%FT%TZ`, never from a guess.
 
 ## Phase subagent prompts
 
 **1. Start** - "Read `.claude/commands/start-issue.md` and follow it for `<ID>` in `<repo-root>`,
-non-interactively; the ticket is already chosen. Branch from `main`. Fetch the issue and write
-`title`, `requirement`, `type`, `descriptionSnapshot` and `branch` into this ticket's state entry.
-Set the Linear status to In Progress: call `list_issue_statuses` first and use the id whose name is
-exactly `In Progress`, then read the status back rather than trusting the write. Set
-`phase: \"plan\"`, `status: \"in_progress\"`, append history. If a branch collision or anything
-else needs a decision `start-issue.md` cannot make, set `status: \"blocked\"` with
-`blockedReason` and stop. Do not guess."
+non-interactively; the ticket is already chosen. `git checkout main && git pull --ff-only` first.
+Branch from `main`. Fetch the issue and write `title`, `requirement`, `type`,
+`descriptionSnapshot` and `branch` into this ticket's state entry. Set the Linear status to In
+Progress: call `list_issue_statuses` first and use the id whose name is exactly `In Progress`, then
+read the status back rather than trusting the write. Set `phase: \"plan\"`,
+`status: \"in_progress\"`, append history. If a branch collision or anything else needs a decision
+`start-issue.md` cannot make, set `status: \"blocked\"` with `blockedReason` and stop. Do not
+guess."
 
-**2. Plan** - "Read `<ID>`'s `descriptionSnapshot` from `.claude/pipeline-state.json`. If a
-`clarification.answer` is recorded, use it: write `planNote` incorporating that decision, set
-`phase: \"implement\"`, done, do not re-judge. Otherwise judge complexity from the files the
-ticket names, not the title. Simple, meaning clear and under three files, gets
-`planNote: \"Straightforward, proceeding directly\"` and `phase: \"implement\"`. Complex or
-needing decomposition should have been caught by Phase 0; do not guess now. Write one crisp line
-into `clarification.question`, leave `answer` null, set `status: \"blocked\"`,
-`blockedReason: \"Unanticipated by pre-flight\"`, stop. If this ticket amends `srs.md`, say in
-`planNote` that an ADR under `docs/adr/` is required."
+**2. Plan** - "Read `<ID>`'s `descriptionSnapshot`, `clarification` and `reproduction` from
+`.claude/pipeline-state.json`. Line numbers in the ticket may be stale if earlier tickets in this
+run touched the same files: read the current code on `main`. Write a concise ordered `planNote`
+naming real functions, incorporating every recorded decision. If a genuinely new ambiguity appears
+that Phase 0 missed, decide it the way Phase 0 would (recommendation plus one line of reasoning),
+record it in `clarification` with `decidedBy: \"pipeline\"`, and post it to Linear as a
+'Decided by /run-tickets' comment. Only if no defensible default exists, set
+`status: \"blocked\"`, `blockedReason: \"Unanticipated by pre-flight: <question>\"`, and stop. If
+this ticket amends `srs.md`, the plan must include an ADR under `docs/adr/` in the existing
+`NNNN-kebab-title.md` format. Set `phase: \"implement\"`."
 
 **3. Implement** - "You are on `<branch>` in `<repo-root>`. Read `<ID>`'s `descriptionSnapshot`,
-`planNote` and `reproduction`.
+`planNote` and `reproduction`. Do not deploy and do not touch `~/Documents/Notes`.
 
 **If `type` is `bug`, reproduce it before changing anything.** `AGENTS.md` rule 12 requires this,
 and most defects in this codebase were invisible to the test suite and obvious the moment the real
-function ran against real input. Bundle the module and run it, for example
-`npx esbuild <probe>.ts --bundle --platform=node --format=esm --outfile=/tmp/probe.mjs && node /tmp/probe.mjs`.
+function ran against real input. Bundle the module and run it from the session scratchpad, never
+the repo, for example
+`npx esbuild <probe>.ts --bundle --platform=node --format=esm --outfile=<scratch>/probe.mjs && node <scratch>/probe.mjs`.
 Record the actual observed output. Set `reproConfirmed: true` only when you have seen the failure
 yourself. If you cannot reproduce it, set `status: \"blocked\"` with what you tried and stop; do
 not fix a bug you have not seen.
 
 Then implement exactly what the acceptance criteria describe, honouring any Out of Scope section.
-Add a regression test, and **confirm it fails against the unfixed code** before claiming it
-verifies anything. Consult the `AGENTS.md` non-negotiable that matches the area you are touching:
-`extract.ts` means the `sourceIndex` lockstep rule, engines mean the `ownsPlayback` rate rule,
-settings mean the normalisation whitelist rule, anything logging means no note text ever.
+Write the regression tests first and **confirm they fail against the unfixed code** before claiming
+they verify anything. Guard tests that pin already-correct behaviour are expected to pass both
+before and after; the core cases must fail first, or set `status: \"blocked\"` and stop. Never
+weaken an existing test. Consult the `AGENTS.md` non-negotiable that matches the area you are
+touching: `extract.ts` means the `sourceIndex` lockstep rule, engines mean the `ownsPlayback` rate
+rule, settings mean the normalisation rule, anything logging means no note text ever.
 
 Run the gates yourself before finishing: `npm test`, `npm run typecheck`, and `npm run build` if
 you touched `src/engines/onnx/`, `esbuild.config.mjs`, `manifest.json` or `package.json`. Note
 that `npm test` chains with `&&`, so an early suite failing tells you nothing about the later
-ones. Write a 3 to 6 sentence `implementationSummary`, set `phase: \"ship\"`. Do not commit, push,
-or open a PR."
+ones. Write a 3 to 6 sentence `implementationSummary` that lists every deviation from the plan and
+every known miss, set `phase: \"ship\"`. Do not commit, push, or open a PR."
 
 **4. Ship** - "Read `.claude/commands/ship.md` and follow it for the current branch in
-`<repo-root>`. PR base is `main`. Use `implementationSummary` for the PR body's approach section,
-and include a manual test plan naming what to click in Obsidian, because the next phase is a human
-walking it. `<--build if the run passed it, otherwise: build only if the diff touches the bundle>`.
+`<repo-root>`, skipping any deploy step. PR base is `main`. Use `implementationSummary` for the PR
+body's approach section. `<--build if the run passed it, otherwise: build only if the diff touches
+the bundle>`.
 
 There is no pre-push hook and no CI in this repo, so the push is instant and the PR will sit with
 no checks. That is expected; do not wait for any.
 
 Run `/check-constraints`. A BLOCK is not overridable: set `status: \"blocked\"` with the findings
-and stop. Same for a `/critique` BLOCK verdict. The PR body must carry a literal
-`NOT VERIFIED IN OBSIDIAN` line, since nothing has driven the real plugin yet. Record `prNumber`,
-`prUrl`, `commitSha`, set `phase: \"verify\"`, `status: \"awaiting_verify\"`."
+and stop without committing. Same for a `/critique` BLOCK verdict. With no human reviewing the
+diff, treat any critique finding where **prose is silently lost, private text is spoken, or
+`sourceIndex` drifts** as must-fix: fix it with a test that fails first, re-run the gates, then
+commit. Lower findings are listed in the PR body as known leftovers.
 
-**5. Verify** - **this phase is always a pause.** Do not spawn a subagent to decide it.
+The PR body must carry a literal `NOT VERIFIED IN OBSIDIAN` line, and a manual test plan with exact
+note contents to paste and the expected speech for each, so the owner can check it later while
+using the app. Record `prNumber`, `prUrl`, `commitSha`, set `phase: \"verify\"`."
 
-The orchestrating conversation does this itself:
+**5. Verify** - automated, in a fresh subagent. It must not be the subagent that wrote the fix.
+
+"You are verifying PR `<prNumber>` for `<ID>` in `<repo-root>`, on branch `<branch>`. Read the
+ticket's `descriptionSnapshot`, `planNote`, `implementationSummary` and `reproduction`. You did not
+write this code; your job is to find out whether it does what the acceptance criteria say. Do not
+edit tracked files.
+
+1. Confirm the working tree is clean and `HEAD` equals `commitSha`. Run `npm test`,
+   `npm run typecheck` and `npm run build`. Check that `main.js`'s `require()` list is only
+   `obsidian`, `@codemirror/view` and `@codemirror/state`.
+2. End-to-end probes: bundle the real changed module from the scratchpad and run **every input the
+   acceptance criteria and the PR's manual test plan name**, including the original reproduction.
+   Compare the actual output to the expected output. For `extract.ts` changes, also check
+   `sourceIndex` lockstep on every probe: equal length to the text, and every non-space character
+   maps to the same raw character.
+3. If Obsidian is reachable on `--remote-debugging-port=9222`
+   (`curl -s --max-time 2 http://127.0.0.1:9222/json/version`), deploy with `npm run deploy` and run
+   `npm run test:obsidian`, and record the result. The running plugin only picks up a deploy after
+   Obsidian restarts, so a smoke test against an un-restarted instance proves nothing; say which
+   build was loaded if you can tell. If the port is not reachable, record `CDP smoke: not run`. Do
+   not start, stop or restart Obsidian.
+
+Set `verifyVerdict: \"pass\"` only if the gates pass and every probe matches. Otherwise set
+`verifyVerdict: \"fail\"`, `status: \"blocked\"`, and put the failing inputs with actual versus
+expected output in `blockedReason`. Do not attempt a fix. Write a short `verifyNotes`, append
+history, and on pass set `phase: \"merge\"`."
+
+On pass, the orchestrator posts a Linear comment with `create_comment` stating, as separate
+points: the suites and gates passed; the automated probes run and their results; whether the CDP
+smoke ran; and the literal line **"Not verified in Obsidian by a human."**
+
+On fail, the ticket is blocked with its PR left open. Continue with the next ticket.
+
+**6. Merge** - done by the orchestrator. Skipped entirely under `--no-merge`, which leaves the
+ticket `done` at phase `verify` with its PR open.
+
+Only when `verifyVerdict` is `pass`:
 
 ```bash
-npm run deploy
-```
-
-Then tell the user precisely what to do in Obsidian and wait. Derive the steps from the ticket's
-acceptance criteria, and always include the baseline: open a note, trigger `Read this note aloud`,
-confirm speech starts, confirm the highlight follows the words, confirm pause and stop behave.
-Remind them to reload the plugin, since `npm run deploy` does not.
-
-Record their answer verbatim into `obsidianNotes` and set `obsidianVerdict` to `pass` or `fail`.
-On `fail`, set `status: \"blocked\"` with their description and stop the ticket; do not attempt a
-second fix inside the same phase without asking. On `pass`, post a Linear comment through
-`create_comment` that states separately that the suites passed and that the change was observed
-working in Obsidian, then set `phase: \"merge\"`.
-
-**6. Merge** - default is a pause. Print the PR URL and wait for the user to merge, then confirm
-with `gh pr view <prNumber> --json state,mergedAt`.
-
-With `--auto-merge`, and only when `obsidianVerdict` is `pass`:
-
-```bash
+gh pr view <prNumber> --json state,mergeable
 gh pr merge <prNumber> --squash --delete-branch
+gh pr view <prNumber> --json state,mergedAt,mergeCommit
 ```
 
-Never auto-merge a ticket whose Verify phase did not record a pass, and never self-approve a PR to
-get around a review requirement. Set `phase: \"finish\"`.
+If the PR is already merged, record that and move on. If it is not mergeable (a conflict with
+`main`), block the ticket with the reason; do not resolve conflicts inside this phase. Never merge
+a ticket whose Verify did not record a pass, and never self-approve. Record the merge commit and
+set `phase: \"finish\"`.
 
 **7. Finish** - "Read `.claude/commands/finish.md` and follow it for the merged branch `<branch>`
-in `<repo-root>`. Verify the merge by content, not just by branch state: this repo may squash, so
+in `<repo-root>`. Verify the merge by content, not just by branch state: this repo squashes, so
 `git branch -d` can claim 'not merged' for work that is fully in `main`. Grep `main` for a
 distinctive symbol the PR added before deleting, and use `-D` only once content is confirmed. Set
 the Linear status to Done by reading `list_issue_statuses` rather than a remembered id, and read
-the status back. Then check whether this ticket removed one of the nine defects listed in the
-`AGENTS.md` Known state section, or moved a requirement's status in `srs.md`; if so, update that
-document in the same pass. Set `phase: \"finish\"`, `status: \"done\"`."
+the status back. Then check whether this ticket removed one of the defects listed in the
+`AGENTS.md` Known state section, or moved a requirement's status in `srs.md`. If so, make the doc
+edit on a `docs/<id>-finish` branch, open a PR, and squash-merge it yourself; never commit to
+`main` directly. Only move a requirement to fully met with evidence, and name that evidence.
+Finally, on an up-to-date `main`, run `npm run deploy` so the owner's vault carries the latest
+merged build. Finish on `main`, clean, synced. Set `phase: \"finish\"`, `status: \"done\"`."
 
-## Pauses - ask and wait, never guess past these
+## When something needs a human
 
-A pause is not a failure. Stop before the next phase, ask here, wait, record the answer, continue.
-The run stays parked on the current ticket.
+Nothing waits. Each of these blocks the ticket it happens in, records why in `blockedReason`, and
+the run continues with the next ticket:
 
-- Phase 0, or Plan as fallback, judges a ticket complex or needing decomposition
-- **The Verify gate on every single ticket.** Structural, not a flag
-- The merge gate, unless `--auto-merge` was passed and Verify recorded a pass
+- Phase 0 or Plan finds a question with no defensible default
 - A bug that cannot be reproduced
 - A `check-constraints` BLOCK or a `critique` BLOCK
-- A regression test that passes against the unfixed code, meaning it proves nothing
+- A regression test whose core cases pass against the unfixed code, meaning it proves nothing
+- Automated Verify fails
+- A merge conflict with `main`
 - A ticket needing hardware this machine lacks, most likely an Android device for R-M03
-- A ticket that turns out to require amending `srs.md`, which needs an ADR and your agreement
 - A branch or issue collision that `start-issue.md` flags
 
-`--resume` is for the session ending, not for any of the above. While the conversation is live,
-every pause resolves by answering in the next message.
+A blocked ticket keeps its branch and any open PR, so the work is not lost. Its Linear status stays
+In Progress, and the orchestrator posts a comment with the `blockedReason`.
+
+A decision the pipeline took on the owner's behalf is **not** a block. It is recorded in state,
+posted to Linear, and listed in the end-of-run report so it can be overridden later.
+
+## End-of-run report
+
+When every ticket is `done` or `blocked`, print one message:
+
+- A table: ticket, PR, merge commit, automated verify result, one line on what changed.
+- Every decision taken with `decidedBy: "pipeline"`, with a link to its Linear comment.
+- Every blocked ticket with its reason, branch and PR.
+- New follow-up tickets filed during the run, and known leftovers from each PR.
+- Requirement status changes, with the evidence for each.
+- The reminder: **the vault now has `main` at `<sha>`. Fully quit and relaunch Obsidian to load
+  it;** an in-app reload has proven unreliable. Nothing in this run was verified in Obsidian by a
+  human, and each PR's manual test plan says what to look at.
 
 ## Example usage
 
@@ -305,7 +369,7 @@ every pause resolves by answering in the next message.
 /run-tickets NRL-19,NRL-20,NRL-21
 ```
 Three reproduced markdown defects in `extract.ts`. Phase 0 skips the repro questions because all
-three are in the Known state list; each ticket then runs 1 to 7, pausing at its Verify gate.
+three are in the Known state list; each ticket then runs 1 to 7 without stopping.
 
 ```
 /run-tickets NRL-30 --build
@@ -313,10 +377,14 @@ three are in the Known state list; each ticket then runs 1 to 7, pausing at its 
 A ticket touching the Kokoro worker, so the bundle gate runs every Ship phase.
 
 ```
-/run-tickets all --auto-merge
+/run-tickets all
 ```
-Everything assigned and open. Still pauses once per ticket to listen to Obsidian; merges itself
-afterwards.
+Everything assigned and open, merged as each one passes automated Verify.
+
+```
+/run-tickets NRL-38 --no-merge
+```
+One ticket, left as an open PR for the owner to read before merging.
 
 ```
 /run-tickets --resume
@@ -328,13 +396,12 @@ Continues the run recorded in `.claude/pipeline-state.json`.
 | Scenario | Action |
 |---|---|
 | No Linear tool in the available list | Continue git-only. Print the status transitions and comments that would have been sent, and record them in the state file. Never block a commit on a missing tracker. |
-| A Linear status write appears to succeed but reads back wrong | Stop. Re-fetch `list_issue_statuses` and report before retrying. Do not trust a remembered status id. |
+| A Linear status write appears to succeed but reads back wrong | Re-fetch `list_issue_statuses` and retry once with the fresh id. If it still reads back wrong, block the ticket and continue. Do not trust a remembered status id. |
 | `npm test` fails at an early suite | Remember the `&&` chain hides later suites. Re-run the remaining ones individually before concluding anything about scope. |
 | `tests/engine.test.ts` fails | It shells out to real `espeak-ng` and `spd-say`. Check the binaries before assuming the code broke. |
-| Deploy succeeds but Obsidian shows no change | The plugin was probably not reloaded. Ask before investigating further. |
-| State file has an `in_progress` ticket and no `--resume` | Ask before overwriting: resume, or start fresh, which orphans the in-flight branch and PR. Say that explicitly. |
-| `gh` auth expires mid-run | Report which step failed. Do not silently skip the ticket. |
-| A phase needs a decision not covered above | Pause, ask, wait. |
+| `main` fails its gates at the start of a ticket | Something already merged is broken. Stop the run and report it; branching further tickets off a broken `main` compounds it. |
+| `gh` auth expires mid-run | Stop the run and report which step failed. Every later ticket would fail the same way. |
+| A phase needs a decision not covered above | Decide it with a recorded default if one is defensible, otherwise block the ticket. Never wait. |
 
 ## Configuration
 
@@ -347,4 +414,4 @@ Continues the run recorded in `.claude/pipeline-state.json`.
 | **Gates** | `npm test` · `npm run typecheck` · `npm run build` when the bundle moved |
 | **CI** | None. Nothing to poll. |
 | **Push gate** | None. No husky, no active git hooks. |
-| **Human gate** | Obsidian verification, once per ticket, always |
+| **Human gate** | None. The owner tests by using the app and files new tickets for what they find. |

@@ -39,7 +39,7 @@ as a `/COMMANDS` command.
 | Command | Purpose |
 |---|---|
 | `/worktrees` | Parallel sessions - list, inspect, create, remove; file-overlap and deploy-slot ownership |
-| `/run-tickets` | Run a batch of tickets end to end in fresh subagents, pausing only where a human is required |
+| `/run-tickets` | Run a batch of tickets end to end in fresh subagents, fully autonomously; anything needing a human blocks that ticket and is reported at the end |
 
 ---
 
@@ -59,7 +59,7 @@ as a `/COMMANDS` command.
 |---|---|
 | `/verify` runs the gates itself | There is no CI here. No `.github/`, no workflow, no git hook. Nothing to poll. |
 | Every shipping command demands an Obsidian check | `AGENTS.md` rule 11. The suites run in bare Node against fakes, so green says nothing about whether speech works. |
-| `/run-tickets` pauses once per ticket, always | Only a human can confirm that a voice sounds right and that highlighting tracks the words. This replaces ShroomSpy's merge gate as the structural pause. |
+| `/run-tickets` never waits for a human | The owner tests by using the app and files new tickets for what they find. Verify is automated (gates, bundled probes of every acceptance input, CDP smoke when reachable) and merge is automatic. Nothing is ever described as verified in Obsidian unless a human saw it; interactive `/verify` still exists for that. |
 | `/spec-check` is new | This project has a written spec with MoSCoW IDs. Compliance drift is the main risk, and no other repo in the portfolio has that shape. |
 | `/critique` risk factors are rewritten | Scored on source-offset edits, log call sites, the worker's network guards, rate handling, settings normalisation and node-builtin imports, not on generic churn. |
 | Bugs must be reproduced before they are fixed | `AGENTS.md` rule 12, enforced in `/create-issue` and in `/run-tickets` Phase 3. |
