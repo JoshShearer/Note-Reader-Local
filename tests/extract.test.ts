@@ -208,6 +208,99 @@ console.log("obsidian tags dropped, mid-sentence hashes kept");
 	check("C# kept", spoken.includes("C#"), `got: ${spoken}`);
 }
 
+console.log("frontmatter detection (NRL-7)");
+{
+	const texts = (src: string): string[] => extractChunks(src, OPTS).map((c) => c.text);
+
+	// (a) A leading horizontal rule followed by prose is not frontmatter.
+	const a = "---\nSome prose here.\nMore prose.";
+	const aChunks = extractChunks(a, OPTS);
+	const aSpoken = aChunks.map((c) => c.text).join(" ");
+	check("leading HR then prose is read in full", aSpoken === "Some prose here. More prose.", `got: ${JSON.stringify(aSpoken)}`);
+	check(
+		"leading HR: first spoken char maps to 'Some'",
+		aChunks[0]?.sourceIndex[0] === a.indexOf("Some") && aChunks[0]?.sourceStart === a.indexOf("Some"),
+		`got: ${aChunks[0]?.sourceIndex[0]} / ${aChunks[0]?.sourceStart}`,
+	);
+
+	// (b) One leading blank line must not expose the frontmatter.
+	const b = texts("\n---\ntitle: secret\n---\nProse follows here.");
+	check("blank-line-prefixed frontmatter is skipped", !b.join(" ").includes("secret"), `got: ${JSON.stringify(b)}`);
+	check("prose after blank-line-prefixed frontmatter is read", b.join(" ") === "Prose follows here.", `got: ${JSON.stringify(b)}`);
+
+	// (c) Several blank lines, several keys; offsets must still be raw offsets.
+	const c = "\n\n---\ntitle: x\ntags: [a]\n---\nProse.";
+	const cChunks = extractChunks(c, OPTS);
+	check("multi-key frontmatter after blank lines is skipped", cChunks.map((k) => k.text).join(" ") === "Prose.", `got: ${JSON.stringify(cChunks.map((k) => k.text))}`);
+	check(
+		"skipped frontmatter: first spoken char maps to 'Prose.'",
+		cChunks[0]?.sourceIndex[0] === c.indexOf("Prose.") && cChunks[0]?.sourceStart === c.indexOf("Prose."),
+		`got: ${cChunks[0]?.sourceIndex[0]} / ${cChunks[0]?.sourceStart}`,
+	);
+	check(
+		"skipped frontmatter: every index entry points at the character it spoke",
+		cChunks.every((k) => [...k.text].every((ch, i) => ch === " " || c[k.sourceIndex[i]!] === ch)),
+	);
+
+	// (d) An unterminated opening fence must not swallow the document.
+	const d = texts("---\ntitle: x\nProse never closed.");
+	check("unterminated fence does not silence the note", d.length > 0, `got: ${JSON.stringify(d)}`);
+	check("unterminated fence: prose is read", d.join(" ").includes("Prose never closed."), `got: ${JSON.stringify(d)}`);
+	check("unterminated fence: the fence itself is silent", !d.join(" ").includes("-"), `got: ${JSON.stringify(d)}`);
+
+	// (e) Horizontal rules in the body are silent and toggle nothing.
+	for (const hr of ["---", "***", "- - -", "___"]) {
+		const e = texts(`Para one.\n\n${hr}\n\nPara two.`);
+		check(`body HR ${JSON.stringify(hr)} is silent`, e.join(" ") === "Para one. Para two.", `got: ${JSON.stringify(e)}`);
+	}
+	const fenceAfterHr = texts("Intro.\n\n---\n\n```\nconst secret = 1;\n```\n\nOutro.");
+	check(
+		"HR does not disturb a later code fence",
+		fenceAfterHr.join(" ") === "Intro. Outro.",
+		`got: ${JSON.stringify(fenceAfterHr)}`,
+	);
+	const twoHrs = texts("One.\n\n---\n\nTwo.\n\n---\n\nThree.");
+	check("paired body HRs are not treated as a frontmatter block", twoHrs.join(" ") === "One. Two. Three.", `got: ${JSON.stringify(twoHrs)}`);
+
+	// (f) Not valid YAML, but key-shaped: skipped (see ADR 0002).
+	const f = texts("---\nnot: really: valid: yaml\n---\nProse.");
+	check("key-shaped but invalid YAML is skipped", f.join(" ") === "Prose.", `got: ${JSON.stringify(f)}`);
+
+	// (g) Block lists and comments inside frontmatter.
+	const g = texts("---\ntags:\n  - a\n# c\n---\nProse.");
+	check("frontmatter with list items and comments is skipped", g.join(" ") === "Prose.", `got: ${JSON.stringify(g)}`);
+
+	// A fenced block of prose at the top is two HRs around a paragraph.
+	const h = texts("---\nJust a sentence.\n---\nProse.");
+	check("fenced prose at the top is read", h.join(" ") === "Just a sentence. Prose.", `got: ${JSON.stringify(h)}`);
+
+	// Key shapes the old positional check skipped and a narrow ASCII rule would
+	// have started speaking: non-English, quoted, punctuated keys, a flow list
+	// wrapped over unindented lines, a BOM, an indented fence.
+	const shapes: Record<string, string> = {
+		"accented key": "---\ntítulo: secret\n---\nProse.",
+		"CJK key": "---\n日付: secret\n---\nProse.",
+		"quoted key": "---\n\"my key\": secret\n---\nProse.",
+		"key with parens": "---\ncreated (date): secret\n---\nProse.",
+		"wrapped flow list": "---\ntags: [a,\nsecret]\n---\nProse.",
+		"leading BOM": "\uFEFF---\ntitle: secret\n---\nProse.",
+		"indented fence": "  ---\ntitle: secret\n---\nProse.",
+		"CRLF after blank line": "\r\n---\r\ntitle: secret\r\n---\r\nProse.",
+	};
+	for (const [name, src] of Object.entries(shapes)) {
+		const got = texts(src);
+		check(`frontmatter with ${name} is skipped`, got.join(" ") === "Prose.", `got: ${JSON.stringify(got)}`);
+	}
+
+	// Offset invariant over every fixture in this section.
+	const all = [a, "\n---\ntitle: secret\n---\nProse follows here.", c, "---\ntitle: x\nProse never closed.",
+		"Para one.\n\n- - -\n\nPara two.", "---\nJust a sentence.\n---\nProse.", ...Object.values(shapes)];
+	check(
+		"sourceIndex.length === text.length for every chunk",
+		all.every((src) => extractChunks(src, OPTS).every((k) => k.sourceIndex.length === k.text.length)),
+	);
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);
