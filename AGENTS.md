@@ -20,7 +20,7 @@ There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The
 are local and nothing runs them for you.
 
 ```bash
-npm test          # 5 suites: extract, engine, player, paths, kokoro
+npm test          # 6 suites: extract, engine, player, paths, kokoro, settings
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -110,8 +110,11 @@ do not rediscover them:
 
 - `extract.ts` speaks `[` and `]` for wikilinks, loses embed content, and returns **zero
   chunks** when line 1 is `---` (a horizontal rule is parsed as frontmatter).
-- `ExtractOptions.skipCode` and `.skipUrls` are plumbed from settings and rendered as
-  toggles, and never read.
+- `ExtractOptions.skipCode` and `.skipUrls` are never read by `extract.ts`. `main.ts`
+  fills them from `skipCodeBlocks` and `!speakUrls`, and the settings tab renders them as
+  the Code and Speak bare links toggles, so both toggles do nothing. `skipInlineCode`,
+  `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` are stored in plugin data v1 but
+  not read either; they have no toggle by design (`docs/adr/0001`).
 - `speechd` builds malformed `-y`/`-t` voice arguments; `spd-say` reports `Invalid voice`
   on **stdout with exit 0**, and the error guard checks stderr, so it fails silently.
 - `replayCurrent` truncates the chunk array and resets the index, corrupting `n / total`.
