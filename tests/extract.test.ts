@@ -503,6 +503,167 @@ console.log("code and bare URL toggles (NRL-10)");
 	}
 }
 
+console.log("inline markup (NRL-9)");
+{
+	const spokenOf = (src: string, opts = OPTS): string[] => extractChunks(src, opts).map((c) => c.text);
+	const spoken = (src: string, opts = OPTS): string => spokenOf(src, opts).join(" ");
+	const eq = (name: string, src: string, want: string, opts = OPTS): void => {
+		const got = spoken(src, opts);
+		check(name, got === want, `got: ${JSON.stringify(got)}`);
+	};
+
+	// As the other lockstep helpers, except a char of the synthetic word
+	// "equation" maps to a `$` of the math span it replaces, not to itself.
+	const lockstep = (src: string, opts = OPTS): boolean =>
+		extractChunks(src, opts).every(
+			(k) =>
+				k.sourceIndex.length === k.text.length &&
+				[...k.text].every((ch, i) => {
+					if (ch === " " || src[k.sourceIndex[i]!] === ch) return true;
+					const at = k.text.lastIndexOf("equation", i);
+					return at !== -1 && i < at + 8 && src[k.sourceIndex[i]!] === "$";
+				}),
+		);
+	// Raw offset of the first char of `word` in the first chunk containing it.
+	const offsetOf = (src: string, word: string, opts = OPTS): number | undefined => {
+		const k = extractChunks(src, opts).find((c) => c.text.includes(word));
+		return k ? k.sourceIndex[k.text.indexOf(word)] : undefined;
+	};
+	// The editor highlight words.ts derives for the spoken word "equation".
+	const equationRange = (src: string): [number, number] | undefined => {
+		const k = extractChunks(src, OPTS).find((c) => c.text.includes("equation"));
+		if (!k) return undefined;
+		const at = k.text.indexOf("equation");
+		return [k.sourceIndex[at]!, k.sourceIndex[at + 7]! + 1];
+	};
+
+	// Underscores: intraword is content, flanking is emphasis.
+	eq("snake_case_name spoken intact", "The snake_case_name is important here.", "The snake_case_name is important here.");
+	eq("a_b spoken intact", "Set a_b to one.", "Set a_b to one.");
+	eq("_emph_ and __strong__ drop the markers", "_emph_ and __strong__", "emph and strong");
+	eq("spaced underscore kept", "a _ b", "a _ b");
+	eq("intraword asterisks still dropped", "a*b*c", "abc");
+	eq("spaced asterisk kept", "2 * 3", "2 * 3");
+	eq("~~strike~~ drops the tildes", "~~strike~~ it", "strike it");
+	eq("single tilde kept", "~5 min", "~5 min");
+
+	// Highlight.
+	eq("==highlight== speaks the text only", "Some ==highlighted== text.", "Some highlighted text.");
+	eq("a == b is not a highlight", "a == b", "a == b");
+	eq("=== is not a highlight", "a === b", "a === b");
+	eq("unclosed == is text", "x==y and more", "x==y and more");
+	eq("nested markup inside ==", "Some ==**bold** hi== text.", "Some bold hi text.");
+
+	// Inline HTML.
+	eq("inline tags stripped, text kept", "Some <b>bold</b> and <br/> text.", "Some bold and text.");
+	eq("<br> and <br /> are one space", "one<br>two<br />three", "one two three");
+	eq("inline tag inside a word keeps the word", "un<b>bold</b>ed", "unbolded");
+	eq("tag with attributes", 'A <span class="x">red</span> word.', "A red word.");
+	eq("comparison with spaces is not a tag", "a < b and c > d", "a < b and c > d");
+	eq("comparison without spaces is not a tag", "x<y and z>w", "x<y and z>w");
+	// Prose between angle brackets that happens to start with a known element
+	// name must not be eaten as a tag with bare attributes. Leaked markup is a
+	// smaller cost than a lost sentence.
+	eq("known element name with prose after is not a tag", "a <b and c> d", "a <b and c> d");
+	eq("<i am here> is not a tag", "x <i am here> y", "x <i am here> y");
+	eq("unknown bare attribute is not a tag", "a <span foo> b", "a <span foo> b");
+	eq("closing tag", "a </b> b", "a b");
+	eq("<br/> is a tag", "one<br/>two", "one two");
+	eq("<br /> is a tag", "one<br />two", "one two");
+	eq("double-quoted attribute", 'A <span class="x">red</span> word.', "A red word.");
+	eq("single-quoted attribute", "A <span class='x y'>red</span> word.", "A red word.");
+	eq("unquoted attribute", "A <font color=red>red</font> word.", "A red word.");
+	eq("known boolean attribute", "A <details open>more</details> end.", "A more end.");
+	eq("mixed attributes", '<span hidden title="t" data-x=1>ok</span>', "ok");
+
+	// HTML comments: hidden by the author, so never read aloud.
+	eq("inline comment dropped whole", "A <!-- hidden secret --> B.", "A B.");
+	const multi = "A <!-- start\nsecret line\nend --> B.\nNext line.";
+	const multiSpoken = spoken(multi);
+	check("multi-line comment content never spoken", !/secret|start|end|<!--|-->/.test(multiSpoken), `got: ${JSON.stringify(multiSpoken)}`);
+	check("multi-line comment keeps text either side", multiSpoken === "A B. Next line.", `got: ${JSON.stringify(multiSpoken)}`);
+	const unterminated = spoken("Visible.\n<!-- never closed\nhidden text");
+	check("unterminated comment hides to end of note", unterminated === "Visible.", `got: ${JSON.stringify(unterminated)}`);
+
+	// Footnotes.
+	eq("footnote reference dropped", "footnote[^1].", "footnote.");
+	eq("named footnote reference dropped", "See this[^note] here.", "See this here.");
+	eq("footnote definition marker dropped", "[^note]: Text.", "Text.");
+	eq("plain link unaffected", "See [the docs](https://x.com) now.", "See the docs now.");
+
+	// Math: currency first, since a false positive eats prose.
+	eq("currency spoken verbatim", "I paid $5 and then $10 later.", "I paid $5 and then $10 later.");
+	eq("currency range verbatim", "$5-$10", "$5-$10");
+	eq("$5$ has no LaTeX shape, stays text", "It was $5$ total.", "It was $5$ total.");
+	eq("escaped dollar kept", "Cost \\$5 today.", "Cost $5 today.");
+	eq("short inline math dropped", "Let $x$ be real.", "Let be real.");
+	eq("short inline math with subscript dropped", "Take $x_1$ first.", "Take first.");
+	eq("short inline command dropped", "Angle $\\alpha$ here.", "Angle here.");
+	eq("long inline math speaks equation", "$E=mc^2$ holds", "equation holds");
+	eq("display math speaks equation", "$$\\int_0^1 f(x)dx$$", "equation");
+	eq("display math with backslash", "$$\\int f$$", "equation");
+	check("backslash inside math never reaches the escape branch", !/int|\\$/.test(spoken("$$\\int_0^1 f(x)dx$$")));
+	const block = spokenOf("$$\na^2\n$$\nAfter.");
+	check("multi-line display math is one equation chunk", JSON.stringify(block) === JSON.stringify(["equation", "After."]), `got: ${JSON.stringify(block)}`);
+	const openOnly = spoken("$$\nnot closed\nMore prose.");
+	check("unterminated $$ does not swallow the note", openOnly.includes("not closed") && openOnly.includes("More prose."), `got: ${JSON.stringify(openOnly)}`);
+	eq("math inside a fence untouched", "```\n$$\na\n$$\n```\nAfter.", "After.");
+
+	// Code and paths are not markdown.
+	const codeOn = { ...OPTS, skipInlineCode: false };
+	eq("a_b in backticks verbatim", "Use `a_b` here.", "Use a_b here.", codeOn);
+	eq("$x$ in backticks verbatim", "Use `$x$` here.", "Use $x$ here.", codeOn);
+	eq("wikilink target underscores kept", "See [[my_note]] now.", "See my_note now.");
+	eq("url underscores untouched when speaking host", "See https://x.com/a_b now.", "See x.com now.", { ...OPTS, speakUrls: true });
+
+	// Offsets of the word after each stripped span (non-negotiable 8).
+	const after: Array<[string, string]> = [
+		["The snake_case_name is here.", "is"],
+		["Some ==hi== text.", "text"],
+		["Some <b>x</b> text.", "text"],
+		["Some <br/> text.", "text"],
+		["Some <!-- c --> text.", "text"],
+		["Some[^1] text.", "text"],
+		["Let $x$ be real.", "be"],
+		["So $E=mc^2$ holds.", "holds"],
+		["So $$\\int f$$ holds.", "holds"],
+		["$$\na^2\n$$\nAfter.", "After"],
+		["A <!-- one\ntwo -->\nAfter.", "After"],
+	];
+	for (const [src, word] of after) {
+		// Each word occurs once, after the span, so lastIndexOf is its raw offset.
+		const got = offsetOf(src, word);
+		check(`offset of "${word}" after span in ${JSON.stringify(src)}`, got === src.lastIndexOf(word), `got: ${got}, want: ${src.lastIndexOf(word)}`);
+	}
+	check("snake_case_name keeps its raw offsets", offsetOf("The snake_case_name x.", "snake_case_name") === 4);
+	check("highlighted inner word keeps its offset", offsetOf("Some ==hi== text.", "hi") === 7);
+	check("bold tag inner word keeps its offset", offsetOf("Some <b>x</b> text.", "x") === 8);
+
+	// "equation" highlights exactly the raw math span.
+	const ranges: Array<[string, number, number]> = [
+		["So $E=mc^2$ holds.", 3, 11],
+		["$$\\int_0^1 f(x)dx$$", 0, 19],
+		["Intro.\n\n$$\na^2\n$$\nAfter.", 8, 17],
+	];
+	for (const [src, from, to] of ranges) {
+		const r = equationRange(src);
+		check(`equation highlight covers the math span in ${JSON.stringify(src)}`, r !== undefined && r[0] === from && r[1] === to, `got: ${JSON.stringify(r)}, want: [${from},${to}]`);
+	}
+
+	const fixtures = [
+		"The snake_case_name is important here.", "_emph_ and __strong__", "a*b*c", "~~strike~~ it", "~5 min",
+		"Some ==highlighted== text.", "Some ==**bold** hi== text.", "Some <b>bold</b> and <br/> text.", "un<b>bold</b>ed",
+		'A <span class="x">red</span> word.', "A <!-- hidden secret --> B.", multi, "footnote[^1].", "[^note]: Text.",
+		"I paid $5 and then $10 later.", "Let $x$ be real.", "$E=mc^2$ holds", "$$\\int_0^1 f(x)dx$$",
+		"$$\na^2\n$$\nAfter.", "$$\nnot closed\nMore prose.", "Intro.\n\n$$\na^2\n$$ tail words.\nAfter.",
+		...after.map(([src]) => src),
+	];
+	for (const src of fixtures) {
+		check(`sourceIndex lockstep for ${JSON.stringify(src)}`, lockstep(src));
+		check(`sourceIndex lockstep, code on, for ${JSON.stringify(src)}`, lockstep(src, codeOn));
+	}
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);

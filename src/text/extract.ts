@@ -18,10 +18,86 @@ interface Cleaned {
 	text: string;
 	/** index[i] is the raw markdown offset that produced text[i]. */
 	index: number[];
+	/**
+	 * The line opened an HTML comment it did not close. extractChunks hides
+	 * the following lines until the `-->`. Only meaningful for a top-level
+	 * line, not a re-cleaned link label.
+	 */
+	openComment?: boolean;
 }
 
 function isWordChar(ch: string): boolean {
 	return /[\p{L}\p{N}'’-]/u.test(ch);
+}
+
+/** Letters and digits only: what makes an underscore intraword. */
+const isAlnum = (ch: string | undefined): boolean => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
+const isSpaceOrEdge = (ch: string | undefined): boolean => ch === undefined || /\s/.test(ch);
+
+/**
+ * Inline HTML tag. Two guards stop prose in angle brackets being eaten as a
+ * tag, which would silently drop words:
+ *
+ * - The element name must be in a whitelist, because `x<y and z>w` is
+ *   otherwise a tag named "y", and comparisons are far more common in notes
+ *   than unknown elements.
+ * - Every attribute must be HTML-shaped: `name="v"`, `name='v'` or
+ *   `name=v` with no space, or a bare name only when it is a known boolean
+ *   attribute. Without this, `a <b and c> d` is a `<b>` tag with bare
+ *   attributes "and" and "c" and reads "a d". Anything else is left as text:
+ *   leaked markup costs less than a lost sentence.
+ */
+const BOOLEAN_ATTRIBUTES = [
+	"hidden", "open", "disabled", "checked", "selected", "readonly", "required", "multiple",
+	"autofocus", "novalidate", "reversed", "nowrap", "compact", "inert", "itemscope",
+	"controls", "autoplay", "loop", "muted", "async", "defer",
+];
+const HTML_ATTRIBUTE =
+	`(?:[A-Za-z_:][-A-Za-z0-9_:.]*=(?:"[^"]*"|'[^']*'|[^\\s"'=<>\`]+)` +
+	`|(?:${BOOLEAN_ATTRIBUTES.join("|")})(?=[\\s/>]))`;
+const HTML_TAG = new RegExp(`^<\\/?([A-Za-z][A-Za-z0-9]*)(?:\\s+${HTML_ATTRIBUTE})*\\s*\\/?>`, "i");
+const INLINE_ELEMENTS = new Set([
+	"b", "i", "u", "s", "em", "strong", "mark", "sub", "sup", "small", "big", "span", "font",
+	"a", "abbr", "kbd", "del", "ins", "q", "cite", "code",
+]);
+/** Elements that break the flow of text, so they separate the words either side. */
+const BREAKING_ELEMENTS = new Set(["br", "hr", "p", "div", "img", "center", "details", "summary"]);
+
+const FOOTNOTE_REF = /^\[\^[^\]\s]+\]/;
+
+/**
+ * Math is spoken as the single word "equation" (docs/adr/0004).
+ *
+ * Size rule: display math (`$$...$$`) always says "equation". Inline math
+ * (`$...$`) says it only when the span has 4 or more tokens, where a `\name`
+ * command is one token and each other non-space, non-brace character is one.
+ * A span of 3 or fewer (`$x$`, `$x_1$`, `$\alpha$`) is dropped, because a
+ * maths-heavy note otherwise says "equation" after every symbol.
+ */
+const INLINE_MATH_MIN_TOKENS = 4;
+const MATH_TOKEN = /\\[A-Za-z]+|\\.|[^\s{}]/g;
+/** Characters that are evidence of LaTeX rather than a price. */
+const LATEX_SHAPE = /[\\^_{}=+<>]/;
+
+/**
+ * Where an inline `$` span closes, or -1 if the `$` at `open` is not math.
+ *
+ * Currency heuristic: `$` is a price far more often than it is maths, and
+ * reading "I paid equation later" eats a sentence, which is worse than
+ * reading a symbol. So a span needs positive evidence: no space after the
+ * opening `$`, a closing `$` on the same line with no space before it and no
+ * digit after it (`$5-$10`), and LaTeX-shaped content or a single letter
+ * (`$5$` stays text). When in doubt it is left as text.
+ */
+function inlineMathClose(raw: string, open: number): number {
+	if (isSpaceOrEdge(raw[open + 1]) || raw[open + 1] === "$") return -1;
+	let close = open + 1;
+	while (close < raw.length && !(raw[close] === "$" && raw[close - 1] !== "\\")) close += 1;
+	if (close >= raw.length) return -1;
+	if (/\s/.test(raw[close - 1]!) || /\d/.test(raw[close + 1] ?? "")) return -1;
+	const content = raw.slice(open + 1, close);
+	if (!LATEX_SHAPE.test(content) && !/^\p{L}$/u.test(content)) return -1;
+	return close;
 }
 
 /** Strip inline markdown from a single line, recording source offsets. */
@@ -44,6 +120,20 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 		}
 	};
 
+	/**
+	 * "equation" is synthetic, so it has no raw character of its own. Its
+	 * first seven letters map to the opening `$` and the last to the final
+	 * closing `$`, which makes the word highlight exactly the math span and
+	 * keeps the index non-decreasing.
+	 */
+	const emitEquation = (open: number, lastDollar: number): void => {
+		pushSpace(open);
+		const word = "equation";
+		for (let k = 0; k < word.length - 1; k++) emit(word[k]!, open);
+		emit(word[word.length - 1]!, lastDollar);
+	};
+
+	let openComment = false;
 	let i = 0;
 
 	while (i < raw.length) {
@@ -73,6 +163,71 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 			i = close === -1 ? i + 1 : close + 1;
 			pushSpace(rawStart + i);
 			continue;
+		}
+
+		// Math. Checked before everything but escapes and code, and consumed
+		// from the opening `$`, so a `\\` inside it never reaches the escape
+		// branch and an `_` inside it is never emphasis.
+		if (ch === "$") {
+			if (raw[i + 1] === "$") {
+				const close = raw.indexOf("$$", i + 2);
+				if (close !== -1 && raw.slice(i + 2, close).trim() !== "") {
+					emitEquation(rawStart + i, rawStart + close + 1);
+					i = close + 2;
+					continue;
+				}
+				// A lone `$$` is either a block extractChunks already took, or text.
+				emit("$", rawStart + i);
+				emit("$", rawStart + i + 1);
+				i += 2;
+				continue;
+			}
+			const close = inlineMathClose(raw, i);
+			if (close !== -1) {
+				const tokens = raw.slice(i + 1, close).match(MATH_TOKEN)?.length ?? 0;
+				// No space is pushed after either form: the source's own
+				// whitespace separates words, and a pushed one would read
+				// "equation ." before a full stop.
+				if (tokens >= INLINE_MATH_MIN_TOKENS) emitEquation(rawStart + i, rawStart + close);
+				i = close + 1;
+				continue;
+			}
+			emit(ch, rawStart + i);
+			i += 1;
+			continue;
+		}
+
+		// HTML comment: dropped with its content. Authors put text in comments
+		// precisely because it does not render, so reading it aloud discloses
+		// something they hid. An unclosed one hides the rest of the line and
+		// tells extractChunks to keep hiding, as a browser would.
+		if (ch === "<" && raw.startsWith("<!--", i)) {
+			const close = raw.indexOf("-->", i + 4);
+			if (close === -1) {
+				openComment = true;
+				// The space before the comment would double with the line join.
+				if (chars[chars.length - 1] === " ") {
+					chars.pop();
+					index.pop();
+				}
+				break;
+			}
+			pushSpace(rawStart + i);
+			i = close + 3;
+			continue;
+		}
+
+		// Inline HTML: the tag is dropped and the text between tags is kept,
+		// because the scanner simply carries on. Formatting tags drop with no
+		// space so "un<b>bold</b>ed" stays one word; breaking tags separate.
+		if (ch === "<") {
+			const m = HTML_TAG.exec(raw.slice(i));
+			const name = m?.[1]!.toLowerCase();
+			if (m && name !== undefined && (INLINE_ELEMENTS.has(name) || BREAKING_ELEMENTS.has(name))) {
+				if (BREAKING_ELEMENTS.has(name)) pushSpace(rawStart + i);
+				i += m[0].length;
+				continue;
+			}
 		}
 
 		// Obsidian embed `![[...]]`: dropped. Must precede the image branch, which
@@ -129,6 +284,22 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 			i = close + 2;
 			pushSpace(rawStart + i);
 			continue;
+		}
+
+		// Footnote reference `[^1]`: dropped with no space, so "word[^1]." reads
+		// "word." At the start of a line followed by `:` it is a definition, and
+		// only the marker goes; whether footnote text is read is out of scope.
+		if (ch === "[" && raw[i + 1] === "^") {
+			const m = FOOTNOTE_REF.exec(raw.slice(i));
+			if (m) {
+				const atLineStart = i === 0;
+				i += m[0].length;
+				if (atLineStart && raw[i] === ":") {
+					i += 1;
+					while (i < raw.length && /\s/.test(raw[i]!)) i += 1;
+				}
+				continue;
+			}
 		}
 
 		// Image: dropped entirely, alt text is not prose.
@@ -231,9 +402,54 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 			continue;
 		}
 
-		// Emphasis and strikethrough markers: dropped, contents kept.
+		// Highlight `==text==`. Both inner edges must be non-space and neither
+		// run may be part of a longer `=` run, so `a == b` and `===` stay text.
+		if (
+			ch === "=" &&
+			raw[i + 1] === "=" &&
+			raw[i - 1] !== "=" &&
+			raw[i + 2] !== "=" &&
+			!isSpaceOrEdge(raw[i + 2])
+		) {
+			const close = raw.indexOf("==", i + 2);
+			if (close !== -1 && !/\s/.test(raw[close - 1]!) && raw[close + 2] !== "=") {
+				const inner = cleanLine(raw.slice(i + 2, close), rawStart + i + 2, opts);
+				for (let k = 0; k < inner.text.length; k++) {
+					emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 2);
+				}
+				i = close + 2;
+				continue;
+			}
+		}
+
+		// Emphasis and strikethrough markers: dropped, contents kept. A marker
+		// run with whitespace or a line edge on both sides cannot be emphasis
+		// ("2 * 3", "a _ b") and is kept.
 		if (ch === "*" || ch === "_" || ch === "~") {
-			i += 1;
+			let end = i;
+			while (raw[end] === ch) end += 1;
+			const before = raw[i - 1];
+			const after = raw[end];
+			const spaced = isSpaceOrEdge(before) && isSpaceOrEdge(after);
+			let markup = !spaced;
+			if (ch === "_") {
+				// An underscore between letters or digits is part of an
+				// identifier (snake_case_name), not emphasis. It is markup only
+				// when it opens or closes a word, as CommonMark's flanking rule
+				// has it. No open/close pairing: "__init__" drops both runs,
+				// which is also how Obsidian renders it.
+				const leftFlank = !isSpaceOrEdge(after) && !isAlnum(before);
+				const rightFlank = !isSpaceOrEdge(before) && !isAlnum(after);
+				markup = leftFlank || rightFlank;
+			} else if (ch === "~") {
+				// Obsidian has no single-tilde strikethrough, and "~5 min" or
+				// "~/dir" are common, so only an exact `~~` is markup.
+				markup = markup && end - i === 2;
+			}
+			if (!markup) {
+				for (let k = i; k < end; k++) emit(ch, rawStart + k);
+			}
+			i = end;
 			continue;
 		}
 
@@ -247,7 +463,7 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 		i += 1;
 	}
 
-	return { text: chars.join(""), index };
+	return { text: chars.join(""), index, openComment };
 }
 
 interface StripOptions {
@@ -490,9 +706,23 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 	const chunks: SpeechChunk[] = [];
 	const lines = source.split("\n");
 
-	let rawOffset = 0;
+	// Per-line raw offsets, because a math block skips ahead several lines at
+	// once and every sourceIndex entry must still be a true raw offset.
+	const lineStarts: number[] = [];
+	let offset = 0;
+	for (const line of lines) {
+		lineStarts.push(offset);
+		offset += line.length + 1;
+	}
+
 	let inFence = false;
+	let inComment = false;
 	const frontmatter = detectFrontmatter(lines);
+	const stripOpts: StripOptions = {
+		stripTags: opts.stripTags,
+		skipInlineCode: opts.skipInlineCode,
+		speakUrls: opts.speakUrls,
+	};
 
 	let paraText = "";
 	let paraIndex: number[] = [];
@@ -524,10 +754,16 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		}
 	};
 
+	/** Clean text that follows a closing `-->` or `$$`, as prose. */
+	const appendRemainder = (raw: string, from: number, lineStart: number): void => {
+		const cleaned = cleanLine(raw.slice(from), lineStart + from, stripOpts);
+		inComment = cleaned.openComment === true;
+		if (cleaned.text.trim() !== "") appendToParagraph(cleaned, lineStart + from);
+	};
+
 	for (let lineNo = 0; lineNo < lines.length; lineNo++) {
 		const raw = lines[lineNo]!;
-		const lineStart = rawOffset;
-		rawOffset += raw.length + 1;
+		const lineStart = lineStarts[lineNo]!;
 
 		// This deliberately diverges from Obsidian, which only honours a `---`
 		// on line 1. A note that starts with blank lines and then a `key: value`
@@ -536,9 +772,20 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		// recoverable, reading someone's frontmatter aloud is not. Do not "fix"
 		// this back to a positional check; see docs/adr/0002.
 		//
-		// Skipped lines are dropped whole. rawOffset has already advanced past
-		// them, so every later sourceIndex entry is still a true raw offset.
+		// Skipped lines are dropped whole. lineStarts are fixed up front, so
+		// every later sourceIndex entry is still a true raw offset.
 		if (frontmatter && lineNo <= frontmatter.endLine) continue;
+
+		// Inside an HTML comment opened on an earlier line. Checked before
+		// fences: a fence inside a comment does not render either. With no
+		// closer the comment runs to the end of the note, as HTML renders it;
+		// silence over disclosure, the same trade as docs/adr/0002.
+		if (inComment) {
+			const close = raw.indexOf("-->");
+			if (close === -1) continue;
+			appendRemainder(raw, close + 3, lineStart);
+			continue;
+		}
 
 		// The fence line itself, including an info string like "js", is never
 		// spoken. Flushing at both fences paces a spoken block as one paragraph.
@@ -555,6 +802,28 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		if (HR.test(raw)) {
 			flushParagraph();
 			continue;
+		}
+
+		// Display math block: a line starting `$$` with no closer on it, closed
+		// by a `$$` on a later line. It is one chunk, the word "equation"
+		// (docs/adr/0004), mapped like the inline form: the opening `$` for
+		// all but the last letter, the final closing `$` for the last. With no
+		// closer anywhere it is not a block, so a stray `$$` cannot swallow the
+		// rest of the note.
+		const mathOpen = raw.indexOf("$$");
+		if (raw.trimStart().startsWith("$$") && raw.indexOf("$$", mathOpen + 2) === -1) {
+			let closeLine = lineNo + 1;
+			while (closeLine < lines.length && !lines[closeLine]!.includes("$$")) closeLine += 1;
+			if (closeLine < lines.length) {
+				const closeAt = lines[closeLine]!.indexOf("$$");
+				const open = lineStart + mathOpen;
+				const last = lineStarts[closeLine]! + closeAt + 1;
+				flushParagraph();
+				chunks.push(...splitSentences("equation", [open, open, open, open, open, open, open, last], open));
+				lineNo = closeLine;
+				appendRemainder(lines[closeLine]!, closeAt + 2, lineStarts[closeLine]!);
+				continue;
+			}
 		}
 		if (opts.skipTables && TABLE_ROW.test(raw)) {
 			flushParagraph();
@@ -590,11 +859,8 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 			continue;
 		}
 
-		const cleaned = cleanLine(body, lineStart + prefixChars, {
-			stripTags: opts.stripTags,
-			skipInlineCode: opts.skipInlineCode,
-			speakUrls: opts.speakUrls,
-		});
+		const cleaned = cleanLine(body, lineStart + prefixChars, stripOpts);
+		inComment = cleaned.openComment === true;
 		if (cleaned.text.trim() === "") continue;
 
 		if (isStructural) {
