@@ -349,9 +349,13 @@ console.log("wikilinks and embeds (NRL-6)");
 	const unterminated = spokenOf("An open [[wikilink never closes here.");
 	check("unterminated [[ drops the brackets and reads on", unterminated === "An open wikilink never closes here.", `got: ${JSON.stringify(unterminated)}`);
 
-	// NRL-8 owns callouts; a single bracket must still take the old path.
-	const callout = spokenOf("[!note] Callout body text here.");
-	check("single-bracket [!note] path unchanged", callout === "!note Callout body text here.", `got: ${JSON.stringify(callout)}`);
+	// A callout marker is only a callout inside a blockquote (NRL-8). A bare
+	// [!note] line is not one in Obsidian either, so it still takes the
+	// single-bracket inline path.
+	const callout = spokenOf("> [!note] Callout body text here.");
+	check("quoted [!note] callout drops its marker", callout === "Callout body text here.", `got: ${JSON.stringify(callout)}`);
+	const bareCallout = spokenOf("[!note] Callout body text here.");
+	check("bare [!note] line keeps the single-bracket path", bareCallout === "!note Callout body text here.", `got: ${JSON.stringify(bareCallout)}`);
 
 	// Offsets: a word after a wikilink maps to its true raw offset.
 	const off = "See [[Some Note|alias]] today.";
@@ -374,7 +378,7 @@ console.log("wikilinks and embeds (NRL-6)");
 	);
 
 	const fixtures = [plain, alias, off, embed, "Read [[Some Note|]] now please.", "An open [[wikilink never closes here.",
-		"[!note] Callout body text here.", "Line one [[A|b]] and\n![[img.png]] then [[C#D]] end.", ...Object.keys(headings)];
+		"[!note] Callout body text here.", "> [!note] Callout body text here.", "Line one [[A|b]] and\n![[img.png]] then [[C#D]] end.", ...Object.keys(headings)];
 	for (const src of fixtures) {
 		check(`sourceIndex lockstep for ${JSON.stringify(src)}`, lockstep(src));
 	}
@@ -661,6 +665,148 @@ console.log("inline markup (NRL-9)");
 	for (const src of fixtures) {
 		check(`sourceIndex lockstep for ${JSON.stringify(src)}`, lockstep(src));
 		check(`sourceIndex lockstep, code on, for ${JSON.stringify(src)}`, lockstep(src, codeOn));
+	}
+}
+
+console.log("block markup (NRL-8)");
+{
+	const HEAD_OFF = { ...OPTS, skipHeadings: true };
+	const codeOn = { ...OPTS, skipCodeBlocks: false };
+	const texts = (src: string, opts = OPTS): string[] => extractChunks(src, opts).map((c) => c.text);
+	const expect = (src: string, want: string[], opts = OPTS, label = ""): void => {
+		const got = texts(src, opts);
+		check(
+			`${JSON.stringify(src)}${label} -> ${JSON.stringify(want)}`,
+			JSON.stringify(got) === JSON.stringify(want),
+			`got: ${JSON.stringify(got)}`,
+		);
+	};
+	const lockstep = (src: string, opts = OPTS): boolean =>
+		extractChunks(src, opts).every(
+			(k) =>
+				k.sourceIndex.length === k.text.length &&
+				[...k.text].every((ch, i) => ch === " " || src[k.sourceIndex[i]!] === ch),
+		);
+	const offsetOf = (src: string, word: string, opts = OPTS): number | undefined => {
+		const k = extractChunks(src, opts).find((c) => c.text.includes(word));
+		return k ? k.sourceIndex[k.text.indexOf(word)] : undefined;
+	};
+	const fixtures: string[] = [];
+	const add = (src: string, want: string[], opts = OPTS, label = ""): void => {
+		fixtures.push(src);
+		expect(src, want, opts, label);
+	};
+
+	// The three ticket reproductions, exactly.
+	add("> [!note] Title\n> Body text goes here.", ["Title", "Body text goes here."]);
+	add("- [x] done item in the list", ["done item in the list"]);
+	add("My Title\n========\nBody.", ["My Title", "Body."]);
+
+	// Callouts: the type and fold marker are dropped silently (NRL-8 Decision).
+	add("> [!tip]+ Expand me\n> Hidden body.", ["Expand me", "Hidden body."]);
+	add("> [!warning]- Folded title", ["Folded title"]);
+	add("> [!NOTE] Upper case type", ["Upper case type"]);
+	add("> [!my-type] Custom type", ["Custom type"]);
+	add("> [!note]\n> Only body here.", ["Only body here."]);
+	add("> > [!tip]- Nested title", ["Nested title"]);
+	add("> > deep quote", ["deep quote"]);
+	add("> [!info] Title\n> Line one of body.\n> Line two of body.", ["Title", "Line one of body.", "Line two of body."]);
+	// Guards: a quoted link or bracket is not a callout; these must match the
+	// unquoted prose path before and after the fix.
+	for (const inner of ["[link](x) here", "[text] y"]) {
+		const quoted = `> ${inner}`;
+		fixtures.push(quoted);
+		const got = texts(quoted);
+		const want = texts(inner);
+		check(`${JSON.stringify(quoted)} is not a callout`, JSON.stringify(got) === JSON.stringify(want), `got: ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+	}
+
+	// Task items: any single status char, state not announced (NRL-8 Decision).
+	for (const marker of ["-", "*", "+", "1.", "1)"]) {
+		for (const state of [" ", "x", "X", "/", "-", ">", "?"]) {
+			add(`${marker} [${state}] task text here`, ["task text here"]);
+		}
+	}
+	add("- a\n    - [ ] nested task", ["a", "nested task"]);
+	add("> - [ ] quoted task", ["quoted task"]);
+	add("- [ ] todo item", ["todo item"]);
+	// Not a checkbox: no space after, or more than one char. Same as prose.
+	for (const inner of ["[x]text", "[ab] thing"]) {
+		const listed = `- ${inner}`;
+		fixtures.push(listed);
+		const got = texts(listed);
+		const want = texts(inner);
+		check(`${JSON.stringify(listed)} is not a task`, JSON.stringify(got) === JSON.stringify(want), `got: ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+	}
+
+	// Setext headings: never speak the underline; honour skipHeadings.
+	add("My Title\n========\nBody.", ["Body."], HEAD_OFF, " (skipHeadings)");
+	add("Sub Title\n--------\nBody.", ["Sub Title", "Body."]);
+	add("Sub Title\n--------\nBody.", ["Body."], HEAD_OFF, " (skipHeadings)");
+	add("Line one\nline two\n===\nBody.", ["Line one line two", "Body."]);
+	add("Line one\nline two\n===\nBody.", ["Body."], HEAD_OFF, " (skipHeadings)");
+	add("Intro.\n\nMy Title\n===   \nBody.", ["Intro.", "My Title", "Body."]);
+	// A "---" with no paragraph line directly above is still a rule.
+	add("Para.\n\n---\n\nNext.", ["Para.", "Next."], HEAD_OFF, " (skipHeadings)");
+	add("# Head\n---\nNext.", ["Head", "Next."]);
+	add("- item\n---\nNext.", ["item", "Next."]);
+	add("Para.\n***\nNext.", ["Para.", "Next."], HEAD_OFF, " (skipHeadings)");
+	add("Para.\n- - -\nNext.", ["Para.", "Next."], HEAD_OFF, " (skipHeadings)");
+	// A lazy continuation of a list item or quote cannot take a setext
+	// underline (CommonMark), so "---" there is a rule. Treating it as a
+	// heading made skipHeadings silently drop the continuation line.
+	add("- item one\ncontinued lazily\n---\nAfter.", ["item one", "continued lazily", "After."], HEAD_OFF, " (skipHeadings)");
+	add("> quote one\nlazy line\n---\nAfter.", ["quote one", "lazy line", "After."], HEAD_OFF, " (skipHeadings)");
+	add("- item\n\n  para in item\n---\nAfter.", ["item", "para in item", "After."], HEAD_OFF, " (skipHeadings)");
+	// Once the list has ended, setext works again.
+	add("- a\n\nTitle\n---\nAfter.", ["a", "After."], HEAD_OFF, " (skipHeadings)");
+
+	// Indented code: CommonMark shape, governed by skipCodeBlocks.
+	add("    const x = 1;\nAfter.", ["After."]);
+	add("Intro.\n\n    const x = 1;", ["Intro."]);
+	add("Intro.\n\n    const x = 1;\n\nAfter.", ["Intro.", "After."]);
+	add("Intro.\n\n    const x = 1;\n\nAfter.", ["Intro.", "const x = 1;", "After."], codeOn, " (code on)");
+	add("Intro.\n\n    a = 1;\n\n      b = 2;\nAfter.", ["Intro.", "a = 1; b = 2;", "After."], codeOn, " (code on)");
+	add("Intro.\n\n\tconst y = 2;", ["Intro."]);
+	add("Intro.\n\n    ```\n    secret\n\nAfter.", ["Intro.", "After."]);
+	add("Intro.\n\n    | a | b |\n\nAfter.", ["Intro.", "After."], { ...OPTS, skipTables: false }, " (tables on)");
+	add("---\ntitle: x\n---\n    code line\nAfter.", ["After."]);
+	// Not code: no blank line before it, or inside a list item.
+	add("Para\n    not code", ["Para not code"]);
+	add("- item\n\n    continuation para", ["item", "continuation para"]);
+	add("- a\n\nPara.\n\n    code now", ["a", "Para."]);
+
+	// Nested list markers at any depth are stripped.
+	add("- a\n    - deep item", ["a", "deep item"]);
+	add("- a\n        - deeper item", ["a", "deeper item"]);
+	add("- a\n\t- tab item", ["a", "tab item"]);
+	add("1. a\n    1. inner", ["a", "inner"]);
+	add("- a\n\n    - after blank still list", ["a", "after blank still list"]);
+
+	// Offsets: the first spoken word maps to its raw offset.
+	const offsets: Array<[string, string, typeof OPTS]> = [
+		["> [!note] Title\n> Body text goes here.", "Title", OPTS],
+		["> [!note] Title\n> Body text goes here.", "Body", OPTS],
+		["> > [!tip]- Nested title", "Nested", OPTS],
+		["- [x] done item in the list", "done", OPTS],
+		["1. [ ] numbered task", "numbered", OPTS],
+		["My Title\n========\nBody.", "My", OPTS],
+		["My Title\n========\nBody.", "Body", OPTS],
+		["Line one\nline two\n===\nBody.", "line", OPTS],
+		["- a\n    - deep item", "deep", OPTS],
+		["- a\n\t- tab item", "tab", OPTS],
+		["Intro.\n\n    const x = 1;\n\nAfter.", "const", codeOn],
+		["Intro.\n\n    const x = 1;\n\nAfter.", "After", OPTS],
+	];
+	for (const [src, word, opts] of offsets) {
+		const got = offsetOf(src, word, opts);
+		check(`${JSON.stringify(word)} in ${JSON.stringify(src)} maps to its raw offset`, got === src.indexOf(word), `got: ${got} want ${src.indexOf(word)}`);
+	}
+
+	for (const src of fixtures) {
+		for (const opts of [OPTS, codeOn, HEAD_OFF]) {
+			check(`sourceIndex lockstep for ${JSON.stringify(src)} (${JSON.stringify({ c: opts.skipCodeBlocks, h: opts.skipHeadings })})`, lockstep(src, opts));
+		}
 	}
 }
 

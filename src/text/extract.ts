@@ -591,8 +591,50 @@ function splitOversized(chunk: SpeechChunk): SpeechChunk[] {
 
 const FENCE = /^\s*(```|~~~)/;
 const HEADING = /^\s{0,3}#{1,6}\s+/;
-const LIST_BULLET = /^\s{0,3}([-*+]|\d+[.)])\s+/;
-const BLOCKQUOTE = /^\s{0,3}>\s?/;
+/**
+ * Any indent: inside a list, "    - item" is a nested item, and its marker
+ * must be stripped rather than spoken. Indented code is told apart by state
+ * (see INDENTED_CODE), not by this pattern.
+ */
+const LIST_BULLET = /^\s*([-*+]|\d+[.)])\s+/;
+/** Every nesting level at once, so "> > x" does not speak the inner ">". */
+const BLOCKQUOTE = /^(?:\s{0,3}>\s?)+/;
+/**
+ * Obsidian callout marker, `[!type]` with an optional fold `+` or `-`. Only
+ * recognised straight after a blockquote prefix, because a bare `[!note]` line
+ * renders literally in Obsidian. Requiring `[!` keeps `> [link](x)` and
+ * `> [text]` on the normal path.
+ *
+ * The type is dropped silently, not announced as "Note:". That was a
+ * deliberate call (NRL-8 Decisions, 2026-09-28): prose flow matters more than
+ * the callout kind when listening. If it proves wrong the fix is a setting,
+ * not a hardcoded prefix.
+ */
+const CALLOUT = /^\[![A-Za-z][\w-]*\][+-]?\s*/;
+/**
+ * Task checkbox after a list marker. Any single status char, since Obsidian
+ * renders `[ ]`, `[x]`, `[/]`, `[-]`, `[>]`, `[?]` and friends all as
+ * checkboxes. The trailing space-or-end keeps "- [x]text" and "- [ab]" as
+ * text.
+ *
+ * Checked state is not spoken (NRL-8 Decisions, 2026-09-28). A listener cannot
+ * tell done from open; that is the accepted trade, because a reader who needs
+ * task state is looking at the screen. If it proves wrong, add a setting.
+ */
+const TASK = /^\[[^\]]\](?=\s|$)\s*/;
+/**
+ * Setext underline. Only an underline when a paragraph line sits directly
+ * above it; otherwise "---" is a rule and "===" is text, so this is checked
+ * against parse state before HR.
+ */
+const SETEXT = /^ {0,3}(?:=+|-+)\s*$/;
+/**
+ * Four columns of indent. A tab after up to three spaces reaches the next tab
+ * stop, which is column four, so it counts too. Whether the line is code
+ * depends on state: CommonMark only starts indented code after a blank line
+ * or at the start of the document, and never inside a list item.
+ */
+const INDENTED_CODE = /^(?: {4}| {0,3}\t)/;
 const TABLE_ROW = /^\s*\|/;
 /**
  * Thematic break: three or more of the same marker, optionally spaced. Checked
@@ -680,7 +722,7 @@ export interface ExtractOptions {
 	stripTags: boolean;
 	/** Bare URLs are spoken as their host only (docs/adr/0003). */
 	speakUrls: boolean;
-	/** Fenced code blocks. Indented code is not parsed yet (NRL-8). */
+	/** Fenced and indented code blocks. */
 	skipCodeBlocks: boolean;
 	skipInlineCode: boolean;
 	skipTables: boolean;
@@ -691,8 +733,11 @@ export interface ExtractOptions {
  * Turn a markdown note into speakable chunks.
  *
  * Frontmatter is located up front by shape (see detectFrontmatter). The rest
- * works line by line and tracks code-fence state, because that is the only
- * context needed to know whether a `#` is a tag or a heading.
+ * works line by line. It tracks fence state, because that decides whether a
+ * `#` is a tag or a heading, and a little block state (list, indented code,
+ * whether the previous line was blank or paragraph text), because that
+ * decides whether an indented line is code and whether `---` underlines a
+ * heading or is a rule.
  *
  * Plain paragraph lines are buffered and joined before sentence-splitting.
  * Markdown soft-wraps a paragraph across multiple source lines with no blank
@@ -717,6 +762,21 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 
 	let inFence = false;
 	let inComment = false;
+	let inIndentedCode = false;
+	// Inside a list item, an indented line is item content or a nested item,
+	// never code. Kept across blank lines, since loose lists have them.
+	let inList = false;
+	// Document start counts as a blank line for indented code, and so does the
+	// line right after frontmatter, which is skipped without updating these.
+	let prevBlank = true;
+	// The previous line was plain paragraph text, so a setext underline here
+	// turns the buffered paragraph into a heading.
+	let prevPara = false;
+	// The previous line was a list item or quote line, or a lazy continuation
+	// of one. A plain line after it continues that container, and CommonMark
+	// does not let a setext underline follow a lazy line: "---" there is a
+	// rule. Getting this wrong let skipHeadings drop the continuation text.
+	let prevContainer = false;
 	const frontmatter = detectFrontmatter(lines);
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
@@ -776,6 +836,17 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		// every later sourceIndex entry is still a true raw offset.
 		if (frontmatter && lineNo <= frontmatter.endLine) continue;
 
+		const blank = raw.trim() === "";
+		const wasBlank = prevBlank;
+		const wasPara = prevPara;
+		const wasContainer = prevContainer;
+		// Read before the list-end check below, which ends the list on this very
+		// "---" line and would otherwise hide that the paragraph was in it.
+		const wasInList = inList;
+		prevBlank = blank;
+		prevPara = false;
+		prevContainer = false;
+
 		// Inside an HTML comment opened on an earlier line. Checked before
 		// fences: a fence inside a comment does not render either. With no
 		// closer the comment runs to the end of the note, as HTML renders it;
@@ -785,6 +856,41 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 			if (close === -1) continue;
 			appendRemainder(raw, close + 3, lineStart);
 			continue;
+		}
+
+		if (!inFence) {
+			// A list ends at an unindented line that is not an item, when a blank
+			// line precedes it or it opens another block. Without a blank line an
+			// unindented line is lazy continuation of the item.
+			if (
+				inList &&
+				!blank &&
+				!/^\s/.test(raw) &&
+				!LIST_BULLET.test(raw) &&
+				(wasBlank || HEADING.test(raw) || FENCE.test(raw) || HR.test(raw) || BLOCKQUOTE.test(raw))
+			) {
+				inList = false;
+			}
+
+			// Indented code. Checked before fences, rules, math and tables: an
+			// indented "```" or "| a |" is code content, not a block opener. Blank
+			// lines stay inside the block; a less-indented line ends it and is then
+			// read normally. Spoken like a fenced block when skipCodeBlocks is off,
+			// through verbatimLine, which drops the indent with true offsets.
+			if (inIndentedCode) {
+				if (blank) continue;
+				if (INDENTED_CODE.test(raw)) {
+					if (!opts.skipCodeBlocks) appendToParagraph(verbatimLine(raw, lineStart), lineStart);
+					continue;
+				}
+				inIndentedCode = false;
+				flushParagraph();
+			} else if (!blank && !inList && wasBlank && INDENTED_CODE.test(raw)) {
+				flushParagraph();
+				inIndentedCode = true;
+				if (!opts.skipCodeBlocks) appendToParagraph(verbatimLine(raw, lineStart), lineStart);
+				continue;
+			}
 		}
 
 		// The fence line itself, including an info string like "js", is never
@@ -797,6 +903,20 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		if (inFence) {
 			if (opts.skipCodeBlocks || raw.trim() === "") continue;
 			appendToParagraph(verbatimLine(raw, lineStart), lineStart);
+			continue;
+		}
+		// Setext heading: the whole buffered paragraph is the heading, as in
+		// CommonMark, and the underline is never spoken. Before HR, since "---"
+		// under a paragraph line is an underline, not a rule. Never inside a
+		// list: an unindented underline is outside the item, so it is a rule,
+		// and erring that way speaks the text instead of dropping it.
+		if (wasPara && !wasInList && paraText !== "" && SETEXT.test(raw)) {
+			if (opts.skipHeadings) {
+				paraText = "";
+				paraIndex = [];
+			} else {
+				flushParagraph();
+			}
 			continue;
 		}
 		if (HR.test(raw)) {
@@ -842,10 +962,30 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 			prefixChars = m[0].length;
 			isStructural = true;
 		} else {
-			const b = raw.match(BLOCKQUOTE) ?? raw.match(LIST_BULLET);
-			if (b) {
-				prefixChars = b[0].length;
+			// Peel prefixes in order, each adding to prefixChars so cleanLine gets
+			// the true raw offset of the first kept character: quote levels, then
+			// a callout marker, or else a list marker and its task checkbox.
+			const q = raw.match(BLOCKQUOTE);
+			if (q) {
+				prefixChars = q[0].length;
 				isStructural = true;
+				prevContainer = true;
+			}
+			const callout = q ? raw.slice(prefixChars).match(CALLOUT) : null;
+			if (callout) {
+				prefixChars += callout[0].length;
+			} else {
+				const b = raw.slice(prefixChars).match(LIST_BULLET);
+				if (b) {
+					prefixChars += b[0].length;
+					isStructural = true;
+					prevContainer = true;
+					// A quoted list ends with its quote, so it does not hold the
+					// list state that shields later indented lines from being code.
+					if (!q) inList = true;
+					const task = raw.slice(prefixChars).match(TASK);
+					if (task) prefixChars += task[0].length;
+				}
 			}
 		}
 		body = raw.slice(prefixChars);
@@ -870,6 +1010,8 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		}
 
 		appendToParagraph(cleaned, lineStart + prefixChars);
+		if (wasContainer) prevContainer = true;
+		else prevPara = true;
 	}
 
 	flushParagraph();
