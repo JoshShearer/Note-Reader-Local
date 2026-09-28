@@ -11,7 +11,8 @@ import {
 	type KokoroOptions,
 	type WeightsPreference,
 } from "./engines/onnx/kokoro";
-import { DEFAULT_SETTINGS, normaliseSettings, type Settings } from "./settings";
+import { DEFAULT_SETTINGS, type Settings } from "./settings";
+import { loadPluginData, serialisePluginData, type PluginData } from "./settings/data";
 import { applyHighlight, registerHighlighting } from "./ui/highlight";
 import { createModelStore, type VaultModelStore } from "./ui/modelStore";
 import { reportError, trace } from "./diagnostics";
@@ -20,6 +21,12 @@ import { ControlBar } from "./ui/controlBar";
 
 export default class LocalTtsReaderPlugin extends Plugin {
 	override settings: Settings = { ...DEFAULT_SETTINGS };
+	/**
+	 * The loaded data.json container. Held so saveSettings() writes back the
+	 * version, positions and any keys this build does not know about, instead
+	 * of replacing the whole file with the settings object.
+	 */
+	private pluginData!: PluginData;
 
 	private engines: SpeechEngine[] = [];
 	private player!: Player;
@@ -29,7 +36,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 	override async onload(): Promise<void> {
 		trace(this.app, this.manifest.dir!, "plugin loaded");
-		this.settings = normaliseSettings(await this.loadData());
+		this.pluginData = loadPluginData(await this.loadData());
+		this.settings = this.pluginData.settings;
 
 		this.modelStore = createModelStore(
 			this.app,
@@ -193,11 +201,11 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		registerHighlighting(current.editor);
 
 		const chunks = extractChunks(current.source, {
-			stripTags: this.settings.strip.tags,
-			skipUrls: this.settings.strip.urls,
-			skipCode: this.settings.strip.code,
-			skipTables: this.settings.strip.tables,
-			skipHeadings: this.settings.strip.headings,
+			stripTags: this.settings.skipTags,
+			skipUrls: !this.settings.speakUrls,
+			skipCode: this.settings.skipCodeBlocks,
+			skipTables: this.settings.skipTables,
+			skipHeadings: this.settings.skipHeadings,
 		});
 		t("chunks extracted", `${chunks.length}`);
 
@@ -368,7 +376,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	async saveSettings(): Promise<void> {
-		await this.saveData(this.settings);
+		this.pluginData = serialisePluginData(this.pluginData, this.settings);
+		await this.saveData(this.pluginData);
 	}
 
 	getPlayer(): Player {
