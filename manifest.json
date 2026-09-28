@@ -1,0 +1,9 @@
+{
+	"id": "local-tts-reader",
+	"name": "Local TTS Reader",
+	"version": "0.1.0",
+	"minAppVersion": "1.8.0",
+	"description": "Read notes aloud with on-device text-to-speech and word highlighting. No cloud, no API keys.",
+	"author": "Josh Shearer",
+	"isDesktopOnly": false
+}

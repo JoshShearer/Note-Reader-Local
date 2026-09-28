@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output. These are attached to GitHub releases, not tracked here:
+# Obsidian's installer downloads them from the release, and `ort/` is 32MB of
+# WASM copied out of node_modules at build time.
+main.js
+kokoro-worker.js
+ort/
+*.map
+
+# Test scratch
+tests/.build/
+
+# Local model weights and downloads
+models/
+
+# Obsidian plugin data from a local sideload
+data.json
+
+# Logs
+*.log
+
+# Editors and OS
+.vscode/
+.idea/
+*.iml
+.DS_Store

@@ -1,0 +1,147 @@
+<!doctype html>
+<!--
+  Synthesis speed harness: the real worker, in a real browser engine.
+
+  Performance claims about this plugin cannot be made from unit tests. The
+  cost is onnxruntime running a 82M-parameter model inside a Web Worker, and
+  it swings by more than 3x with the weights build and the thread count. This
+  page loads the plugin's own built `kokoro-worker.js` the same way the plugin
+  does (blob URL, model bytes by postMessage) and reports wall time against
+  audio duration, so "faster" can be measured instead of asserted. It also
+  checks that stopping actually drops queued work, which is a timing bug no
+  unit test would have caught.
+
+  Usage:
+    npm run build
+    cp kokoro-worker.js ort/ort-wasm-simd-threaded.jsep.* tests/perf/
+    ln -s <vault>/.obsidian/local-tts/kokoro tests/perf/model
+    python3 tests/perf/server.py 8765
+    open http://127.0.0.1:8765/index.html?threads=4&device=auto
+
+  Query parameters: threads, device (auto|wasm|webgpu), dtype, weights.
+  A ratio of 1.0 means synthesis exactly keeps up with playback; above 1.0 and
+  gaps open up between sentences.
+-->
+<html>
+  <body>
+    <pre id="log"></pre>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const threads = Number(params.get("threads") ?? 1);
+      const device = params.get("device") ?? "wasm";
+      const lines = [];
+      const log = (s) => {
+        lines.push(s);
+        document.getElementById("log").textContent = lines.join("\n");
+        document.title = "RESULT::" + lines.join(" || ");
+        console.log(s);
+      };
+
+      const SENTENCES = [
+        "The quick brown fox jumps over the lazy dog near the river bank.",
+        "Architecture is the art of deciding what matters, and then defending that decision against everything else.",
+        "Local TTS Reader reads this sentence aloud while the next one is being synthesised in the background.",
+      ];
+
+      const grab = async (url) => (await fetch(url)).arrayBuffer();
+      const blobUrl = async (url, type) =>
+        URL.createObjectURL(new Blob([await grab(url)], { type }));
+
+      (async () => {
+        try {
+          log(`crossOriginIsolated=${crossOriginIsolated} SAB=${typeof SharedArrayBuffer !== "undefined"} cores=${navigator.hardwareConcurrency}`);
+
+          const dtype = params.get("dtype") ?? "q8";
+          const weights = params.get("weights") ?? "model/onnx/model_quantized.onnx";
+          const weightsPath = "onnx/" + weights.split("/").pop();
+          log(`dtype=${dtype} weights=${weights}`);
+
+          const paths = ["config.json", "tokenizer.json", "tokenizer_config.json", "voices/af_heart.bin"];
+          const files = [];
+          for (const p of paths) files.push({ path: p, bytes: await grab(`model/${p}`) });
+          files.push({ path: weightsPath, bytes: await grab(weights) });
+
+          const workerUrl = await blobUrl("kokoro-worker.js", "text/javascript");
+          const mjs = await blobUrl("ort-wasm-simd-threaded.jsep.mjs", "text/javascript");
+          const wasm = await blobUrl("ort-wasm-simd-threaded.jsep.wasm", "application/wasm");
+
+          const worker = new Worker(workerUrl, { type: "classic" });
+          let t0 = performance.now();
+          const pending = new Map();
+
+          const ready = new Promise((resolve, reject) => {
+            worker.addEventListener("message", (e) => {
+              const m = e.data;
+              if (m.type === "info") log(`info: ${m.message}`);
+              else if (m.type === "ready") {
+                log(`READY device=${m.device} threads=${m.threads} load=${Math.round(performance.now() - t0)}ms`);
+                resolve(m);
+              } else if (m.type === "audio") {
+                pending.get(m.id)?.(m);
+                pending.delete(m.id);
+              } else if (m.type === "error") {
+                log(`ERROR ${m.message}`);
+                if (m.id === undefined) reject(new Error(m.message));
+              }
+            });
+            worker.addEventListener("error", (e) => reject(new Error("worker error: " + e.message)));
+          });
+
+          worker.postMessage(
+            {
+              type: "init",
+              modelId: "onnx-community/Kokoro-82M-v1.0-ONNX",
+              modelBase: "local-model://kokoro/",
+              wasmPaths: { mjs, wasm },
+              files,
+              dtype,
+              device,
+              threads,
+            },
+            files.map((f) => f.bytes),
+          );
+
+          await ready;
+
+          let id = 1;
+          for (let run = 0; run < 2; run++) {
+            for (const text of SENTENCES) {
+              const myId = id++;
+              const start = performance.now();
+              const audio = await new Promise((res) => {
+                pending.set(myId, res);
+                worker.postMessage({ type: "speak", id: myId, text, voice: "af_heart", rate: 1 });
+              });
+              const wall = (performance.now() - start) / 1000;
+              const secs = audio.pcm.length / audio.sampleRate;
+              log(`run${run} audio=${secs.toFixed(1)}s wall=${wall.toFixed(1)}s ratio=${(wall / secs).toFixed(2)}x`);
+            }
+          }
+          // Cancel test: queue several sentences, cancel immediately, then
+          // time one more. Without a working cancel the new request waits
+          // behind everything abandoned.
+          const queued = [];
+          for (let i = 0; i < 5; i++) {
+            const qid = id++;
+            queued.push(qid);
+            worker.postMessage({ type: "speak", id: qid, text: SENTENCES[i % 3], voice: "af_heart", rate: 1 });
+          }
+          worker.postMessage({ type: "cancel" });
+          const cancelId = id++;
+          const cancelStart = performance.now();
+          const after = await new Promise((res) => {
+            pending.set(cancelId, res);
+            worker.postMessage({ type: "speak", id: cancelId, text: SENTENCES[0], voice: "af_heart", rate: 1 });
+          });
+          const cancelWall = (performance.now() - cancelStart) / 1000;
+          const delivered = queued.filter((q) => !pending.has(q)).length;
+          log(`after-cancel wall=${cancelWall.toFixed(1)}s (one sentence alone was ~4.5s of audio)`);
+
+          log("DONE");
+        } catch (err) {
+          log("FATAL " + (err?.message ?? String(err)));
+        }
+      })();
+    </script>
+  </body>
+</html>
