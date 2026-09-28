@@ -65,6 +65,7 @@ src/
 ├── main.ts                     plugin entry: commands, wiring, notices, prewarm
 ├── diagnostics.ts              trace() / reportError() - metadata only, never text
 ├── settings/index.ts           Settings type, defaults, normaliseSettings()
+├── settings/data.ts            data.json container: version, v0 migration, save round trip
 ├── text/extract.ts             markdown → SpeechChunk[] with source offsets
 ├── audio/
 │   ├── types.ts                SpeechEngine, EngineCapabilities, SpeechChunk, VoiceInfo

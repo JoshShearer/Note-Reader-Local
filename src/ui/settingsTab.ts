@@ -389,12 +389,40 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	private renderStripSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName("Skipped content").setHeading();
 
-		const rows: Array<[keyof typeof this.plugin.settings.strip, string, string]> = [
-			["code", "Code", "Skip inline code and fenced code blocks."],
-			["urls", "URLs", "Skip bare links. Link labels are still read."],
-			["tags", "Tags", "Skip #tags."],
-			["tables", "Tables", "Skip table rows."],
-			["headings", "Headings", "Skip headings instead of reading them."],
+		const settings = this.plugin.settings;
+		const save = () => this.plugin.saveSettings();
+
+		// One switch for both code keys until the UI splits them: v0 had a
+		// single "Code" setting, and a second toggle for inline code would do
+		// nothing until extraction reads skipInlineCode.
+		new Setting(containerEl)
+			.setName("Code")
+			.setDesc("Skip inline code and fenced code blocks.")
+			.addToggle((toggle) =>
+				toggle.setValue(settings.skipCodeBlocks).onChange(async (value) => {
+					settings.skipCodeBlocks = value;
+					settings.skipInlineCode = value;
+					await save();
+				}),
+			);
+
+		// Positive polarity, matching the stored speakUrls. v0 stored "skip
+		// URLs" and the migration inverted it, so what the user hears is
+		// unchanged even though the switch now reads the other way.
+		new Setting(containerEl)
+			.setName("Speak bare links")
+			.setDesc("Read bare URLs aloud. Link labels are always read.")
+			.addToggle((toggle) =>
+				toggle.setValue(settings.speakUrls).onChange(async (value) => {
+					settings.speakUrls = value;
+					await save();
+				}),
+			);
+
+		const rows: Array<["skipTags" | "skipTables" | "skipHeadings", string, string]> = [
+			["skipTags", "Tags", "Skip #tags."],
+			["skipTables", "Tables", "Skip table rows."],
+			["skipHeadings", "Headings", "Skip headings instead of reading them."],
 		];
 
 		for (const [key, name, desc] of rows) {
@@ -402,9 +430,9 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				.setName(name)
 				.setDesc(desc)
 				.addToggle((toggle) =>
-					toggle.setValue(this.plugin.settings.strip[key]).onChange(async (value) => {
-						this.plugin.settings.strip[key] = value;
-						await this.plugin.saveSettings();
+					toggle.setValue(settings[key]).onChange(async (value) => {
+						settings[key] = value;
+						await save();
 					}),
 				);
 		}

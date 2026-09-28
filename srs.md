@@ -393,22 +393,42 @@ Conceptual configuration:
 
 ```ts
 interface TTSSettings {
-  voiceId?: string;
+  engine: EngineId;
+  voiceId: string;
 
   rate: number;
   pitch: number;
 
+  highlight: { enabled: boolean; color: string };
+
   skipFrontmatter: boolean;
   skipCodeBlocks: boolean;
   skipInlineCode: boolean;
+  skipTags: boolean;
+  skipTables: boolean;
+  skipHeadings: boolean;
 
   speakUrls: boolean;
   speakImageAlt: boolean;
   speakEmbeds: boolean;
 
   offlinePreferred: boolean;
+
+  bufferAhead: number;
+  kokoroModelPath: string;
+  kokoroDevice: "auto" | "wasm" | "webgpu";
+  kokoroThreads: number;
+  kokoroWeights: "auto" | "gpu" | "fast" | "small";
 }
 ```
+
+The implemented key set is `Settings` in `src/settings/index.ts`. Polarity is
+deliberately mixed: `skipX` for content read by default, `speakX` for content
+dropped by default. A key MAY be stored before extraction reads it, but MUST NOT
+be given a settings toggle until it does (see `docs/adr/0001`).
+
+Settings normalisation MUST preserve keys it does not recognise, at every level,
+because the normalised object is what gets saved.
 
 Settings SHALL use Obsidian's plugin-data persistence facilities.
 
@@ -1528,6 +1548,22 @@ Example:
 Future schema changes MUST increment `version`.
 
 Migration logic SHOULD be implemented before introducing schema version 2.
+
+Data written before the versioned container (v0) is the flat settings object at
+the root of `data.json`, with no `version` and a nested
+`strip: { tags, urls, code, tables, headings }`. It is migrated to v1 on load
+(`migrateV0` in `src/settings/data.ts`):
+
+- `strip.code` sets both `skipCodeBlocks` and `skipInlineCode`.
+- `speakUrls = !strip.urls`. This is an inversion, not a copy.
+- `strip.tags`, `strip.tables`, `strip.headings` become `skipTags`,
+  `skipTables`, `skipHeadings`.
+- `skipFrontmatter`, `speakImageAlt`, `speakEmbeds` and `offlinePreferred` take
+  their defaults (`true`, `true`, `false`, `false`).
+- `positions` starts empty, and unrecognised v0 root keys move to the v1 root.
+
+Root keys other than `version`, `settings` and `positions` MUST survive a save.
+See `docs/adr/0001-versioned-plugin-data-and-settings-keys.md`.
 
 ---
 
