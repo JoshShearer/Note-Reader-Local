@@ -275,6 +275,14 @@ The processor MUST handle at least:
 - Obsidian embeds.
 
 Markdown syntax SHOULD NOT itself be spoken unless meaningful to the content.
+In particular:
+
+- Emphasis markers are dropped. An underscore between letters or digits is part of an identifier (`snake_case_name` is spoken intact); only a flanking `_` is emphasis. `*` and `~~` with whitespace on both sides, and a single `~`, are spoken as text.
+- `==highlight==` speaks its text without the equals signs; `a == b` is text.
+- Inline HTML tags from a known-element list are dropped and their text content kept; `<br>` and other breaking elements separate words.
+- HTML comments (`<!-- ... -->`), including multi-line ones, are never spoken. An unclosed comment hides the rest of the note.
+- Footnote references (`[^1]`) are dropped, and a definition's `[^1]:` marker with them.
+- Math is spoken as the word "equation": display math always, inline math only when it has 4 or more tokens, with a currency heuristic so prices such as `$5` are read as written (ADR 0004).
 
 ---
 
