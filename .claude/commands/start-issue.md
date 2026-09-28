@@ -14,9 +14,9 @@ made, per the degradation rule in `.claude/linear.md`.
 
 ## Input
 
-`$ARGUMENTS` is the issue identifier. Accepts `NRL-12`, `nrl-12`, or bare `12`. The team key is
-still **UNVERIFIED**; `NRL` is a placeholder. If `get_issue` rejects the prefix, run
-`list_teams`, use the real KEY, and say in your output that `.claude/linear.md` needs correcting.
+`$ARGUMENTS` is the issue identifier. Accepts `NRL-12`, `nrl-12`, or bare `12`. The key `NRL`
+was verified on 2026-09-28. If `get_issue` rejects the prefix, someone renamed the team: run
+`list_issues`, read the key off an identifier, and say `.claude/linear.md` needs correcting.
 
 ## Step 1: Resolve the issue
 
@@ -188,7 +188,7 @@ Only one worktree at a time can hold the deployed Obsidian build.
 
 | Scenario | Action |
 |---|---|
-| Issue not found | Show the error. Try `list_teams` in case the `NRL` placeholder prefix is wrong, and report the real KEY. |
+| Issue not found | Show the error. Run `list_issues` in case the team key changed, and report the real one. |
 | Branch exists locally | Offer checkout-existing or a new slug. Never delete. |
 | Uncommitted changes | Stop. Stash or commit first. |
 | Not on `main` | Ask before switching. Report what you would base on. |

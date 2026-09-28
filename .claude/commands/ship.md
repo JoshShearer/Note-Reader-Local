@@ -329,8 +329,9 @@ The Manual Test Plan must name real UI surfaces. The plugin exposes a ribbon ico
 
 ## Step 10: Update Linear
 
-`In Review` optionality, per `.claude/linear.md`. The team's status set is **UNVERIFIED** and
-setting a status that does not exist fails.
+`In Review` optionality, per `.claude/linear.md`. Verified on 2026-09-28: this team has only
+Linear's default six states and **`In Review` is not one of them**. Setting a status that does
+not exist fails, so check rather than assume.
 
 1. `list_issue_statuses` for the team, and look for `In Review`.
 2. Exists → `save_issue` with `state: "In Review"`.

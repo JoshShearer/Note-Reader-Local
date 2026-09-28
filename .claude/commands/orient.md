@@ -94,8 +94,7 @@ Only `note-reader-local-nrl-*` siblings belong to this pool. A worktree with any
 1. `state: "In Progress"`
 2. `state: "Todo"`, limit 5
 
-The team's status set is marked **UNVERIFIED** in `.claude/linear.md`, and `In Review` may not
-exist. Do not query it blind. Instead, split the In Progress results by whether an open PR
+Verified on 2026-09-28: this team has no `In Review` status. Do not query it blind. Instead, split the In Progress results by whether an open PR
 exists for the branch (`gh pr list --head feature/nrl-{N}-* --state open`) and report those
 under an **In Review** heading. If `list_issue_statuses` shows a real `In Review`, query it
 directly and say so, so the conventions file can be corrected.

@@ -16,9 +16,9 @@ Do not hardcode an MCP tool prefix. The operations are `get_issue`, `list_issues
 If no Linear tool is present, skip to the Degradation section at the bottom and print the
 issue instead of creating it.
 
-The team key is **UNVERIFIED**. `.claude/linear.md` uses the placeholder prefix `NRL`. If a
-Linear tool is available, run `list_teams` once and use the key it returns. If it differs
-from `NRL`, say so in your output so `.claude/linear.md` can be corrected.
+The team key is `NRL`, verified on 2026-09-28. If a lookup rejects that prefix the team was
+renamed: run `list_issues`, read the key off an identifier, and say so in your output so
+`.claude/linear.md` can be corrected.
 
 ## Step 1: Type
 
@@ -30,9 +30,9 @@ from `NRL`, say so in your output so `.claude/linear.md` can be corrected.
 | `spec-gap` | `srs.md` demands it and the code does not do it | `Improvement` | Normal (3) |
 | omitted | Infer, then state which you chose and why | varies | varies |
 
-Labels are **UNVERIFIED** in this workspace. Call `list_issue_labels` and apply only a
-label that actually exists. If none match, apply none. Never create a label; that is a
-change to a shared workspace and is the user's call.
+Verified on 2026-09-28, the label set is exactly `Bug`, `Feature` and `Improvement`. There
+are no area labels. Apply one from that set or none. Never create a label; that is a change
+to a shared workspace and is the user's call.
 
 `spec-gap` is the type this repo will use most. The `srs.md` audit found 2 of 16 MUST
 requirements fully met, so the majority of open work is a gap against the written spec

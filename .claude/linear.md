@@ -5,25 +5,41 @@ Single source of truth for how the `/`-commands talk to Linear. Every command in
 
 ## Account
 
+**Verified 2026-09-28** by running the discovery block below. Nothing here is assumed.
+
 | Setting | Value |
 |---|---|
-| **Workspace** | `note-reader-local` - <https://linear.app/note-reader-local> |
-| **Team** | **UNVERIFIED** - run the discovery block below before trusting anything here |
+| **Workspace** | `Note-Reader-Local` - <https://linear.app/note-reader-local> |
+| **Workspace id** | `c6a08f34-8be8-4124-950c-a7d5aafffb69` |
+| **Team** | `Note-Reader-Local` |
+| **Team id** | `8e4bda9f-f4d8-443c-8ff4-a169018366cf` |
+| **Team key** | `NRL` |
 | **MCP server** | `linear-nrl` (see `.mcp.json` and `opencode.json`) |
-| **Issue IDs** | Commands accept `NRL-12`, `nrl-12`, or bare `12`. Replace the prefix once discovery confirms the real team key. |
+| **Issue IDs** | Commands accept `NRL-12`, `nrl-12`, or bare `12`. |
 
 The server is named `linear-nrl` rather than `linear` so it stays distinguishable from the
 global `linear` server and from `linear-jr` in job-radar. MCP config is per-project, but
 tool names show up in transcripts and an ambiguous `save_issue` in a log is worth avoiding.
 
+> **On the team key.** Linear auto-derived `NOT` from the team name "Note-Reader-Local",
+> which makes issues read `NOT-19` and branches read `fix/not-19-...`. It was changed to
+> `NRL` in Settings > Team > General > Identifier, which rewrites existing issue ids. If a
+> lookup ever fails with an unknown-identifier error, re-run discovery: someone may have
+> changed it back.
+
 ### Tool names differ by runtime
 
-The **operations** are identical; only the prefix changes.
+The **operations** are identical; only the prefix changes. Both shapes below were observed
+directly, not inferred.
 
 | Runtime | Shape | Example |
 |---|---|---|
 | Claude Code | `mcp__linear-nrl__<operation>` | `mcp__linear-nrl__get_issue` |
-| opencode | opencode's own MCP naming for the `linear-nrl` server | check your tool list |
+| opencode | `mcp_Linear-nrl_<operation>` | `mcp_Linear-nrl_get_issue` |
+
+Note the casing: opencode title-cases the server name and uses single underscores, Claude
+Code lowercases it and uses double underscores. That is exactly the kind of difference that
+breaks a hardcoded string.
 
 **Do not hardcode a prefix.** Look up the actual name in your available tools and use the
 operation names below (`get_issue`, `list_issues`, `save_issue`, `create_comment`,
@@ -42,31 +58,47 @@ Until that is done every command degrades to git-only and prints what it would h
 
 ## Statuses
 
-**UNVERIFIED.** The table below is Linear's default set, not a reading of this workspace.
-Run the discovery block and correct it - everything downstream reads from here.
+**Verified 2026-09-28** via `list_issue_statuses`. These are Linear's default six, with the
+team's real status ids, which are what a transition actually needs.
 
-| Status | Type |
-|---|---|
-| `Backlog` | backlog |
-| `Todo` | unstarted |
-| `In Progress` | started |
-| `Done` | completed |
-| `Canceled` | canceled |
-| `Duplicate` | duplicate |
+| Status | Type | Id |
+|---|---|---|
+| `Backlog` | backlog | `0332342b-8c91-4745-a764-0c78bb57d558` |
+| `Todo` | unstarted | `8130d105-155a-4acb-bae2-ff6d838ff174` |
+| `In Progress` | started | `1d678ae1-6980-4e89-9eb9-80a0eb1ca355` |
+| `Done` | completed | `5734df62-bb4c-404a-90f2-622c5f509c76` |
+| `Canceled` | canceled | `e153e1af-c8bd-42aa-9d90-02bf6e845092` |
+| `Duplicate` | duplicate | `c98e6667-6c4a-4c0d-b3d4-2ff43493b7b2` |
 
-### Treat `In Review` as optional
+Prefer resolving a status by name at call time over pasting an id from this table. Ids are
+recorded so a mismatch is debuggable, not so they can be hardcoded.
 
-Linear's default six states do not include one, and a command that sets a status which does
-not exist will fail.
+### There is no `In Review`, confirmed
+
+The team uses Linear's default six states, and none of them is `In Review`. This is not a
+hypothetical: `/ship` would set a status that does not exist and `/verify` would filter on it
+and find nothing.
+
+**Rule for every command:** treat `In Review` as optional.
 
 - If a status named `In Review` exists, `/ship` moves the issue there and `/verify` expects it.
-- If it does not, `/ship` leaves the issue **In Progress** and posts the PR link as a comment.
-  The open PR is the review signal, and `/verify` accepts **In Progress with an open PR** as
-  the pre-merge state.
+- It does not exist today, so `/ship` leaves the issue **In Progress** and posts the PR link as
+  a comment. The open PR is the review signal, and `/verify` accepts **In Progress with an open
+  PR** as the pre-merge state.
+
+Adding an `In Review` state in Linear restores the intended flow with no command edits. The
+fallback is conditional, not hardcoded.
 
 ## Labels
 
-**UNVERIFIED.** Defaults assumed until discovery says otherwise.
+**Verified 2026-09-28** via `list_issue_labels`. That is the entire set; there are no area
+labels, no `Chore`, no `Documentation`.
+
+| Label | Color | Id |
+|---|---|---|
+| `Bug` | `#EB5757` | `cfe31867-9a02-4d81-924e-a18853a6f6bd` |
+| `Feature` | `#BB87FC` | `c892b0f2-5e7d-49d8-8842-2d2a9db81795` |
+| `Improvement` | `#4EA7FC` | `8ceb69d9-2972-4375-b9a1-24e34d1b0204` |
 
 | Issue type | Label to apply |
 |---|---|
@@ -76,7 +108,7 @@ not exist will fail.
 | spec gap | `Improvement` |
 | blocker | none (priority Urgent carries it) |
 
-Apply only a label confirmed to exist, or none. Area is carried by the commit scope
+Apply only a label from the table above, or none. Area is carried by the commit scope
 (`fix(extract): …`) and the branch name rather than by a label.
 
 ### Requirement IDs instead of area labels
@@ -88,13 +120,26 @@ than any label set, and `/spec-check` reads it.
 ## Re-running discovery
 
 ```
-get_workspace          → workspace name and url
-list_teams             → team id, name and KEY        ← the missing piece
-list_issue_statuses    → statuses for the team
+get_workspace          → workspace name, id and url
+list_teams             → team name and id
+get_team <id>          → the same fields again
+list_issue_statuses    → statuses and their ids
 list_issue_labels      → label set
+list_issues            → read the KEY off an issue identifier
 ```
 
-Update the tables above and the issue-ID prefix, then delete the UNVERIFIED markers.
+**Neither `list_teams` nor `get_team` returns the team key.** They give the name and the
+UUID only. The key is only visible as the prefix of an issue identifier, so the last call is
+the one that answers it:
+
+```
+list_issues → "NRL-4" → the key is NRL
+```
+
+On a brand-new workspace the only issues are Linear's four onboarding tickets, which is
+enough. If the team genuinely has no issues, create one, read its identifier, and delete it.
+
+After re-running, update the tables above and the dates on the "Verified" lines.
 
 ## Issue URLs
 

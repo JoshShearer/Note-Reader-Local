@@ -33,8 +33,8 @@ Claude Code and opencode and must never be hardcoded. If no Linear tool is prese
 works: every phase does its git work and prints what it would have sent, and the state file
 carries it. A missing tracker never blocks a commit.
 
-The team key is **UNVERIFIED**; `NRL` is a placeholder. Run the discovery block in
-`.claude/linear.md` before the first real run, or every issue lookup will miss.
+The team key is `NRL`, verified on 2026-09-28. If an issue lookup fails with an unknown
+identifier, re-run the discovery block in `.claude/linear.md`: someone renamed the team.
 
 ## Why phases run in fresh subagents
 
@@ -343,7 +343,7 @@ Continues the run recorded in `.claude/pipeline-state.json`.
 | **Repo root** | `git rev-parse --show-toplevel` |
 | **Base branch** | `main` (only branch; PRs target it) |
 | **Remote** | `git@github.com:JoshShearer/Note-Reader-Local.git` |
-| **Tracker** | Linear workspace `note-reader-local`, MCP server `linear-nrl`, team key UNVERIFIED |
+| **Tracker** | Linear workspace `note-reader-local`, MCP server `linear-nrl`, team key `NRL` |
 | **Gates** | `npm test` · `npm run typecheck` · `npm run build` when the bundle moved |
 | **CI** | None. Nothing to poll. |
 | **Push gate** | None. No husky, no active git hooks. |

@@ -77,9 +77,13 @@ Authenticate once per runtime before any Linear-touching command works. In Claud
 `/mcp`; in opencode restart first so the config is picked up. Until then every command degrades
 to git-only and prints what it would have sent.
 
-**The team key is still UNVERIFIED.** `NRL` is a placeholder. Run the discovery block in
-`linear.md` once and correct the tables there; everything downstream reads from that file.
+The workspace, team, statuses and labels were verified on 2026-09-28 and are recorded in
+`linear.md`. Two findings from that pass are worth knowing:
 
-Tool names are never hardcoded in a command, because the prefix differs between the two
-runtimes. Commands name the bare Linear operation and resolve the real tool from the available
-list at runtime.
+- **This team has no `In Review` status.** The conditional fallback in `/ship` and `/verify`
+  is load-bearing, not defensive.
+- **The team key is `NRL`.** Linear auto-derived `NOT` from the team name; it was renamed.
+
+Tool names are never hardcoded in a command, because the prefix genuinely differs:
+`mcp__linear-nrl__get_issue` in Claude Code, `mcp_Linear-nrl_get_issue` in opencode. Commands
+name the bare operation and resolve the real tool from the available list at runtime.
