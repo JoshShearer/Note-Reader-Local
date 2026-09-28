@@ -108,11 +108,9 @@ The working tree passes its gates, and an audit against `srs.md` found 2 of 16 M
 requirements fully met. The gap is tracked in Linear. Notable reproduced defects, so you
 do not rediscover them:
 
-- `ExtractOptions.skipCode` and `.skipUrls` are never read by `extract.ts`. `main.ts`
-  fills them from `skipCodeBlocks` and `!speakUrls`, and the settings tab renders them as
-  the Code and Speak bare links toggles, so both toggles do nothing. `skipInlineCode`,
-  `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` are stored in plugin data v1 but
-  not read either; they have no toggle by design (`docs/adr/0001`).
+- `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` are stored in plugin data v1 but
+  never read by `extract.ts`; they have no toggle by design (`docs/adr/0001`). Making
+  those exclusions configurable is NRL-21.
 - `speechd` builds malformed `-y`/`-t` voice arguments; `spd-say` reports `Invalid voice`
   on **stdout with exit 0**, and the error guard checks stderr, so it fails silently.
 - `replayCurrent` truncates the chunk array and resets the index, corrupting `n / total`.
