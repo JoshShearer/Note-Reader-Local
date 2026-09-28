@@ -26,3 +26,8 @@ data.json
 .idea/
 *.iml
 .DS_Store
+
+# Agent pipeline state (machine-local, never committed)
+.claude/pipeline-state.json
+.claude/last-critique.md
+.claude/scratch/

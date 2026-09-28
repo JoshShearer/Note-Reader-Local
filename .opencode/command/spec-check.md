@@ -1,0 +1,1 @@
+../../.claude/commands/spec-check.md
