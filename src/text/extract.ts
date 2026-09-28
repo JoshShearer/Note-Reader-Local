@@ -255,6 +255,82 @@ const HEADING = /^\s{0,3}#{1,6}\s+/;
 const LIST_BULLET = /^\s{0,3}([-*+]|\d+[.)])\s+/;
 const BLOCKQUOTE = /^\s{0,3}>\s?/;
 const TABLE_ROW = /^\s*\|/;
+/**
+ * Thematic break: three or more of the same marker, optionally spaced. Checked
+ * before LIST_BULLET because "- - -" would otherwise read as a bullet whose
+ * body is "- -", and the dashes would be spoken.
+ */
+const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
+
+/**
+ * A `key:` line. Keys may be quoted or contain any character but a colon, so
+ * non-English property names (`título:`, `日付:`) and names like
+ * `created (date):` count. The trailing space-or-end stops "http://x" counting
+ * as a key. A leading `-` or `#` is a list item or a comment, not a key.
+ */
+const FM_KEY = /^(?:"[^"]*"|'[^']*'|[^\s#:\-"'][^:]*?)\s*:(\s|$)/;
+const FM_LIST_ITEM = /^\s*-(\s|$)/;
+const FM_CONTINUATION = /^\s+\S/;
+const FM_COMMENT = /^\s*#/;
+
+// trim, not trimEnd, and a leading BOM tolerated: the positional check this
+// replaced accepted both, and narrowing either would start reading
+// frontmatter aloud on notes that are silent about it today.
+const isFrontmatterFence = (line: string): boolean => line.replace(/^\uFEFF/, "").trim() === "---";
+
+/**
+ * Net open `[` / `{` on a line, ignoring quoted strings. A flow collection
+ * such as `tags: [a,` may continue on unindented lines until it closes.
+ */
+function flowDepthDelta(line: string): number {
+	const bare = line.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, "");
+	let delta = 0;
+	for (const ch of bare) {
+		if (ch === "[" || ch === "{") delta += 1;
+		else if (ch === "]" || ch === "}") delta -= 1;
+	}
+	return delta;
+}
+
+/**
+ * Find a YAML frontmatter block by its shape, not only its position.
+ *
+ * The opening fence is the first non-blank line and the block must close, and
+ * every line inside must look like YAML metadata with at least one `key:` line.
+ * Anything else is a horizontal rule and the note is read normally. An
+ * unterminated fence is never frontmatter, so it cannot swallow the document.
+ *
+ * Returns the line number of the closing fence, or null.
+ */
+function detectFrontmatter(lines: string[]): { endLine: number } | null {
+	let open = 0;
+	while (open < lines.length && lines[open]!.replace(/^\uFEFF/, "").trim() === "") open += 1;
+	if (open >= lines.length || !isFrontmatterFence(lines[open]!)) return null;
+
+	let sawKey = false;
+	let flowDepth = 0;
+	for (let n = open + 1; n < lines.length; n++) {
+		const line = lines[n]!;
+		if (isFrontmatterFence(line)) return sawKey ? { endLine: n } : null;
+		if (flowDepth > 0) {
+			flowDepth = Math.max(0, flowDepth + flowDepthDelta(line));
+			continue;
+		}
+		if (line.trim() === "" || FM_COMMENT.test(line)) continue;
+		if (FM_KEY.test(line)) {
+			sawKey = true;
+			flowDepth = Math.max(0, flowDepthDelta(line));
+			continue;
+		}
+		// Lists and indented continuations only make sense as a key's value.
+		if (sawKey && (FM_LIST_ITEM.test(line) || FM_CONTINUATION.test(line))) {
+			flowDepth = Math.max(0, flowDepthDelta(line));
+			continue;
+		}
+		return null;
+	}
+	return null;
+}
 
 export interface ExtractOptions {
 	stripTags: boolean;
@@ -267,8 +343,9 @@ export interface ExtractOptions {
 /**
  * Turn a markdown note into speakable chunks.
  *
- * Works line by line and tracks block state (frontmatter, code fences) because
- * that is the only context needed to know whether a `#` is a tag or a heading.
+ * Frontmatter is located up front by shape (see detectFrontmatter). The rest
+ * works line by line and tracks code-fence state, because that is the only
+ * context needed to know whether a `#` is a tag or a heading.
  *
  * Plain paragraph lines are buffered and joined before sentence-splitting.
  * Markdown soft-wraps a paragraph across multiple source lines with no blank
@@ -283,9 +360,8 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 	const lines = source.split("\n");
 
 	let rawOffset = 0;
-	let inFrontmatter = false;
-	let frontmatterDone = false;
 	let inFence = false;
+	const frontmatter = detectFrontmatter(lines);
 
 	let paraText = "";
 	let paraIndex: number[] = [];
@@ -304,18 +380,16 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		const lineStart = rawOffset;
 		rawOffset += raw.length + 1;
 
-		if (lineNo === 0 && raw.trim() === "---") {
-			inFrontmatter = true;
-			continue;
-		}
-		if (inFrontmatter) {
-			if (raw.trim() === "---") {
-				inFrontmatter = false;
-				frontmatterDone = true;
-			}
-			continue;
-		}
-		void frontmatterDone;
+		// This deliberately diverges from Obsidian, which only honours a `---`
+		// on line 1. A note that starts with blank lines and then a `key: value`
+		// block renders in Obsidian as a rule and visible text, and we stay
+		// silent on it. That is intended: silence on visible text is
+		// recoverable, reading someone's frontmatter aloud is not. Do not "fix"
+		// this back to a positional check; see docs/adr/0002.
+		//
+		// Skipped lines are dropped whole. rawOffset has already advanced past
+		// them, so every later sourceIndex entry is still a true raw offset.
+		if (frontmatter && lineNo <= frontmatter.endLine) continue;
 
 		if (FENCE.test(raw)) {
 			flushParagraph();
@@ -323,6 +397,10 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 			continue;
 		}
 		if (inFence) continue;
+		if (HR.test(raw)) {
+			flushParagraph();
+			continue;
+		}
 		if (opts.skipTables && TABLE_ROW.test(raw)) {
 			flushParagraph();
 			continue;

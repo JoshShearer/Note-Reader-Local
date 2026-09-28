@@ -268,7 +268,7 @@ The processor MUST handle at least:
 - Italic text.
 - External links.
 - Obsidian wikilinks.
-- YAML frontmatter.
+- YAML frontmatter. Detected by shape at the top of the note, ignoring leading blank lines, and skipped only when closed and `key:`-shaped (ADR 0002).
 - Fenced code blocks.
 - Inline code.
 - Images.
