@@ -24,11 +24,19 @@ const CAPABILITIES: EngineCapabilities = {
 	rate: true,
 	pitch: true,
 	desktopOnly: true,
-	// By the time `spd-say` returns the audio is already at the sound card, and
-	// the tool offers no pause: only `-S` to stop. So there is nothing to pause
-	// and nothing to resume, and the player's pause button has to say so.
-	pause: false,
-	resume: false,
+	// True, but not by pausing anything: `spd-say` has no pause, only `-S` to
+	// stop, so this engine deliberately implements neither SpeechEngine.pause()
+	// nor resume(). The player recognises that and pauses it the way srs.md:250
+	// sanctions instead - stop the utterance, keep the index, and re-read the
+	// sentence from its start on resume. So the sound really does stop and the
+	// reading really does come back, which is what this field is asked; what
+	// differs from the other engines is only how far back the resume picks up.
+	// Two caveats a user will notice, both inherited: the stop is the `-S` from
+	// NRL-41, which cannot reach the one chunk already queued behind the spoken
+	// one (about 830 ms of audio plays on, NRL-43), and the re-read repeats a
+	// sentence they already heard the beginning of.
+	pause: true,
+	resume: true,
 	sentenceBoundary: false,
 	// A local daemon. Its output modules are installed software, not services.
 	offlineStatus: true,

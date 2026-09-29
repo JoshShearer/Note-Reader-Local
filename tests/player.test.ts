@@ -48,8 +48,15 @@ class FakeAudio {
 		for (const fn of [...(this.listeners.get(type) ?? [])]) fn();
 	}
 
+	/** Test hook: make the next play() reject, the way a real element does. */
+	failNextPlay = false;
+
 	play(): Promise<void> {
 		this.playCalls += 1;
+		if (this.failNextPlay) {
+			this.failNextPlay = false;
+			return Promise.reject(new Error("no supported source"));
+		}
 		this.paused = false;
 		return Promise.resolve();
 	}
@@ -735,6 +742,298 @@ console.log("setRate emits a rate event, only when the rate changes");
 	check("play() at the current rate emits nothing", rates.length === 2, JSON.stringify(rates));
 	player.stop();
 	await again.catch(() => undefined);
+}
+
+// --- NRL-23: pause on an engine that owns playback --------------------------
+
+/**
+ * An engine that makes the sound itself, as speechd and webspeech do.
+ *
+ * `synthesize()` is the utterance: it does not settle until the fake is told
+ * to finish or its signal aborts. That is the whole reason pause is hard here,
+ * so the fake has to behave that way rather than resolving immediately.
+ */
+function makeOwningEngine(opts: { enginePause?: boolean; halfPair?: boolean } = {}): {
+	engine: SpeechEngine;
+	calls: Array<{ index: number; rate: number }>;
+	aborted: number[];
+	stateDuring: string[];
+	pauseCalls: () => number;
+	resumeCalls: () => number;
+	finish: () => void;
+	observe: (fn: () => string) => void;
+} {
+	const calls: Array<{ index: number; rate: number }> = [];
+	const aborted: number[] = [];
+	const stateDuring: string[] = [];
+	let observeState: () => string = () => "?";
+	let finishCurrent: (() => void) | null = null;
+	let pauses = 0;
+	let resumes = 0;
+
+	const engine: SpeechEngine = {
+		id: "speechd",
+		label: "fake that owns playback",
+		capabilities: {
+			voices: false,
+			timing: "none",
+			rate: true,
+			pitch: true,
+			desktopOnly: true,
+			pause: true,
+			resume: true,
+			sentenceBoundary: false,
+			offlineStatus: true,
+			ownsPlayback: true,
+		},
+		async isAvailable() {
+			return true;
+		},
+		async listVoices() {
+			return [];
+		},
+		async selectVoice() {},
+		async synthesize(req: SynthRequest, signal: AbortSignal): Promise<SynthResult> {
+			const index = req.chunk.sourceStart / 100;
+			calls.push({ index, rate: req.rate });
+			// A microtask later, so the player has finished whatever it does
+			// around the call and the state we read is the one pause() sees.
+			await Promise.resolve();
+			stateDuring.push(`${index}:${observeState()}`);
+			await new Promise<void>((resolve) => {
+				finishCurrent = resolve;
+				signal.addEventListener(
+					"abort",
+					() => {
+						aborted.push(index);
+						resolve();
+					},
+					{ once: true },
+				);
+			});
+			return { kind: "streamed", estimatedMs: 0, words: null };
+		},
+		async dispose() {},
+	};
+
+	if (opts.enginePause) {
+		engine.pause = (): void => {
+			pauses += 1;
+		};
+		engine.resume = (): void => {
+			resumes += 1;
+		};
+	}
+	if (opts.halfPair) {
+		engine.pause = (): void => {
+			pauses += 1;
+		};
+	}
+
+	return {
+		engine,
+		calls,
+		aborted,
+		stateDuring,
+		pauseCalls: () => pauses,
+		resumeCalls: () => resumes,
+		finish: () => finishCurrent?.(),
+		observe: (fn) => {
+			observeState = fn;
+		},
+	};
+}
+
+console.log("an engine that owns playback reaches state playing while it speaks");
+{
+	// run() used to announce "playing" only AFTER awaiting synthesize(). On
+	// these engines synthesize() IS the utterance, so the first sentence of
+	// every note was spoken in state "preparing", where pause() early-returns
+	// and the control bar shows a spinner over a button it forces disabled.
+	const fake = makeOwningEngine();
+	const player = new Player({ bufferAhead: 2 });
+	fake.observe(() => player.getState());
+	const playing = player.play(fake.engine, numbered(3), 1);
+
+	for (let i = 0; i < 3; i++) {
+		await tick();
+		fake.finish();
+	}
+	await playing;
+
+	check(
+		"every chunk is spoken in state playing",
+		fake.stateDuring.join(" | ") === "0:playing | 1:playing | 2:playing",
+		fake.stateDuring.join(" | "),
+	);
+}
+
+console.log("pause stops the sound on an engine that cannot pause itself");
+{
+	// srs.md:250: where a backend cannot pause an active utterance, the
+	// controller may pause by stopping synthesis and retaining the position.
+	// That is speechd, and the stop reaches the daemon through the same abort
+	// signal NRL-41 already wired up.
+	const fake = makeOwningEngine();
+	const player = new Player({ bufferAhead: 2 });
+	fake.observe(() => player.getState());
+	const states: string[] = [];
+	player.on("state", (s) => states.push(s));
+	const playing = player.play(fake.engine, numbered(3), 1);
+	await tick();
+
+	check("speaking chunk 0 before the pause", player.getIndex() === 0 && player.getState() === "playing", `${player.getIndex()} ${player.getState()}`);
+
+	player.pause();
+	await tick();
+	check("state is paused", player.getState() === "paused", `got ${player.getState()}`);
+	check("the utterance was aborted exactly once", fake.aborted.join(",") === "0", fake.aborted.join(","));
+	check("index is retained", player.getIndex() === 0, `got ${player.getIndex()}`);
+
+	// The defect: the run loop used to walk straight on to the next chunk.
+	await new Promise((r) => setTimeout(r, 30));
+	await tick();
+	check("the queue does not advance while paused", player.getState() === "paused" && player.getIndex() === 0, `${player.getState()} ${player.getIndex()}`);
+	check("nothing else was spoken while paused", fake.calls.length === 1, JSON.stringify(fake.calls));
+
+	void player.resume();
+	await tick();
+	check("resume re-speaks the same sentence", fake.calls.length === 2 && fake.calls[1]?.index === 0, JSON.stringify(fake.calls));
+	check("resume is playing again", player.getState() === "playing", `got ${player.getState()}`);
+	check("resume did not restart the note", player.getIndex() === 0, `got ${player.getIndex()}`);
+
+	fake.finish();
+	await tick();
+	check("the queue continues to the next chunk", player.getIndex() === 1 && fake.calls.at(-1)?.index === 1, `${player.getIndex()} ${JSON.stringify(fake.calls)}`);
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("pause asks a live engine to pause rather than cutting it off");
+{
+	// webspeech: speechSynthesis has a real pause()/resume(), so the utterance
+	// must be left alone and picked up mid-word. Aborting it would throw the
+	// rest of the sentence away and re-read it.
+	const fake = makeOwningEngine({ enginePause: true });
+	const player = new Player({ bufferAhead: 2 });
+	fake.observe(() => player.getState());
+	const playing = player.play(fake.engine, numbered(2), 1);
+	await tick();
+
+	player.pause();
+	await tick();
+	check("engine.pause() was called once", fake.pauseCalls() === 1, String(fake.pauseCalls()));
+	check("the utterance was not aborted", fake.aborted.length === 0, fake.aborted.join(","));
+	check("state is paused", player.getState() === "paused", `got ${player.getState()}`);
+
+	await new Promise((r) => setTimeout(r, 30));
+	check("still paused, and nothing new was spoken", player.getState() === "paused" && fake.calls.length === 1, `${player.getState()} ${JSON.stringify(fake.calls)}`);
+
+	void player.resume();
+	await tick();
+	check("engine.resume() was called once", fake.resumeCalls() === 1, String(fake.resumeCalls()));
+	check("state is playing", player.getState() === "playing", `got ${player.getState()}`);
+	// The loop stayed parked inside the same synthesize() call, which is the
+	// only way a mid-utterance resume can work.
+	check("the sentence was synthesised exactly once across the pause", fake.calls.filter((c) => c.index === 0).length === 1, JSON.stringify(fake.calls));
+
+	fake.finish();
+	await tick();
+	fake.finish();
+	await tick();
+	await playing;
+	check("the queue finished", player.getState() === "finished", `got ${player.getState()}`);
+}
+
+console.log("an engine that declares pause without resume is refused, not half-used");
+{
+	// A pause with no way back is the defect this ticket exists to remove, so
+	// a half-declared pair must not be taken as engine support. It falls back
+	// to the stop-and-retain route and says so rather than failing silently.
+	const fake = makeOwningEngine({ halfPair: true });
+	const player = new Player({ bufferAhead: 2 });
+	fake.observe(() => player.getState());
+	const errors: string[] = [];
+	player.on("error", (e) => errors.push(e.message));
+	const playing = player.play(fake.engine, numbered(2), 1);
+	await tick();
+
+	player.pause();
+	await tick();
+	check("the half-declared pause() was not called", fake.pauseCalls() === 0, String(fake.pauseCalls()));
+	check("it fell back to stopping the utterance", fake.aborted.join(",") === "0", fake.aborted.join(","));
+	check("state is still paused", player.getState() === "paused", `got ${player.getState()}`);
+	check("the contract violation was reported", errors.some((e) => e.includes("pause")) && errors.length === 1, JSON.stringify(errors));
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("a rejected resume reports an error instead of hanging in paused");
+{
+	const { engine } = makeEngine();
+	const player = new Player({ bufferAhead: 0 });
+	const errors: string[] = [];
+	player.on("error", (e) => errors.push(e.message));
+	const playing = player.play(engine, chunksOf(SRC), 1);
+	await tick();
+
+	player.pause();
+	check("paused", player.getState() === "paused", `got ${player.getState()}`);
+
+	fakeAudio.failNextPlay = true;
+	void player.resume();
+	await tick();
+
+	check("exactly one error was emitted", errors.length === 1, JSON.stringify(errors));
+	check("the error names the resume", errors[0]?.includes("Could not resume audio playback") === true, errors[0] ?? "none");
+	check("the error carries the cause", errors[0]?.includes("no supported source") === true, errors[0] ?? "none");
+	check("not left stuck in paused", player.getState() !== "paused", `got ${player.getState()}`);
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("rate is still applied exactly once across a pause and resume");
+{
+	// AGENTS.md non-negotiable 9, re-checked because this ticket touches the
+	// pause and resume paths that re-enter synthesis.
+	const { engine } = makeEngine();
+	const seen: number[] = [];
+	const spy: SpeechEngine = {
+		...engine,
+		async synthesize(req: SynthRequest, signal: AbortSignal) {
+			seen.push(req.rate);
+			return await engine.synthesize(req, signal);
+		},
+	};
+	const player = new Player({ bufferAhead: 0 });
+	const playing = player.play(spy, chunksOf(SRC), 1.5);
+	await tick();
+	player.pause();
+	void player.resume();
+	await tick();
+	check("buffer engine still renders at natural speed after a resume", seen.every((r) => r === 1), JSON.stringify(seen));
+	check("the element still carries the whole 1.5x", fakeAudio.playbackRate === 1.5, String(fakeAudio.playbackRate));
+	player.stop();
+	await playing.catch(() => undefined);
+
+	// The stop-and-retain route re-synthesises the sentence. Asking for 1.5x
+	// a second time is correct; asking for 2.25x, or letting the element also
+	// apply 1.5x to audio it does not hold, is the bug this pins.
+	const fake = makeOwningEngine();
+	const player2 = new Player({ bufferAhead: 0 });
+	fake.observe(() => player2.getState());
+	const playing2 = player2.play(fake.engine, numbered(3), 1.5);
+	await tick();
+	player2.pause();
+	await tick();
+	void player2.resume();
+	await tick();
+	check("re-synthesis after a pause asks for 1.5, not 2.25", fake.calls.length === 2 && fake.calls.every((c) => c.rate === 1.5), JSON.stringify(fake.calls));
+	player2.stop();
+	await playing2.catch(() => undefined);
 }
 
 async function tick(): Promise<void> {

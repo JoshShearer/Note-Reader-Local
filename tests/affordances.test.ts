@@ -167,8 +167,8 @@ console.log("the four real engines declare their new capabilities honestly");
 	const real = [
 		{ e: new KokoroEngine(noStore), pause: true, sentenceBoundary: false, offlineStatus: true },
 		{ e: new EspeakEngine(noRunner), pause: true, sentenceBoundary: false, offlineStatus: true },
-		{ e: new SpeechDispatcherEngine(noRunner), pause: false, sentenceBoundary: false, offlineStatus: true },
-		{ e: new WebSpeechEngine(), pause: false, sentenceBoundary: false, offlineStatus: false },
+		{ e: new SpeechDispatcherEngine(noRunner), pause: true, sentenceBoundary: false, offlineStatus: true },
+		{ e: new WebSpeechEngine(), pause: true, sentenceBoundary: false, offlineStatus: false },
 	];
 	for (const { e, pause, sentenceBoundary, offlineStatus } of real) {
 		const c = e.capabilities;
@@ -181,16 +181,25 @@ console.log("the four real engines declare their new capabilities honestly");
 		check(`${e.id} offlineStatus === ${offlineStatus}`, c.offlineStatus === offlineStatus, String(c.offlineStatus));
 	}
 
-	// The bug this ticket makes honest: the two engines whose audio the player
-	// never holds are the two that must not offer a pause button. `pause` is
-	// deliberately a separate field from `ownsPlayback`, so that NRL-23 can
-	// make webspeech pausable without touching rate routing.
+	// NRL-22 made the gap honest by declaring these two unpausable; NRL-23
+	// closed it, so the honest answer changed. Both now offer a pause button,
+	// by two different routes, and the difference is in how far back a resume
+	// picks up rather than in whether the sound stops:
+	//   webspeech - speechSynthesis.pause()/resume(), so the utterance is held
+	//               in place and resumes mid-word.
+	//   speechd   - no pause exists in spd-say, so the player stops the
+	//               utterance and retains the index, and resume re-reads the
+	//               current sentence from its start. That is srs.md:250's
+	//               sanctioned fallback, not a second-class pause.
+	// `pause` stays a separate field from `ownsPlayback`: both of these own
+	// playback and both can now be paused, so inferring one from the other
+	// would be wrong in both directions.
 	const speechd = new SpeechDispatcherEngine(noRunner);
 	const webspeech = new WebSpeechEngine();
-	check("speechd's pause button is disabled",
-		!controlAffordances(speechd.capabilities, speechd.label).playPause.enabled);
-	check("webspeech's pause button is disabled",
-		!controlAffordances(webspeech.capabilities, webspeech.label).playPause.enabled);
+	check("speechd's pause button is enabled",
+		controlAffordances(speechd.capabilities, speechd.label).playPause.enabled);
+	check("webspeech's pause button is enabled",
+		controlAffordances(webspeech.capabilities, webspeech.label).playPause.enabled);
 	check("speechd's highlight toggle is disabled",
 		!controlAffordances(speechd.capabilities, speechd.label).highlightToggle.enabled);
 	check("kokoro keeps its pause button",

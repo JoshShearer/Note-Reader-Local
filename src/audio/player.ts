@@ -20,6 +20,16 @@ import type { SpeechEngine, SpeechChunk, SynthResult, WordTiming } from "./types
 
 export type PlayerState = "idle" | "preparing" | "playing" | "paused" | "finished";
 
+/**
+ * How a pause is going to be carried out, decided by who is making the sound.
+ *
+ * `element`  the player holds the audio, so pausing the element is the pause.
+ * `engine`   the engine can hold its own utterance in place (speechSynthesis).
+ * `restart`  nothing can hold the utterance, so it is stopped and the index
+ *            retained; resume re-reads the sentence (srs.md:250).
+ */
+type PauseRoute = "element" | "engine" | "restart";
+
 export interface PlayerEvents extends Record<string, unknown> {
 	state: PlayerState;
 	/** Active word, or null when nothing is highlighted. */
@@ -65,6 +75,11 @@ export class Player {
 	 */
 	private chunkScope: LinkedScope | null = null;
 	private runToken = 0;
+	/**
+	 * The route the current pause was taken by, so resume() undoes what pause()
+	 * did rather than deciding again. Null whenever nothing is paused.
+	 */
+	private pausedVia: PauseRoute | null = null;
 
 	/** Synthesised results, keyed by chunk index. */
 	private pending = new Map<number, Promise<SynthResult>>();
@@ -160,19 +175,26 @@ export class Player {
 			const scope = linkedScope(session);
 			this.chunkScope = scope;
 			const signal = scope.signal;
+			const owns = engine.capabilities.ownsPlayback;
 			try {
+				// On an engine that owns playback, synthesize() IS the act of
+				// speaking, so it is already too late to announce "playing"
+				// once it resolves. Doing so left the first sentence of every
+				// note spoken in state "preparing", where pause() early-returns
+				// and the control bar puts a spinner over a button it forces
+				// disabled - i.e. that sentence could not be paused at all.
+				// The cost is a second progress event for the first chunk,
+				// carrying the same index play() already emitted.
+				if (owns) this.announcePlaying(index);
+
 				// A buffer engine's synthesis is shared with prefetch and stays
 				// valid across a replay, so it only answers to the session. On an
 				// engine that owns playback the synthesis IS the utterance, and a
 				// replay has to be able to cut it off.
-				const result = await this.synthesize(
-					index,
-					engine.capabilities.ownsPlayback ? signal : session,
-				);
+				const result = await this.synthesize(index, owns ? signal : session);
 				if (token !== this.runToken || signal.aborted) return;
 
-				this.setState("playing");
-				this.emitter.emit("progress", { chunkIndex: index, total: this.chunks.length });
+				if (!owns) this.announcePlaying(index);
 
 				switch (result.kind) {
 					case "buffer":
@@ -199,6 +221,11 @@ export class Player {
 			this.setState("finished");
 			this.emitter.emit("finished", undefined as never);
 		}
+	}
+
+	private announcePlaying(index: number): void {
+		this.setState("playing");
+		this.emitter.emit("progress", { chunkIndex: index, total: this.chunks.length });
 	}
 
 	/** Synthesise a chunk, caching the promise so prefetch and playback share it. */
@@ -372,23 +399,108 @@ export class Player {
 		this.emitter.emit("word", { chunkIndex: this.index, wordIndex: -1, timing });
 	};
 
+	/**
+	 * Who is going to carry out a pause, and how.
+	 *
+	 * Deliberately not decided from `result.kind`: on an engine that owns
+	 * playback the result does not exist until the utterance is over, which is
+	 * precisely when pause is pressed. `ownsPlayback` is the only thing known
+	 * at that moment, and using it here is not a non-negotiable-9 problem -
+	 * run() already branches on it four times for this same "who holds the
+	 * sound" question. What rule 9 protects is rate routing, and what
+	 * affordances.ts protects is that the *UI* must not infer pause-ability
+	 * from it. The player is the layer that legitimately knows.
+	 */
+	private pauseRoute(): PauseRoute {
+		const engine = this.engine;
+		if (!engine) return "element";
+
+		const canPause = typeof engine.pause === "function";
+		const canResume = typeof engine.resume === "function";
+		if (canPause && canResume) return "engine";
+		if (canPause !== canResume) {
+			// Half a pair is a programming error, and silently taking the half
+			// that exists is how a reading ends up paused with nothing able to
+			// resume it. Refuse the engine route, say so, and fall through to a
+			// route that does have a way back.
+			this.emitter.emit(
+				"error",
+				new Error(
+					`Engine "${engine.id}" implements ${canPause ? "pause" : "resume"}() without ` +
+						`${canPause ? "resume" : "pause"}(); they must come as a pair. ` +
+						"Pausing by stopping the sentence instead.",
+				),
+			);
+		}
+
+		return engine.capabilities.ownsPlayback ? "restart" : "element";
+	}
+
 	pause(): void {
 		if (this.state !== "playing") return;
-		this.audio.pause();
+		const route = this.pauseRoute();
+
+		if (route === "restart") {
+			// Nothing in flight to stop, so there is nothing to come back to
+			// either. Half a teardown would be worse than not pausing.
+			if (!this.chunkScope) return;
+			this.tearDownCurrentChunk();
+		} else if (route === "engine") {
+			this.engine?.pause?.();
+		} else {
+			this.audio.pause();
+		}
+
+		this.pausedVia = route;
 		this.setState("paused");
 	}
 
-	resume(): void {
+	async resume(): Promise<void> {
 		if (this.state !== "paused") return;
-		void this.audio.play().then(() => {
+		const route = this.pausedVia;
+		// Paused without a recorded route means we did not pause it, so there
+		// is nothing here to undo.
+		if (!route) return;
+		this.pausedVia = null;
+
+		if (route === "restart") {
+			await this.restartCurrent();
+			return;
+		}
+		if (route === "engine") {
+			this.engine?.resume?.();
 			this.setState("playing");
-			this.tick();
-		});
+			// Deliberately no tick(): a live result leaves `wordTimings` empty,
+			// so the rAF loop would spin doing nothing. Words come from the
+			// engine's own boundary events.
+			return;
+		}
+
+		void this.audio
+			.play()
+			.then(() => {
+				this.setState("playing");
+				this.tick();
+			})
+			.catch((err: unknown) => {
+				// Without this the player sat in "paused" forever with an
+				// unhandled rejection and no way back. Emitted before stop() so
+				// the notice is not racing the clear-on-idle. Giving the
+				// position up rather than retrying is what every other playback
+				// failure in this file does.
+				this.emitter.emit(
+					"error",
+					err instanceof Error
+						? new Error(`Could not resume audio playback: ${err.message}`)
+						: new Error("Could not resume audio playback"),
+				);
+				this.stop();
+			});
 	}
 
 	toggle(): void {
 		if (this.state === "playing") this.pause();
-		else if (this.state === "paused") this.resume();
+		else if (this.state === "paused") void this.resume();
 	}
 
 	/**
@@ -421,33 +533,70 @@ export class Player {
 	 */
 	async replayCurrent(): Promise<void> {
 		if (this.state === "idle" || this.state === "finished") return;
-		const engine = this.engine;
-		const index = this.index;
-		if (!engine || !this.controller) return;
-		if (index < 0 || index >= this.chunks.length) return;
+		if (!this.engine || !this.controller) return;
+		if (this.index < 0 || this.index >= this.chunks.length) return;
+		await this.restartCurrent();
+	}
 
-		const token = ++this.runToken;
+	/**
+	 * Cut the current chunk off and speak it again from its start.
+	 *
+	 * One body for two callers: replayCurrent(), and resume() on the
+	 * stop-and-retain route, where the pause already did the teardown half and
+	 * this does the rest. They must not drift: a replay and a resume-after-
+	 * pause are the same act on an engine that cannot hold an utterance.
+	 */
+	private async restartCurrent(): Promise<void> {
+		if (!this.engine || !this.controller) return;
+		const index = this.index;
+
+		this.tearDownCurrentChunk();
+
+		this.setState("preparing");
+		this.emitter.emit("progress", { chunkIndex: index, total: this.chunks.length });
+
+		await this.startRun(this.runToken);
+	}
+
+	/**
+	 * Abandon the utterance in flight while keeping the queue and the index.
+	 *
+	 * Bumping the token is load bearing, not bookkeeping. Without it the
+	 * superseded run() iteration comes back from its await and runs
+	 * `this.index = index + 1`, so a pause silently eats a sentence.
+	 *
+	 * The session controller is deliberately untouched. run() reads
+	 * `this.controller?.signal` once on entry and returns if it is missing, so
+	 * nulling it here would kill the run loop and leave a resume nothing to
+	 * restart. Only stop() may do that. `engine.cancelPending()` is likewise
+	 * not called: stop() discards queued work, a pause wants it kept.
+	 */
+	private tearDownCurrentChunk(): void {
+		this.runToken += 1;
+		// Whatever was paused is gone now. pause() re-records the route after
+		// calling this; a replay straight out of a pause must not leave the old
+		// one behind for the next resume to act on.
+		this.pausedVia = null;
+		// NRL-41: on speechd this abort is what reaches the daemon with `-S`.
+		// It cannot reach the one chunk already queued behind the spoken one,
+		// so roughly 830 ms of audio plays on past a pause there (NRL-43).
 		this.chunkScope?.abort();
 		this.chunkScope = null;
 
 		// On an engine that owns playback the cached promise is the utterance
 		// that was just cut off, so it cannot be replayed; speak it again.
-		if (engine.capabilities.ownsPlayback) this.pending.delete(index);
+		if (this.engine?.capabilities.ownsPlayback) this.pending.delete(this.index);
 		// The superseded run bailed out before revoking, and playBuffer is
 		// about to register a fresh URL for this index.
-		this.revokeUrl(index);
+		this.revokeUrl(this.index);
 		this.clearWordState();
 		this.emitter.emit("word", null);
 		this.audio.pause();
-
-		this.setState("preparing");
-		this.emitter.emit("progress", { chunkIndex: index, total: this.chunks.length });
-
-		await this.startRun(token);
 	}
 
 	stop(): void {
 		this.runToken += 1;
+		this.pausedVia = null;
 		this.chunkScope?.abort();
 		this.chunkScope = null;
 		this.controller?.abort();
