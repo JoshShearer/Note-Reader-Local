@@ -145,6 +145,42 @@ export class Player {
 	}
 
 	/**
+	 * The note this player is reading, or "" before the first play().
+	 *
+	 * Every chunk of one extraction carries the same path, so the first is
+	 * enough. This exists so a caller can ask the player which file it is on
+	 * instead of reaching into a private field, and, more to the point, so it
+	 * can ask the player rather than the workspace: a read that outlives the
+	 * note being in front would otherwise record its progress against whichever
+	 * note happens to be active now.
+	 *
+	 * Deliberately not cleared by stop(): the queue is where this player's file
+	 * identity lives, and it stays readable until the next play() replaces it.
+	 * main.ts reads a position's file and its chunk identity as a pair out of
+	 * this one queue, so the two accessors are a unit.
+	 *
+	 * A choice, not a forced one. The trailing-save hazard this comment used to
+	 * claim does not exist: main.ts's position gate is leading-edge, so every
+	 * save is driven by a progress event, and stop() emits none. Clearing the
+	 * queue would not lose a position; it is kept so the accessors keep
+	 * answering for the last reading handed to the player.
+	 */
+	getFilePath(): string {
+		return this.chunks[0]?.filePath ?? "";
+	}
+
+	/**
+	 * One chunk of the queue by index, or undefined if there is none.
+	 *
+	 * A single chunk rather than the array, so `chunks` stays private the way
+	 * getIndex() already implies. Read-only by construction: a caller that
+	 * could hand back the array could also reorder it underneath run().
+	 */
+	getChunk(index: number): SpeechChunk | undefined {
+		return this.chunks[index];
+	}
+
+	/**
 	 * Begin reading `chunks`. Replaces any current playback.
 	 *
 	 * `startAt` is a source offset, so a caller can resume mid-document.

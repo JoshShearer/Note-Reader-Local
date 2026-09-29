@@ -33,8 +33,11 @@ is what makes highlighting possible, and it is the load-bearing idea in the code
 
 Spec vocabulary differs from the code: `srs.md` says `TTSBackend` / `TTSCapabilities` /
 `TTSVoice` / `SpeechSegment`, the code says `SpeechEngine` / `EngineCapabilities` /
-`VoiceInfo` / `SpeechChunk`. They are approximate, not exact, synonyms. `SpeechChunk`
-notably lacks the `id`, `sequence`, `blockType` and `filePath` that `SpeechSegment` has.
+`VoiceInfo` / `SpeechChunk`. They are approximate, not exact, synonyms. All four of
+`id`, `sequence`, `blockType` and `filePath` now exist on `SpeechChunk`; what still
+differs is shape. `SpeechSegment` nests the location as `source: { filePath, from, to }`
+(`srs.md:392-396`) where `SpeechChunk` flattens it to a `filePath` plus flat
+`sourceStart`/`sourceEnd` (`src/audio/types.ts:139-152`).
 
 ---
 
@@ -211,9 +214,13 @@ it is no longer the inverse of `ownsPlayback` and must not be inferred from it.
 
 These are design-level, not bugs, and they shape any new work:
 
-- `Player` is a **chunk-queue player, not a reading session**. It holds no file path and
-  no document identity, which is why per-note reading position (R-M12) cannot simply be
-  bolted on.
+- `Player` is a **chunk-queue player, not a reading session**. It knows its file path
+  and hands it out (`getFilePath()`, `getChunk()`), which is what lets `main.ts` record
+  a position against the note it is actually reading rather than whichever note is in
+  front. What it still does not hold is a document, a revision or a vault handle, and
+  every play site still re-extracts from the active view (`src/main.ts` calls
+  `extractChunks` on `current.source` at **361**, **507** and **577**) rather than from
+  the file a position was keyed by, so R-M12 is only half bolted on.
 - **Capabilities are consumed for the transport controls only.** `src/ui/affordances.ts`
   gates play/pause, the rate nudges and the highlight toggle, and the settings engine list
   reports each engine's limitations. `pitch` still gates nothing (there is no pitch control

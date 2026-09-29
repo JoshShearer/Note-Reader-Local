@@ -1,4 +1,4 @@
-import type { SpeechChunk } from "../audio/types";
+import type { BlockType, SpeechChunk } from "../audio/types";
 import {
 	type SegmenterSource,
 	graphemeBoundaries,
@@ -835,8 +835,19 @@ interface Piece {
  * pair was split across 32,000 fuzz cases. Closing it means snapping here
  * too, which moves where every boundary lands and wants its own fail-first
  * change.
+ *
+ * `blockType` is a parameter rather than part of `ctx` on purpose: `ctx` is one
+ * object per document, and the block kind is a property of the line being
+ * turned into chunks, not of the document. It is labelled here, at the point
+ * the chunk is built, so every route into a chunk carries a real value.
  */
-function splitSentences(text: string, index: number[], rawStart: number, ctx: SegmentContext): SpeechChunk[] {
+function splitSentences(
+	text: string,
+	index: number[],
+	rawStart: number,
+	ctx: SegmentContext,
+	blockType: BlockType,
+): SpeechChunk[] {
 	const pieces: Piece[] = [];
 	const bounds: Array<{ from: number; to: number; legacyOpen: boolean }> = [];
 
@@ -865,7 +876,7 @@ function splitSentences(text: string, index: number[], rawStart: number, ctx: Se
 			chunk: {
 				id: "",
 				sequence: 0,
-				blockType: "other",
+				blockType,
 				filePath: "",
 				text: text.slice(s, e),
 				sourceIndex: index.slice(s, e),
@@ -1351,20 +1362,28 @@ export function extractChunks(
 	let paraText = "";
 	let paraIndex: number[] = [];
 	let paraStart = 0;
+	// The kind of block the buffer is holding, so a buffered paragraph is not
+	// hardcoded to one value at flush time. Every appendToParagraph call site
+	// today takes the default, so this is "paragraph" in practice; the setext
+	// route does not go through here either, it passes "heading" to
+	// flushParagraph directly. The parameter exists so a future route that
+	// reclassifies a buffered line has one place to do it in.
+	let paraBlockType: BlockType = "paragraph";
 
-	const flushParagraph = (): void => {
+	const flushParagraph = (blockType: BlockType = paraBlockType): void => {
 		if (paraText.trim() !== "") {
-			chunks.push(...splitSentences(paraText, paraIndex, paraStart, segmentCtx));
+			chunks.push(...splitSentences(paraText, paraIndex, paraStart, segmentCtx, blockType));
 		}
 		paraText = "";
 		paraIndex = [];
 	};
 
-	const appendToParagraph = (cleaned: Cleaned, start: number): void => {
+	const appendToParagraph = (cleaned: Cleaned, start: number, blockType: BlockType = "paragraph"): void => {
 		if (paraText === "") {
 			paraText = cleaned.text;
 			paraIndex = cleaned.index;
 			paraStart = start;
+			paraBlockType = blockType;
 		} else if (paraText.endsWith(" ")) {
 			// The line already ended in a real mapped space, because whatever
 			// it ended with was dropped: a comment, an image, a tag, a URL, an
@@ -1523,7 +1542,7 @@ export function extractChunks(
 				paraText = "";
 				paraIndex = [];
 			} else {
-				flushParagraph();
+				flushParagraph("heading");
 			}
 			continue;
 		}
@@ -1547,7 +1566,7 @@ export function extractChunks(
 				const open = lineStart + mathOpen;
 				const last = lineStarts[closeLine]! + closeAt + 1;
 				flushParagraph();
-				chunks.push(...splitSentences("equation", [open, open, open, open, open, open, open, last], open, segmentCtx));
+				chunks.push(...splitSentences("equation", [open, open, open, open, open, open, open, last], open, segmentCtx, "other"));
 				lineNo = closeLine;
 				appendRemainder(lines[closeLine]!, closeAt + 2, lineStarts[closeLine]!);
 				continue;
@@ -1555,11 +1574,15 @@ export function extractChunks(
 		}
 		let body = raw;
 		let prefixChars = 0;
-		let isStructural = false;
+		// The block scan already knows which construct this line belongs to, so
+		// it says so rather than setting a boolean and throwing the answer away.
+		// "paragraph" is the else: a plain prose line, and also a lazy
+		// continuation of a list or quote, which matches nothing on its own line.
+		let blockType: BlockType = "paragraph";
 		const m = raw.match(HEADING);
 		if (m) {
 			prefixChars = m[0].length;
-			isStructural = true;
+			blockType = "heading";
 		} else {
 			// Peel prefixes in order, each adding to prefixChars so cleanLine gets
 			// the true raw offset of the first kept character: quote levels, then
@@ -1567,7 +1590,7 @@ export function extractChunks(
 			const q = raw.match(BLOCKQUOTE);
 			if (q) {
 				prefixChars = q[0].length;
-				isStructural = true;
+				blockType = "quote";
 				prevContainer = true;
 			}
 			const callout = q ? raw.slice(prefixChars).match(CALLOUT) : null;
@@ -1577,7 +1600,13 @@ export function extractChunks(
 				const b = raw.slice(prefixChars).match(LIST_BULLET);
 				if (b) {
 					prefixChars += b[0].length;
-					isStructural = true;
+					// Only a line that is not already a quote is a list. A quoted
+					// list item matches both matchers, and the outer construct is
+					// the quote, because BLOCKQUOTE is peeled above before
+					// LIST_BULLET is even tried - the same order the `if (!q)
+					// inList = true` below already draws. Without the guard the
+					// two writes would race and the inner one would win.
+					if (blockType === "paragraph") blockType = "list";
 					prevContainer = true;
 					// A quoted list ends with its quote, so it does not hold the
 					// list state that shields later indented lines from being code.
@@ -1608,9 +1637,9 @@ export function extractChunks(
 		}
 		if (cleaned.text.trim() === "") continue;
 
-		if (isStructural) {
+		if (blockType !== "paragraph") {
 			flushParagraph();
-			chunks.push(...splitSentences(cleaned.text, cleaned.index, lineStart + prefixChars, segmentCtx));
+			chunks.push(...splitSentences(cleaned.text, cleaned.index, lineStart + prefixChars, segmentCtx, blockType));
 			continue;
 		}
 
@@ -1641,7 +1670,10 @@ export function extractChunks(
 		chunk.id = `${hash(filePath + i + chunk.sourceStart)}`;
 		chunk.sequence = i;
 		chunk.filePath = filePath;
-		chunk.blockType = "paragraph"; // Default; would need more context to detect heading/list/quote
+		// blockType is deliberately not set here. It is decided by the block scan
+		// and labelled in the SpeechChunk literal inside splitSentences, so it
+		// is already real by the time this post-pass runs. Overwriting it here
+		// is what made every chunk read "paragraph" (NRL-17, closed in NRL-50).
 	}
 
 	return chunks;

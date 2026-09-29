@@ -2,7 +2,7 @@ import { MarkdownView, Notice, Plugin, TFile, getLanguage, moment } from "obsidi
 import { EditorView } from "@codemirror/view";
 
 import { Player } from "./audio/player";
-import { describeUnavailable, type SpeechChunk, type SpeechEngine, type VoiceInfo } from "./audio/types";
+import { describeUnavailable, type SpeechEngine, type VoiceInfo } from "./audio/types";
 import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
 import { platformSegmenters } from "./text/segment";
@@ -139,19 +139,24 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		});
 
 		this.player.on("progress", (progress) => {
-			// Track reading position for resume
-			if (this.activeEditor) {
-				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (view?.file?.path) {
-					const filePath = view.file.path;
-					// Debounce position updates to avoid hammering saveData
-					if (!this.positionUpdateTimeout) {
-						this.positionUpdateTimeout = window.setTimeout(() => {
-							this.positionUpdateTimeout = null;
-						}, 1000);
-						// Save position async, don't block playback
-						void this.savePosition(filePath, progress.chunkIndex);
-					}
+			// Track reading position for resume.
+			//
+			// The path comes from the player, not from the active view. The
+			// active view is whatever note happens to be in front, which is the
+			// wrong file the moment the user switches notes mid-read - the queue
+			// behind is still the note the reading started on. The gate is a
+			// non-empty path rather than an active editor, so a read whose note
+			// is no longer in front still records where it got to; otherwise
+			// closing the view would silently discard the last position.
+			const filePath = this.player.getFilePath();
+			if (filePath) {
+				// Debounce position updates to avoid hammering saveData
+				if (!this.positionUpdateTimeout) {
+					this.positionUpdateTimeout = window.setTimeout(() => {
+						this.positionUpdateTimeout = null;
+					}, 1000);
+					// Save position async, don't block playback
+					void this.savePosition(filePath, progress.chunkIndex);
 				}
 			}
 		});
@@ -653,11 +658,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	private async savePosition(filePath: string, chunkIndex: number): Promise<void> {
 		if (chunkIndex < 0 || !this.player) return;
 
-		// Get the current chunks from player state to find segment info
-		const chunks = (this.player as unknown as { chunks: SpeechChunk[] }).chunks;
-		if (!chunks || chunkIndex >= chunks.length) return;
-
-		const chunk = chunks[chunkIndex];
+		// The player owns the queue, so it answers rather than being cast open.
+		const chunk = this.player.getChunk(chunkIndex);
 		if (!chunk) return;
 
 		const position = {

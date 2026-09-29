@@ -11,6 +11,7 @@
 
 import { Player } from "../src/audio/player.ts";
 import { extractChunks } from "../src/text/extract.ts";
+import { platformSegmenters } from "../src/text/segment.ts";
 import { allocateWordTimings } from "../src/audio/words.ts";
 import { pcmToWav } from "../src/audio/wav.ts";
 import type { SpeechChunk, SpeechEngine, SynthRequest, SynthResult } from "../src/audio/types.ts";
@@ -191,6 +192,91 @@ function chunksOf(src: string): SpeechChunk[] {
 }
 
 // --- Tests ------------------------------------------------------------------
+
+console.log("player exposes the file it is reading and the chunks it holds (NRL-50)");
+{
+	const { engine } = makeEngine();
+	const player = new Player({ bufferAhead: 1 });
+	const chunks = extractChunks(
+		SRC,
+		{
+			stripTags: true,
+			speakUrls: false,
+			skipCodeBlocks: true,
+			skipInlineCode: true,
+			skipTables: true,
+			skipHeadings: false,
+			skipFrontmatter: true,
+			speakImageAlt: true,
+			speakEmbeds: false,
+			locale: "en",
+		},
+		platformSegmenters,
+		"Notes/a.md",
+	);
+	check("NRL-50 the fixture really produced several chunks", chunks.length > 2, String(chunks.length));
+
+	// Before play() there is no file, and that has to be an empty path rather
+	// than a throw: a position save can race the first play().
+	check("NRL-50 no file before play()", player.getFilePath() === "");
+	check("NRL-50 no chunk before play()", player.getChunk(0) === undefined);
+
+	const playing = player.play(engine, chunks, 1);
+
+	check("NRL-50 the player reports the file it was given", player.getFilePath() === "Notes/a.md", player.getFilePath());
+	check("NRL-50 chunk 0 is the first chunk", player.getChunk(0)?.text === chunks[0]?.text);
+	check("NRL-50 a middle chunk is reachable by index", player.getChunk(2)?.text === chunks[2]?.text);
+	check("NRL-50 an out-of-range index is undefined, not a throw", player.getChunk(chunks.length + 10) === undefined);
+
+	for (let i = 0; i < chunks.length; i++) {
+		await tick();
+		fakeAudio.advance(fakeAudio.currentTime + 1.2, 1.0);
+		await tick();
+	}
+	await playing;
+
+	/*
+	 * stop() must not drop the queue: these accessors are what main.ts's
+	 * savePosition reads, so they keep answering for the last reading handed to
+	 * the player.
+	 *
+	 * Deliberate, but not forced. The trailing save this comment used to claim
+	 * does not happen: main.ts's position gate is leading-edge, so every save
+	 * rides a progress event, and stop() emits none. Clearing chunks would not
+	 * lose a position today.
+	 */
+	player.stop();
+	check("NRL-50 stop() keeps the file", player.getFilePath() === "Notes/a.md", player.getFilePath());
+	check("NRL-50 stop() keeps the chunks", player.getChunk(0)?.text === chunks[0]?.text);
+
+	// A second read replaces the file, so a stale path cannot outlive its note.
+	const otherChunks = extractChunks(
+		SRC,
+		{
+			stripTags: true,
+			speakUrls: false,
+			skipCodeBlocks: true,
+			skipInlineCode: true,
+			skipTables: true,
+			skipHeadings: false,
+			skipFrontmatter: true,
+			speakImageAlt: true,
+			speakEmbeds: false,
+			locale: "en",
+		},
+		platformSegmenters,
+		"Notes/b.md",
+	);
+	const playingB = player.play(engine, otherChunks, 1);
+	check("NRL-50 a new read replaces the file", player.getFilePath() === "Notes/b.md", player.getFilePath());
+	for (let i = 0; i < otherChunks.length; i++) {
+		await tick();
+		fakeAudio.advance(fakeAudio.currentTime + 1.2, 1.0);
+		await tick();
+	}
+	await playingB;
+	player.dispose();
+}
 
 console.log("player walks the queue and highlights in order");
 {
