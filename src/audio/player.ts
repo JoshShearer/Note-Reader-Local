@@ -44,6 +44,11 @@ export interface PlayerEvents extends Record<string, unknown> {
 	 * the value back from looping.
 	 */
 	rate: number;
+	/**
+	 * Pitch control, emitted only when it changes. Like rate, both the control
+	 * bar and the settings slider observe this to avoid feedback loops.
+	 */
+	pitch: number;
 	finished: void;
 	error: Error;
 }
@@ -80,6 +85,7 @@ export class Player {
 	private chunks: SpeechChunk[] = [];
 	private engine: SpeechEngine | null = null;
 	private rate = 1;
+	private pitch = 0;
 
 	private index = 0;
 	private state: PlayerState = "idle";
@@ -140,6 +146,7 @@ export class Player {
 		engine: SpeechEngine,
 		chunks: SpeechChunk[],
 		rate: number,
+		pitch: number,
 		startAtSource = -1,
 	): Promise<void> {
 		this.stop();
@@ -158,6 +165,7 @@ export class Player {
 		this.engine = engine;
 		this.chunks = chunks;
 		this.setRate(rate || 1);
+		this.setPitch(pitch);
 		this.index = start;
 		this.currentWord = -1;
 
@@ -267,7 +275,7 @@ export class Player {
 			{
 				chunk,
 				rate: engine.capabilities.ownsPlayback ? this.rate : 1,
-				pitch: 0,
+				pitch: this.pitch,
 				onWord: this.onEngineWord,
 			},
 			signal,
@@ -575,6 +583,20 @@ export class Player {
 
 	getRate(): number {
 		return this.rate;
+	}
+
+	/**
+	 * Change the pitch immediately. Unlike rate, pitch only affects future
+	 * synthesis, not audio that has already been produced.
+	 */
+	setPitch(pitch: number): void {
+		if (pitch === this.pitch) return;
+		this.pitch = pitch;
+		this.emitter.emit("pitch", pitch);
+	}
+
+	getPitch(): number {
+		return this.pitch;
 	}
 
 	/**

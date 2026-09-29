@@ -215,7 +215,7 @@ console.log("first candidate fails at chunk 0: the second is tried and succeeds"
 	const player = new Player({ bufferAhead: 0 });
 	const fallbacks: Array<{ from: string; to: string }> = [];
 
-	const winner = await playWithFallback(player, candidates, numbered(3), 1, {
+	const winner = await playWithFallback(player, candidates, numbered(3), 1, 0, {
 		onFallback: (from, to) => fallbacks.push({ from: from.id, to: to.id }),
 	});
 
@@ -247,7 +247,7 @@ console.log(
 	player.on("error", (e) => persistentErrors.push(e.message));
 	const fallbacks: unknown[] = [];
 
-	const resultPromise = playWithFallback(player, candidates, numbered(3), 1, {
+	const resultPromise = playWithFallback(player, candidates, numbered(3), 1, 0, {
 		onFallback: (from, to) => fallbacks.push({ from: from.id, to: to.id }),
 	});
 
@@ -282,7 +282,7 @@ console.log("a single candidate that fails at chunk 0: returns null, onFallback 
 	const player = new Player({ bufferAhead: 0 });
 	const fallbacks: unknown[] = [];
 
-	const winner = await playWithFallback(player, candidates, numbered(2), 1, {
+	const winner = await playWithFallback(player, candidates, numbered(2), 1, 0, {
 		onFallback: (from, to) => fallbacks.push({ from: from.id, to: to.id }),
 	});
 
@@ -307,7 +307,7 @@ console.log(
 	const persistentErrors: string[] = [];
 	player.on("error", (e) => persistentErrors.push(e.message));
 
-	const resultPromise = playWithFallback(player, candidates, numbered(2), 1, {
+	const resultPromise = playWithFallback(player, candidates, numbered(2), 1, 0, {
 		onFallback: (from, to) => fallbacks.push({ from: from.id, to: to.id }),
 	});
 
@@ -338,7 +338,7 @@ console.log("beforeAttempt is awaited once per candidate actually tried, in orde
 	const player = new Player({ bufferAhead: 0 });
 	const attempts: string[] = [];
 
-	const winner = await playWithFallback(player, candidates, numbered(2), 1, {
+	const winner = await playWithFallback(player, candidates, numbered(2), 1, 0, {
 		beforeAttempt: async (c) => {
 			attempts.push(c.id);
 		},

@@ -22,7 +22,7 @@
 import type { EngineCapabilities } from "../audio/types";
 
 /** A control whose availability depends on the engine. */
-export type ControlId = "playPause" | "rate" | "highlightToggle";
+export type ControlId = "playPause" | "rate" | "pitch" | "highlightToggle";
 
 export interface Affordance {
 	enabled: boolean;
@@ -58,7 +58,7 @@ function gate(enabled: boolean, reason: string): Affordance {
  * the user would hide the real problem rather than explain it.
  */
 export function controlAffordances(caps: EngineCapabilities | null, engineLabel: string): Affordances {
-	if (!caps) return { playPause: able, rate: able, highlightToggle: able };
+	if (!caps) return { playPause: able, rate: able, pitch: able, highlightToggle: able };
 
 	return {
 		// Both halves are required. A pause the player cannot come back from is
@@ -71,6 +71,7 @@ export function controlAffordances(caps: EngineCapabilities | null, engineLabel:
 			`${engineLabel} cannot pause. Stop and start again.`,
 		),
 		rate: gate(caps.rate, `${engineLabel} reads at a fixed speed.`),
+		pitch: gate(caps.pitch, `${engineLabel} does not support pitch control.`),
 		highlightToggle: gate(
 			caps.timing !== "none",
 			`${engineLabel} does not report word timings, so there is nothing to highlight.`,
@@ -91,6 +92,7 @@ export function engineLimitations(caps: EngineCapabilities, engineLabel: string)
 	if (!affordances.highlightToggle.enabled) out.push({ id: "highlightToggle", text: "no word highlighting" });
 	if (!affordances.playPause.enabled) out.push({ id: "playPause", text: "cannot pause" });
 	if (!affordances.rate.enabled) out.push({ id: "rate", text: "fixed speed" });
+	if (!affordances.pitch.enabled) out.push({ id: "pitch", text: "no pitch control" });
 	if (!caps.sentenceBoundary) out.push({ id: "sentenceBoundary", text: "no sentence boundaries" });
 	if (!caps.offlineStatus) {
 		out.push({ id: "offlineStatus", text: "cannot tell which voices need the network" });
