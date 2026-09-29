@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import process from "process";
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import builtins from "builtin-modules";
@@ -51,6 +51,10 @@ Independent implementation; no code derived from any other plugin.
  * Build configuration for main.js.
  * ORT checksums are injected at build time (production only) for runtime validation.
  * Non-negotiable: checksums are read-only, never modified after build.
+ *
+ * The Kokoro worker code is inlined into main.js as base64 at build time,
+ * reducing installer download from 5 files to 4. The inlineWorkerIntoMain()
+ * function runs after the worker is built.
  */
 function createMainConfig(ortChecksums = null) {
 	const define = {
@@ -140,6 +144,37 @@ async function copyOrtRuntime() {
 	}
 }
 
+/**
+ * Embed the worker script in main.js by reading the built kokoro-worker.js
+ * and injecting it as a base64-encoded constant.
+ */
+async function inlineWorkerIntoMain() {
+	const workerCode = await readFile("kokoro-worker.js", "utf8");
+	const workerBase64 = Buffer.from(workerCode).toString("base64");
+	const mainCode = await readFile("main.js", "utf8");
+
+	// Inject the inlined worker code at the start of the main.js file,
+	// just after the banner comment and before any other code.
+	const injection = `
+// Inlined Kokoro worker code (base64-encoded)
+var KOKORO_WORKER_CODE = "${workerBase64}";
+`;
+
+	const injected = mainCode.replace(
+		/(\*\/\n)/,
+		`$1${injection}`,
+	);
+
+	await writeFile("main.js", injected, "utf8");
+
+	// Remove the separate worker file since it is now inlined
+	try {
+		await rm("kokoro-worker.js");
+	} catch {
+		// File may not exist in dev mode
+	}
+}
+
 if (production) {
 	// Compute ORT checksums at build time for runtime validation.
 	// Non-negotiable: no model weights downloaded, only published ORT files.
@@ -147,6 +182,7 @@ if (production) {
 	const mainConfig = createMainConfig(ortChecksums);
 	await build(mainConfig);
 	await build(workerConfig);
+	await inlineWorkerIntoMain();
 	await copyOrtRuntime();
 } else {
 	const mainConfig = createMainConfig();
