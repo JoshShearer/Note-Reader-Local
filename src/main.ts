@@ -33,8 +33,13 @@ import {
 	type PluginData,
 } from "./settings/data";
 import { PositionThrottle } from "./settings/positionThrottle";
-import { applyHighlight, registerHighlighting } from "./ui/highlight";
-import { WORD_HIGHLIGHT_VAR, applyWordHighlightColour } from "./ui/highlightColour";
+import { applyHighlight, applySentenceHighlight, applyWordHighlight, registerHighlighting } from "./ui/highlight";
+import {
+	WORD_HIGHLIGHT_VAR,
+	SENTENCE_HIGHLIGHT_VAR,
+	applyWordHighlightColour,
+	applySentenceHighlightColour,
+} from "./ui/highlightColour";
 import { createModelStore, type VaultModelStore } from "./ui/modelStore";
 import { reportError, trace } from "./diagnostics";
 import { LocalTtsSettingTab } from "./ui/settingsTab";
@@ -157,12 +162,12 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		// Sentence-level highlighting
 		this.player.on("chunk", (chunk) => {
-			if (!this.settings.highlight.enabled || !chunk) {
+			if (!this.settings.highlight.enabled || !this.settings.highlight.sentence || !chunk) {
 				this.clearHighlight();
 				return;
 			}
 			if (!this.activeEditor) return;
-			applyHighlight(this.activeEditor, {
+			applySentenceHighlight(this.activeEditor, {
 				from: chunk.sourceStart,
 				to: chunk.sourceEnd,
 			});
@@ -170,14 +175,17 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		// Word-level highlighting (on top of sentence)
 		this.player.on("word", (payload) => {
-			if (!this.settings.highlight.enabled || !payload) {
+			if (!this.settings.highlight.enabled || !this.settings.highlight.word || !payload) {
 				this.clearHighlight();
 				return;
 			}
 			// The view can be closed mid-playback; a missing editor just means
 			// there is nothing left to highlight.
 			if (!this.activeEditor) return;
-			applyHighlight(this.activeEditor, {
+			// Only apply word highlight if the engine supports word timing
+			const engine = this.activeEngine();
+			if (!engine || engine.capabilities.timing === "none") return;
+			applyWordHighlight(this.activeEditor, {
 				from: payload.timing.sourceStart,
 				to: payload.timing.sourceEnd,
 			});
@@ -1400,11 +1408,12 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
-	 * Write the colour to the custom property styles.css reads. On body
+	 * Write the colour to the custom properties styles.css reads. On body
 	 * because the highlight is a CodeMirror mark inside whichever editor is
 	 * reading, and every one of those sits under body.
 	 */
 	private applyHighlightColour(): void {
+		applySentenceHighlightColour(document.body.style, this.settings.highlight.color);
 		applyWordHighlightColour(document.body.style, this.settings.highlight.color);
 	}
 

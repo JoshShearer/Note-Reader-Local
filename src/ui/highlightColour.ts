@@ -15,6 +15,11 @@
  */
 
 /**
+ * The property styles.css reads for the spoken sentence.
+ */
+export const SENTENCE_HIGHLIGHT_VAR = "--local-tts-reader-sentence-highlight";
+
+/**
  * The property styles.css reads for the spoken word. Named for the word so a
  * sentence highlight can sit beside it as --local-tts-reader-sentence-highlight.
  */
@@ -65,6 +70,12 @@ export interface StyleTarget {
  * Removing the property rather than setting it to the theme variable keeps
  * the fallback in one place (styles.css) and leaves nothing behind on unload.
  */
+export function applySentenceHighlightColour(style: StyleTarget, stored: string): void {
+	const value = highlightCssValue(stored);
+	if (value === null) style.removeProperty(SENTENCE_HIGHLIGHT_VAR);
+	else style.setProperty(SENTENCE_HIGHLIGHT_VAR, value);
+}
+
 export function applyWordHighlightColour(style: StyleTarget, stored: string): void {
 	const value = highlightCssValue(stored);
 	if (value === null) style.removeProperty(WORD_HIGHLIGHT_VAR);
