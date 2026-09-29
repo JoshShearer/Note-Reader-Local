@@ -14,16 +14,18 @@ const MIN_CHUNK_CHARS = 40;
 const EMOJI =
 	/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/u;
 
+type CommentCloser = "-->" | "%%";
+
 interface Cleaned {
 	text: string;
 	/** index[i] is the raw markdown offset that produced text[i]. */
 	index: number[];
 	/**
-	 * The line opened an HTML comment it did not close. extractChunks hides
-	 * the following lines until the `-->`. Only meaningful for a top-level
+	 * The line opened a comment it did not close. extractChunks hides
+	 * the following lines until this delimiter. Only meaningful for a top-level
 	 * line, not a re-cleaned link label.
 	 */
-	openComment?: boolean;
+	openComment?: CommentCloser;
 }
 
 function isWordChar(ch: string): boolean {
@@ -100,8 +102,53 @@ function inlineMathClose(raw: string, open: number): number {
 	return close;
 }
 
+/** A code span closes on a run of the same length, not on an inner backtick. */
+function inlineCodeBounds(raw: string, open: number): { start: number; close: number; end: number } {
+	let start = open + 1;
+	while (raw[start] === "`") start += 1;
+	let next = start;
+	while ((next = raw.indexOf("`", next)) !== -1) {
+		let end = next + 1;
+		while (raw[end] === "`") end += 1;
+		if (end - next === start - open) return { start, close: next, end };
+		next = end;
+	}
+	return { start, close: -1, end: start };
+}
+
+/**
+ * A hidden or literal delimiter cannot end its enclosing label/highlight.
+ * Otherwise recursive cleaning sees half a comment and speaks the other half.
+ * Unclosed comments remain local to the label, as in cleanLine.
+ */
+function inlineContainerClose(raw: string, from: number, delimiter: string): number {
+	let i = from;
+	while (i < raw.length) {
+		if (raw[i] === "\\") {
+			i += 2;
+			continue;
+		}
+		if (raw[i] === "`") {
+			i = inlineCodeBounds(raw, i).end;
+			continue;
+		}
+		const html = raw.startsWith("<!--", i);
+		if (html || raw.startsWith("%%", i)) {
+			const closer = html ? "-->" : "%%";
+			const close = raw.indexOf(closer, i + (html ? 4 : 2));
+			if (close !== -1) {
+				i = close + closer.length;
+				continue;
+			}
+		}
+		if (raw.startsWith(delimiter, i)) return i;
+		i += 1;
+	}
+	return -1;
+}
+
 /** Strip inline markdown from a single line, recording source offsets. */
-function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
+function cleanLine(raw: string, rawStart: number, opts: StripOptions, blockComments = false): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
 
@@ -133,7 +180,7 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 		emit(word[word.length - 1]!, lastDollar);
 	};
 
-	let openComment = false;
+	let openComment: CommentCloser | undefined;
 	let i = 0;
 
 	while (i < raw.length) {
@@ -149,18 +196,18 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 		// Inline code: dropped unless skipInlineCode is off, in which case the
 		// content is read verbatim. Code is not markdown, so it is not re-cleaned:
 		// `a_b` or `#x` inside backticks mean exactly what they say. A backtick
-		// with no closer is dropped alone in both positions, so a stray one never
+		// run with no matching closer is dropped in both positions, so it never
 		// swallows the rest of the line.
 		if (ch === "`") {
-			const close = raw.indexOf("`", i + 1);
+			const { start, close, end } = inlineCodeBounds(raw, i);
 			if (close !== -1 && !opts.skipInlineCode) {
 				pushSpace(rawStart + i);
-				for (let k = i + 1; k < close; k++) {
+				for (let k = start; k < close; k++) {
 					if (/\s/.test(raw[k]!)) pushSpace(rawStart + k);
 					else emit(raw[k]!, rawStart + k);
 				}
 			}
-			i = close === -1 ? i + 1 : close + 1;
+			i = end;
 			pushSpace(rawStart + i);
 			continue;
 		}
@@ -197,14 +244,23 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 			continue;
 		}
 
-		// HTML comment: dropped with its content. Authors put text in comments
-		// precisely because it does not render, so reading it aloud discloses
-		// something they hid. An unclosed one hides the rest of the line and
-		// tells extractChunks to keep hiding, as a browser would.
-		if (ch === "<" && raw.startsWith("<!--", i)) {
-			const close = raw.indexOf("-->", i + 4);
+		// Comments own their content: only their own first closer matters, even
+		// if the content looks like code or the other comment syntax. Obsidian
+		// treats an unmatched inline %% as text, but a block opener hides to EOF
+		// (ADR 0006). Recursive labels cannot open a document-level block.
+		const htmlComment = ch === "<" && raw.startsWith("<!--", i);
+		const obsidianComment = ch === "%" && raw.startsWith("%%", i);
+		if (htmlComment || obsidianComment) {
+			const closer: CommentCloser = htmlComment ? "-->" : "%%";
+			const close = raw.indexOf(closer, i + (htmlComment ? 4 : 2));
+			if (close === -1 && obsidianComment && !(blockComments && raw.slice(0, i).trim() === "")) {
+				emit("%", rawStart + i);
+				emit("%", rawStart + i + 1);
+				i += 2;
+				continue;
+			}
 			if (close === -1) {
-				openComment = true;
+				openComment = closer;
 				// The space before the comment would double with the line join.
 				if (chars[chars.length - 1] === " ") {
 					chars.pop();
@@ -213,7 +269,7 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 				break;
 			}
 			pushSpace(rawStart + i);
-			i = close + 3;
+			i = close + closer.length;
 			continue;
 		}
 
@@ -234,7 +290,7 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 		// would stop at the first `]` of `]]` and speak the second. Whether embeds
 		// should be spoken is a setting that extract does not read yet (NRL-21).
 		if (ch === "!" && raw[i + 1] === "[" && raw[i + 2] === "[") {
-			const close = raw.indexOf("]]", i + 3);
+			const close = inlineContainerClose(raw, i + 3, "]]");
 			if (close !== -1) {
 				i = close + 2;
 				pushSpace(rawStart + i);
@@ -249,7 +305,7 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 		// Only a double bracket lands here, so a single `[` (including callouts
 		// like `[!note]`) still reaches the link branch below.
 		if (ch === "[" && raw[i + 1] === "[") {
-			const close = raw.indexOf("]]", i + 2);
+			const close = inlineContainerClose(raw, i + 2, "]]");
 			if (close === -1) {
 				// No closer on this line (wikilinks never span lines). Drop just the
 				// brackets so the rest of the line is still read as prose.
@@ -304,7 +360,7 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 
 		// Image: dropped entirely, alt text is not prose.
 		if (ch === "!" && raw[i + 1] === "[") {
-			const close = raw.indexOf("]", i + 2);
+			const close = inlineContainerClose(raw, i + 2, "]");
 			if (close === -1) {
 				i += 1;
 				continue;
@@ -321,7 +377,7 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 
 		// Link: keep the label, drop the target. Covers inline and reference form.
 		if (ch === "[") {
-			const close = raw.indexOf("]", i + 1);
+			const close = inlineContainerClose(raw, i + 1, "]");
 			if (close === -1) {
 				emit(ch, rawStart + i);
 				i += 1;
@@ -411,7 +467,7 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions): Cleaned {
 			raw[i + 2] !== "=" &&
 			!isSpaceOrEdge(raw[i + 2])
 		) {
-			const close = raw.indexOf("==", i + 2);
+			const close = inlineContainerClose(raw, i + 2, "==");
 			if (close !== -1 && !/\s/.test(raw[close - 1]!) && raw[close + 2] !== "=") {
 				const inner = cleanLine(raw.slice(i + 2, close), rawStart + i + 2, opts);
 				for (let k = 0; k < inner.text.length; k++) {
@@ -761,7 +817,7 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 	}
 
 	let inFence = false;
-	let inComment = false;
+	let inComment: CommentCloser | undefined;
 	let inIndentedCode = false;
 	// Inside a list item, an indented line is item content or a nested item,
 	// never code. Kept across blank lines, since loose lists have them.
@@ -814,10 +870,10 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		}
 	};
 
-	/** Clean text that follows a closing `-->` or `$$`, as prose. */
+	/** Clean closing-line prose, including any further comments. */
 	const appendRemainder = (raw: string, from: number, lineStart: number): void => {
-		const cleaned = cleanLine(raw.slice(from), lineStart + from, stripOpts);
-		inComment = cleaned.openComment === true;
+		const cleaned = cleanLine(raw.slice(from), lineStart + from, stripOpts, true);
+		inComment = cleaned.openComment;
 		if (cleaned.text.trim() !== "") appendToParagraph(cleaned, lineStart + from);
 	};
 
@@ -836,6 +892,15 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		// every later sourceIndex entry is still a true raw offset.
 		if (frontmatter && lineNo <= frontmatter.endLine) continue;
 
+		// Hidden lines must not change blank, paragraph, list, code or math state.
+		// In particular, a different comment delimiter cannot close this one.
+		if (inComment) {
+			const close = raw.indexOf(inComment);
+			if (close === -1) continue;
+			appendRemainder(raw, close + inComment.length, lineStart);
+			continue;
+		}
+
 		const blank = raw.trim() === "";
 		const wasBlank = prevBlank;
 		const wasPara = prevPara;
@@ -846,17 +911,6 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		prevBlank = blank;
 		prevPara = false;
 		prevContainer = false;
-
-		// Inside an HTML comment opened on an earlier line. Checked before
-		// fences: a fence inside a comment does not render either. With no
-		// closer the comment runs to the end of the note, as HTML renders it;
-		// silence over disclosure, the same trade as docs/adr/0002.
-		if (inComment) {
-			const close = raw.indexOf("-->");
-			if (close === -1) continue;
-			appendRemainder(raw, close + 3, lineStart);
-			continue;
-		}
 
 		if (!inFence) {
 			// A list ends at an unindented line that is not an item, when a blank
@@ -945,20 +999,11 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 				continue;
 			}
 		}
-		if (opts.skipTables && TABLE_ROW.test(raw)) {
-			flushParagraph();
-			continue;
-		}
-
 		let body = raw;
 		let prefixChars = 0;
 		let isStructural = false;
 		const m = raw.match(HEADING);
 		if (m) {
-			if (opts.skipHeadings) {
-				flushParagraph();
-				continue;
-			}
 			prefixChars = m[0].length;
 			isStructural = true;
 		} else {
@@ -999,8 +1044,14 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 			continue;
 		}
 
-		const cleaned = cleanLine(body, lineStart + prefixChars, stripOpts);
-		inComment = cleaned.openComment === true;
+		const cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true);
+		inComment = cleaned.openComment;
+		// Output exclusions do not exclude parsing: an HTML or Obsidian comment
+		// opened in a skipped heading/table must still hide its following lines.
+		if ((opts.skipTables && TABLE_ROW.test(raw)) || (opts.skipHeadings && m)) {
+			flushParagraph();
+			continue;
+		}
 		if (cleaned.text.trim() === "") continue;
 
 		if (isStructural) {

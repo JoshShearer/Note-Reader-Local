@@ -280,7 +280,10 @@ In particular:
 - Emphasis markers are dropped. An underscore between letters or digits is part of an identifier (`snake_case_name` is spoken intact); only a flanking `_` is emphasis. `*` and `~~` with whitespace on both sides, and a single `~`, are spoken as text.
 - `==highlight==` speaks its text without the equals signs; `a == b` is text.
 - Inline HTML tags from a known-element list are dropped and their text content kept; `<br>` and other breaking elements separate words.
-- HTML comments (`<!-- ... -->`), including multi-line ones, are never spoken. An unclosed comment hides the rest of the note.
+- HTML comments (`<!-- ... -->`), including multi-line ones, are never spoken. An unclosed comment hides the rest of the note. Literal code is exempt from comment parsing.
+- Obsidian comments (`%%...%%`) are unconditionally excluded, including their delimiters (ADR 0006). Complete inline spans and multi-line blocks are silent; visible text before them and after the closing delimiter, including closing-line prose, remains speakable. A block opener is `%%` at the start of a prose line allowing whitespace, after structural prefixes or in a closing-line remainder; if unclosed it hides through EOF. An unmatched inline opener remains literal, as do lone `%` and escaped openers.
+- Comments are non-nesting: the first matching closer ends the active comment, and HTML and Obsidian delimiters cannot close each other's comments. Hidden content, including fences, math, other comment openers and blank lines, MUST NOT change parser state. Skipping headings or tables MUST NOT bypass comment tracking. Recursively cleaned labels, aliases and highlights suppress complete comments with local state that cannot consume subsequent source lines.
+- Inline, fenced and indented code retain literal comment delimiters when spoken and remain silent when skipped. Comment removal MUST preserve word separation and raw UTF-16 source offsets, including mapped separating spaces and true offsets after multi-line comments (ADR 0006, R-M11).
 - Footnote references (`[^1]`) are dropped, and a definition's `[^1]:` marker with them.
 - Math is spoken as the word "equation": display math always, inline math only when it has 4 or more tokens, with a currency heuristic so prices such as `$5` are read as written (ADR 0004).
 
