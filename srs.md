@@ -267,6 +267,11 @@ Previous segment
 Next segment
 ```
 
+Previous and Next buttons are implemented in the control bar and navigate the
+chunk queue during playback. Navigation attempts at queue boundaries (first
+chunk when calling Previous, last chunk when calling Next) are silently
+no-ops, bounds-checked by the player.
+
 The exact implementation of pause/resume MAY depend on backend capabilities.
 
 Where a backend cannot pause an active utterance, the controller MAY implement pause by stopping synthesis while retaining the current segment and position.

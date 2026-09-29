@@ -40,6 +40,15 @@ export class ControlBar {
 	constructor(private readonly plugin: LocalTtsReaderPlugin) {
 		this.el = document.body.createDiv({ cls: "local-tts-control-bar" });
 
+		const previousBtn = this.el.createEl("button", {
+			cls: "local-tts-cb-btn",
+			attr: { "aria-label": "Read previous sentence", type: "button" },
+		});
+		setIcon(previousBtn, "skip-back");
+		previousBtn.addEventListener("click", () => {
+			void this.plugin.getPlayer().previous();
+		});
+
 		const replayBtn = this.el.createEl("button", {
 			cls: "local-tts-cb-btn",
 			attr: { "aria-label": "Replay current sentence", type: "button" },
@@ -61,6 +70,15 @@ export class ControlBar {
 		});
 		setIcon(stopBtn, "square");
 		stopBtn.addEventListener("click", () => this.plugin.stopReading());
+
+		const nextBtn = this.el.createEl("button", {
+			cls: "local-tts-cb-btn",
+			attr: { "aria-label": "Read next sentence", type: "button" },
+		});
+		setIcon(nextBtn, "skip-forward");
+		nextBtn.addEventListener("click", () => {
+			void this.plugin.getPlayer().next();
+		});
 
 		const speed = this.el.createDiv({ cls: "local-tts-cb-speed" });
 
