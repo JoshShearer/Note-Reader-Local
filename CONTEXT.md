@@ -177,6 +177,17 @@ Three consequences worth knowing before touching any of it:
 - On the `engine` route the loop deliberately stays parked inside `await synthesize()`. Not
   bumping the token and not aborting the chunk scope is the whole mechanism of a
   mid-utterance resume.
+- On the `element` route both of `audio.play()`'s callbacks **outlive their own run**, so
+  both re-check the `runToken` captured before the call. A real `HTMLAudioElement` settles
+  that promise asynchronously, and `pause()` on this route does not bump the token, so a
+  `stop()` or a fresh `play()` can land in between. The success half would otherwise revive
+  a dead run's state and prime a queue `stop()` has already cleared, on a signal nothing
+  can abort; the failure half would report a notice about a reading the user had abandoned
+  and then `stop()` the playback that replaced it. A superseded rejection is therefore
+  swallowed on purpose: nothing awaits it, and whoever started the replacement owns its own
+  failures. Only this route needs the guard, and only this route primes - `restart` implies
+  `ownsPlayback`, which `primeBuffer` refuses and whose `restartCurrent` re-enters `run()`'s
+  own priming, and `engine` is webspeech alone, which also owns playback.
 
 `EngineCapabilities.pause` therefore answers "can the player stop this engine's sound and
 come back to it", not "does the engine have a pause API". All four engines now say yes, so

@@ -14,6 +14,7 @@ import { extractChunks } from "../src/text/extract.ts";
 import { allocateWordTimings } from "../src/audio/words.ts";
 import { pcmToWav } from "../src/audio/wav.ts";
 import type { SpeechChunk, SpeechEngine, SynthRequest, SynthResult } from "../src/audio/types.ts";
+import { normaliseSettings } from "../src/settings/index.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = ""): void {
@@ -418,6 +419,236 @@ console.log("an engine that owns playback is never prefetched");
 	check("at most one synthesize in flight", peak === 1, `peak ${peak}`);
 	check("every chunk spoken exactly once", order.length === 10, `got ${order.length}`);
 	check("spoken in chunk order", order.every((n, i) => n === i), order.join(","));
+}
+
+// --- Look ahead applies without a reload (NRL-40) ---------------------------
+//
+// The slider wrote settings.bufferAhead and saved, but the running Player had
+// read the value once in its constructor, so look-ahead only changed on the
+// next plugin load. These pin the live path. `numbered` and `makeEngine` are
+// hoisted function declarations, so using them above their definitions is
+// deliberate: these belong beside the other look-ahead tests.
+
+console.log("raising look ahead fills the window on a running player");
+{
+	// The ticket's own acceptance criterion: construct with 2, set 6, play over
+	// ten chunks, expect 7 synthesise calls (the current chunk plus six ahead).
+	const { engine, calls } = makeEngine();
+	const chunks = numbered(10);
+	const player = new Player({ bufferAhead: 2 });
+	const playing = player.play(engine, chunks, 1);
+	await tick();
+	check("starts at the constructor window", calls.length === 3, `got ${calls.length}`);
+
+	player.setBufferAhead(6);
+	await tick();
+	check("window widened to six ahead without a reload", calls.length === 7, `got ${calls.length}`);
+	check("did not run past the end of the queue", calls.length <= chunks.length, `got ${calls.length}`);
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("lowering look ahead issues no further prefetch and keeps issued work");
+{
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 6 });
+	const playing = player.play(engine, numbered(10), 1);
+	await tick();
+	check("starts at six ahead", calls.length === 7, `got ${calls.length}`);
+
+	const before = player.getIndex();
+	player.setBufferAhead(1);
+	await tick();
+	// A shrink only stops FUTURE excess prefetch. Synthesis already issued is
+	// shared with the session and must not be thrown away or aborted.
+	check("no further synthesis issued", calls.length === 7, `got ${calls.length}`);
+	check("index untouched by a shrink", player.getIndex() === before, `got ${player.getIndex()}`);
+	check("state untouched by a shrink", player.getState() === "playing", `got ${player.getState()}`);
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("a raised look ahead still never reaches an engine that owns playback");
+{
+	// NRL-13's guard. A wider window must not start a second voice on speechd
+	// or webspeech, whatever the slider says.
+	const { engine } = makeEngine();
+	let inFlight = 0;
+	let peak = 0;
+	let started = 0;
+	const owning: SpeechEngine = {
+		...engine,
+		capabilities: { ...engine.capabilities, ownsPlayback: true },
+		async synthesize(): Promise<SynthResult> {
+			started += 1;
+			inFlight += 1;
+			peak = Math.max(peak, inFlight);
+			await new Promise((r) => setTimeout(r, 20));
+			inFlight -= 1;
+			return { kind: "streamed", estimatedMs: 0, words: null };
+		},
+	};
+
+	const player = new Player({ bufferAhead: 0 });
+	const playing = player.play(owning, numbered(10), 1);
+	await tick();
+	player.setBufferAhead(8);
+	await tick();
+	check("still one utterance in flight after widening", peak === 1, `peak ${peak}`);
+	check("no burst of extra utterances", started <= 2, `started ${started}`);
+	await playing;
+	check("at most one in flight for the whole queue", peak === 1, `peak ${peak}`);
+}
+
+console.log("look ahead set while paused fills on resume");
+{
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 2 });
+	const playing = player.play(engine, numbered(10), 1);
+	await tick();
+	check("playing before pause", player.getState() === "playing", `got ${player.getState()}`);
+	check("window is three before pause", calls.length === 3, `got ${calls.length}`);
+
+	player.pause();
+	player.setBufferAhead(6);
+	await tick();
+	check("paused player does not prefetch", calls.length === 3, `got ${calls.length}`);
+	check("value was stored while paused", player.getBufferAhead() === 6, `got ${player.getBufferAhead()}`);
+
+	player.resume();
+	await tick();
+	check("resume fills the widened window", calls.length === 7, `got ${calls.length}`);
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("look ahead set while idle applies on the next play");
+{
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 2 });
+	check("idle before play", player.getState() === "idle", `got ${player.getState()}`);
+	player.setBufferAhead(5);
+	check("no synthesis from a setter while idle", calls.length === 0, `got ${calls.length}`);
+
+	const playing = player.play(engine, numbered(10), 1);
+	await tick();
+	check("next play uses the new window", calls.length === 6, `got ${calls.length}`);
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("setBufferAhead normalises to an integer in 0 to 8");
+{
+	// Same rule normaliseSettings already applies to the stored value: a
+	// non-finite input falls back to the default of 2, anything else is
+	// clamped then rounded.
+	const player = new Player({ bufferAhead: 2 });
+	check("constructor value is readable", player.getBufferAhead() === 2, `got ${player.getBufferAhead()}`);
+
+	player.setBufferAhead(-3);
+	check("negative clamps to 0", player.getBufferAhead() === 0, `got ${player.getBufferAhead()}`);
+	player.setBufferAhead(99);
+	check("above the maximum clamps to 8", player.getBufferAhead() === 8, `got ${player.getBufferAhead()}`);
+	player.setBufferAhead(3.7);
+	check("a fraction rounds", player.getBufferAhead() === 4, `got ${player.getBufferAhead()}`);
+	player.setBufferAhead(Number.NaN);
+	check("NaN falls back to the default", player.getBufferAhead() === 2, `got ${player.getBufferAhead()}`);
+	player.setBufferAhead(Number.POSITIVE_INFINITY);
+	check("Infinity falls back to the default", player.getBufferAhead() === 2, `got ${player.getBufferAhead()}`);
+	player.setBufferAhead(0);
+	check("zero is a real value, not falsy-defaulted", player.getBufferAhead() === 0, `got ${player.getBufferAhead()}`);
+}
+
+console.log("a clamped look ahead is the window that is actually used");
+{
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 2 });
+	const playing = player.play(engine, numbered(10), 1);
+	await tick();
+	player.setBufferAhead(-5);
+	await tick();
+	// Clamped to 0, so nothing new: the current chunk plus the two already
+	// prefetched stay, and no fourth is issued.
+	check("a negative window issues nothing further", calls.length === 3, `got ${calls.length}`);
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("changing look ahead does not touch the rate");
+{
+	// Non-negotiable 9: the rate is applied exactly once. A look-ahead change
+	// must not go anywhere near it.
+	const { engine } = makeEngine();
+	const player = new Player({ bufferAhead: 2 });
+	const rates: number[] = [];
+	player.on("rate", (r) => rates.push(r));
+	const playing = player.play(engine, numbered(10), 1.5);
+	await tick();
+	check("rate is 1.5 before", player.getRate() === 1.5, `got ${player.getRate()}`);
+	player.setBufferAhead(6);
+	await tick();
+	check("rate unchanged by setBufferAhead", player.getRate() === 1.5, `got ${player.getRate()}`);
+	check("no rate event from setBufferAhead", JSON.stringify(rates) === "[1.5]", JSON.stringify(rates));
+	check("audio element rate unchanged", fakeAudio.playbackRate === 1.5, `got ${fakeAudio.playbackRate}`);
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("a stop while resuming does not start work on a queue that is gone");
+{
+	// resume() primes the buffer inside audio.play()'s callback, and a real
+	// HTMLAudioElement resolves that promise asynchronously, so Stop can land
+	// between the call and the callback. Without a guard the callback starts
+	// synthesis for a queue stop() has already cleared and cancelPending()ed,
+	// on a signal nothing can abort, because stop() has nulled the controller.
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 2 });
+	const playing = player.play(engine, numbered(10), 1);
+	await tick();
+	check("playing before pause", player.getState() === "playing", `got ${player.getState()}`);
+
+	player.pause();
+	const realPlay = fakeAudio.play.bind(fakeAudio);
+	let releasePlay = (): void => {};
+	fakeAudio.play = (): Promise<void> =>
+		new Promise<void>((resolve) => {
+			releasePlay = () => {
+				void realPlay();
+				resolve();
+			};
+		});
+
+	player.resume();
+	player.stop();
+	const atStop = calls.length;
+	releasePlay();
+	await tick();
+
+	check("no synthesis issued after stop", calls.length === atStop, `issued ${calls.length - atStop}`);
+	check("state not resurrected by a late resume", player.getState() === "idle", `got ${player.getState()}`);
+	fakeAudio.play = realPlay;
+	await playing.catch(() => undefined);
+}
+
+console.log("the player's look-ahead rule matches the stored-value rule");
+{
+	// `normaliseBufferAhead` in player.ts deliberately duplicates
+	// `normaliseSettings`'s bufferAhead clause rather than importing it, so the
+	// audio layer keeps no dependency on plugin data. The comment there says
+	// "if the range moves, it moves in both places"; this is what makes that
+	// true instead of hopeful. Without it the two can drift silently and the
+	// window in use stops matching the window on disk.
+	const player = new Player({ bufferAhead: 2 });
+	const inputs = [-100, -1, -0.4, 0, 0.4, 0.5, 1, 2.5, 3.5, 7.6, 8, 8.4, 9, 1000, Number.NaN];
+	const drift: string[] = [];
+	for (const value of inputs) {
+		player.setBufferAhead(value);
+		const stored = normaliseSettings({ bufferAhead: value }).bufferAhead;
+		if (player.getBufferAhead() !== stored) {
+			drift.push(`${value}: player ${player.getBufferAhead()} vs settings ${stored}`);
+		}
+	}
+	check("no input normalises differently", drift.length === 0, drift.join("; "));
 }
 
 /** Hand-built chunks, one per index, so the chunk count is exact. */
@@ -1038,6 +1269,192 @@ console.log("rate is still applied exactly once across a pause and resume");
 	check("re-synthesis after a pause asks for 1.5, not 2.25", fake.calls.length === 2 && fake.calls.every((c) => c.rate === 1.5), JSON.stringify(fake.calls));
 	player2.stop();
 	await playing2.catch(() => undefined);
+}
+
+// --- NRL-40 x NRL-23: the two resume() changes composed -------------------
+//
+// NRL-40 gave resume() work that outlives its own run (a token-guarded prime
+// inside audio.play()'s callback). NRL-23 gave resume() a route dispatch and a
+// .catch() that reports an error and calls stop(). Neither side is wrong
+// alone; the hazards below only exist once both are in the same function, so
+// they cannot be covered by either side's own tests.
+
+console.log("a resume rejected after its run was superseded reports nothing and stops nobody");
+{
+	// The composition hazard. NRL-23's catch gives the position up and calls
+	// stop(), which is right for the run that was paused. NRL-40 made the
+	// callback outlive that run, so the same catch can now fire after a fresh
+	// play() has taken over: unguarded it puts a "Could not resume" notice on
+	// screen for a reading the user already abandoned, and stop() tears down
+	// the playback that replaced it.
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 0 });
+	const errors: string[] = [];
+	player.on("error", (e) => errors.push(e.message));
+	const first = player.play(engine, numbered(10), 1);
+	await tick();
+	player.pause();
+	check("paused before the resume", player.getState() === "paused", player.getState());
+
+	// Hold play()'s rejection until a newer run owns the player.
+	const realPlay = fakeAudio.play.bind(fakeAudio);
+	let rejectPlay: (err: Error) => void = () => {};
+	fakeAudio.play = (): Promise<void> =>
+		new Promise<void>((_resolve, reject) => {
+			rejectPlay = reject;
+		});
+	void player.resume();
+	fakeAudio.play = realPlay;
+
+	const second = player.play(engine, numbered(10), 1);
+	await tick();
+	check("the replacement run is playing", player.getState() === "playing", player.getState());
+	const atTakeover = calls.length;
+
+	rejectPlay(new Error("no supported source"));
+	await tick();
+
+	check("no error from the abandoned resume", errors.length === 0, JSON.stringify(errors));
+	check("the replacement was not stopped", player.getState() === "playing", player.getState());
+	check("the replacement queue was not re-primed", calls.length === atTakeover, `issued ${calls.length - atTakeover}`);
+
+	// And the replacement is still a working queue, not a husk: stop() would
+	// have cleared `pending` and nulled the controller behind its back.
+	fakeAudio.advance(fakeAudio.currentTime + 1.2, fakeAudio.currentTime);
+	await tick();
+	check("the replacement kept advancing", player.getIndex() === 1, `got ${player.getIndex()}`);
+
+	player.stop();
+	await first.catch(() => undefined);
+	await second.catch(() => undefined);
+}
+
+console.log("a live resume still reports its own failure");
+{
+	// The other half of the same guard: a rejection that belongs to the run
+	// that is still current must behave exactly as NRL-23 left it.
+	const { engine } = makeEngine();
+	const player = new Player({ bufferAhead: 0 });
+	const errors: string[] = [];
+	player.on("error", (e) => errors.push(e.message));
+	const playing = player.play(engine, numbered(10), 1);
+	await tick();
+	player.pause();
+
+	fakeAudio.failNextPlay = true;
+	void player.resume();
+	await tick();
+	check("the current run's failure is reported", errors.length === 1, JSON.stringify(errors));
+	check("and it names the resume", errors[0]?.includes("Could not resume audio playback") === true, errors[0] ?? "none");
+	check("and it gives the position up", player.getState() === "idle", player.getState());
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("a resume resolved after a newer play() neither revives it nor primes it");
+{
+	// The success path's half of the same shape, superseded by a fresh read
+	// rather than by Stop. A stale callback that ran here would un-pause the
+	// replacement and fill a window against a queue it does not belong to.
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 0 });
+	const first = player.play(engine, numbered(10), 1);
+	await tick();
+	player.pause();
+
+	const realPlay = fakeAudio.play.bind(fakeAudio);
+	let release = (): void => {};
+	fakeAudio.play = (): Promise<void> =>
+		new Promise<void>((resolve) => {
+			release = () => {
+				void realPlay();
+				resolve();
+			};
+		});
+	void player.resume();
+	fakeAudio.play = realPlay;
+
+	const second = player.play(engine, numbered(10), 1);
+	await tick();
+	player.pause();
+	check("the replacement is paused", player.getState() === "paused", player.getState());
+	// Stored, not acted on: the only thing that should ever spend this is the
+	// replacement's OWN resume.
+	player.setBufferAhead(8);
+	const atTakeover = calls.length;
+
+	release();
+	await tick();
+	check("stale resume does not un-pause the replacement", player.getState() === "paused", player.getState());
+	check("stale resume issues no synthesis", calls.length === atTakeover, `issued ${calls.length - atTakeover}`);
+
+	void player.resume();
+	await tick();
+	check("the replacement's own resume still fills the window", calls.length === atTakeover + 8, `got ${calls.length - atTakeover}`);
+	check("and it is playing", player.getState() === "playing", player.getState());
+
+	player.stop();
+	await first.catch(() => undefined);
+	await second.catch(() => undefined);
+}
+
+console.log("pause and resume on an engine that owns playback prefetch nothing, at any window");
+{
+	// resume() now has a priming step, and neither of the two non-element
+	// routes may inherit it. `restart` is only ever chosen for an ownsPlayback
+	// engine, which primeBuffer refuses outright and whose restartCurrent
+	// re-enters run()'s own priming; `engine` leaves the run loop parked
+	// inside the utterance it is already holding. A wide window set while
+	// paused is the input that would expose a leak in either.
+	for (const enginePause of [false, true]) {
+		const route = enginePause ? "engine" : "restart";
+		const fake = makeOwningEngine({ enginePause });
+		let inFlight = 0;
+		let peak = 0;
+		const counted: SpeechEngine = {
+			...fake.engine,
+			async synthesize(req: SynthRequest, signal: AbortSignal): Promise<SynthResult> {
+				inFlight += 1;
+				peak = Math.max(peak, inFlight);
+				try {
+					return await fake.engine.synthesize(req, signal);
+				} finally {
+					inFlight -= 1;
+				}
+			},
+		};
+
+		const player = new Player({ bufferAhead: 2 });
+		fake.observe(() => player.getState());
+		const playing = player.play(counted, numbered(12), 1);
+		await tick();
+		check(`${route}: one utterance before the pause`, fake.calls.length === 1, JSON.stringify(fake.calls));
+
+		player.pause();
+		player.setBufferAhead(8);
+		await tick();
+		check(`${route}: a wide window while paused prefetches nothing`, fake.calls.length === 1, JSON.stringify(fake.calls));
+		check(`${route}: the window was stored`, player.getBufferAhead() === 8, String(player.getBufferAhead()));
+
+		void player.resume();
+		await tick();
+		check(`${route}: resume is playing`, player.getState() === "playing", player.getState());
+		// restart re-speaks the sentence (srs.md:250); engine picks the same
+		// utterance back up, so it is never synthesised twice.
+		check(
+			`${route}: resume issued no prefetch`,
+			fake.calls.length === (enginePause ? 1 : 2),
+			JSON.stringify(fake.calls),
+		);
+		check(`${route}: still one utterance at a time`, peak === 1, `peak ${peak}`);
+		check(`${route}: index retained`, player.getIndex() === 0, String(player.getIndex()));
+
+		player.stop();
+		await playing.catch(() => undefined);
+		await tick();
+		check(`${route}: peak stayed one across the whole cycle`, peak === 1, `peak ${peak}`);
+	}
 }
 
 async function tick(): Promise<void> {

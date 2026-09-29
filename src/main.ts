@@ -605,6 +605,25 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
+	 * Store the look-ahead and hand it to the running player.
+	 *
+	 * The Look ahead slider used to write the setting and save, which left the
+	 * player on whatever it read at construction until the next plugin load.
+	 *
+	 * The player is updated before the save is awaited, for setRate's reason: a
+	 * slider dragged across several steps fires repeatedly inside one saveData,
+	 * and the runtime must not lag behind. The stored value is read back from
+	 * the player rather than taken from the caller, so what is persisted is
+	 * exactly the window in use rather than a value that only gets clamped on
+	 * the next load.
+	 */
+	async setBufferAhead(count: number): Promise<void> {
+		this.player.setBufferAhead(count);
+		this.settings.bufferAhead = this.player.getBufferAhead();
+		await this.saveSettings();
+	}
+
+	/**
 	 * Store a highlight colour and apply it. The caller validates; "" means
 	 * follow the theme.
 	 */
