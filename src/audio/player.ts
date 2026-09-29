@@ -141,11 +141,16 @@ export class Player {
 	 * note being in front would otherwise record its progress against whichever
 	 * note happens to be active now.
 	 *
-	 * Deliberately not cleared by stop(). The progress handler debounces its
-	 * position save by 1000 ms, so the last save of a reading always lands
-	 * after the user has stopped. An empty queue at that moment would silently
-	 * discard the final position, which is the one position the user most
-	 * wants kept.
+	 * Deliberately not cleared by stop(): the queue is where this player's file
+	 * identity lives, and it stays readable until the next play() replaces it.
+	 * main.ts reads a position's file and its chunk identity as a pair out of
+	 * this one queue, so the two accessors are a unit.
+	 *
+	 * A choice, not a forced one. The trailing-save hazard this comment used to
+	 * claim does not exist: main.ts's position gate is leading-edge, so every
+	 * save is driven by a progress event, and stop() emits none. Clearing the
+	 * queue would not lose a position; it is kept so the accessors keep
+	 * answering for the last reading handed to the player.
 	 */
 	getFilePath(): string {
 		return this.chunks[0]?.filePath ?? "";

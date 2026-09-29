@@ -236,12 +236,14 @@ console.log("player exposes the file it is reading and the chunks it holds (NRL-
 	await playing;
 
 	/*
-	 * stop() must not drop the queue. The progress handler debounces its
-	 * position save by 1000 ms, so the last save for a reading always fires
-	 * after the user stops: if stop() cleared chunks, every Stop would write
-	 * that final position against an empty queue and silently lose it. The
-	 * accessors are what main.ts's savePosition now reads, so this is the
-	 * behaviour the resume feature depends on.
+	 * stop() must not drop the queue: these accessors are what main.ts's
+	 * savePosition reads, so they keep answering for the last reading handed to
+	 * the player.
+	 *
+	 * Deliberate, but not forced. The trailing save this comment used to claim
+	 * does not happen: main.ts's position gate is leading-edge, so every save
+	 * rides a progress event, and stop() emits none. Clearing chunks would not
+	 * lose a position today.
 	 */
 	player.stop();
 	check("NRL-50 stop() keeps the file", player.getFilePath() === "Notes/a.md", player.getFilePath());
