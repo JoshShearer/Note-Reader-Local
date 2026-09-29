@@ -43,7 +43,8 @@ note markdown
       │
       ▼
 extract.ts ──────────► SpeechChunk[]   text + sourceIndex + sourceStart/End
-      │                                 (block scan, then per-character inline scan)
+      │                                 (block scan, then per-character inline scan,
+      │                                  plus one forward lookahead for code spans)
       ▼
 Player ──────────────► orchestrates: synthesise ahead, play, advance, emit events
       │
@@ -103,6 +104,17 @@ src/
 It carries raw-markdown offsets end to end. This is why `extract.ts` pushes an index
 entry for every dropped span, and why a stripping change that forgets to is a silent
 corruption rather than a crash.
+
+**Lines are scanned one at a time, with one deliberate exception.** `cleanLine` sees a
+single source line and nothing else, which is why the same `%%` can be a comment on one
+line and literal text on another. The exception is an inline code span, which CommonMark
+lets cross a soft line break: `Cleaned.openCode` reports the length of a backtick run left
+open, and `extractChunks` only carries it forward once `codeSpanClosesLater` has found a
+run of the same length on a later line of the same paragraph. The confirmation is not an
+optimisation. An unmatched run is literal text, so carrying it blindly would stop the next
+line's `%%` being recognised as a block opener and would speak text the author hid, which
+is the one direction ADR 0006 exists to prevent. Anything else that needs cross-line state
+should follow that shape: prove the span is real before trusting it.
 
 **The worker is a jail.** `kokoro.worker.ts` shims `fetch` to reject any cross-origin
 URL and asserts locality on the ORT paths, because both transformers.js and kokoro-js
