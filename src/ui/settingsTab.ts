@@ -1,10 +1,10 @@
 import { App, Notice, PluginSettingTab, Setting, type ColorComponent } from "obsidian";
 import type LocalTtsReaderPlugin from "../main";
+import type { VoiceInfo } from "../audio/types";
 import { KOKORO_VOICES, KOKORO_WEIGHTS, probeGpu } from "../engines/onnx/kokoro";
 import { downloadModel, downloadVoice } from "./modelStore";
 import { isAcceptableColourInput } from "./highlightColour";
 import { controlAffordances, engineLimitations } from "./affordances";
-import type { VoiceInfo } from "../audio/types";
 
 export class LocalTtsSettingTab extends PluginSettingTab {
 	/** Detaches the Speed slider from the player's rate event. */
@@ -63,7 +63,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Speech engine")
-			.setDesc("All engines run on this device. None of them send your notes anywhere.")
+			.setDesc(this.engineNetworkClaim())
 			.addDropdown((dropdown) => {
 				dropdown.addOption("auto", "Automatic");
 				for (const engine of this.plugin.getEngines()) {
@@ -116,6 +116,35 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		// actually picked Kokoro.
 		if (this.plugin.activeEngine()?.id === "kokoro") this.renderKokoroRuntime(containerEl);
 		this.renderKokoroInstall(containerEl);
+	}
+
+	/**
+	 * What can honestly be claimed about network use, keyed to the RESOLVED
+	 * engine (`activeEngine()?.id`, the same idiom as line 102 above and
+	 * renderVoiceSection below), not a single static sentence covering all
+	 * four. Switching engines visibly changes what's claimed, which is the
+	 * point: the old blanket "None of them send your notes anywhere" was
+	 * untrue for a cloud-backed Web Speech voice (R-S01/R-S04, non-negotiable
+	 * 4's "no cloud TTS" is about what THIS plugin does, not what an OS voice
+	 * a user already configured might do).
+	 *
+	 * The null case (before the first automatic resolution completes) is
+	 * worded to be true regardless of which engine ends up resolved, not a
+	 * guess at one.
+	 */
+	private engineNetworkClaim(): string {
+		const id = this.plugin.activeEngine()?.id;
+		switch (id) {
+			case "kokoro":
+			case "espeak":
+				return "This engine runs entirely on this device; it never sends your notes anywhere.";
+			case "speechd":
+				return "This engine speaks through a local daemon, but it cannot report whether a given voice's synthesis needs the network (see the voice list below).";
+			case "webspeech":
+				return "This engine uses your operating system's installed voices. A voice marked \"needs network\" below sends the text being read to a remote service to synthesize it; pick a local voice to keep everything on this device.";
+			default:
+				return "Kokoro and espeak-ng run entirely on this device. Speech Dispatcher and Web Speech use voices installed on the system that this plugin cannot always verify are local; the voice list below marks what's known.";
+		}
 	}
 
 	/**
@@ -303,6 +332,26 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		const engine = this.plugin.activeEngine();
 		if (!engine) return;
 
+		// A voice-selection preference, not an engine one, so it lives here
+		// rather than in the Engine section above. Affects automatic voice
+		// selection only (pickLocaleVoice's tiebreak, voiceChoice.ts) - a
+		// pinned voice is untouched regardless of this setting (R-S04's
+		// "preference, not a guarantee"), and the dropdown below still lists
+		// every voice.
+		new Setting(containerEl)
+			.setName("Prefer voices that do not require network access")
+			.setDesc(
+				"When choosing a voice automatically - no voice pinned, or the pinned one is gone - " +
+					"prefer a voice that doesn't need the network. Not a guarantee: if nothing local " +
+					"matches your language, a network or unknown-status voice may still be chosen.",
+			)
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.offlinePreferred).onChange(async (value) => {
+					this.plugin.settings.offlinePreferred = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
 		const setting = new Setting(containerEl)
 			.setName("Voice")
 			.setDesc(`Which voice ${engine.label} should use.`);
@@ -322,7 +371,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 						dropdown.addOption(`__lang_${lang}`, `-- ${lang} --`);
 						// Add voices in this language
 						for (const voice of voicesInLang) {
-							const label = `  ${voice.name}${voice.isVariant ? " (variant)" : ""}`;
+							const label = `  ${voice.name}${voice.isVariant ? " (variant)" : ""}${voiceNetworkMarker(voice)}`;
 							dropdown.addOption(voice.id, label);
 						}
 					}
@@ -717,6 +766,18 @@ function groupVoicesByLanguage(voices: VoiceInfo[]): Map<string, VoiceInfo[]> {
 
 function errText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Suffix for the voice dropdown: nothing for a confirmed-local voice,
+ * otherwise a plain-language marker so the "unknown" case is not mistaken
+ * for "known safe" (R-S01's "MUST NOT claim offline when it cannot
+ * determine this" cuts both ways - silence here would be its own claim).
+ */
+function voiceNetworkMarker(voice: VoiceInfo): string {
+	if (voice.local === true) return "";
+	if (voice.local === false) return " - needs network";
+	return " - network status unknown";
 }
 
 /**

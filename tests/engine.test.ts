@@ -128,6 +128,11 @@ console.log("speechd: failures are not silent (fake runner)");
 	const variant = voices.find((v) => v.name.includes("Adam") && v.lang === "af");
 	check("variant voice listed", variant !== undefined);
 	check("variant id is the NAME column", variant?.id === "speechd:Afrikaans+Adam", `got ${variant?.id}`);
+	// NRL-26: `spd-say -L` has no module column (verified live on this
+	// machine), so no speechd voice's network need is ever knowable. Every
+	// voice must report "unknown" on both fields, never a guessed boolean.
+	check("every voice reports local: unknown", voices.every((v) => v.local === "unknown"), JSON.stringify(voices.map((v) => v.local)));
+	check("every voice reports requiresNetwork: unknown", voices.every((v) => v.requiresNetwork === "unknown"), JSON.stringify(voices.map((v) => v.requiresNetwork)));
 	if (variant) {
 		await spd2.selectVoice(variant);
 		const err = await synthErr(spd2);
@@ -178,7 +183,7 @@ console.log("speechd: failures are not silent (fake runner)");
 {
 	const { runner, calls } = fakeRunner({ code: 0 });
 	const spd2 = new SpeechDispatcherEngine(runner);
-	await spd2.selectVoice({ id: "speechd:NoSuchVoice", name: "x", lang: "xx", gender: "neutral", engineId: "speechd" });
+	await spd2.selectVoice({ id: "speechd:NoSuchVoice", name: "x", lang: "xx", gender: "neutral", engineId: "speechd", local: "unknown", requiresNetwork: "unknown" });
 	const err = await synthErr(spd2);
 	check("unknown voice throws", err !== null);
 	check("unknown voice message", err?.message === "Requested voice unavailable", `got ${err?.message}`);
@@ -513,7 +518,7 @@ console.log("voice ids resolve across the format change");
 }
 {
 	const v = (id: string, lang: string, isVariant = false): VoiceInfo => ({
-		id, name: id, lang, gender: "neutral", engineId: "speechd", isVariant,
+		id, name: id, lang, gender: "neutral", engineId: "speechd", isVariant, local: "unknown", requiresNetwork: "unknown",
 	});
 	const list = [v("a", "af"), v("b+x", "en-US", true), v("c", "en-GB"), v("d", "en-US")];
 	check("locale: exact tag, preferring non-variant", pickLocaleVoice(list, "en-US")?.voice.id === "d");
@@ -589,7 +594,7 @@ console.log("speech-dispatcher speaks a variant voice (real binary)");
 		check("real daemon: a !-! chunk is spoken, not run as a command", bangErr === null && bangTook > 300, `${bangTook}ms ${(bangErr as Error | null)?.message}`);
 	}
 
-	await spd.selectVoice({ id: "speechd:NoSuchVoice", name: "x", lang: "xx", gender: "neutral", engineId: "speechd" });
+	await spd.selectVoice({ id: "speechd:NoSuchVoice", name: "x", lang: "xx", gender: "neutral", engineId: "speechd", local: "unknown", requiresNetwork: "unknown" });
 	let unknown: Error | null = null;
 	try {
 		await spd.synthesize({ chunk: CHUNK, rate: 1, pitch: 0 }, new AbortController().signal);

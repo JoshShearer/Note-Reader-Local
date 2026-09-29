@@ -150,6 +150,50 @@ console.log("espeak: a synthesis failure never dumps raw stderr (NRL-25 #6)");
 	);
 }
 
+console.log("NRL-26: every voice reports local: true, requiresNetwork: false");
+{
+	// Genuinely true for every voice: espeak.ts has no fetch/http/
+	// XMLHttpRequest/axios/WebSocket call anywhere (grep-confirmed), it only
+	// spawns the local espeak-ng binary via ProcessRunner.
+
+	// Real --voices parse path (format per the comment in listVoices()).
+	const listing = [
+		"Pty Language Age/Gender VoiceName          File          Other Languages",
+		"1  en          en-us  english (usa)",
+		"5  en          en-gb  english (gb)",
+	].join("\n");
+	const r = runner({
+		async which() {
+			return "/usr/bin/espeak-ng";
+		},
+		async run(_cmd, args): Promise<RunResult> {
+			if (args[0] === "--voices") return { code: 0, stderr: "", stdout: Buffer.from(listing) };
+			throw new Error(`unexpected call: ${args.join(" ")}`);
+		},
+	});
+	const engine = new EspeakEngine(r);
+	const voices = await engine.listVoices();
+	check("real --voices parse: has voices", voices.length > 0, `got ${voices.length}`);
+	check("real --voices parse: every voice local: true", voices.every((v) => v.local === true), JSON.stringify(voices.map((v) => v.local)));
+	check("real --voices parse: every voice requiresNetwork: false", voices.every((v) => v.requiresNetwork === false), JSON.stringify(voices.map((v) => v.requiresNetwork)));
+
+	// BUILTIN_LANGUAGES fallback path: --voices fails, falls through.
+	const rFallback = runner({
+		async which() {
+			return "/usr/bin/espeak-ng";
+		},
+		async run(_cmd, args): Promise<RunResult> {
+			if (args[0] === "--voices") return { code: 1, stderr: "", stdout: Buffer.from("") };
+			throw new Error(`unexpected call: ${args.join(" ")}`);
+		},
+	});
+	const engineFallback = new EspeakEngine(rFallback);
+	const fallbackVoices = await engineFallback.listVoices();
+	check("builtin fallback: has voices", fallbackVoices.length > 0, `got ${fallbackVoices.length}`);
+	check("builtin fallback: every voice local: true", fallbackVoices.every((v) => v.local === true), JSON.stringify(fallbackVoices.map((v) => v.local)));
+	check("builtin fallback: every voice requiresNetwork: false", fallbackVoices.every((v) => v.requiresNetwork === false), JSON.stringify(fallbackVoices.map((v) => v.requiresNetwork)));
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);

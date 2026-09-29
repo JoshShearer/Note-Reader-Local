@@ -703,7 +703,14 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 */
 	private async selectVoiceIfNeeded(engine: SpeechEngine, voices: VoiceInfo[], noteLang?: string): Promise<void> {
 		if (voices.length === 0) return;
-		const resolved = resolveStoredVoice(engine, this.settings.voiceId, voices, noteLang, appLocale());
+		const resolved = resolveStoredVoice(
+			engine,
+			this.settings.voiceId,
+			voices,
+			noteLang,
+			appLocale(),
+			this.settings.offlinePreferred,
+		);
 		await engine.selectVoice(resolved.voice);
 		if (resolved.id !== this.settings.voiceId) {
 			this.settings.voiceId = resolved.id;

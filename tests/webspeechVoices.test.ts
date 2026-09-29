@@ -110,6 +110,36 @@ console.log("listLocalVoices() returns only the local ones, mapped like listVoic
 	check("listVoices() is unaffected: still returns all three", all.length === 3, String(all.length));
 }
 
+console.log(
+	"NRL-26: listVoices() maps localService to local/requiresNetwork honestly (tri-state)",
+);
+{
+	withVoices([
+		{ voiceURI: "local-1", name: "System Voice", lang: "en-US", localService: true },
+		{ voiceURI: "remote-1", name: "Cloud Voice", lang: "en-GB", localService: false },
+		{ voiceURI: "unknown-1", name: "Mystery Voice", lang: "fr-FR" },
+	]);
+	const engine = new WebSpeechEngine();
+	const voices = await engine.listVoices();
+	const local = voices.find((v) => v.id === "webspeech:local-1");
+	const remote = voices.find((v) => v.id === "webspeech:remote-1");
+	const unknown = voices.find((v) => v.id === "webspeech:unknown-1");
+
+	check("localService: true -> local: true", local?.local === true, JSON.stringify(local));
+	check("localService: true -> requiresNetwork: false", local?.requiresNetwork === false, JSON.stringify(local));
+
+	check("localService: false -> local: false", remote?.local === false, JSON.stringify(remote));
+	check("localService: false -> requiresNetwork: true", remote?.requiresNetwork === true, JSON.stringify(remote));
+
+	// The honest reading: undefined must never be coerced to a boolean.
+	check("localService: undefined -> local: \"unknown\"", unknown?.local === "unknown", JSON.stringify(unknown));
+	check(
+		"localService: undefined -> requiresNetwork: \"unknown\"",
+		unknown?.requiresNetwork === "unknown",
+		JSON.stringify(unknown),
+	);
+}
+
 console.log("isAvailable() distinguishes its failure modes (NRL-25)");
 {
 	// No window/speechSynthesis at all.

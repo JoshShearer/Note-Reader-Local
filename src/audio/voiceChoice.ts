@@ -47,17 +47,37 @@ function likelyRegion(tag: string): string | undefined {
  * speech-dispatcher is English (Caribbean)); then a sub-region of it
  * (en-US-NYC); then any voice in the language. Only when nothing matches
  * does it fall back to the first voice, and `matched: false` says so.
+ *
+ * `preferOffline` (default false, a preference not a guarantee, R-S04) adds a
+ * secondary tiebreak within the winning locale tier: a confirmed-network
+ * voice (`local === false`) ranks last, behind both a confirmed-local voice
+ * and an unknown one - an unknown voice is a better bet than a guaranteed-
+ * network one for this purpose, and this is a ranking heuristic, not a claim
+ * about any individual voice's status; the voice's own `local` field is
+ * unaffected and still reports honestly. Relies on `Array.prototype.sort`'s
+ * ES2019+ stability guarantee (true for this repo's Node/Electron targets),
+ * so the isVariant ordering is preserved when the offline tiebreak is equal
+ * on both sides - which it always is when `preferOffline` is false, making
+ * the sort a no-op beyond the existing isVariant ordering in that case.
  */
-export function pickLocaleVoice(voices: VoiceInfo[], locale: string): LocaleVoice | undefined {
+export function pickLocaleVoice(voices: VoiceInfo[], locale: string, preferOffline = false): LocaleVoice | undefined {
 	if (voices.length === 0) return undefined;
 	const want = normaliseTag(locale);
 	const primary = want.split("-")[0] ?? "";
 	const region = want ? likelyRegion(want) : undefined;
 	const likely = primary && region ? `${primary}-${region}` : undefined;
 
+	const networkRank = (v: VoiceInfo): number => (preferOffline && v.local === false ? 1 : 0);
+
 	const pick = (pred: (tag: string) => boolean): VoiceInfo | undefined => {
 		const hits = voices.filter((v) => pred(normaliseTag(v.lang)));
-		return hits.find((v) => !v.isVariant) ?? hits[0];
+		if (hits.length === 0) return undefined;
+		const ranked = [...hits].sort((a, b) => {
+			const variantDiff = Number(!!a.isVariant) - Number(!!b.isVariant);
+			if (variantDiff !== 0) return variantDiff;
+			return networkRank(a) - networkRank(b);
+		});
+		return ranked[0];
 	};
 
 	const found =
@@ -75,6 +95,14 @@ export function pickLocaleVoice(voices: VoiceInfo[], locale: string): LocaleVoic
  * Order: exact id, then the engine's own remap of an old id format (silent),
  * then language-based matching (note language > app locale) with a notice
  * naming both voices and which signal matched.
+ *
+ * `preferOffline` only ever reaches `pickLocaleVoice`, below both the exact
+ * and remapped branches, both of which `return` before it is called. A pin
+ * (exact match or a remapped old-format id) is therefore structurally unable
+ * to be overridden by this preference, regardless of its value - the pin is
+ * absolute, as required. It is threaded through both the note-language and
+ * app-locale attempts below, so whichever one actually wins still applies
+ * the same offline tiebreak.
  */
 export function resolveStoredVoice(
 	engine: SpeechEngine,
@@ -82,6 +110,7 @@ export function resolveStoredVoice(
 	voices: VoiceInfo[],
 	noteLang: string | undefined,
 	appLocale: string,
+	preferOffline = false,
 ): StoredVoiceResolution {
 	const exact = voices.find((v) => v.id === storedId);
 	if (exact) return { voice: exact, id: exact.id, notice: null };
@@ -94,12 +123,12 @@ export function resolveStoredVoice(
 	let usedNoteLangMatch = false;
 
 	if (noteLang) {
-		choice = pickLocaleVoice(voices, noteLang);
+		choice = pickLocaleVoice(voices, noteLang, preferOffline);
 		if (choice) usedNoteLangMatch = choice.matched;
 	}
 
 	if (!choice?.matched) {
-		choice = pickLocaleVoice(voices, appLocale);
+		choice = pickLocaleVoice(voices, appLocale, preferOffline);
 	}
 
 	if (!choice) throw new Error("No voices to choose from");

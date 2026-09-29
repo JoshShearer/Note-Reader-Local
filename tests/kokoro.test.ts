@@ -251,6 +251,18 @@ console.log("voice ids map to voice files");
 	check("bare id", voiceFilePath("bm_george") === "voices/bm_george.bin");
 }
 
+console.log("NRL-26: every kokoro voice reports local: true, requiresNetwork: false");
+{
+	// Genuinely true for every voice: kokoro.worker.ts's fetch shim plus
+	// isRemote/assertLocal reject any non-blob URL at runtime. No network
+	// code path exists.
+	const engine = new KokoroEngine(fakeStore([]));
+	const voices = await engine.listVoices();
+	check("has voices", voices.length > 0, `got ${voices.length}`);
+	check("every voice is local: true", voices.every((v) => v.local === true), JSON.stringify(voices.map((v) => v.local)));
+	check("every voice is requiresNetwork: false", voices.every((v) => v.requiresNetwork === false), JSON.stringify(voices.map((v) => v.requiresNetwork)));
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);

@@ -106,6 +106,19 @@ export interface VoiceInfo {
 	 * default, since the variants are thousands of novelty timbres.
 	 */
 	isVariant?: boolean;
+	/**
+	 * Whether this specific voice runs on-device. Independent of
+	 * `requiresNetwork`, not derived from it - a backend can in principle know
+	 * one without the other, so both are reported separately (srs.md's
+	 * TTSVoice shape). `"unknown"` when the backend cannot determine this;
+	 * per R-S01 that must never be coerced to `true` or `false`.
+	 */
+	local: boolean | "unknown";
+	/**
+	 * Whether speaking this voice needs the network. See `local` above for
+	 * why this is a separate, required field rather than `!local`.
+	 */
+	requiresNetwork: boolean | "unknown";
 }
 
 /**

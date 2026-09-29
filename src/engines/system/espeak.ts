@@ -87,6 +87,12 @@ function toVoiceInfo(code: string, name: string): VoiceInfo {
 		lang: code,
 		gender: "neutral",
 		engineId: "espeak",
+		// Genuinely local for every voice: espeak.ts has no fetch/http/XMLHttpRequest/
+		// axios/WebSocket call anywhere (grep-confirmed), it only spawns the local
+		// espeak-ng binary via ProcessRunner. Covers both the real --voices parse
+		// and the BUILTIN_LANGUAGES fallback, since both call this function.
+		local: true,
+		requiresNetwork: false,
 	};
 }
 
@@ -189,13 +195,7 @@ function parseVoiceList(output: string): VoiceInfo[] {
 		const file = m[2]!;
 		const label = m[3]!;
 		if (!/^[a-z]{2,3}(-[a-z]{2,4})?$/.test(file)) continue;
-		out.push({
-			id: `espeak:${file}`,
-			name: label.charAt(0).toUpperCase() + label.slice(1),
-			lang: file,
-			gender: "neutral",
-			engineId: "espeak",
-		});
+		out.push(toVoiceInfo(file, label.charAt(0).toUpperCase() + label.slice(1)));
 	}
 	return out;
 }
