@@ -154,14 +154,34 @@ const EMBED_SIZING_ALIAS = /^\d+(?:[xX]\d+)?$/;
  * (`![[Some Note]]`, `![[Some Note.md]]`) is a title the author wrote, and
  * reduces exactly as a wikilink target does.
  *
- * Any extension but markdown counts, rather than a list of media types, so an
- * embeddable format we do not know about errs towards silence.
+ * The test is deliberately crude: a dot anywhere in the final path segment
+ * means a file unless what follows the LAST dot is `md` or `markdown`. No list
+ * of media types, no cap on the extension's length and no alphanumeric-only
+ * restriction, because every one of those is a way for a filename to slip
+ * through and be read aloud. An earlier version tested
+ * `/\.([A-Za-z0-9]{1,8})$/`, which spoke `document.webmanifest` and
+ * `archive.tar-gz` verbatim - the one direction ADR 0008 clause 5 says this
+ * must not fail in, since silence on a filename is recoverable and reading out
+ * a path is what R-M09 forbids.
+ *
+ * The cost is accepted on purpose: a note whose *title* holds a dot
+ * (`![[Version 1.2 notes]]`) is classified as a file and an embed of it says
+ * nothing, with an alias as the way to speak it. A `[[wikilink]]` to the same
+ * note is unaffected, because only an embed classifies its target.
+ *
+ * A target with no dot at all is a note name and is spoken: an extensionless
+ * file (`![[Dockerfile]]`) is indistinguishable from a note title, and
+ * silencing every dotless target would break the wikilink parity srs.md
+ * promises for a note embed.
+ *
+ * Classification trims, emission does not, so a stray space inside the
+ * brackets cannot turn `![[Some Note.md ]]` into a file.
  */
 function isFileTarget(target: string): boolean {
 	const path = target.split("#")[0]!;
-	const name = path.slice(path.lastIndexOf("/") + 1);
-	const ext = /\.([A-Za-z0-9]{1,8})$/.exec(name);
-	return ext !== null && !/^(?:md|markdown)$/i.test(ext[1]!);
+	const name = path.slice(path.lastIndexOf("/") + 1).trim();
+	const dot = name.lastIndexOf(".");
+	return dot !== -1 && !/^(?:md|markdown)$/i.test(name.slice(dot + 1));
 }
 
 /**

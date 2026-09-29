@@ -79,6 +79,53 @@ and `skipInlineCode`, even though extraction had read them separately since NRL-
    an image path. Silence on a filename is recoverable; reading out a path is
    the thing R-M09 asks us not to do.
 
+   **Clause 5a, added 2026-09-29: "names a file" is a dot, with `md` and
+   `markdown` as the only exceptions.** The rule shipped in the first pass at
+   this ticket tested `/\.([A-Za-z0-9]{1,8})$/`, so an extension counted only
+   when it was 1 to 8 characters and entirely alphanumeric. Verification
+   measured the boundary exactly - 1 to 8 silent, 9 and above spoken - and
+   found this clause's own "errs towards silence" to be false in the
+   disclosing direction, which is the direction it says must not fail: with
+   `speakEmbeds` on, `A ![[document.webmanifest]] B` spoke
+   `A document.webmanifest B`, and so did `design.storyboard`, `app.properties`,
+   `schema.jsonschema` and `archive.tar-gz`. Real extensions, all of them.
+
+   The rule is now: take the final path segment, trim it, and if it contains a
+   dot then the segment after the LAST dot decides. `md` or `markdown`, in any
+   case, is a note. Anything else, including an empty extension
+   (`![[Some Note.]]`) and a leading-dot name (`![[.gitignore]]`), is a file.
+   There is no cap on the extension's length and no character class, because
+   each of those was a way for a filename to be read aloud.
+
+   Three consequences are recorded rather than left to be rediscovered:
+
+   - **A note whose title holds a dot is classified as a file.**
+     `![[Version 1.2 notes]]` now says nothing where it previously said
+     `Version 1.2 notes`. This is the chosen direction, not an oversight: the
+     failure is towards silence, an alias speaks the title
+     (`![[Version 1.2 notes|the release]]`), and a `[[wikilink]]` to the same
+     note is untouched because only an embed classifies its target. The likeliest
+     real complaint is a dotted daily-note convention: `![[2026.09.29]]` is
+     silent under this rule. A carve-out was considered and rejected - "an
+     extension holds no whitespace" would recover `![[2026.09.29 Daily]]` but
+     not `![[2026.09.29]]`, so it buys a partial recovery in exchange for a
+     class of filename that is spoken again, and the rule stops being one
+     sentence with no cases. If that complaint arrives, it deserves its own
+     ticket with a real vault as the evidence, not a guess here.
+   - **A target with no dot at all is a note name, and is spoken as the label.**
+     `A ![[Dockerfile]] B` says `A Dockerfile B`. An extensionless file is
+     indistinguishable from a note title by inspection, and silencing every
+     dotless target would break the wikilink parity this clause and srs.md
+     promise for a note embed. Pinned by fixture, so it cannot drift silently.
+   - **A vault folder path in a dotless target is still spoken**, so
+     `A ![[private/folder/Secret Note]] B` reads the folders aloud. That is
+     unchanged here and is the documented target reduction shared with the
+     `[[wikilink]]` branch, byte-identical on the merge base and default-on
+     through that branch. Narrowing it would be a change to wikilink speech,
+     which is a different promise and a different ticket.
+
+   Classification trims; emission does not. `![[Some Note.md ]]` stays a note.
+
 6. **Spoken frontmatter is source-mapped key/value text with no YAML parse.**
    `detectFrontmatter` keeps ADR 0002's judgement entirely, including the
    deliberate divergence from Obsidian's positional rule and the
@@ -155,3 +202,10 @@ and `skipInlineCode`, even though extraction had read them separately since NRL-
 - The wikilink branch is now a caller of the shared label helper. The NRL-6
   wikilink suite passes unedited, which is the evidence that the extraction was
   pure.
+- Clause 5a narrows what an embed will speak and widens nothing. At
+  `speakEmbeds: false`, which is the default, every embed shape is
+  byte-identical to the merge base, and every `[[wikilink]]` is byte-identical
+  in both positions, so no default listener hears a change from it. What moved
+  is opt-in speech: seven real long extensions, three punctuated ones, a
+  dotfile, an empty extension and a dotted note title all stop being read
+  aloud, and `![[Dockerfile]]` keeps being read as a title by decision.

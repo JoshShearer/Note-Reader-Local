@@ -1405,6 +1405,57 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		["nested-markup-alias", "Before ![[T|**bold** alias]] after.", "Before after.", "Before bold alias after."],
 		["comment-in-alias", "Before ![[T|alias %%SECRET%% words]] after.", "Before after.", "Before alias words after."],
 		["unterminated", "Before ![[Some Note after.", "Before Some Note after.", "Before Some Note after."],
+		/*
+		 * A dot means a file, with no cap on the extension's length and no
+		 * restriction on its characters (ADR 0008 clause 5). The earlier rule
+		 * tested `/\.([A-Za-z0-9]{1,8})$/`, so an extension of nine or more
+		 * characters, or one carrying a hyphen, fell through to the note-title
+		 * path and read the whole filename aloud with `speakEmbeds` on. Every
+		 * row below is a real extension and every one of them spoke before.
+		 */
+		["long-ext-webmanifest", "Before ![[document.webmanifest]] after.", "Before after.", "Before after."],
+		["long-ext-storyboard", "Before ![[design.storyboard]] after.", "Before after.", "Before after."],
+		["long-ext-properties", "Before ![[app.properties]] after.", "Before after.", "Before after."],
+		["long-ext-jsonschema", "Before ![[schema.jsonschema]] after.", "Before after.", "Before after."],
+		["long-ext-xcodeproj", "Before ![[Thing.xcodeproj]] after.", "Before after.", "Before after."],
+		["long-ext-handlebars", "Before ![[page.handlebars]] after.", "Before after.", "Before after."],
+		["long-ext-postscript", "Before ![[art.postscript]] after.", "Before after.", "Before after."],
+		["punctuated-ext-hyphen", "Before ![[archive.tar-gz]] after.", "Before after.", "Before after."],
+		["punctuated-ext-plus", "Before ![[main.c++]] after.", "Before after.", "Before after."],
+		["punctuated-ext-underscore", "Before ![[data.x_y]] after.", "Before after.", "Before after."],
+		["long-ext-in-folder", "Before ![[assets/deep/site.webmanifest]] after.", "Before after.", "Before after."],
+		["long-ext-with-alias", "Before ![[document.webmanifest|The manifest]] after.", "Before after.", "Before The manifest after."],
+		["long-ext-with-heading", "Before ![[design.storyboard#Scene One]] after.", "Before after.", "Before after."],
+		// A leading-dot name is all extension and no stem, so it is a file.
+		["dotfile", "Before ![[.gitignore]] after.", "Before after.", "Before after."],
+		// A trailing dot has an empty extension, which is not `md`, so the
+		// target is a file and stays silent rather than being read as a title.
+		["trailing-dot", "Before ![[Some Note.]] after.", "Before after.", "Before after."],
+		/*
+		 * The cost of the rule, pinned deliberately: a note whose TITLE holds a
+		 * dot is classified as a file and an embed of it says nothing. ADR 0008
+		 * clause 5 chooses that direction on purpose - silence on a title is
+		 * recoverable and an alias speaks it, whereas reading a path is the
+		 * thing R-M09 asks us not to do. A `[[wikilink]]` to the same note is
+		 * unaffected, because only the embed branch classifies a target.
+		 */
+		["dotted-note-title", "Before ![[Version 1.2 notes]] after.", "Before after.", "Before after."],
+		["dotted-note-title-alias", "Before ![[Version 1.2 notes|the release]] after.", "Before after.", "Before the release after."],
+		// Markdown is still a note in both spellings, so both are spoken.
+		["markdown-long-target-spoken", "Before ![[Some Note.markdown]] after.", "Before after.", "Before Some Note.markdown after."],
+		["markdown-target-uppercase", "Before ![[Some Note.MD]] after.", "Before after.", "Before Some Note.MD after."],
+		// Classification trims, so a stray space around the target does not
+		// turn a note into a file. Emission is untrimmed, as before.
+		["markdown-target-padded", "Before ![[Some Note.md ]] after.", "Before after.", "Before Some Note.md after."],
+		/*
+		 * A target with NO dot at all is a note name, not a path, so it is read
+		 * as the label exactly as a `[[wikilink]]` target is. That is a recorded
+		 * decision (ADR 0008 clause 5), not an oversight: an extensionless file
+		 * is indistinguishable from a note title, and an embed of a note must
+		 * keep the wikilink parity srs.md promises.
+		 */
+		["no-extension-dockerfile", "Before ![[Dockerfile]] after.", "Before after.", "Before Dockerfile after."],
+		["no-extension-licence", "Before ![[LICENSE]] after.", "Before after.", "Before LICENSE after."],
 	];
 	for (const [id, src, dropped, read] of embedCases) {
 		const off = say(src, { speakEmbeds: false });
@@ -1415,6 +1466,22 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 			check(`NRL-21 embed ${id} (${label}) never speaks a bracket`, !got.includes("[") && !got.includes("]"), `got: ${JSON.stringify(got)}`);
 			check(`NRL-21 embed ${id} (${label}) never discloses a comment`, !got.includes("SECRET"), `got: ${JSON.stringify(got)}`);
 			check(`NRL-21 embed ${id} (${label}) never speaks an image destination`, !got.includes("pic.png") && !got.includes("report.pdf"), `got: ${JSON.stringify(got)}`);
+		}
+	}
+
+	/*
+	 * The extension rule has no upper bound, so assert that directly rather
+	 * than only through the table above: a filename of any extension length
+	 * except `md` / `markdown` is silent in both toggle positions, and its
+	 * stem is the sentinel, so a spoken path fails here by name.
+	 */
+	for (let len = 1; len <= 24; len++) {
+		const ext = "z".repeat(len);
+		const src = `Before ![[SENTINELSTEM.${ext}]] after.`;
+		for (const speakEmbeds of [false, true]) {
+			const got = say(src, { speakEmbeds });
+			check(`NRL-21 embed extension of ${len} char(s) is silent (speakEmbeds ${speakEmbeds})`, got === "Before after.", `got: ${JSON.stringify(got)}`);
+			check(`NRL-21 embed extension of ${len} char(s) speaks no stem (speakEmbeds ${speakEmbeds})`, !got.includes("SENTINELSTEM"), `got: ${JSON.stringify(got)}`);
 		}
 	}
 
@@ -1460,6 +1527,7 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		["links", "See [the docs](https://example.com/p) and [ref][r] and https://bare.example.org/x now."],
 		["wikilinks", "Go to [[Some Note|the alias]] and [[Other#Head]] and [[Third#^abc]] now."],
 		["embeds", "Here ![[Some Note]] and ![[pic.png|200x100]] and ![[pic.png|A bicycle]] end."],
+		["embed-file-shapes", "Here ![[site.webmanifest]] and ![[archive.tar-gz]] and ![[Dockerfile]] and ![[Version 1.2 notes|the release]] end."],
 		["images", 'Here ![alt words](img.png "Title") and ![ref alt][r] and ![shortcut] end.'],
 		["table", "Lead in here.\n\n| a | b |\n| - | - |\n| c | d |\n\nLead out here."],
 		["headings", "# Top Heading\n\nBody one here.\n\n## Sub Heading\n\nBody two here."],
@@ -1496,7 +1564,7 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		}
 	}
 	check(`NRL-21 sourceIndex lockstep over ${sweepRuns} option combinations`, sweepBad === "", sweepBad);
-	check("NRL-21 sweep really ran every combination", sweepRuns === corpus.length * (1 << keys.length) && sweepRuns === 15 * 512, String(sweepRuns));
+	check("NRL-21 sweep really ran every combination", sweepRuns === corpus.length * (1 << keys.length) && sweepRuns === 16 * 512, String(sweepRuns));
 }
 
 console.log("");
