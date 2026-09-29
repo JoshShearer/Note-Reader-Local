@@ -1,5 +1,5 @@
 /**
- * Plugin data: versioning, the v0 -> v1 migration, and key preservation.
+ * Plugin data: versioning, the v0 -> v1 -> v2 migrations, and key preservation.
  *
  * `saveSettings()` runs on every rate nudge, voice change and toggle flip, so
  * whatever the load -> save round trip drops is dropped for good the next time
@@ -97,11 +97,11 @@ console.log("positions survive a saveSettings() triggered by a rate change");
 		JSON.stringify(saved.positions));
 }
 
-console.log("a v0 data.json lands every value in the v1 shape");
+console.log("a v0 data.json lands every value in the current shape");
 {
 	const saved = roundTrip(v0Fixture());
 	const s = saved.settings ?? {};
-	check("version is 1", saved.version === 1 && PLUGIN_DATA_VERSION === 1, String(saved.version));
+	check("version is the current one (2)", saved.version === 2 && PLUGIN_DATA_VERSION === 2, String(saved.version));
 	check("positions is an empty object", JSON.stringify(saved.positions) === "{}", JSON.stringify(saved.positions));
 	check("engine", s.engine === "espeak", s.engine);
 	check("voiceId", s.voiceId === "espeak:en-gb", s.voiceId);
@@ -163,10 +163,10 @@ console.log("unknown v0 top-level keys are carried to the v1 root");
 	check("kept at the root", saved.handEdited === 42, JSON.stringify(Object.keys(saved)));
 }
 
-console.log("a v1 file round-trips unchanged");
+console.log("a file at the current version round-trips unchanged");
 {
 	const v1 = {
-		version: 1,
+		version: PLUGIN_DATA_VERSION,
 		settings: {
 			...DEFAULT_SETTINGS,
 			rate: 1.25,
@@ -185,11 +185,80 @@ console.log("garbage input yields defaults");
 	for (const raw of [null, undefined, "nonsense", 7, [], { version: 1, settings: "x", positions: [] }]) {
 		const saved = roundTrip(raw);
 		const label = JSON.stringify(raw) ?? "undefined";
-		check(`${label}: version 1`, saved.version === 1);
+		check(`${label}: current version`, saved.version === PLUGIN_DATA_VERSION && PLUGIN_DATA_VERSION === 2, String(saved.version));
 		check(`${label}: default settings`, canon(saved.settings) === canon(DEFAULT_SETTINGS),
 			JSON.stringify(saved.settings));
 		check(`${label}: positions is an object`, JSON.stringify(saved.positions) === "{}", JSON.stringify(saved.positions));
 	}
+}
+
+console.log("highlight colour: \"\" means theme default, and only hex is stored");
+{
+	check("default colour is the theme default", DEFAULT_SETTINGS.highlight.color === "", JSON.stringify(DEFAULT_SETTINGS.highlight.color));
+	for (const color of ["", "#abc", "#abcd", "#aabbcc", "#aabbccdd", "#AABBCC"]) {
+		const out = normaliseSettings({ highlight: { enabled: true, color } });
+		check(`keeps ${JSON.stringify(color)}`, out.highlight.color === color, JSON.stringify(out.highlight.color));
+	}
+	for (const color of ["not a colour", "#12345", "#1234567", "red", "#ggg", "rgb(1,2,3)", 7, null]) {
+		const out = normaliseSettings({ highlight: { enabled: true, color } });
+		check(`rejects ${JSON.stringify(color)} to the theme default`, out.highlight.color === "", JSON.stringify(out.highlight.color));
+	}
+}
+
+console.log("v1 -> v2 moves exactly the old default colour to the theme default");
+{
+	const v1 = (color: string): Json => ({
+		version: 1,
+		settings: { ...DEFAULT_SETTINGS, rate: 1.3, highlight: { enabled: true, color, futureHighlightKey: "x" }, futureSetting: 9 },
+		positions: { "a.md": { sourceOffset: 4 } },
+		otherFeature: true,
+	});
+	for (const old of ["#ffd54f", "#FFD54F", "#FfD54f"]) {
+		const saved = roundTrip(v1(old));
+		check(`v1 ${old} -> ""`, saved.settings?.highlight?.color === "", JSON.stringify(saved.settings?.highlight));
+		check(`v1 ${old} relabelled 2`, saved.version === 2, String(saved.version));
+	}
+	const kept = roundTrip(v1("#123456"));
+	check("v1 deliberate colour kept", kept.settings?.highlight?.color === "#123456", JSON.stringify(kept.settings?.highlight));
+	check("v1 deliberate colour relabelled 2", kept.version === 2, String(kept.version));
+	check("unknown root key survives v1 -> v2", kept.otherFeature === true, JSON.stringify(Object.keys(kept)));
+	check("unknown settings key survives v1 -> v2", kept.settings?.futureSetting === 9, JSON.stringify(kept.settings));
+	check("unknown highlight key survives v1 -> v2", kept.settings?.highlight?.futureHighlightKey === "x", JSON.stringify(kept.settings?.highlight));
+	check("positions survive v1 -> v2", kept.positions?.["a.md"]?.sourceOffset === 4, JSON.stringify(kept.positions));
+	check("other settings survive v1 -> v2", kept.settings?.rate === 1.3, String(kept.settings?.rate));
+}
+
+console.log("v0 files go v0 -> v1 -> v2");
+{
+	const oldDefault = roundTrip({ ...v0Fixture(), highlight: { enabled: true, color: "#ffd54f" } });
+	check("v0 old default -> \"\"", oldDefault.settings?.highlight?.color === "", JSON.stringify(oldDefault.settings?.highlight));
+	check("v0 lands at version 2", oldDefault.version === 2, String(oldDefault.version));
+	const custom = roundTrip(v0Fixture());
+	check("v0 custom colour kept", custom.settings?.highlight?.color === "#00ff00", JSON.stringify(custom.settings?.highlight));
+}
+
+console.log("the v2 migration runs once: a later deliberate #ffd54f is kept");
+{
+	const saved = roundTrip({
+		version: 2,
+		settings: { ...DEFAULT_SETTINGS, highlight: { enabled: true, color: "#ffd54f" } },
+		positions: {},
+	});
+	check("v2 #ffd54f kept", saved.settings?.highlight?.color === "#ffd54f", JSON.stringify(saved.settings?.highlight));
+	check("v2 stays 2", saved.version === 2, String(saved.version));
+}
+
+console.log("a file from a newer build keeps its label and is not migrated");
+{
+	const saved = roundTrip({
+		version: 3,
+		settings: { ...DEFAULT_SETTINGS, highlight: { enabled: true, color: "#ffd54f" } },
+		positions: {},
+		fromTheFuture: 1,
+	});
+	check("version 3 kept", saved.version === 3, String(saved.version));
+	check("colour not rewritten", saved.settings?.highlight?.color === "#ffd54f", JSON.stringify(saved.settings?.highlight));
+	check("unknown root key kept", saved.fromTheFuture === 1);
 }
 
 console.log("DEFAULT_SETTINGS keeps today's effective behaviour");

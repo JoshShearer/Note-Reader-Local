@@ -444,6 +444,12 @@ be given a settings toggle until it does (see `docs/adr/0001`).
 Settings normalisation MUST preserve keys it does not recognise, at every level,
 because the normalised object is what gets saved.
 
+`highlight.color` is a hex colour (`#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`) or
+the empty string. The empty string is the default and means "follow the theme"
+(Obsidian's `--text-highlight-bg`). The word highlight reads the CSS custom
+property `--local-tts-reader-word-highlight`; a sentence highlight, when added,
+uses `--local-tts-reader-sentence-highlight` (see `docs/adr/0005`).
+
 Settings SHALL use Obsidian's plugin-data persistence facilities.
 
 The plugin MUST NOT modify note contents simply to store global TTS settings.
@@ -1518,7 +1524,7 @@ Conceptual schema:
 
 ```ts
 interface PluginData {
-  version: 1;
+  version: 2;
 
   settings: TTSSettings;
 
@@ -1530,7 +1536,7 @@ Example:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
 
   "settings": {
     "rate": 1.2,
@@ -1561,7 +1567,9 @@ Example:
 
 Future schema changes MUST increment `version`.
 
-Migration logic SHOULD be implemented before introducing schema version 2.
+Each older version migrates forward one step at a time on load, so a v0 file
+goes v0 -> v1 -> v2. A file whose `version` is the current one or newer keeps
+its label and is not migrated.
 
 Data written before the versioned container (v0) is the flat settings object at
 the root of `data.json`, with no `version` and a nested
@@ -1576,7 +1584,15 @@ the root of `data.json`, with no `version` and a nested
   their defaults (`true`, `true`, `false`, `false`).
 - `positions` starts empty, and unrecognised v0 root keys move to the v1 root.
 
-Root keys other than `version`, `settings` and `positions` MUST survive a save.
+v1 -> v2 (`migrateV1`): a stored `highlight.color` equal to `#ffd54f`
+(case-insensitive), the old default, becomes `""` (theme default). Any other
+colour is kept. This is a one-shot migration, not a normalisation rule, so a
+later deliberate choice of `#ffd54f` is not undone. See
+`docs/adr/0005-highlight-colour-theme-default-and-data-v2.md`.
+
+Root keys other than `version`, `settings` and `positions` MUST survive a save,
+and so MUST unrecognised keys inside `settings` and `settings.highlight`, across
+every migration step.
 See `docs/adr/0001-versioned-plugin-data-and-settings-keys.md`.
 
 ---

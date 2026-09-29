@@ -84,23 +84,25 @@ export class ControlBar {
 			player.on("progress", ({ chunkIndex, total }) => {
 				this.progressEl.setText(`${chunkIndex + 1} / ${total}`);
 			}),
+			// The readout follows the player, whoever changed the rate: these
+			// buttons, the settings slider, or a new play() at a stored rate.
+			player.on("rate", (rate) => this.setRateDisplay(rate)),
 		);
 
-		this.setRateDisplay(this.plugin.settings.rate);
+		this.setRateDisplay(player.getRate());
 		this.onState(player.getState());
 	}
 
-	/** Called from the settings tab too, so the readout stays in sync either way. */
-	setRateDisplay(rate: number): void {
+	private setRateDisplay(rate: number): void {
 		this.speedValueEl.setText(`${rate.toFixed(2)}\u00d7`);
 	}
 
 	private nudgeRate(delta: number): void {
 		const next =
-			Math.round(Math.min(RATE_MAX, Math.max(RATE_MIN, this.plugin.settings.rate + delta)) * 100) /
-			100;
+			Math.round(
+				Math.min(RATE_MAX, Math.max(RATE_MIN, this.plugin.getPlayer().getRate() + delta)) * 100,
+			) / 100;
 		void this.plugin.setRate(next);
-		this.setRateDisplay(next);
 	}
 
 	private onState(state: PlayerState): void {

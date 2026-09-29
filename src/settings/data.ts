@@ -8,11 +8,14 @@ import { isRecord, normaliseSettings, type Settings } from "./index";
  * it drops is gone for good.
  */
 
-export const PLUGIN_DATA_VERSION = 1;
+export const PLUGIN_DATA_VERSION = 2;
+
+/** The v1 default highlight colour, which v2 replaces with "" (theme). */
+const V1_DEFAULT_HIGHLIGHT = "#ffd54f";
 
 export interface PluginData {
 	/**
-	 * Schema version. A number rather than the literal 1 because a file
+	 * Schema version. A number rather than a literal because a file
 	 * written by a newer build keeps its label; see loadPluginData.
 	 */
 	version: number;
@@ -76,33 +79,57 @@ export function migrateV0(raw: Record<string, unknown>): PluginData {
 	candidate.skipTables = boolOr(strip.tables, true);
 	candidate.skipHeadings = boolOr(strip.headings, false);
 
-	return {
+	// v0 had the same default colour as v1, so it goes on through v1 -> v2.
+	return migrateV1({
 		...rest,
-		version: PLUGIN_DATA_VERSION,
+		version: 1,
 		settings: normaliseSettings(candidate),
 		positions: {},
+	});
+}
+
+/**
+ * v1 -> v2: the stored default highlight colour becomes "" (follow the theme).
+ *
+ * Until v2 the colour setting was never applied, so everyone saw #ffd54f
+ * whatever was stored, and a stored #ffd54f is overwhelmingly the untouched
+ * default rather than a choice. This is a one-shot migration and not a
+ * normaliseSettings rule because a rule would run on every load and undo a
+ * later, deliberate pick of that same yellow. Only that exact colour moves;
+ * anything else was set by hand and is kept. See docs/adr/0005.
+ */
+export function migrateV1(data: PluginData): PluginData {
+	const highlight = data.settings.highlight;
+	const color =
+		highlight.color.toLowerCase() === V1_DEFAULT_HIGHLIGHT ? "" : highlight.color;
+	return {
+		...data,
+		version: 2,
+		settings: { ...data.settings, highlight: { ...highlight, color } },
 	};
 }
 
 /**
- * Turn whatever loadData() returned into a v1 container.
+ * Turn whatever loadData() returned into a current-version container.
  *
  * No numeric `version` means v0, including null (no data.json yet) and
- * garbage, which both migrate to defaults. A numeric version is taken as
- * versioned and its label is kept as-is: a file from a newer build is
- * normalised as best this build can, but not relabelled as v1, so that build
- * still knows to run its own migration if the user goes back to it.
+ * garbage, which both migrate to defaults. Older versions step forward one
+ * migration at a time (v0 -> v1 -> v2). The current version, and anything
+ * newer, keeps its label as-is: a file from a newer build is normalised as
+ * best this build can, but not relabelled or migrated, so that build still
+ * knows to run its own migration if the user goes back to it.
  */
 export function loadPluginData(raw: unknown): PluginData {
 	if (!isRecord(raw)) return migrateV0({});
 	if (typeof raw.version !== "number") return migrateV0(raw);
 
-	return {
+	const data: PluginData = {
 		...raw,
 		version: raw.version,
 		settings: normaliseSettings(raw.settings),
 		positions: isRecord(raw.positions) ? raw.positions : {},
 	};
+	return data.version === 1 ? migrateV1(data) : data;
 }
 
 /** What saveData() writes: the loaded container with the live settings in it. */

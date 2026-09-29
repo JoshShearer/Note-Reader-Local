@@ -25,6 +25,13 @@ export interface PlayerEvents extends Record<string, unknown> {
 	/** Active word, or null when nothing is highlighted. */
 	word: { chunkIndex: number; wordIndex: number; timing: WordTiming } | null;
 	progress: { chunkIndex: number; total: number };
+	/**
+	 * Playback rate, emitted only when it changes. The control bar and the
+	 * settings slider both observe this rather than each other (srs.md
+	 * R-M16), and emitting only on change is what stops a slider that writes
+	 * the value back from looping.
+	 */
+	rate: number;
 	finished: void;
 	error: Error;
 }
@@ -114,9 +121,8 @@ export class Player {
 
 		this.engine = engine;
 		this.chunks = chunks;
-		this.rate = rate || 1;
+		this.setRate(rate || 1);
 		this.index = start;
-		this.audio.playbackRate = this.rate;
 		this.currentWord = -1;
 
 		this.controller = new AbortController();
@@ -394,8 +400,10 @@ export class Player {
 	 * `audio.currentTime`, which already accounts for the new rate.
 	 */
 	setRate(rate: number): void {
-		this.rate = rate;
 		this.audio.playbackRate = rate;
+		if (rate === this.rate) return;
+		this.rate = rate;
+		this.emitter.emit("rate", rate);
 	}
 
 	getRate(): number {

@@ -1,4 +1,5 @@
 import type { EngineId } from "../audio/types";
+import { isStorableColour } from "../ui/highlightColour";
 
 export interface Settings {
 	/** Which engine produces audio. */
@@ -12,7 +13,10 @@ export interface Settings {
 
 	highlight: {
 		enabled: boolean;
-		/** CSS colour for the active word. */
+		/**
+		 * Hex colour for the active word, or "" to follow the theme
+		 * (--text-highlight-bg). See docs/adr/0005.
+		 */
 		color: string;
 	};
 
@@ -81,7 +85,8 @@ export const DEFAULT_SETTINGS: Settings = {
 	pitch: 0,
 	highlight: {
 		enabled: true,
-		color: "#ffd54f",
+		// Follow the theme: one fixed hex cannot suit light and dark themes.
+		color: "",
 	},
 	// The first six reproduce what the pre-v1 defaults did, so nobody's
 	// reading changes on upgrade. The reserved keys take their srs.md
@@ -154,10 +159,7 @@ export function normaliseSettings(raw: unknown): Settings {
 		highlight: {
 			...highlight,
 			enabled: bool(highlight.enabled, DEFAULT_SETTINGS.highlight.enabled),
-			color:
-				typeof highlight.color === "string" && /^#[0-9a-f]{3,8}$/i.test(highlight.color)
-					? highlight.color
-					: DEFAULT_SETTINGS.highlight.color,
+			color: isStorableColour(highlight.color) ? highlight.color : DEFAULT_SETTINGS.highlight.color,
 		},
 		skipCodeBlocks: bool(data.skipCodeBlocks, DEFAULT_SETTINGS.skipCodeBlocks),
 		skipInlineCode: bool(data.skipInlineCode, DEFAULT_SETTINGS.skipInlineCode),
