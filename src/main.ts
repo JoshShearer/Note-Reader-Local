@@ -5,6 +5,7 @@ import { Player } from "./audio/player";
 import type { SpeechEngine, VoiceInfo } from "./audio/types";
 import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
+import { platformSegmenters } from "./text/segment";
 import { resolveStoredVoice } from "./audio/voiceChoice";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
 import {
@@ -241,7 +242,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * supported way to get at it. The `cm` property is the fallback for older
 	 * builds where the container lookup comes up empty.
 	 */
-	private currentEditor(): { editor: EditorView; source: string } | null {
+	private currentEditor(): { editor: EditorView; source: string; filePath: string } | null {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!view) return null;
 
@@ -250,7 +251,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			((view.editor as unknown as { cm?: EditorView }).cm ?? null);
 		if (!editor) return null;
 
-		return { editor, source: view.editor.getValue() };
+		const filePath = view.file?.path ?? "";
+		return { editor, source: view.editor.getValue(), filePath };
 	}
 
 	async readActiveNote(): Promise<void> {
@@ -269,20 +271,25 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.activeEditor = current.editor;
 		registerHighlighting(current.editor);
 
-		const chunks = extractChunks(current.source, {
-			stripTags: this.settings.skipTags,
-			speakUrls: this.settings.speakUrls,
-			skipCodeBlocks: this.settings.skipCodeBlocks,
-			skipInlineCode: this.settings.skipInlineCode,
-			skipTables: this.settings.skipTables,
-			skipHeadings: this.settings.skipHeadings,
-			skipFrontmatter: this.settings.skipFrontmatter,
-			speakImageAlt: this.settings.speakImageAlt,
-			speakEmbeds: this.settings.speakEmbeds,
-			// Not a setting: the UI language, which is what the segmenters are
-			// built with. appLocale() never throws and falls back to "en".
-			locale: appLocale(),
-		});
+		const chunks = extractChunks(
+			current.source,
+			{
+				stripTags: this.settings.skipTags,
+				speakUrls: this.settings.speakUrls,
+				skipCodeBlocks: this.settings.skipCodeBlocks,
+				skipInlineCode: this.settings.skipInlineCode,
+				skipTables: this.settings.skipTables,
+				skipHeadings: this.settings.skipHeadings,
+				skipFrontmatter: this.settings.skipFrontmatter,
+				speakImageAlt: this.settings.speakImageAlt,
+				speakEmbeds: this.settings.speakEmbeds,
+				// Not a setting: the UI language, which is what the segmenters are
+				// built with. appLocale() never throws and falls back to "en".
+				locale: appLocale(),
+			},
+			platformSegmenters,
+			current.filePath,
+		);
 		t("chunks extracted", `${chunks.length}`);
 
 		if (chunks.length === 0) {

@@ -391,6 +391,10 @@ console.log("an engine that owns playback is never prefetched");
 	const chunks: SpeechChunk[] = Array.from({ length: 10 }, (_, i) => {
 		const text = `Sentence ${i}.`;
 		return {
+			id: `chunk-${i}`,
+			sequence: i,
+			blockType: "paragraph" as const,
+			filePath: "test.md",
 			text,
 			sourceIndex: Array.from(text, (_, k) => i * 100 + k),
 			sourceStart: i * 100,
@@ -656,6 +660,10 @@ function numbered(n: number): SpeechChunk[] {
 	return Array.from({ length: n }, (_, i) => {
 		const text = `Sentence ${i}.`;
 		return {
+			id: `chunk-${i}`,
+			sequence: i,
+			blockType: "paragraph" as const,
+			filePath: "test.md",
 			text,
 			sourceIndex: Array.from(text, (_, k) => i * 100 + k),
 			sourceStart: i * 100,
