@@ -115,8 +115,6 @@ do not rediscover them:
   never read by `extract.ts`; they have no toggle by design (`docs/adr/0001`). Making
   those exclusions configurable is NRL-21.
 - `replayCurrent` truncates the chunk array and resets the index, corrupting `n / total`.
-- `primeBuffer` prefetches against engines where `synthesize()` *is* speaking, producing
-  overlapping speech on speechd and webspeech.
 - Pause is a no-op on speechd and webspeech: it pauses an `<audio>` element they never use.
 
 ## Style
