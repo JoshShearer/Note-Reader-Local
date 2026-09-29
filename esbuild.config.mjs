@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import process from "process";
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import builtins from "builtin-modules";
@@ -25,13 +25,13 @@ Independent implementation; no code derived from any other plugin.
 */`;
 
 /**
- * Two bundles, on purpose.
+ * Inlined worker code.
  *
- * `main.js` runs in Electron on desktop and in a WebView on mobile, so it must
- * not reference anything that only exists in a desktop runtime. The Kokoro
- * worker pulls in transformers.js and onnxruntime-web, which assume a real
- * browser and are far too large for the main bundle, so they are built
- * separately with a browser target and loaded as a worker.
+ * The Kokoro worker pulls in transformers.js and onnxruntime-web, which assume
+ * a real browser and are far too large for the main bundle when not inlined.
+ * Building it separately with a browser target and embedding its output as a
+ * blob URL at runtime keeps the two-target strategy while reducing installer
+ * download from 5 files to 4.
  */
 const mainConfig = {
 	banner: { js: banner },
@@ -111,9 +111,41 @@ async function copyOrtRuntime() {
 	}
 }
 
+/**
+ * Embed the worker script in main.js by reading the built kokoro-worker.js
+ * and injecting it as a base64-encoded constant.
+ */
+async function inlineWorkerIntoMain() {
+	const workerCode = await readFile("kokoro-worker.js", "utf8");
+	const workerBase64 = Buffer.from(workerCode).toString("base64");
+	const mainCode = await readFile("main.js", "utf8");
+
+	// Inject the inlined worker code at the start of the main.js file,
+	// just after the banner comment and before any other code.
+	const injection = `
+// Inlined Kokoro worker code (base64-encoded)
+var KOKORO_WORKER_CODE = "${workerBase64}";
+`;
+
+	const injected = mainCode.replace(
+		/(\*\/\n)/,
+		`$1${injection}`,
+	);
+
+	await writeFile("main.js", injected, "utf8");
+
+	// Remove the separate worker file since it is now inlined
+	try {
+		await rm("kokoro-worker.js");
+	} catch {
+		// File may not exist in dev mode
+	}
+}
+
 if (production) {
 	await build(mainConfig);
 	await build(workerConfig);
+	await inlineWorkerIntoMain();
 	await copyOrtRuntime();
 } else {
 	const ctx = await (await import("esbuild")).context(mainConfig);
