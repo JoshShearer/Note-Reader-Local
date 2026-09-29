@@ -1238,6 +1238,106 @@ console.log("replay restarts from pause and does nothing when idle");
 	await playing.catch(() => undefined);
 }
 
+console.log("next() advances to the next chunk and replays");
+{
+	const { engine, perIndex } = makeCountingEngine();
+	const player = new Player({ bufferAhead: 1 });
+	const progress: Array<{ chunkIndex: number; total: number }> = [];
+	player.on("progress", (p) => progress.push(p));
+
+	const { playing } = await playUntil(player, engine, numbered(5), 2, progress);
+	check("reached chunk 2 before next", player.getIndex() === 2, `got ${player.getIndex()}`);
+	check("queue is 5 before next", progress.at(-1)?.total === 5, JSON.stringify(progress.at(-1)));
+
+	const mark = progress.length;
+	void player.next();
+	await tick();
+	const after = progress.slice(mark);
+	check(
+		"progress after next is 3 / 5",
+		after.length > 0 && after.every((p) => p.chunkIndex === 3 && p.total === 5),
+		JSON.stringify(after),
+	);
+	check("index advanced to 3", player.getIndex() === 3, `got ${player.getIndex()}`);
+	check("next plays again", player.getState() === "playing", `got ${player.getState()}`);
+	check("chunk 3 was synthesised", perIndex.get(3) === 1, `synthesised ${perIndex.get(3)} times`);
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("next() at the last chunk is a no-op");
+{
+	const { engine } = makeEngine({ durationPerChunk: 100 });
+	const player = new Player({ bufferAhead: 0 });
+	const progress: Array<{ chunkIndex: number; total: number }> = [];
+	player.on("progress", (p) => progress.push(p));
+
+	const { playing } = await playUntil(player, engine, numbered(3), 2, progress);
+	check("reached chunk 2 before next", player.getIndex() === 2, `got ${player.getIndex()}`);
+
+	const mark = progress.length;
+	void player.next();
+	await tick();
+	const after = progress.slice(mark);
+	check("no new progress events after next at last chunk", after.length === 0, JSON.stringify(after));
+	check("index stays at 2", player.getIndex() === 2, `got ${player.getIndex()}`);
+	check("still playing chunk 2", progress.at(-1)?.chunkIndex === 2, JSON.stringify(progress.at(-1)));
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("previous() goes back to the previous chunk and replays");
+{
+	const { engine, perIndex } = makeCountingEngine();
+	const player = new Player({ bufferAhead: 1 });
+	const progress: Array<{ chunkIndex: number; total: number }> = [];
+	player.on("progress", (p) => progress.push(p));
+
+	const { playing } = await playUntil(player, engine, numbered(5), 2, progress);
+	check("reached chunk 2 before previous", player.getIndex() === 2, `got ${player.getIndex()}`);
+	check("queue is 5 before previous", progress.at(-1)?.total === 5, JSON.stringify(progress.at(-1)));
+
+	const mark = progress.length;
+	void player.previous();
+	await tick();
+	const after = progress.slice(mark);
+	check(
+		"progress after previous is 1 / 5",
+		after.length > 0 && after.every((p) => p.chunkIndex === 1 && p.total === 5),
+		JSON.stringify(after),
+	);
+	check("index went back to 1", player.getIndex() === 1, `got ${player.getIndex()}`);
+	check("previous plays again", player.getState() === "playing", `got ${player.getState()}`);
+	check("chunk 1 was synthesised", perIndex.get(1) === 1, `synthesised ${perIndex.get(1)} times`);
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("previous() at the first chunk is a no-op");
+{
+	const { engine } = makeEngine({ durationPerChunk: 100 });
+	const player = new Player({ bufferAhead: 0 });
+	const progress: Array<{ chunkIndex: number; total: number }> = [];
+	player.on("progress", (p) => progress.push(p));
+
+	const { playing } = await playUntil(player, engine, numbered(3), 0, progress);
+	check("reached chunk 0 before previous", player.getIndex() === 0, `got ${player.getIndex()}`);
+
+	const mark = progress.length;
+	void player.previous();
+	await tick();
+	const after = progress.slice(mark);
+	check("no new progress events after previous at first chunk", after.length === 0, JSON.stringify(after));
+	check("index stays at 0", player.getIndex() === 0, `got ${player.getIndex()}`);
+	check("still playing chunk 0", progress.at(-1)?.chunkIndex === 0, JSON.stringify(progress.at(-1)));
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
 console.log("setRate emits a rate event, only when the rate changes");
 {
 	// The control bar and the settings slider both observe this event rather
