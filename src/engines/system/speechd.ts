@@ -24,6 +24,14 @@ const CAPABILITIES: EngineCapabilities = {
 	rate: true,
 	pitch: true,
 	desktopOnly: true,
+	// By the time `spd-say` returns the audio is already at the sound card, and
+	// the tool offers no pause: only `-S` to stop. So there is nothing to pause
+	// and nothing to resume, and the player's pause button has to say so.
+	pause: false,
+	resume: false,
+	sentenceBoundary: false,
+	// A local daemon. Its output modules are installed software, not services.
+	offlineStatus: true,
 	// spd-say plays to the sound card and tells us nothing.
 	ownsPlayback: true,
 };

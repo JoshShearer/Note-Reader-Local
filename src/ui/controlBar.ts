@@ -1,6 +1,8 @@
 import { setIcon } from "obsidian";
 import type LocalTtsReaderPlugin from "../main";
 import type { PlayerState } from "../audio/player";
+import type { EngineCapabilities } from "../audio/types";
+import { controlAffordances, type Affordance, type Affordances } from "./affordances";
 
 const RATE_MIN = 0.5;
 const RATE_MAX = 2;
@@ -18,9 +20,22 @@ const RATE_STEP = 0.05;
 export class ControlBar {
 	private readonly el: HTMLElement;
 	private readonly playPauseBtn: HTMLButtonElement;
+	private readonly slowerBtn: HTMLButtonElement;
+	private readonly fasterBtn: HTMLButtonElement;
 	private readonly speedValueEl: HTMLElement;
 	private readonly progressEl: HTMLElement;
 	private readonly unsubscribers: Array<() => void> = [];
+	/**
+	 * What the active engine can do, and the last state the player reported.
+	 *
+	 * Both are held because the two reasons a button can be disabled arrive on
+	 * different events: a capability when the engine changes, "preparing" when
+	 * the player moves. Writing `.disabled` from whichever fired last let a
+	 * state event re-enable a button the engine cannot honour, so both are kept
+	 * and one refresh reads them together.
+	 */
+	private affordances: Affordances = controlAffordances(null, "This engine");
+	private state: PlayerState;
 
 	constructor(private readonly plugin: LocalTtsReaderPlugin) {
 		this.el = document.body.createDiv({ cls: "local-tts-control-bar" });
@@ -49,27 +64,31 @@ export class ControlBar {
 
 		const speed = this.el.createDiv({ cls: "local-tts-cb-speed" });
 
-		const slowerBtn = speed.createEl("button", {
+		this.slowerBtn = speed.createEl("button", {
 			cls: "local-tts-cb-speed-btn",
 			text: "\u2212",
 			attr: { "aria-label": "Read slower", type: "button" },
 		});
-		slowerBtn.addEventListener("click", () => this.nudgeRate(-RATE_STEP));
+		this.slowerBtn.addEventListener("click", () => this.nudgeRate(-RATE_STEP));
 
 		this.speedValueEl = speed.createSpan({ cls: "local-tts-cb-speed-value" });
 
-		const fasterBtn = speed.createEl("button", {
+		this.fasterBtn = speed.createEl("button", {
 			cls: "local-tts-cb-speed-btn",
 			text: "+",
 			attr: { "aria-label": "Read faster", type: "button" },
 		});
-		fasterBtn.addEventListener("click", () => this.nudgeRate(RATE_STEP));
+		this.fasterBtn.addEventListener("click", () => this.nudgeRate(RATE_STEP));
 
 		// Scrolling over the readout is a faster way to nudge speed than
 		// hunting for the small +/- buttons.
 		this.speedValueEl.addEventListener(
 			"wheel",
 			(event) => {
+				// Bail before preventDefault: on an engine with no rate control
+				// there is nothing to nudge, and swallowing the wheel event would
+				// stop the note scrolling for no reason.
+				if (!this.affordances.rate.enabled) return;
 				event.preventDefault();
 				this.nudgeRate(event.deltaY < 0 ? RATE_STEP : -RATE_STEP);
 			},
@@ -90,7 +109,21 @@ export class ControlBar {
 		);
 
 		this.setRateDisplay(player.getRate());
-		this.onState(player.getState());
+		this.state = player.getState();
+		this.refresh();
+	}
+
+	/**
+	 * Tell the bar which engine is now active, so it can stop offering what that
+	 * engine cannot do.
+	 *
+	 * Called on construction and from the plugin's `setEngine`, which is the
+	 * only writer of `settings.engine`. `caps` is null when no engine matched;
+	 * see `controlAffordances` for why that leaves everything enabled.
+	 */
+	setEngine(caps: EngineCapabilities | null, label: string): void {
+		this.affordances = controlAffordances(caps, label);
+		this.refresh();
 	}
 
 	private setRateDisplay(rate: number): void {
@@ -106,12 +139,43 @@ export class ControlBar {
 	}
 
 	private onState(state: PlayerState): void {
+		this.state = state;
+		this.refresh();
+	}
+
+	/**
+	 * Mark a control unavailable, with the reason where the user can find it.
+	 *
+	 * `title` is the only room a toolbar this size has for an explanation, so a
+	 * disabled button without one would be indistinguishable from a broken one.
+	 */
+	private apply(el: HTMLElement, affordance: Affordance, alsoDisabled = false): void {
+		const disabled = !affordance.enabled || alsoDisabled;
+		if (el instanceof HTMLButtonElement) el.disabled = disabled;
+		el.toggleClass("is-unavailable", !affordance.enabled);
+		// Spelled out rather than toggled: aria-disabled is a true/false token,
+		// and a bare `aria-disabled=""` is read as false, which is the opposite
+		// of what is meant. Needed on the speed readout in particular, which is
+		// a span and so has no `disabled` property of its own.
+		if (disabled) el.setAttribute("aria-disabled", "true");
+		else el.removeAttribute("aria-disabled");
+		if (affordance.reason) el.setAttribute("title", affordance.reason);
+		else el.removeAttribute("title");
+	}
+
+	/** The single place either reason for a disabled control is written to the DOM. */
+	private refresh(): void {
+		const state = this.state;
 		const active = state === "preparing" || state === "playing" || state === "paused";
 		this.el.toggleClass("is-visible", active);
 
 		setIcon(this.playPauseBtn, state === "preparing" ? "loader-2" : state === "playing" ? "pause" : "play");
 		this.playPauseBtn.toggleClass("is-loading", state === "preparing");
-		this.playPauseBtn.disabled = state === "preparing";
+		this.apply(this.playPauseBtn, this.affordances.playPause, state === "preparing");
+
+		this.apply(this.slowerBtn, this.affordances.rate);
+		this.apply(this.fasterBtn, this.affordances.rate);
+		this.apply(this.speedValueEl, this.affordances.rate);
 
 		if (!active) this.progressEl.setText("");
 	}

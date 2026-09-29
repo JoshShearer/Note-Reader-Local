@@ -126,6 +126,11 @@ function makeEngine(opts: { durationPerChunk?: number; failOn?: number } = {}): 
 			rate: true,
 			pitch: true,
 			desktopOnly: true,
+			// espeak-shaped: a buffer engine, so the player can pause it.
+			pause: true,
+			resume: true,
+			sentenceBoundary: false,
+			offlineStatus: true,
 			ownsPlayback: false,
 		},
 		async isAvailable() {
