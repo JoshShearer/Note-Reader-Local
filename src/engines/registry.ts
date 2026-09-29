@@ -1,5 +1,6 @@
 import { Platform } from "obsidian";
 import type { EngineId, SpeechEngine } from "../audio/types";
+import { shouldConstructLinuxDesktopEngines } from "./platform";
 import { EspeakEngine } from "./system/espeak";
 import { SpeechDispatcherEngine } from "./system/speechd";
 import { getProcessRunner } from "./system/spawn";
@@ -31,7 +32,11 @@ export function createEngines(
 ): SpeechEngine[] {
 	const engines: SpeechEngine[] = [new KokoroEngine(kokoroStore, kokoroOptions)];
 
-	if (!Platform.isMobile) {
+	// espeak-ng and spd-say are Linux-only system binaries: constructing
+	// these engines on macOS/Windows desktop would only produce `which`
+	// failures at probe time (registry.ts:64), so the guard is Linux desktop
+	// specifically, not desktop-vs-mobile (srs.md:1023-1027).
+	if (shouldConstructLinuxDesktopEngines(Platform)) {
 		const runner = getProcessRunner();
 		engines.push(new EspeakEngine(runner), new SpeechDispatcherEngine(runner));
 	}

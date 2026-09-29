@@ -5,7 +5,10 @@ import type { ChildProcessWithoutNullStreams } from "child_process";
  * imports node builtins on a path that could run on mobile.
  *
  * Obsidian's desktop build has nodeIntegration on, so this is available in the
- * renderer. On mobile it is never constructed.
+ * renderer. It is only ever constructed on Linux desktop, though: registry.ts
+ * gates EspeakEngine/SpeechDispatcherEngine construction on
+ * `Platform.isDesktopApp && Platform.isLinux`, so a macOS or Windows desktop
+ * never reaches this file's NodeProcessRunner any more than mobile does.
  */
 
 export interface RunResult {
