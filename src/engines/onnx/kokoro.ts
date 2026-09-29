@@ -14,10 +14,9 @@ import type { DeviceRequest, FromWorker, ModelFile, ToWorker } from "./kokoro.wo
 /**
  * Kokoro, run locally in a Web Worker.
  *
- * This is the engine that makes the plugin usable on a phone. Android's
- * WebView does not give plugins access to the system text-to-speech engine, and
- * a community plugin cannot add native code, so the only route to good on-device
- * speech is to run the model in the WebView itself.
+ * Android system TTS availability is unknown and requires device testing (SPIKE-ANDROID-001 blocked on hardware).
+ * The plugin attempts to use system TTS when available on Android. If system TTS is not reachable,
+ * running the model in the WebView is the only alternative for good on-device speech without cloud services.
  *
  * Model files live in the vault rather than in the plugin folder, so they
  * survive plugin updates. The bundled onnxruntime WASM does live in the plugin
