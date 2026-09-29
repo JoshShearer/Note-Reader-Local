@@ -404,6 +404,260 @@ console.log("an engine that owns playback is never prefetched");
 	check("spoken in chunk order", order.every((n, i) => n === i), order.join(","));
 }
 
+/** Hand-built chunks, one per index, so the chunk count is exact. */
+function numbered(n: number): SpeechChunk[] {
+	return Array.from({ length: n }, (_, i) => {
+		const text = `Sentence ${i}.`;
+		return {
+			text,
+			sourceIndex: Array.from(text, (_, k) => i * 100 + k),
+			sourceStart: i * 100,
+			sourceEnd: i * 100 + text.length,
+		};
+	});
+}
+
+/** Buffer engine that counts synthesize() calls per chunk index. */
+function makeCountingEngine(): {
+	engine: SpeechEngine;
+	perIndex: Map<number, number>;
+	cancelPendingCalls: () => number;
+} {
+	const { engine } = makeEngine({ durationPerChunk: 100 });
+	const perIndex = new Map<number, number>();
+	let cancels = 0;
+	const counting: SpeechEngine = {
+		...engine,
+		async synthesize(req: SynthRequest, signal: AbortSignal): Promise<SynthResult> {
+			const i = req.chunk.sourceStart / 100;
+			perIndex.set(i, (perIndex.get(i) ?? 0) + 1);
+			return await engine.synthesize(req, signal);
+		},
+		cancelPending() {
+			cancels += 1;
+		},
+	};
+	return { engine: counting, perIndex, cancelPendingCalls: () => cancels };
+}
+
+/** Play `chunks`, finishing each buffer chunk until progress reaches `target`. */
+async function playUntil(
+	player: Player,
+	engine: SpeechEngine,
+	chunks: SpeechChunk[],
+	target: number,
+	progress: Array<{ chunkIndex: number; total: number }>,
+): Promise<{ playing: Promise<void> }> {
+	const playing = player.play(engine, chunks, 1);
+	await tick();
+	while ((progress.at(-1)?.chunkIndex ?? -1) < target) {
+		fakeAudio.advance(fakeAudio.currentTime + 0.2, fakeAudio.currentTime);
+		await tick();
+	}
+	// Wrapped: returning the promise itself would make this await the whole queue.
+	return { playing };
+}
+
+console.log("replayCurrent keeps the queue and the position");
+{
+	// Replaying sentence 42 of 186 used to replace the queue with the 145
+	// chunks from there on and reset the index, so the readout jumped to
+	// 1 / 145 and nothing before sentence 42 could be reached again.
+	const { engine, perIndex, cancelPendingCalls } = makeCountingEngine();
+	const chunks = numbered(186);
+	const player = new Player({ bufferAhead: 2 });
+	const progress: Array<{ chunkIndex: number; total: number }> = [];
+	player.on("progress", (p) => progress.push(p));
+
+	const { playing } = await playUntil(player, engine, chunks, 41, progress);
+	check("reached chunk 41 before replay", player.getIndex() === 41, `got ${player.getIndex()}`);
+	check("queue is 186 before replay", progress.at(-1)?.total === 186, JSON.stringify(progress.at(-1)));
+
+	const mark = progress.length;
+	void player.replayCurrent();
+	await tick();
+	const after = progress.slice(mark);
+	check(
+		"progress after replay is still 41 / 186",
+		after.length > 0 && after.every((p) => p.chunkIndex === 41 && p.total === 186),
+		JSON.stringify(after),
+	);
+	check("index unchanged by replay", player.getIndex() === 41, `got ${player.getIndex()}`);
+	check("replay plays again", player.getState() === "playing", `got ${player.getState()}`);
+	check("current chunk reuses its buffer", perIndex.get(41) === 1, `synthesised ${perIndex.get(41)} times`);
+	check(
+		"prefetched chunks are kept",
+		perIndex.get(42) === 1 && perIndex.get(43) === 1,
+		`42: ${perIndex.get(42)}, 43: ${perIndex.get(43)}`,
+	);
+	check("engine queue not cancelled by replay", cancelPendingCalls() === 0, `${cancelPendingCalls()} calls`);
+
+	// The chunk after the replayed one is 42, not 1.
+	fakeAudio.advance(fakeAudio.currentTime + 0.2, fakeAudio.currentTime);
+	await tick();
+	check(
+		"playback continues at 42 / 186",
+		progress.at(-1)?.chunkIndex === 42 && progress.at(-1)?.total === 186,
+		JSON.stringify(progress.at(-1)),
+	);
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("ten replays leave the same state as one");
+{
+	const run = async (
+		replays: number,
+	): Promise<{ index: number; last: string; state: string; synth41: number | undefined }> => {
+		const { engine, perIndex } = makeCountingEngine();
+		const player = new Player({ bufferAhead: 2 });
+		const progress: Array<{ chunkIndex: number; total: number }> = [];
+		player.on("progress", (p) => progress.push(p));
+		const { playing } = await playUntil(player, engine, numbered(186), 41, progress);
+		for (let i = 0; i < replays; i++) {
+			void player.replayCurrent();
+			await tick();
+		}
+		const out = {
+			index: player.getIndex(),
+			last: JSON.stringify(progress.at(-1)),
+			state: player.getState(),
+			synth41: perIndex.get(41),
+		};
+		player.stop();
+		await playing.catch(() => undefined);
+		return out;
+	};
+	const one = await run(1);
+	const ten = await run(10);
+	check("one replay leaves index 41 at 41 / 186", one.index === 41 && one.last === '{"chunkIndex":41,"total":186}', JSON.stringify(one));
+	check("ten replays match one", JSON.stringify(ten) === JSON.stringify(one), `one ${JSON.stringify(one)} ten ${JSON.stringify(ten)}`);
+}
+
+console.log("replay on an engine that owns playback stops the utterance first");
+{
+	// synthesize() is the speaking on these engines, so the old utterance has
+	// to be aborted before the same chunk is spoken again, or two voices talk.
+	const { engine } = makeEngine();
+	const events: string[] = [];
+	const signals: AbortSignal[] = [];
+	let inFlight = 0;
+	let peak = 0;
+	const owning: SpeechEngine = {
+		...engine,
+		capabilities: { ...engine.capabilities, ownsPlayback: true },
+		async synthesize(req: SynthRequest, signal: AbortSignal): Promise<SynthResult> {
+			const i = req.chunk.sourceStart / 100;
+			const n = signals.push(signal) - 1;
+			inFlight += 1;
+			peak = Math.max(peak, inFlight);
+			events.push(`start ${i}#${n}`);
+			await new Promise<void>((resolve, reject) => {
+				let done = false;
+				const t = setTimeout(() => {
+					if (done) return;
+					done = true;
+					inFlight -= 1;
+					resolve();
+				}, 60);
+				signal.addEventListener(
+					"abort",
+					() => {
+						if (done) return;
+						done = true;
+						clearTimeout(t);
+						inFlight -= 1;
+						events.push(`abort ${i}#${n}`);
+						reject(new DOMException("Aborted", "AbortError"));
+					},
+					{ once: true },
+				);
+			});
+			return { kind: "streamed", estimatedMs: 0, words: null };
+		},
+	};
+
+	const player = new Player({ bufferAhead: 2 });
+	const progress: Array<{ chunkIndex: number; total: number }> = [];
+	player.on("progress", (p) => progress.push(p));
+	const errors: string[] = [];
+	player.on("error", (e) => errors.push(e.message));
+	const playing = player.play(owning, numbered(5), 1);
+	await new Promise((r) => setTimeout(r, 90)); // chunk 0 done, chunk 1 speaking
+	check("speaking chunk 1 before replay", player.getIndex() === 1, `got ${player.getIndex()}`);
+
+	void player.replayCurrent();
+	await tick();
+	const firstAbort = events.indexOf("abort 1#1");
+	const restart = events.indexOf("start 1#2");
+	check(
+		"old utterance aborted before chunk 1 is spoken again",
+		firstAbort !== -1 && restart !== -1 && firstAbort < restart,
+		events.join(" | "),
+	);
+	check("never two utterances at once", peak === 1, `peak ${peak}`);
+	check("index unchanged by replay", player.getIndex() === 1, `got ${player.getIndex()}`);
+	check(
+		"progress still 1 / 5",
+		progress.at(-1)?.chunkIndex === 1 && progress.at(-1)?.total === 5,
+		JSON.stringify(progress.at(-1)),
+	);
+	check("abort of the old utterance is not an error", errors.length === 0, JSON.stringify(errors));
+
+	player.stop();
+	await playing.catch(() => undefined);
+	await tick();
+	// Chunk 0 finished on its own; what matters is the one speaking at stop().
+	check("stop aborts the utterance in flight", signals.at(-1)?.aborted === true && inFlight === 0, `${signals.map((s) => s.aborted).join(",")} inFlight ${inFlight}`);
+}
+
+console.log("stop after a replay still aborts prefetches");
+{
+	const { engine } = makeEngine();
+	const signals: AbortSignal[] = [];
+	const slow: SpeechEngine = {
+		...engine,
+		async synthesize(req: SynthRequest, signal: AbortSignal): Promise<SynthResult> {
+			signals.push(signal);
+			await new Promise((r) => setTimeout(r, 200));
+			return await engine.synthesize(req, signal);
+		},
+	};
+	const player = new Player({ bufferAhead: 2 });
+	const playing = player.play(slow, numbered(6), 1);
+	await tick();
+	void player.replayCurrent();
+	await tick();
+	player.stop();
+	await playing.catch(() => undefined);
+	check("prefetches were issued", signals.length >= 3, `got ${signals.length}`);
+	check("every synthesis signal aborted by stop", signals.every((s) => s.aborted), signals.map((s) => s.aborted).join(","));
+	check("state idle after stop", player.getState() === "idle", `got ${player.getState()}`);
+}
+
+console.log("replay restarts from pause and does nothing when idle");
+{
+	const { engine } = makeEngine({ durationPerChunk: 100 });
+	const player = new Player({ bufferAhead: 0 });
+	const progress: Array<{ chunkIndex: number; total: number }> = [];
+	player.on("progress", (p) => progress.push(p));
+
+	await player.replayCurrent();
+	check("replay while idle is a no-op", player.getState() === "idle" && progress.length === 0, `${player.getState()} ${progress.length}`);
+
+	const { playing } = await playUntil(player, engine, numbered(4), 2, progress);
+	player.pause();
+	check("paused", player.getState() === "paused", `got ${player.getState()}`);
+	void player.replayCurrent();
+	await tick();
+	check("replay from pause plays", player.getState() === "playing", `got ${player.getState()}`);
+	check("replay from pause keeps 3 / 4", player.getIndex() === 2 && progress.at(-1)?.total === 4, JSON.stringify(progress.at(-1)));
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
 async function tick(): Promise<void> {
 	for (let i = 0; i < 12; i++) await Promise.resolve();
 	await new Promise((r) => setTimeout(r, 0));

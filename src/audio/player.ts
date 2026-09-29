@@ -45,7 +45,18 @@ export class Player {
 
 	private index = 0;
 	private state: PlayerState = "idle";
+	/**
+	 * Session scope: aborted only by stop(). Buffer-engine synthesis and
+	 * prefetches hang off this, so a replay does not throw away audio that is
+	 * still valid.
+	 */
 	private controller: AbortController | null = null;
+	/**
+	 * Scope of the chunk currently being played, linked to the session. A
+	 * replay aborts only this: it stops the <audio> element, and on an engine
+	 * that owns playback it stops the utterance itself.
+	 */
+	private chunkScope: LinkedScope | null = null;
 	private runToken = 0;
 
 	/** Synthesised results, keyed by chunk index. */
@@ -114,10 +125,15 @@ export class Player {
 		this.setState("preparing");
 		this.emitter.emit("progress", { chunkIndex: this.index, total: this.chunks.length });
 
+		await this.startRun(token);
+	}
+
+	/** Run the queue from `this.index`, turning failures into an error event. */
+	private async startRun(token: number): Promise<void> {
 		try {
 			await this.run(token);
 		} catch (err) {
-			if (token !== this.runToken) return; // superseded by a newer play()
+			if (token !== this.runToken) return; // superseded by a newer play() or replay
 			if (err instanceof DOMException && err.name === "AbortError") return;
 			this.setState("idle");
 			this.emitter.emit("error", err instanceof Error ? err : new Error(String(err)));
@@ -126,31 +142,45 @@ export class Player {
 
 	private async run(token: number): Promise<void> {
 		const engine = this.engine;
-		const signal = this.controller?.signal;
-		if (!engine || !signal) return;
+		const session = this.controller?.signal;
+		if (!engine || !session) return;
 
 		while (this.index < this.chunks.length && token === this.runToken) {
-			if (signal.aborted) return;
+			if (session.aborted) return;
 
 			const index = this.index;
-			const chunk = this.chunks[index]!;
 			this.primeBuffer(index);
 
-			const result = await this.synthesize(index, signal);
-			if (token !== this.runToken || signal.aborted) return;
+			const scope = linkedScope(session);
+			this.chunkScope = scope;
+			const signal = scope.signal;
+			try {
+				// A buffer engine's synthesis is shared with prefetch and stays
+				// valid across a replay, so it only answers to the session. On an
+				// engine that owns playback the synthesis IS the utterance, and a
+				// replay has to be able to cut it off.
+				const result = await this.synthesize(
+					index,
+					engine.capabilities.ownsPlayback ? signal : session,
+				);
+				if (token !== this.runToken || signal.aborted) return;
 
-			this.setState("playing");
-			this.emitter.emit("progress", { chunkIndex: index, total: this.chunks.length });
+				this.setState("playing");
+				this.emitter.emit("progress", { chunkIndex: index, total: this.chunks.length });
 
-			switch (result.kind) {
-				case "buffer":
-					await this.playBuffer(index, result.audio, result.words, result.durationMs, signal);
-					break;
-				case "live":
-					// Words arrive via onWord; onEnd is fired by the engine.
-					break;
-				case "streamed":
-					break;
+				switch (result.kind) {
+					case "buffer":
+						await this.playBuffer(index, result.audio, result.words, result.durationMs, signal);
+						break;
+					case "live":
+						// Words arrive via onWord; onEnd is fired by the engine.
+						break;
+					case "streamed":
+						break;
+				}
+			} finally {
+				scope.release();
+				if (this.chunkScope === scope) this.chunkScope = null;
 			}
 
 			this.clearWordState();
@@ -372,20 +402,46 @@ export class Player {
 		return this.rate;
 	}
 
-	/** Restart the current chunk from the beginning. */
+	/**
+	 * Restart the current chunk from the beginning.
+	 *
+	 * The queue and the index are left alone, so the position readout does not
+	 * move and earlier chunks stay reachable. Only the current chunk's scope is
+	 * aborted: prefetched audio for later chunks is still valid, and on a
+	 * buffer engine the current chunk's own audio is reused rather than
+	 * synthesised again.
+	 */
 	async replayCurrent(): Promise<void> {
 		if (this.state === "idle" || this.state === "finished") return;
-		this.index = Math.max(0, this.index);
 		const engine = this.engine;
-		const chunks = this.chunks;
-		if (!engine) return;
-		const startSource = chunks[this.index]?.sourceStart ?? -1;
-		const trimmed = chunks.slice(this.index);
-		await this.play(engine, trimmed, this.rate, startSource < 0 ? -1 : 0);
+		const index = this.index;
+		if (!engine || !this.controller) return;
+		if (index < 0 || index >= this.chunks.length) return;
+
+		const token = ++this.runToken;
+		this.chunkScope?.abort();
+		this.chunkScope = null;
+
+		// On an engine that owns playback the cached promise is the utterance
+		// that was just cut off, so it cannot be replayed; speak it again.
+		if (engine.capabilities.ownsPlayback) this.pending.delete(index);
+		// The superseded run bailed out before revoking, and playBuffer is
+		// about to register a fresh URL for this index.
+		this.revokeUrl(index);
+		this.clearWordState();
+		this.emitter.emit("word", null);
+		this.audio.pause();
+
+		this.setState("preparing");
+		this.emitter.emit("progress", { chunkIndex: index, total: this.chunks.length });
+
+		await this.startRun(token);
 	}
 
 	stop(): void {
 		this.runToken += 1;
+		this.chunkScope?.abort();
+		this.chunkScope = null;
 		this.controller?.abort();
 		this.controller = null;
 		this.audio.pause();
@@ -411,4 +467,35 @@ export class Player {
 		this.stop();
 		this.emitter.clear();
 	}
+}
+
+interface LinkedScope {
+	readonly signal: AbortSignal;
+	abort(): void;
+	/** Detach from the parent once the scope is finished with. */
+	release(): void;
+}
+
+/**
+ * An abort scope that also aborts when `parent` does.
+ *
+ * Not AbortSignal.any: that is missing from the older mobile WebViews this
+ * plugin still runs in. The parent is the session signal, which outlives
+ * hundreds of chunks, so each scope removes its listener when released rather
+ * than piling them up.
+ */
+function linkedScope(parent: AbortSignal): LinkedScope {
+	const controller = new AbortController();
+	const onParentAbort = (): void => controller.abort();
+	if (parent.aborted) controller.abort();
+	else parent.addEventListener("abort", onParentAbort, { once: true });
+	const release = (): void => parent.removeEventListener("abort", onParentAbort);
+	return {
+		signal: controller.signal,
+		abort: () => {
+			release();
+			controller.abort();
+		},
+		release,
+	};
 }
