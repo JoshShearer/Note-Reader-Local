@@ -33,3 +33,6 @@ data.json
 .claude/pipeline-state-local.json
 .claude/last-critique.md
 .claude/scratch/
+# Run and deploy locks: per-working-tree, taken atomically with mkdir
+.claude/pipeline.lock/
+.claude/deploy.lock/

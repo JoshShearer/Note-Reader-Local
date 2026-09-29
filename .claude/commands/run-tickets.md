@@ -15,11 +15,12 @@ table before the first run.
 | **There is no CI.** No `.github/`, no workflow, no hook. `.git/hooks` holds only samples. | The Verify phase has nothing to poll. It runs the gates and the probes itself. Do not write a `gh pr checks` loop; it will wait forever on a PR that no runner ever touches. |
 | **A green suite is not a working feature** (`AGENTS.md` rule 11). The suites run in bare Node against fakes. | Automated Verify also runs the real bundled module against the ticket's acceptance inputs, and drives real Obsidian over CDP when it is reachable. Nothing a human did not observe is ever described as "verified in Obsidian". PRs carry `NOT VERIFIED IN OBSIDIAN`, and Linear comments say so plainly. |
 | **Bugs must be reproduced before they are fixed** (`AGENTS.md` rule 12). | Implement begins by reproducing, not by editing. If the repro fails, the ticket blocks rather than proceeding on a guess. |
-| **One deploy slot.** `npm run deploy` writes to one fixed folder in `~/Documents/Notes`. | Multiple worktrees can run phases concurrently (each with its own state file), but only one lane at a time may call `npm run deploy`. Coordinate: if two lanes both reach Finish, the first to deploy owns the slot; the second must wait or skip deploy. |
+| **One deploy slot.** `npm run deploy` writes to one fixed folder in `~/Documents/Notes`. | Multiple worktrees can run phases concurrently (each with its own state file), but only one lane at a time may call `npm run deploy`. Take `.claude/deploy.lock` the same atomic way as the run lock, deploy, write `.deployed-from` with the `runId` and commit, then release. A lane that cannot take it skips the deploy and says so in its report rather than waiting: the vault carries merged `main` either way, and whoever deploys last wins. |
 | **A deploy is not live until Obsidian restarts.** On 2026-09-28 two tickets were "passed" against a stale in-memory build after an in-app reload. | Finish deploys `main` so the owner's vault always has the latest merged build, and the end-of-run report tells them to **fully quit and relaunch** Obsidian. A deploy never counts as evidence that the code ran. |
 | **Base branch is `main`.** It is the only branch; `origin/HEAD` resolves correctly here. | No special casing. Still assert it rather than assuming. |
 | **Reproduced defects are listed** in `AGENTS.md` "Known state", with exact triggering inputs. | Phase 0 must not ask for a repro for one of those. It is already written down. |
-| **Worktree parallelism** (new). Multiple worktrees can run phases concurrently. | Each worktree uses its own `.claude/pipeline-state-local.json` for isolation. Main repo uses `.claude/pipeline-state.json`. Only one lane may deploy at a time. |
+| **Worktree parallelism.** Multiple worktrees can run phases concurrently. | Each worktree uses its own `.claude/pipeline-state-local.json` for isolation. Main repo uses `.claude/pipeline-state.json`. Only one lane may deploy at a time. |
+| **One run per working tree, enforced by a lock.** On 2026-09-29 two runs both worked in the primary repo: the second reinitialised `.claude/pipeline-state.json`, destroying the first run's six ticket entries **and** the archive it had just written to `.claude/scratch/`, then rewrote `main` and dropped an unpushed commit. | Step 0 acquires `.claude/pipeline.lock` **atomically** before touching anything, and refuses to start if a live run holds it. Isolation keyed on the directory name is not enough: both of those runs were in the same directory, so both resolved to the same state file. See Step 0. |
 
 `gh` is installed and authenticated as `JoshShearer`. There is no permission classifier blocking
 `gh pr merge` in this repo, and no required review, so merge automation works. Never self-approve a
@@ -70,6 +71,9 @@ Argument: `$ARGUMENTS`
   or for unrelated tickets only.
 - `--resume` - re-validate `.claude/pipeline-state.json` against Linear and git before continuing.
   Auto-invoked if the state file has in-progress tickets and no flag was given.
+- `--force-unlock` - replace a `.claude/pipeline.lock` held by another run. For a human who knows
+  the other run is dead. It still prints the holder and archives that run's state file first, and an
+  agent must never pass it to itself to get past Step 0a.
 
 If no argument is given, ask which tickets to run. That is the only question this command asks
 before its work starts.
@@ -93,20 +97,99 @@ git rev-parse --abbrev-ref HEAD
 node --version
 ```
 
+### Step 0a: Take the lock, before anything else
+
+The state-file split above isolates one **worktree** from another. It does not isolate two runs in
+the **same** working tree, which is the collision that actually happened: both runs were in the
+primary repo, so both computed the same `STATE_FILE`. The lock is what makes "one run per working
+tree" true rather than hoped for.
+
+`.claude/` is per-working-tree, so a lock inside it is automatically keyed on the tree, which is the
+resource being contended: the checkout, the state file and `node_modules`.
+
+```bash
+RUN_ID=$(date -u +%FT%TZ)
+LOCK=".claude/pipeline.lock"
+
+# mkdir is atomic on POSIX: it succeeds for exactly one caller. Do not replace
+# this with a -f test followed by a write, which is the race it exists to avoid.
+if mkdir "$LOCK" 2>/dev/null; then
+  cat > "$LOCK/owner" <<EOF
+runId=$RUN_ID
+pid=$$
+repo=$REPO_ROOT
+branch=$(git rev-parse --abbrev-ref HEAD)
+stateFile=$STATE_FILE
+heartbeat=$(date -u +%FT%TZ)
+EOF
+  echo "lock acquired: $RUN_ID"
+else
+  echo "LOCK HELD, this run must not start:"
+  cat "$LOCK/owner" 2>/dev/null || echo "(no owner file: malformed lock)"
+fi
+```
+
+If the lock was **not** acquired, stop the whole run and report the holder verbatim. Do not remove
+the lock, do not work around it, and do not start in a different directory to dodge it. Two
+exceptions, both explicit:
+
+- **Stale.** `heartbeat` is more than 60 minutes old, or the `owner` file is missing or unparseable.
+  Say so, name the age you measured, archive any existing state file as below, then replace the lock.
+  Measure it, do not eyeball it:
+
+  ```bash
+  HB=$(grep '^heartbeat=' "$LOCK/owner" | cut -d= -f2-)
+  AGE=$(( ( $(date -u +%s) - $(date -u -d "$HB" +%s) ) / 60 ))
+  echo "holder heartbeat is ${AGE} minutes old"
+  ```
+
+- **`--force-unlock` was passed.** Print the holder, archive its state file, then replace the lock.
+  Never pass this to yourself; it exists for a human who knows the other run is dead.
+
+Refresh `heartbeat` at every phase transition, in the same write that appends to `history`. A run
+that dies mid-phase then reads as stale within the hour instead of blocking the tree forever.
+
+Release the lock with `rm -rf "$LOCK"` when the run reaches its end-of-run report, and say in that
+report that it was released. A **blocked ticket does not release the lock** - the run continues to
+the next ticket and only the end of the run releases it.
+
+### Step 0b: Never destroy another run's record
+
+Each of these was violated on 2026-09-29 and each cost real work:
+
+- **Never reinitialise a state file you did not create.** If `$STATE_FILE` exists and its `runId` is
+  not yours, you are either resuming it or archiving it. There is no third option, and "the tickets
+  look done" is not a reason: that file held a `blocked` ticket with an open PR.
+- **Archive before you write**, to `.claude/scratch/pipeline-state.<their-runId>.json`, and verify
+  the copy parses before the original is touched.
+- **Never empty `.claude/scratch/`.** It is the archive of record, it is gitignored, and it is where
+  a superseded run's only copy lives.
+- **Never rewrite a branch you did not create**, and never amend, rebase or reset `main`. A run on
+  2026-09-29 rewrote `main` and silently dropped an unpushed commit that was not its own. Merge, or
+  leave it alone.
+- **Never `git checkout` in a working tree whose lock you do not hold.** That includes the primary
+  repo while a worktree lane is running, and it is why the lock is keyed on the tree rather than on
+  the run.
+
 Assert before starting. These are the only conditions that stop the whole run, because nothing has
 been touched yet and continuing could destroy someone's work:
 
+- **The lock was acquired** (Step 0a). Everything below is pointless if another run is live here.
 - The working tree is clean. A dirty tree means a previous run or a manual edit is in flight: stop
-  and report what is dirty. Do not stash or discard it.
-- If in `main` branch: synced with `origin/main`. If `main` is only behind, fast-forward it.
-  If in a worktree on a feature branch: any branch state is OK (agents manage it).
+  and report what is dirty. Do not stash or discard it. This one is not negotiable just because a
+  worktree is "agent-managed": a dirty tree plus a second run is precisely how one run's edit gets
+  swept into another's `git add -A`.
+- On `main`: synced with `origin/main`, and fast-forward if only behind. In a worktree on its own
+  feature branch: record the branch and assert it is the one this run's state file names, so a
+  half-finished lane is resumed rather than silently re-based.
 - `node_modules` exists in this context (main repo or worktree). If not, `npm ci`.
-- If the state file (`.claude/pipeline-state.json` or `.claude/pipeline-state-local.json`) holds
-  an in-progress run and `--resume` was not given, resume it rather than overwriting it, and say
-  so in the first message. Starting fresh would orphan an in-flight branch and PR.
+- If `$STATE_FILE` holds an in-progress run and `--resume` was not given, resume it rather than
+  overwriting it, and say so in the first message. Starting fresh would orphan an in-flight branch
+  and PR. Compare by `runId`, not by how finished the tickets look.
 
-**Worktree isolation:** Each worktree uses its own state file (`.claude/pipeline-state-local.json`)
-so that main repo and worktree runs do not collide. This enables concurrent parallel pipelines.
+**Two layers, and they do different jobs.** The state-file split keyed on directory name isolates
+worktree lanes from each other. The lock isolates two runs that resolve to the *same* state file,
+which the split cannot see. Keep both; neither is redundant.
 
 Then read, in this order: `AGENTS.md` (the non-negotiables and the Known-state defect list),
 `.claude/linear.md`, and the commands this pipeline delegates to - `start-issue.md`, `ship.md`,
@@ -378,7 +461,10 @@ When every ticket is `done` or `blocked`, print one message:
 - Requirement status changes, with the evidence for each.
 - The reminder: **the vault now has `main` at `<sha>`. Fully quit and relaunch Obsidian to load
   it;** an in-app reload has proven unreliable. Nothing in this run was verified in Obsidian by a
-  human, and each PR's manual test plan says what to look at.
+  human, and each PR's manual test plan says what to look at. If this lane could not take
+  `.claude/deploy.lock`, say that it skipped the deploy and name the lane that holds it.
+- Confirmation that `.claude/pipeline.lock` was released, and the path of anything archived under
+  `.claude/scratch/` during the run.
 
 ## Example usage
 
@@ -419,6 +505,10 @@ Continues the run recorded in `.claude/pipeline-state.json`.
 | `main` fails its gates at the start of a ticket | Something already merged is broken. Stop the run and report it; branching further tickets off a broken `main` compounds it. |
 | `gh` auth expires mid-run | Stop the run and report which step failed. Every later ticket would fail the same way. |
 | A phase needs a decision not covered above | Decide it with a recorded default if one is defensible, otherwise block the ticket. Never wait. |
+| `.claude/pipeline.lock` is held on entry | Stop the whole run before touching anything. Print the holder's `owner` file verbatim. Only a measured heartbeat over 60 minutes old, or an explicit `--force-unlock`, may replace it. Never work around it by changing directory. |
+| `$STATE_FILE` exists with a `runId` that is not yours | Resume it, or archive it to `.claude/scratch/` and verify the copy parses first. Never reinitialise it, however finished its tickets look. |
+| The working tree changed branch under you mid-run | Another run is in this tree despite the lock. Stop, report both the branch you expected and the one you found, and do not commit: your files may already be staged into someone else's commit. |
+| An unpushed commit you did not create is on `main` | Do not amend, rebase or reset to tidy it. Push it or leave it. One was silently dropped this way on 2026-09-29. |
 
 ## Configuration
 
