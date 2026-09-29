@@ -203,7 +203,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			id: "read-selection",
 			name: "Read selection",
 			checkCallback: (checking: boolean) => {
-				const editor = this.activeEditor;
+				const editor = this.currentEditor()?.editor;
 				if (!editor) return false;
 				const hasSelection = !editor.state.selection.main.empty;
 				if (!checking && hasSelection) {
@@ -218,7 +218,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			id: "read-from-cursor",
 			name: "Read from cursor",
 			checkCallback: (checking: boolean) => {
-				const editor = this.activeEditor;
+				const editor = this.currentEditor()?.editor;
 				if (!editor) return false;
 				if (!checking) {
 					const cursorPos = editor.state.selection.main.from;
@@ -535,12 +535,44 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		);
 
 		// Filter chunks to only those within the selection range
-		const selectedChunks = chunks.filter((chunk) => chunk.sourceEnd > from && chunk.sourceStart < to);
+		let selectedChunks = chunks.filter((chunk) => chunk.sourceEnd > from && chunk.sourceStart < to);
 
 		if (selectedChunks.length === 0) {
 			new Notice("No text in selection.");
 			return;
 		}
+
+		// Clip chunks to selection boundaries, maintaining sourceIndex synchronization
+		selectedChunks = selectedChunks.map((chunk, idx, arr) => {
+			const isFirst = idx === 0;
+			const isLast = idx === arr.length - 1;
+
+			let textStart = 0;
+			let textEnd = chunk.text.length;
+
+			// Clip first chunk: remove text before selection start
+			if (isFirst && chunk.sourceStart < from) {
+				textStart = from - chunk.sourceStart;
+			}
+
+			// Clip last chunk: remove text after selection end
+			if (isLast && chunk.sourceEnd > to) {
+				textEnd = to - chunk.sourceStart;
+			}
+
+			const newText = chunk.text.slice(textStart, textEnd);
+			const newSourceIndex = chunk.sourceIndex.slice(textStart, textEnd);
+			const newSourceStart = newSourceIndex[0] ?? chunk.sourceStart;
+			const newSourceEnd = (newSourceIndex[newSourceIndex.length - 1] ?? chunk.sourceEnd - 1) + 1;
+
+			return {
+				...chunk,
+				text: newText,
+				sourceIndex: newSourceIndex,
+				sourceStart: newSourceStart,
+				sourceEnd: newSourceEnd,
+			};
+		});
 
 		const selection = this.settings.engine;
 		const isAutomatic = selection === "auto";
