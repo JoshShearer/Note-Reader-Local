@@ -1,4 +1,4 @@
-import { MarkdownView, Notice, Plugin, getLanguage, moment } from "obsidian";
+import { MarkdownView, Notice, Plugin, TFile, getLanguage, moment } from "obsidian";
 import { EditorView } from "@codemirror/view";
 
 import { Player } from "./audio/player";
@@ -437,7 +437,9 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: async (candidate) => {
 				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
-				await this.selectVoiceIfNeeded(candidate.engine, voices);
+				// Extract note language for voice selection (priority: frontmatter lang > app locale)
+				const noteLang = this.extractNoteLanguage(current.filePath);
+				await this.selectVoiceIfNeeded(candidate.engine, voices, noteLang);
 
 				// Loading can take seconds. Say so, rather than announcing
 				// playback that will not start yet and leaving the silence to
@@ -547,7 +549,9 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		await playWithFallback(this.player, candidates, selectedChunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: async (candidate: FallbackCandidate) => {
 				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
-				await this.selectVoiceIfNeeded(candidate.engine, voices);
+				// Extract note language for voice selection (priority: frontmatter lang > app locale)
+				const noteLang = this.extractNoteLanguage(current.filePath);
+				await this.selectVoiceIfNeeded(candidate.engine, voices, noteLang);
 				if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
 					const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
 					try {
@@ -614,7 +618,9 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: async (candidate: FallbackCandidate) => {
 				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
-				await this.selectVoiceIfNeeded(candidate.engine, voices);
+				// Extract note language for voice selection (priority: frontmatter lang > app locale)
+				const noteLang = this.extractNoteLanguage(current.filePath);
+				await this.selectVoiceIfNeeded(candidate.engine, voices, noteLang);
 				if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
 					const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
 					try {
@@ -657,16 +663,30 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
+	 * Extract the note's language from frontmatter `lang` key, if present.
+	 *
+	 * Priority order for voice selection: frontmatter lang > app locale.
+	 * Returns undefined if the key is not found.
+	 */
+	private extractNoteLanguage(filePath: string): string | undefined {
+		const file = this.app.vault.getAbstractFileByPath(filePath);
+		if (!(file instanceof TFile)) return undefined;
+		const cache = this.app.metadataCache.getFileCache(file);
+		return cache?.frontmatter?.lang as string | undefined;
+	}
+
+	/**
 	 * Apply the configured voice, or a substitute the user is told about.
 	 *
 	 * A voice id is scoped to its engine, so switching engines invalidates it.
-	 * The substitute follows the app language rather than whatever sorts
-	 * first (on speech-dispatcher that is Afrikaans, out of thousands), and
-	 * the notice names both voices. It is persisted so the notice fires once.
+	 * The substitute follows the note language (if marked in frontmatter), then
+	 * the app language rather than whatever sorts first (on speech-dispatcher
+	 * that is Afrikaans, out of thousands), and the notice names both voices.
+	 * It is persisted so the notice fires once.
 	 */
-	private async selectVoiceIfNeeded(engine: SpeechEngine, voices: VoiceInfo[]): Promise<void> {
+	private async selectVoiceIfNeeded(engine: SpeechEngine, voices: VoiceInfo[], noteLang?: string): Promise<void> {
 		if (voices.length === 0) return;
-		const resolved = resolveStoredVoice(engine, this.settings.voiceId, voices, appLocale());
+		const resolved = resolveStoredVoice(engine, this.settings.voiceId, voices, noteLang, appLocale());
 		await engine.selectVoice(resolved.voice);
 		if (resolved.id !== this.settings.voiceId) {
 			this.settings.voiceId = resolved.id;
