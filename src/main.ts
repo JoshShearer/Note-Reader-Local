@@ -165,6 +165,11 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			reportError(this.app, this.manifest.dir!, "playback failed", err);
 		});
 
+		this.player.on("timerExpired", () => {
+			new Notice("Sleep timer expired.");
+			this.clearHighlight();
+		});
+
 		this.controlBar = new ControlBar(this);
 		this.refreshEngineAffordances();
 		// Kicked off now, not deferred to onLayoutReady: cheap (no model load,
@@ -473,6 +478,10 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		if (isAutomatic) this.autoResolution = { id: result.id, reason: result.reason };
 
+		// Initialize sleep timer if preset is not "off"
+		const timerMs = this.presetToMs(this.settings.timerPreset);
+		if (timerMs > 0) this.player.setTimer(timerMs);
+
 		const runtime = result.engine.runtimeInfo?.();
 		new Notice(
 			`Reading ${chunks.length} passages with ${result.engine.label}${runtime ? ` on ${runtime}` : ""}.`,
@@ -562,6 +571,10 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				}
 			},
 		});
+
+		// Initialize sleep timer if preset is not "off"
+		const timerMs = this.presetToMs(this.settings.timerPreset);
+		if (timerMs > 0) this.player.setTimer(timerMs);
 	}
 
 	private async readFromCursor(position: number): Promise<void> {
@@ -631,6 +644,10 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				}
 			},
 		}, position);
+
+		// Initialize sleep timer if preset is not "off"
+		const timerMs = this.presetToMs(this.settings.timerPreset);
+		if (timerMs > 0) this.player.setTimer(timerMs);
 	}
 
 	private async savePosition(filePath: string, chunkIndex: number): Promise<void> {
@@ -966,6 +983,42 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.settings.pitch = pitch;
 		this.player.setPitch(pitch);
 		await this.saveSettings();
+	}
+
+	/**
+	 * Set the sleep timer preset and apply it to the player.
+	 *
+	 * Converts preset strings (e.g. "5m" = 5 minutes = 300000ms) to milliseconds
+	 * and starts the timer. "off" clears any running timer.
+	 */
+	async setTimerPreset(preset: string): Promise<void> {
+		this.settings.timerPreset = preset as Settings["timerPreset"];
+		const presetMs = this.presetToMs(preset);
+		this.player.setTimer(presetMs);
+		await this.saveSettings();
+	}
+
+	/**
+	 * Convert a timer preset string to milliseconds.
+	 *
+	 * "off" returns 0, minute presets return minutes * 60 * 1000.
+	 */
+	private presetToMs(preset: string): number {
+		switch (preset) {
+			case "5m":
+				return 5 * 60 * 1000;
+			case "10m":
+				return 10 * 60 * 1000;
+			case "15m":
+				return 15 * 60 * 1000;
+			case "30m":
+				return 30 * 60 * 1000;
+			case "60m":
+				return 60 * 60 * 1000;
+			case "off":
+			default:
+				return 0;
+		}
 	}
 
 	/**

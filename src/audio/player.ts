@@ -49,6 +49,10 @@ export interface PlayerEvents extends Record<string, unknown> {
 	 * bar and the settings slider observe this to avoid feedback loops.
 	 */
 	pitch: number;
+	/** Timer countdown in milliseconds remaining, emitted on each tick while running. */
+	timer: number;
+	/** Timer expired event, emitted when the timer reaches zero. */
+	timerExpired: void;
 	finished: void;
 	error: Error;
 }
@@ -86,6 +90,9 @@ export class Player {
 	private engine: SpeechEngine | null = null;
 	private rate = 1;
 	private pitch = 0;
+	private timerMs: number = 0;
+	private timerInterval: NodeJS.Timeout | null = null;
+	private timerStartedAt: number = 0;
 
 	private index = 0;
 	private state: PlayerState = "idle";
@@ -600,6 +607,60 @@ export class Player {
 	}
 
 	/**
+	 * Set a sleep timer that stops playback after the specified duration.
+	 *
+	 * When ms > 0, starts a countdown interval. When it reaches 0, calls expireTimer().
+	 * When ms === 0, cancels any running timer.
+	 */
+	setTimer(ms: number): void {
+		// Cancel existing timer
+		if (this.timerInterval !== null) {
+			clearInterval(this.timerInterval);
+			this.timerInterval = null;
+		}
+
+		if (ms <= 0) {
+			this.timerMs = 0;
+			this.emitter.emit("timer", 0);
+			return;
+		}
+
+		this.timerMs = ms;
+		this.timerStartedAt = Date.now();
+		this.emitter.emit("timer", ms);
+
+		// Update countdown every 100ms
+		this.timerInterval = setInterval(() => {
+			const remaining = Math.max(0, this.timerStartedAt + this.timerMs - Date.now());
+			this.emitter.emit("timer", remaining);
+
+			if (remaining <= 0) {
+				this.expireTimer();
+			}
+		}, 100);
+	}
+
+	getTimer(): number {
+		if (this.timerMs <= 0) return 0;
+		const remaining = Math.max(0, this.timerStartedAt + this.timerMs - Date.now());
+		return remaining;
+	}
+
+	private expireTimer(): void {
+		if (this.timerInterval !== null) {
+			clearInterval(this.timerInterval);
+			this.timerInterval = null;
+		}
+		this.timerMs = 0;
+		this.emitter.emit("timer", 0);
+		this.emitter.emit("timerExpired", undefined as never);
+		// Stop playback at current chunk boundary
+		if (this.state === "playing") {
+			this.stop();
+		}
+	}
+
+	/**
 	 * Change how many chunks are synthesised ahead of the one playing.
 	 *
 	 * The Look ahead slider used to write only `settings.bufferAhead`, so the
@@ -735,6 +796,12 @@ export class Player {
 		for (const url of this.objectUrls.values()) URL.revokeObjectURL(url);
 		this.objectUrls.clear();
 		this.clearWordState();
+		// Clear timer
+		if (this.timerInterval !== null) {
+			clearInterval(this.timerInterval);
+			this.timerInterval = null;
+		}
+		this.timerMs = 0;
 		this.setState("idle");
 	}
 
