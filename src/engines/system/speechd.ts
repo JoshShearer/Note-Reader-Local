@@ -39,8 +39,20 @@ const CAPABILITIES: EngineCapabilities = {
 	pause: true,
 	resume: true,
 	sentenceBoundary: false,
-	// A local daemon. Its output modules are installed software, not services.
-	offlineStatus: true,
+	// This field is per-voice ("can say whether a GIVEN VOICE needs the
+	// network", types.ts's own doc comment), not "is the daemon local
+	// software" - that second claim is true but a different, coarser one.
+	// Verified live on this machine: `spd-say -L`'s columns are NAME/
+	// LANGUAGE/VARIANT only, no module column, and `spd-say -O` lists
+	// modules (here: espeak-ng, openjtalk) with no link back to individual
+	// NAME rows. So no speechd voice's network need is ever knowable from
+	// this engine, and per the field's own definition that means false, not
+	// true. (`spd-say -o <module> -L` does scope the list per module, which
+	// could in principle attribute NAME rows to a known-local module - but
+	// that is undocumented behaviour verified on exactly one build, too
+	// risky to hang a MUST-relevant claim on; see VoiceInfo population
+	// below.)
+	offlineStatus: false,
 	// spd-say plays to the sound card and tells us nothing.
 	ownsPlayback: true,
 };
@@ -174,6 +186,11 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 				gender: "neutral" as const,
 				engineId: "speechd" as const,
 				isVariant: row.variant !== "none",
+				// `spd-say -L` has no module column (see CAPABILITIES.offlineStatus
+				// above), so no NAME row can be attributed to a module and no
+				// per-voice network need is knowable. Honest answer is unknown.
+				local: "unknown" as const,
+				requiresNetwork: "unknown" as const,
 			}));
 		} catch {
 			return [];

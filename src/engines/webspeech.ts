@@ -81,6 +81,21 @@ function waitForVoices(): Promise<SpeechSynthesisVoice[]> {
 	});
 }
 
+/**
+ * `SpeechSynthesisVoice.localService` maps to `VoiceInfo.local`/`requiresNetwork`
+ * honestly: `undefined` (the API allows it) becomes `"unknown"` on both fields
+ * rather than being coerced to either boolean, per R-S01's "MUST NOT claim a
+ * voice is offline when the backend cannot determine this". Separate from
+ * `hasLocalVoice()`/`listLocalVoices()` below, which answer a narrower,
+ * fail-closed question for automatic selection only and must not be routed
+ * through this.
+ */
+function voiceLocality(localService: boolean | undefined): { local: boolean | "unknown"; requiresNetwork: boolean | "unknown" } {
+	if (localService === true) return { local: true, requiresNetwork: false };
+	if (localService === false) return { local: false, requiresNetwork: true };
+	return { local: "unknown", requiresNetwork: "unknown" };
+}
+
 function toVoiceInfo(voice: SpeechSynthesisVoice): VoiceInfo {
 	// Voice names vary wildly by platform. The URI is the only stable handle.
 	const id = voice.voiceURI || voice.name;
@@ -90,6 +105,7 @@ function toVoiceInfo(voice: SpeechSynthesisVoice): VoiceInfo {
 		lang: voice.lang,
 		gender: guessGender(voice.name),
 		engineId: "webspeech",
+		...voiceLocality(voice.localService),
 	};
 }
 

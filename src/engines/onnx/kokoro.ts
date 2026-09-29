@@ -337,6 +337,11 @@ export class KokoroEngine implements SpeechEngine {
 			lang: first.lang,
 			gender: first.gender,
 			engineId: "kokoro",
+			// Genuinely local for every voice: kokoro.worker.ts's fetch shim plus
+			// isRemote/assertLocal reject any non-blob URL at runtime, not just in
+			// comment. No network code path exists for any voice.
+			local: true,
+			requiresNetwork: false,
 		};
 	}
 
@@ -480,6 +485,10 @@ export class KokoroEngine implements SpeechEngine {
 			lang: v.lang,
 			gender: v.gender,
 			engineId: "kokoro" as const,
+			// See the constructor's default-voice literal above for why this is
+			// true unconditionally, not a per-voice guess.
+			local: true,
+			requiresNetwork: false,
 		}));
 	}
 

@@ -167,7 +167,16 @@ console.log("the four real engines declare their new capabilities honestly");
 	const real = [
 		{ e: new KokoroEngine(noStore), pause: true, sentenceBoundary: false, offlineStatus: true },
 		{ e: new EspeakEngine(noRunner), pause: true, sentenceBoundary: false, offlineStatus: true },
-		{ e: new SpeechDispatcherEngine(noRunner), pause: true, sentenceBoundary: false, offlineStatus: true },
+		// NRL-26: was `true`, meaning "this daemon is local software" - a real
+		// but different claim than what the field asks (types.ts:80: "can say
+		// whether a GIVEN VOICE needs the network to speak"). `spd-say -L` has
+		// no module column (verified live), so no per-voice network need is
+		// ever knowable here; per the field's own definition that is `false`,
+		// not `true`. This corrects a premise, it does not weaken the test:
+		// affordances.ts's own `!caps.offlineStatus` rule now correctly
+		// surfaces "cannot tell which voices need the network" for speechd,
+		// which it wrongly never did before this ticket.
+		{ e: new SpeechDispatcherEngine(noRunner), pause: true, sentenceBoundary: false, offlineStatus: false },
 		{ e: new WebSpeechEngine(), pause: true, sentenceBoundary: false, offlineStatus: false },
 	];
 	for (const { e, pause, sentenceBoundary, offlineStatus } of real) {
