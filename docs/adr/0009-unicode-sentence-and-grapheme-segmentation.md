@@ -33,16 +33,51 @@ Four facts shaped the design, each measured rather than assumed:
    English prose fixtures: raw ICU supplies **1,803 boundaries the regex does
    not have**, spread over 1,229 of the 4,000, and declines to supply
    **15,523** that the regex does - it will not break after `e.g.`, after
-   `...` or after `U.S.A.`. So a straight replacement would have moved English
-   in both directions at once, dominantly toward longer chunks. What makes the
-   net effect on English nil is not ICU's behaviour but clause 4's guard: over
-   those same 4,000 fixtures it admitted **0** of the 1,803 into the union.
+   `...` or after `U.S.A.`. So on that corpus a straight replacement would
+   have moved English in both directions at once, dominantly toward longer
+   chunks. What makes the net effect on English nil is not ICU's behaviour but
+   clause 4's guard: over those same 4,000 fixtures it admitted **0** of the
+   1,803 into the union.
 
    An earlier version of this line said ICU adds nothing to English. That was
    false, and clause 4 - four clauses down, about the `!` in `[!note]` -
    contradicts it outright. The honest argument is stronger than the one it
    replaces: the union is safe because of the guard, not because ICU is
    conservative.
+
+   **That 1,803-to-15,523 ratio is a property of the corpus, not of ICU, and
+   it inverts.** NRL-28's verification found the balance reversed on an
+   independently generated English corpus, and the NRL-28 finish pass then
+   measured what drives it (`node v24.21.0`, bundling this repo's own
+   `legacySentenceBoundaries` against `Intl.Segmenter`, 2026-09-29):
+
+   | Corpus, 4,000 fixtures each | ICU-only | Regex-only |
+   |---|---|---|
+   | Prose, newline-free | 0 | 1,327 |
+   | Prose joined with soft line breaks | 0 | 0 |
+   | Markdown: headings, list items, blockquote, blank lines | **24,000** | 0 |
+   | Terminator-free lines joined by `\n` | **12,000** | 0 |
+
+   The whole inversion is one effect: **ICU ends a sentence at a hard line
+   break and the regex cannot**, because the regex demands `[.!?…]+` before
+   the whitespace. On the markdown corpus **100%** of the 24,000 ICU-only
+   boundaries sit immediately after a newline.
+
+   Two separate reasons this does not reach the decision, and the first is the
+   one that matters most:
+
+   - **`splitSentences` is never handed a newline.** `extractChunks` splits
+     the source on `\n` (`src/text/extract.ts:1279`) and `appendToParagraph`
+     joins paragraph lines with a space (`:1369`), so the line break is gone
+     before the splitter sees the text. The newline-free row is the only row
+     describing input this code actually receives.
+   - Clause 4's guard admits **0** ICU-only boundaries on every row above,
+     including the 24,000, because walking back over the whitespace lands on
+     the previous line's last character, which in English is ASCII.
+
+   So state the conclusion as scoped: *on the newline-free English prose the
+   splitter is actually given*, replacing the regex would lengthen chunks.
+   Stated as a general property of ICU versus this regex it is false.
 3. An astral emoji survives `cleanLine`, because the `EMOJI` drop test reads a
    single UTF-16 unit and a lone surrogate is in none of its ranges. So astral
    characters really do reach the splitter.
@@ -211,10 +246,26 @@ Four facts shaped the design, each measured rather than assumed:
   400-character unbroken token with a comma in it is cut after the comma
   instead of blindly at 220. English prose never reaches it, which is what the
   4,000-fixture figure measures. The smallest non-final piece any differing
-  fixture produced is **111 units**, so none of it undercuts clause 6's floor.
+  fixture produced is **111 units**, so none of *that corpus* undercuts clause
+  6's floor.
   Clause 4's guard is what makes the *sentence* half structural rather than
   lucky: where the terminator is ASCII, no ICU-only boundary can be admitted
   at all.
+
+  **The floor is a property of those two branches, not of `splitOversized`.**
+  The repair pass measured "minimum non-final length 111 and zero non-final
+  pieces ending in a space" over an all-punctuation sweep and that is true of
+  the sweep, but it is not an invariant of the code, because the
+  grapheme-snap exception below deliberately breaks both halves. Measured in
+  the NRL-28 finish pass (2026-09-29, bundled `src/text/extract.ts` at
+  `c29e7af`): over 924 fixtures placing one indivisible 301-unit cluster after
+  an `a`-run of length 0 to 230, with and without a space before it, in both
+  segmenter positions, **478** non-final pieces fall under 111 units, the
+  shortest being **1** unit, and **240** non-final pieces end in a space -
+  120 in each segmenter position, so it is not the word branch doing it. That
+  is the snap walking back to the start of a cluster that straddles the cap,
+  which is exactly what the exception is for. Quote the floor as what the
+  space and word branches guarantee; the snap overrides it by design.
   The claim this replaces - "1,351,680 then 20,076 then 296,960 comparisons,
   zero differences" - was an artefact of three corpora that all lacked long
   spaceless ASCII runs and all sampled near the halfway mark instead of

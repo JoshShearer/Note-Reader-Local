@@ -1003,7 +1003,13 @@ function splitOversized(chunk: SpeechChunk, ctx: SegmentContext): SpeechChunk[] 
 				// piece below the floor is the grapheme snap below walking
 				// back inside a single cluster, which is bounded by that
 				// cluster's length and is the deliberate exception this
-				// function exists to make.
+				// function exists to make. That exception is not theoretical,
+				// so do not quote the floor as an invariant of this function:
+				// over 924 fixtures placing one indivisible 301-unit cluster
+				// after an `a`-run of 0 to 230, with and without a space
+				// before it, 478 non-final pieces come in under 111 units, the
+				// shortest 1 unit, and 240 end in a space - 120 in each
+				// segmenter position, so it is the snap and not this branch.
 				if (candidate - cursor > MAX_CHUNK_CHARS * 0.5) end = candidate;
 			}
 			while (end > cursor && isGraphemeBoundary[end] !== 1) end -= 1;
