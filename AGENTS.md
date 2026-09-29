@@ -107,14 +107,22 @@ Each of these is a promise the product makes. Breaking one is a BLOCK, not a con
 
 ## Known state
 
-The working tree passes its gates, and an audit against `srs.md` found 2 of 16 MUST
-requirements fully met. The gap is tracked in Linear. Notable reproduced defects, so you
-do not rediscover them:
+The working tree passes its gates. The audit against `srs.md` that opened this repo found
+2 of 16 MUST requirements fully met. That count has not been re-run since, and several
+tickets have closed gaps against it, so treat it as a floor rather than as current state.
+One confirmed move: R-M14 (backend capability detection) is met as of NRL-22, because
+every capability that differs across the four engines now gates the control it affects,
+and the ones that gate nothing have no control to gate. The remaining gap is tracked in
+Linear. Notable reproduced defects, so you do not rediscover them:
 
 - `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` are stored in plugin data (now v2) but
   never read by `extract.ts`; they have no toggle by design (`docs/adr/0001`). Making
   those exclusions configurable is NRL-21.
-- Pause is a no-op on speechd and webspeech: it pauses an `<audio>` element they never use.
+- Pause is still a no-op on speechd and webspeech: `Player.pause()` pauses an `<audio>`
+  element those two engines never fill. NRL-22 only stopped the UI from offering it, by
+  declaring `pause: false` and `resume: false` on both and gating the button and the
+  palette command through `src/ui/affordances.ts`. The capability fields already exist, so
+  NRL-23 wires the real calls and flips the two booleans rather than adding anything.
 
 ## Style
 
