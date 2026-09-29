@@ -34,7 +34,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		this.renderVoiceSection(containerEl);
 		this.renderPlaybackSection(containerEl);
 		this.renderHighlightSection(containerEl);
-		this.renderStripSection(containerEl);
+		this.renderContentSection(containerEl);
 	}
 
 	private renderEngineSection(containerEl: HTMLElement): void {
@@ -493,40 +493,58 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		);
 	}
 
-	private renderStripSection(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName("Skipped content").setHeading();
+	/**
+	 * One "Content" group covering every exclusion, each row writing exactly one
+	 * key.
+	 *
+	 * The heading is no longer "Skipped content": with speakUrls, speakImageAlt
+	 * and speakEmbeds in it the group is not all-skip, and the polarity of each
+	 * row follows its stored key rather than being normalised (ADR 0001).
+	 *
+	 * A row writing a second key is how the "Code" switch silently governed
+	 * inline code, so there is no shared row here. Changes take effect on the
+	 * next read: extraction runs once when a read starts, so a queue the player
+	 * is already holding is deliberately left alone (ADR 0008).
+	 */
+	private renderContentSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Content").setHeading();
 
 		const settings = this.plugin.settings;
 		const save = () => this.plugin.saveSettings();
 
-		// One switch for both code keys. Extraction reads them separately, so
-		// splitting this into two toggles is purely a UI choice, deferred until
-		// NRL-8 (indented code) and the exclusions work settle what "code" covers.
-		new Setting(containerEl)
-			.setName("Code")
-			.setDesc("Skip inline code and fenced code blocks.")
-			.addToggle((toggle) =>
-				toggle.setValue(settings.skipCodeBlocks).onChange(async (value) => {
-					settings.skipCodeBlocks = value;
-					settings.skipInlineCode = value;
-					await save();
-				}),
-			);
+		type ContentKey =
+			| "skipFrontmatter"
+			| "skipCodeBlocks"
+			| "skipInlineCode"
+			| "speakUrls"
+			| "speakImageAlt"
+			| "speakEmbeds"
+			| "skipTags"
+			| "skipTables"
+			| "skipHeadings";
 
-		// Positive polarity, matching the stored speakUrls. v0 stored "skip
-		// URLs" and the migration inverted it, so what the user hears is
-		// unchanged even though the switch now reads the other way.
-		new Setting(containerEl)
-			.setName("Speak bare links")
-			.setDesc("Read the site name of bare URLs aloud (example.com), not the full address. Link labels are always read.")
-			.addToggle((toggle) =>
-				toggle.setValue(settings.speakUrls).onChange(async (value) => {
-					settings.speakUrls = value;
-					await save();
-				}),
-			);
-
-		const rows: Array<["skipTags" | "skipTables" | "skipHeadings", string, string]> = [
+		const rows: Array<[ContentKey, string, string]> = [
+			["skipFrontmatter", "Frontmatter", "Skip the note's YAML properties block."],
+			["skipCodeBlocks", "Code blocks", "Skip fenced and indented code blocks."],
+			["skipInlineCode", "Inline code", "Skip `inline code` spans."],
+			// Positive polarity, matching the stored speakUrls. v0 stored "skip
+			// URLs" and the migration inverted it, so what the user hears is
+			// unchanged even though the switch reads the other way.
+			[
+				"speakUrls",
+				"Speak bare links",
+				"Read the site name of bare URLs aloud (example.com), not the full address. Link labels are always read.",
+			],
+			[
+				"speakImageAlt",
+				"Speak image alt text",
+				"Read an image's alt text aloud. The image's file path is never read.",
+			],
+			[
+				"speakEmbeds",
+				"Speak embeds",
+				"Read the name an ![[embed]] refers to. The embedded note's contents are not read.",
+			],
 			["skipTags", "Tags", "Skip #tags."],
 			["skipTables", "Tables", "Skip table rows."],
 			["skipHeadings", "Headings", "Skip headings instead of reading them."],

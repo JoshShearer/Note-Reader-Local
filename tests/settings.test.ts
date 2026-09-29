@@ -269,6 +269,59 @@ console.log("DEFAULT_SETTINGS keeps today's effective behaviour");
 	check("headings read", DEFAULT_SETTINGS.skipHeadings === false);
 }
 
+console.log("the six R-M09 exclusions have the spec's defaults (NRL-21)");
+{
+	// srs.md R-M09: frontmatter false, codeBlocks false, inlineCode false,
+	// urls false, imageAltText true, embeds false. The stored polarity is mixed
+	// (ADR 0001), so "spoken: false" is `skipX: true` for three of them.
+	const spec: Array<[keyof typeof DEFAULT_SETTINGS, boolean]> = [
+		["skipFrontmatter", true],
+		["skipCodeBlocks", true],
+		["skipInlineCode", true],
+		["speakUrls", false],
+		["speakImageAlt", true],
+		["speakEmbeds", false],
+	];
+	for (const [key, want] of spec) {
+		check(`${key} defaults to ${want}`, DEFAULT_SETTINGS[key] === want, String(DEFAULT_SETTINGS[key]));
+		// Every one of the six must survive a stored value in either position,
+		// or a settings tab toggle would be undone on the next load.
+		for (const stored of [true, false]) {
+			const out = normaliseSettings({ [key]: stored }) as unknown as Json;
+			check(`${key}=${stored} round-trips`, out[key] === stored, String(out[key]));
+		}
+	}
+	// NRL-21 split the one UI switch, so the two code keys are independent.
+	const split = roundTrip({ version: PLUGIN_DATA_VERSION, settings: { ...DEFAULT_SETTINGS, skipCodeBlocks: false, skipInlineCode: true }, positions: {} });
+	check("code keys are independent", split.settings?.skipCodeBlocks === false && split.settings?.skipInlineCode === true, JSON.stringify(split.settings));
+}
+
+console.log("flipping a content toggle preserves keys nobody recognises (NRL-21)");
+{
+	// The real save path: load, mutate one toggle the way the settings tab does,
+	// serialise. Non-negotiable 10 - a whitelist rebuild here would erase
+	// reading positions on the next toggle flip.
+	for (const key of ["skipFrontmatter", "speakImageAlt", "speakEmbeds", "skipInlineCode", "skipCodeBlocks", "speakUrls"] as const) {
+		const saved = roundTrip(
+			{
+				version: PLUGIN_DATA_VERSION,
+				settings: { ...DEFAULT_SETTINGS, futureSetting: "keep-me", highlight: { ...DEFAULT_SETTINGS.highlight, futureHighlightKey: 5 } },
+				positions: { "Books/a.md": { sourceOffset: 77 } },
+				otherFeature: { enabled: true },
+			},
+			(s) => {
+				s[key] = !DEFAULT_SETTINGS[key];
+			},
+		);
+		check(`${key}: flip persisted`, saved.settings?.[key] === !DEFAULT_SETTINGS[key], String(saved.settings?.[key]));
+		check(`${key}: unknown root key survives`, saved.otherFeature?.enabled === true, JSON.stringify(Object.keys(saved)));
+		check(`${key}: unknown settings key survives`, saved.settings?.futureSetting === "keep-me", JSON.stringify(saved.settings));
+		check(`${key}: unknown highlight key survives`, saved.settings?.highlight?.futureHighlightKey === 5, JSON.stringify(saved.settings?.highlight));
+		check(`${key}: positions survive`, saved.positions?.["Books/a.md"]?.sourceOffset === 77, JSON.stringify(saved.positions));
+		check(`${key}: version unchanged`, saved.version === PLUGIN_DATA_VERSION && PLUGIN_DATA_VERSION === 2, String(saved.version));
+	}
+}
+
 if (failures > 0) {
 	console.log(`\n${failures} failure(s)`);
 	process.exit(1);

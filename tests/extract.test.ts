@@ -1,5 +1,7 @@
 import { extractChunks } from "../src/text/extract.ts";
 
+// Mirrors DEFAULT_SETTINGS, so a fixture written without overrides asserts what
+// a user with untouched settings actually hears.
 const OPTS = {
 	stripTags: true,
 	speakUrls: false,
@@ -7,6 +9,9 @@ const OPTS = {
 	skipInlineCode: true,
 	skipTables: true,
 	skipHeadings: false,
+	skipFrontmatter: true,
+	speakImageAlt: true,
+	speakEmbeds: false,
 };
 
 let failures = 0;
@@ -74,13 +79,22 @@ console.log("links keep label, drop target");
 	check("drops bare url", !spoken.includes("bare.example.org"), `got: ${spoken}`);
 }
 
-console.log("images are dropped entirely");
+console.log("images follow speakImageAlt, and never speak the destination");
 {
 	const src = "Before ![alt text](img.png) after.";
-	const chunks = extractChunks(src, OPTS);
-	const spoken = chunks.map((c) => c.text).join(" ");
-	check("no alt text", !spoken.includes("alt text"), `got: ${spoken}`);
-	check("no image path", !spoken.includes("img.png"), `got: ${spoken}`);
+	// The original assertions, now in the position that produces them.
+	const dropped = extractChunks(src, { ...OPTS, speakImageAlt: false })
+		.map((c) => c.text)
+		.join(" ");
+	check("speakImageAlt off: no alt text", !dropped.includes("alt text"), `got: ${dropped}`);
+	check("speakImageAlt off: no image path", !dropped.includes("img.png"), `got: ${dropped}`);
+	check("speakImageAlt off: whole construct gone", dropped === "Before after.", `got: ${dropped}`);
+
+	const spokenAlt = extractChunks(src, { ...OPTS, speakImageAlt: true })
+		.map((c) => c.text)
+		.join(" ");
+	check("speakImageAlt on: alt text spoken", spokenAlt === "Before alt text after.", `got: ${spokenAlt}`);
+	check("speakImageAlt on: still no image path", !spokenAlt.includes("img.png"), `got: ${spokenAlt}`);
 }
 
 console.log("headings and list markers");
@@ -342,9 +356,13 @@ console.log("wikilinks and embeds (NRL-6)");
 	check("[[Note#Section]] with stripTags off", tagsOff === "Go to Note Section for more detail.", `got: ${JSON.stringify(tagsOff)}`);
 
 	const embed = "Before ![[Some Note]] after the embed.";
-	const embedSpoken = spokenOf(embed);
+	const embedSpoken = spokenOf(embed, { ...OPTS, speakEmbeds: false });
 	check("![[Note]] is dropped cleanly", embedSpoken === "Before after the embed.", `got: ${JSON.stringify(embedSpoken)}`);
 	check("![[Note]] leaves no stray bracket or target", !embedSpoken.includes("]") && !embedSpoken.includes("Some Note"), `got: ${JSON.stringify(embedSpoken)}`);
+	// The other position: the same reduction the `[[` branch uses, shared.
+	const embedOn = spokenOf(embed, { ...OPTS, speakEmbeds: true });
+	check("![[Note]] with speakEmbeds on speaks the target", embedOn === "Before Some Note after the embed.", `got: ${JSON.stringify(embedOn)}`);
+	check("![[Note]] with speakEmbeds on leaves no bracket", !embedOn.includes("[") && !embedOn.includes("]"), `got: ${JSON.stringify(embedOn)}`);
 
 	const unterminated = spokenOf("An open [[wikilink never closes here.");
 	check("unterminated [[ drops the brackets and reads on", unterminated === "An open wikilink never closes here.", `got: ${JSON.stringify(unterminated)}`);
@@ -1018,10 +1036,18 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["code-inner-tick-skipped", "Before ``one ` %%literal%% two`` after.", "Before after."],
 		["label-comment-bracket", "Before [label %%hidden] private%% end](target) after.", "Before label end after."],
 		["alias-comment-brackets", "Before [[target|label %%hidden]] private%% end]] after.", "Before label end after."],
-		["image-comment-bracket", "Before ![label %%hidden] private%% end](target) after.", "Before after."],
-		["embed-comment-brackets", "Before ![[target|label %%hidden]] private%% end]] after.", "Before after."],
-		["image-html-bracket", "Before ![label <!--hidden] private--> end](target) after.", "Before after."],
-		["embed-html-brackets", "Before ![[target|label <!--hidden]] private--> end]] after.", "Before after."],
+		// NRL-21 made these two constructs configurable, so each keeps its
+		// original expectation in the position that produces it and gains a
+		// counterpart proving the comment inside the label is still suppressed
+		// when the label itself is spoken.
+		["image-comment-bracket", "Before ![label %%hidden] private%% end](target) after.", "Before after.", { speakImageAlt: false }],
+		["image-comment-bracket-spoken", "Before ![label %%hidden] private%% end](target) after.", "Before label end after.", { speakImageAlt: true }],
+		["embed-comment-brackets", "Before ![[target|label %%hidden]] private%% end]] after.", "Before after.", { speakEmbeds: false }],
+		["embed-comment-brackets-spoken", "Before ![[target|label %%hidden]] private%% end]] after.", "Before label end after.", { speakEmbeds: true }],
+		["image-html-bracket", "Before ![label <!--hidden] private--> end](target) after.", "Before after.", { speakImageAlt: false }],
+		["image-html-bracket-spoken", "Before ![label <!--hidden] private--> end](target) after.", "Before label end after.", { speakImageAlt: true }],
+		["embed-html-brackets", "Before ![[target|label <!--hidden]] private--> end]] after.", "Before after.", { speakEmbeds: false }],
+		["embed-html-brackets-spoken", "Before ![[target|label <!--hidden]] private--> end]] after.", "Before label end after.", { speakEmbeds: true }],
 		["highlight-comment-equals", "Before ==label %%hidden== private%% end== after.", "Before label end after."],
 		["label-html-bracket", "Before [label <!--hidden] private--> end](target) after.", "Before label end after."],
 		["highlight-html-equals", "Before ==label <!--hidden== private--> end== after.", "Before label end after."],
@@ -1035,7 +1061,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["paragraphs", "Before.\n\n%%\nhidden\n%%\n\nafter.", "Before. after."],
 		["crlf", "Before.\r\n%%\r\nhidden\r\n%% after.", "Before. after."],
 		["utf16", "𐐀lpha %%hidden%% élan after.", "𐐀lpha élan after."],
-		["unconditional", "Before %%hidden%% after.", "Before after.", { stripTags: false, skipCodeBlocks: false, skipInlineCode: false, skipTables: false, skipHeadings: true, speakUrls: true }],
+		["unconditional", "Before %%hidden%% after.", "Before after.", { stripTags: false, skipCodeBlocks: false, skipInlineCode: false, skipTables: false, skipHeadings: true, speakUrls: true, skipFrontmatter: false, speakImageAlt: true, speakEmbeds: true }],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -1133,7 +1159,8 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		["join-block-close-then-inline", "%%hidden\n%% before %%hidden%%\nafter.", "before after."],
 		["join-comment-trailing-space", "Before %%hidden%% \nafter.", "Before after."],
 		["join-crlf-unmatched-opener", "Before %% visible\r\nStill visible.", "Before %% visible Still visible."],
-		["join-image", "Before ![alt](target)\nafter.", "Before after."],
+		["join-image", "Before ![alt](target)\nafter.", "Before after.", { speakImageAlt: false }],
+		["join-image-spoken", "Before ![alt](target)\nafter.", "Before alt after.", { speakImageAlt: true }],
 		["join-tag", "Before #tag\nafter.", "Before after."],
 		["join-url", "Before https://example.com\nafter.", "Before after."],
 		["join-single-space-unchanged", "Before %% visible\nStill visible.", "Before %% visible Still visible."],
@@ -1168,6 +1195,308 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 	// A confirmed span does not fold the paragraph break away.
 	const paced = extractChunks("Before `x\n%%\nSENTINEL\n%%\ntail.\n\nNext `first\n%%literal%%\nlast` end.", { ...OPTS, skipInlineCode: false });
 	check("NRL-42 paragraph boundaries retained", paced.length === 2);
+}
+
+console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
+{
+	type Key = keyof typeof OPTS;
+	const say = (src: string, over: Partial<typeof OPTS> = {}): string =>
+		extractChunks(src, { ...OPTS, ...over }).map((c) => c.text).join(" ");
+
+	/*
+	 * Every toggle, in both positions, on a fixture that isolates it.
+	 *
+	 * A fixture whose output is the same either way proves nothing about its
+	 * toggle, which is the dead-switch defect this ticket exists to close. So
+	 * each row asserts the two positions differ AND that flipping any of the
+	 * other eight keys on the same fixture changes nothing: a toggle that
+	 * quietly governs a second construct fails here.
+	 */
+	const toggles: Array<[Key, string, string, string]> = [
+		// key, fixture, spoken with the key false, spoken with the key true
+		["skipFrontmatter", "---\ntitle: Fixture\n---\nBody prose.", "title: Fixture Body prose.", "Body prose."],
+		["skipCodeBlocks", "Body prose.\n\n```\nfenced code\n```", "Body prose. fenced code", "Body prose."],
+		["skipInlineCode", "Body `inline code` prose.", "Body inline code prose.", "Body prose."],
+		["speakUrls", "Body https://example.com/a prose.", "Body prose.", "Body example.com prose."],
+		["speakImageAlt", "Body ![alt words](img.png) prose.", "Body prose.", "Body alt words prose."],
+		["speakEmbeds", "Body ![[Target Note]] prose.", "Body prose.", "Body Target Note prose."],
+		["stripTags", "Body #tagname prose.", "Body #tagname prose.", "Body prose."],
+		["skipTables", "Body prose.\n\n| a | b |", "Body prose. | a | b |", "Body prose."],
+		["skipHeadings", "# Heading Words\n\nBody prose.", "Heading Words Body prose.", "Body prose."],
+	];
+	const keys = toggles.map(([k]) => k);
+	for (const [key, src, whenFalse, whenTrue] of toggles) {
+		const off = say(src, { [key]: false });
+		const on = say(src, { [key]: true });
+		check(`${key} false speaks ${JSON.stringify(whenFalse)}`, off === whenFalse, `got: ${JSON.stringify(off)}`);
+		check(`${key} true speaks ${JSON.stringify(whenTrue)}`, on === whenTrue, `got: ${JSON.stringify(on)}`);
+		check(`${key} changes behaviour`, off !== on);
+		for (const other of keys) {
+			if (other === key) continue;
+			for (const held of [false, true]) {
+				const base = say(src, { [key]: held });
+				const moved = say(src, { [key]: held, [other]: !OPTS[other] });
+				check(
+					`${key}=${held}: ${other} moves nothing`,
+					base === moved,
+					`got: ${JSON.stringify(moved)} want ${JSON.stringify(base)}`,
+				);
+			}
+		}
+	}
+
+	// Frontmatter, spoken. Source-mapped key/value text with no YAML parse and
+	// no reserialisation, so a value is heard exactly as it was written.
+	const fmCases: Array<[string, string, string, string]> = [
+		// id, source, spoken when skipped, spoken when read
+		["fences-never-spoken", "---\ntitle: Fixture\n---\nBody prose.", "Body prose.", "title: Fixture Body prose."],
+		["yaml-comment-dropped", "---\ntitle: T\n# a yaml comment\n---\nBody prose.", "Body prose.", "title: T Body prose."],
+		["blank-line-dropped", "---\ntitle: T\n\nalias: A\n---\nBody prose.", "Body prose.", "title: T alias: A Body prose."],
+		// Nothing is reserialised: no YAML parse, no reordering, no added words,
+		// and every character keeps its own raw offset. A value does go through
+		// the same inline cleaner as prose though, so bracket and emphasis
+		// markup in it is stripped exactly as it would be in a paragraph. That
+		// is the price of keeping URL and comment suppression inside a value,
+		// which are the two things this path must not lose (ADR 0008).
+		["no-reserialisation", "---\ntags: [a, b]\n---\nBody prose.", "Body prose.", "tags: a, b Body prose."],
+		["value-cleaned-like-prose", "---\nnote: **bold** x\n---\nBody prose.", "Body prose.", "note: bold x Body prose."],
+		["underscored-value-intact", "---\nnote: a_b_c\n---\nBody prose.", "Body prose.", "note: a_b_c Body prose."],
+		["hash-in-value-kept", "---\ncolour: #ff0000\n---\nBody prose.", "Body prose.", "colour: #ff0000 Body prose."],
+		["url-suppressed", "---\nsource: https://example.com/secret/path\n---\nBody prose.", "Body prose.", "source: Body prose."],
+		["inline-code-literal", "---\nnote: `a_b`\n---\nBody prose.", "Body prose.", "note: a_b Body prose."],
+		// A heading- or table-shaped value is metadata, not a Markdown block, so
+		// the Markdown exclusions do not reach it.
+		["heading-shaped-value", "---\nnote: \"# not a heading\"\n---\nBody prose.", "Body prose.", "note: \"# not a heading\" Body prose.", ],
+		["table-shaped-value", "---\nnote: \"| a | b |\"\n---\nBody prose.", "Body prose.", "note: \"| a | b |\" Body prose."],
+		// The recorded decision: a frontmatter line must never silence the note
+		// body. An unmatched delimiter in a value is YAML text, which Obsidian
+		// shows in the properties table, so it stays literal for `%%`; an
+		// unmatched `<!--` ends its own line and nothing more.
+		["unmatched-percent-cannot-hide-body", "---\nnote: %% tail\n---\nBody prose.", "Body prose.", "note: %% tail Body prose."],
+		["unmatched-html-cannot-hide-body", "---\nnote: <!-- tail\n---\nBody prose.", "Body prose.", "note: Body prose."],
+		// An unmatched backtick run is dropped and its text stays literal, as in
+		// prose. The returned openCode is discarded, so the run cannot be
+		// carried and the body is never treated as code content.
+		["unmatched-backtick-cannot-hide-body", "---\nnote: `open\n---\nBody prose.", "Body prose.", "note: open Body prose."],
+		["indented-percent-cannot-hide-body", "---\nnote:\n  %% tail\n---\nBody prose.", "Body prose.", "note: %% tail Body prose."],
+		// A complete comment span is still excluded (ADR 0006).
+		["complete-percent-span-suppressed", "---\nnote: %%SECRET%% visible\n---\nBody prose.", "Body prose.", "note: visible Body prose."],
+		["complete-html-span-suppressed", "---\nnote: <!--SECRET--> visible\n---\nBody prose.", "Body prose.", "note: visible Body prose."],
+		// Not frontmatter at all: unterminated, so it is a rule and read (ADR 0002
+		// clause 4). Both positions agree, because there is no block to govern.
+		["unterminated-is-not-frontmatter", "---\ntitle: x\nProse never closed.", "title: x Prose never closed.", "title: x Prose never closed."],
+	];
+	for (const [id, src, skipped, read] of fmCases) {
+		const gotSkipped = say(src, { skipFrontmatter: true });
+		const gotRead = say(src, { skipFrontmatter: false });
+		check(`NRL-21 frontmatter ${id} skipped`, gotSkipped === skipped, `got: ${JSON.stringify(gotSkipped)}`);
+		check(`NRL-21 frontmatter ${id} read`, gotRead === read, `got: ${JSON.stringify(gotRead)}`);
+		if (src.includes("SECRET")) {
+			check(`NRL-21 frontmatter ${id} never discloses a suppressed span`, !gotRead.includes("SECRET"));
+		}
+		// The note body is reachable either way: metadata cannot silence it.
+		if (src.includes("Body prose.")) {
+			check(`NRL-21 frontmatter ${id} body survives`, gotRead.includes("Body prose."), `got: ${JSON.stringify(gotRead)}`);
+		}
+		check(`NRL-21 frontmatter ${id} never speaks a fence`, !gotRead.includes("---"), `got: ${JSON.stringify(gotRead)}`);
+	}
+
+	// A frontmatter code span cannot reach the body: if it could, the body's `%%`
+	// would be literal code and the hidden text would be read aloud.
+	check(
+		"NRL-21 an unmatched frontmatter backtick cannot make the body literal",
+		say("---\nnote: `open\n---\nBefore %%SECRET%% after.", { skipFrontmatter: false }) === "note: open Before after.",
+		say("---\nnote: `open\n---\nBefore %%SECRET%% after.", { skipFrontmatter: false }),
+	);
+
+	// Frontmatter is its own paragraph: it never merges into the first prose line.
+	{
+		const src = "---\ntitle: Fixture\n---\nBody prose.";
+		const chunks = extractChunks(src, { ...OPTS, skipFrontmatter: false });
+		check("NRL-21 frontmatter is its own chunk", chunks.length === 2 && chunks[0]?.text === "title: Fixture", JSON.stringify(chunks.map((c) => c.text)));
+		check("NRL-21 frontmatter maps to its raw offsets", chunks[0]?.sourceIndex[0] === src.indexOf("title"), String(chunks[0]?.sourceIndex[0]));
+		check("NRL-21 body after spoken frontmatter maps to its raw offset", chunks[1]?.sourceIndex[0] === src.indexOf("Body"), String(chunks[1]?.sourceIndex[0]));
+	}
+
+	// Markdown images. The destination and any quoted title are a path, never
+	// prose, in either position.
+	const imgCases: Array<[string, string, string, string]> = [
+		// id, source, spoken when dropped, spoken when alt is read
+		["inline", "Before ![alt words](img.png) after.", "Before after.", "Before alt words after."],
+		["titled", 'Before ![alt words](img.png "The Title") after.', "Before after.", "Before alt words after."],
+		["reference", "Before ![alt words][the-ref] after.", "Before after.", "Before alt words after."],
+		["shortcut", "Before ![alt words] after.", "Before after.", "Before alt words after."],
+		["empty-alt", "Before ![](img.png) after.", "Before after.", "Before after."],
+		["nested-markup", "Before ![**bold** alt](img.png) after.", "Before after.", "Before bold alt after."],
+		["comment-in-alt", "Before ![alt %%SECRET%% words](img.png) after.", "Before after.", "Before alt words after."],
+		["escape-in-alt", "Before ![a\\*b](img.png) after.", "Before after.", "Before a*b after."],
+		// No closing `]`, so this is not an image in either position: the `!` is
+		// dropped and the single-bracket path keeps the rest as prose. Unchanged
+		// by this ticket, and pinned so it stays that way.
+		["unterminated", "Before ![alt words after.", "Before [alt words after.", "Before [alt words after."],
+	];
+	for (const [id, src, dropped, spokenAlt] of imgCases) {
+		const off = say(src, { speakImageAlt: false });
+		const on = say(src, { speakImageAlt: true });
+		check(`NRL-21 image ${id} dropped`, off === dropped, `got: ${JSON.stringify(off)}`);
+		check(`NRL-21 image ${id} alt spoken`, on === spokenAlt, `got: ${JSON.stringify(on)}`);
+		for (const [label, got] of [["off", off], ["on", on]] as const) {
+			check(`NRL-21 image ${id} (${label}) never speaks the destination`, !got.includes("img.png") && !got.includes("the-ref"), `got: ${JSON.stringify(got)}`);
+			check(`NRL-21 image ${id} (${label}) never speaks a title`, !got.includes("The Title"), `got: ${JSON.stringify(got)}`);
+			check(`NRL-21 image ${id} (${label}) never discloses a comment`, !got.includes("SECRET"), `got: ${JSON.stringify(got)}`);
+		}
+	}
+	// The reference-form leak this ticket found by running the old module: the
+	// `[ref]` tail was not consumed, so the link branch spoke the reference id.
+	check("NRL-21 reference-form tail no longer leaks the reference id", !say("Before ![alt][ref] after.", { speakImageAlt: false }).includes("ref"), say("Before ![alt][ref] after.", { speakImageAlt: false }));
+
+	/*
+	 * Pinned, not fixed: a label containing another bracket construct.
+	 *
+	 * inlineContainerClose (extract.ts:229) skips escapes, code spans and
+	 * comments but does not balance brackets, so the label of
+	 * `![a [[N|l]] b](img.png)` ends at the first `]` of `]]` and the leftover
+	 * `](img.png)` is spoken as prose - the destination included. That is not
+	 * something this ticket introduced: every `speakImageAlt: false` string
+	 * below is byte-identical to the merge base, and the pure-link form is
+	 * identical on the base and here, because both branches share the scanner.
+	 * What did change is that the alt is now read alongside the leftover, so
+	 * the shape is audible by default. Balancing brackets means changing the
+	 * scanner every inline branch calls, which is its own ticket with its own
+	 * reproduction; pinning it here is what stops it moving by accident.
+	 */
+	const nestedLabel: Array<[string, string, string, string]> = [
+		// id, source, spoken with alt dropped, spoken with alt read
+		["wikilink-in-alt", "Before ![a [[N|l]] b](img.png) after.", "Before ] b](img.png) after.", "Before a N|l ] b](img.png) after."],
+		["image-in-alt", "Before ![a ![b](in.png) c](img.png) after.", "Before c](img.png) after.", "Before a [b c](img.png) after."],
+		["link-in-alt", "Before ![a [lab](u.html) b](img.png) after.", "Before b](img.png) after.", "Before a [lab b](img.png) after."],
+		// The same scanner, reached through the link branch, which this ticket
+		// did not touch: identical in both positions and on the merge base.
+		["wikilink-in-link-label", "Before [a [[N|l]] b](out.html) after.", "Before a N|l ] b](out.html) after.", "Before a N|l ] b](out.html) after."],
+		// `[[N]]` glued to an image is not a reference label, but the tail is
+		// consumed as one, exactly as the link branch consumes it. The merge
+		// base spoke `N` here; neither output is meaningful and diverging from
+		// the link branch for this shape would be worse than matching it.
+		["wikilink-tail", "Before ![alt][[N]] after.", "Before ] after.", "Before alt ] after."],
+	];
+	for (const [id, src, dropped, read] of nestedLabel) {
+		check(`NRL-21 pin nested-label ${id} dropped`, say(src, { speakImageAlt: false }) === dropped, `got: ${JSON.stringify(say(src, { speakImageAlt: false }))}`);
+		check(`NRL-21 pin nested-label ${id} read`, say(src, { speakImageAlt: true }) === read, `got: ${JSON.stringify(say(src, { speakImageAlt: true }))}`);
+	}
+
+	// Embeds speak a label for the local reference, never the transcluded file.
+	const embedCases: Array<[string, string, string, string]> = [
+		// id, source, spoken when dropped, spoken when read
+		["note", "Before ![[Some Note]] after.", "Before after.", "Before Some Note after."],
+		["alias", "Before ![[Some Note|the alias]] after.", "Before after.", "Before the alias after."],
+		["heading", "Before ![[Some Note#Section Two]] after.", "Before after.", "Before Some Note Section Two after."],
+		["block-id", "Before ![[Some Note#^abc123]] after.", "Before after.", "Before Some Note after."],
+		["empty-alias", "Before ![[Some Note|]] after.", "Before after.", "Before Some Note after."],
+		// Sizing is layout, not prose, and the target is a file path, so an
+		// image embed with only a sizing alias says nothing at all.
+		["sizing-width", "Before ![[pic.png|200]] after.", "Before after.", "Before after."],
+		["sizing-both", "Before ![[pic.png|200x100]] after.", "Before after.", "Before after."],
+		["sizing-upper-x", "Before ![[pic.png|200X100]] after.", "Before after.", "Before after."],
+		// A file target is a destination; only a meaningful alias is prose.
+		["file-no-alias", "Before ![[pic.png]] after.", "Before after.", "Before after."],
+		["file-with-alias", "Before ![[pic.png|A red bicycle]] after.", "Before after.", "Before A red bicycle after."],
+		["pdf-no-alias", "Before ![[report.pdf]] after.", "Before after.", "Before after."],
+		["markdown-target-spoken", "Before ![[Some Note.md]] after.", "Before after.", "Before Some Note.md after."],
+		["nested-markup-alias", "Before ![[T|**bold** alias]] after.", "Before after.", "Before bold alias after."],
+		["comment-in-alias", "Before ![[T|alias %%SECRET%% words]] after.", "Before after.", "Before alias words after."],
+		["unterminated", "Before ![[Some Note after.", "Before Some Note after.", "Before Some Note after."],
+	];
+	for (const [id, src, dropped, read] of embedCases) {
+		const off = say(src, { speakEmbeds: false });
+		const on = say(src, { speakEmbeds: true });
+		check(`NRL-21 embed ${id} dropped`, off === dropped, `got: ${JSON.stringify(off)}`);
+		check(`NRL-21 embed ${id} read`, on === read, `got: ${JSON.stringify(on)}`);
+		for (const [label, got] of [["off", off], ["on", on]] as const) {
+			check(`NRL-21 embed ${id} (${label}) never speaks a bracket`, !got.includes("[") && !got.includes("]"), `got: ${JSON.stringify(got)}`);
+			check(`NRL-21 embed ${id} (${label}) never discloses a comment`, !got.includes("SECRET"), `got: ${JSON.stringify(got)}`);
+			check(`NRL-21 embed ${id} (${label}) never speaks an image destination`, !got.includes("pic.png") && !got.includes("report.pdf"), `got: ${JSON.stringify(got)}`);
+		}
+	}
+
+	// The two constructs are governed by different keys, which is the whole
+	// reason the embed branch is ordered ahead of the image branch.
+	{
+		const mixed = "A ![alt words](img.png) and ![[Target Note]] B.";
+		check("NRL-21 speakImageAlt does not move embeds", say(mixed, { speakImageAlt: true, speakEmbeds: false }) === "A alt words and B.", say(mixed, { speakImageAlt: true, speakEmbeds: false }));
+		check("NRL-21 speakEmbeds does not move markdown images", say(mixed, { speakImageAlt: false, speakEmbeds: true }) === "A and Target Note B.", say(mixed, { speakImageAlt: false, speakEmbeds: true }));
+		check("NRL-21 both on", say(mixed, { speakImageAlt: true, speakEmbeds: true }) === "A alt words and Target Note B.", say(mixed, { speakImageAlt: true, speakEmbeds: true }));
+		check("NRL-21 both off", say(mixed, { speakImageAlt: false, speakEmbeds: false }) === "A and B.", say(mixed, { speakImageAlt: false, speakEmbeds: false }));
+	}
+
+	// Options are read at call time only, so a settings change applies on the
+	// next read and never rewrites a queue the Player is already holding.
+	{
+		const src = "Body ![alt words](img.png) prose.";
+		const live = { ...OPTS, speakImageAlt: false };
+		const first = extractChunks(src, live);
+		const firstText = first.map((c) => c.text).join(" ");
+		live.speakImageAlt = true;
+		check("NRL-21 already-extracted chunks are unaffected by a later flip", first.map((c) => c.text).join(" ") === firstText && firstText === "Body prose.", firstText);
+		check("NRL-21 the next extraction sees the new value", extractChunks(src, live).map((c) => c.text).join(" ") === "Body alt words prose.");
+	}
+
+	/*
+	 * sourceIndex lockstep over every combination of the nine toggles.
+	 *
+	 * 2^9 = 512 runs per fixture, which is cheap and removes the guesswork about
+	 * which combination was actually covered. Indexing is numeric and
+	 * UTF-16-based, not `[...text]`, because a spread iterates code points and
+	 * would silently skip the second unit of a surrogate pair.
+	 *
+	 * No math in the corpus: "equation" is a synthetic word whose characters map
+	 * to the `$` delimiters by design (ADR 0004), so the character-identity
+	 * assertion does not apply to it.
+	 */
+	const corpus: Array<[string, string]> = [
+		["frontmatter", "---\ntitle: A Note\ntags: [a, b]\nsource: https://example.com/a/b\n# yaml comment\n---\nBody prose here."],
+		["fenced", "Intro line here.\n\n```js\nconst x = 1;\n```\n\nOutro line here."],
+		["indented", "Intro line here.\n\n    indented code here\n\nOutro line here."],
+		["inline-code", "Call `git commit -m x` to save it all now."],
+		["links", "See [the docs](https://example.com/p) and [ref][r] and https://bare.example.org/x now."],
+		["wikilinks", "Go to [[Some Note|the alias]] and [[Other#Head]] and [[Third#^abc]] now."],
+		["embeds", "Here ![[Some Note]] and ![[pic.png|200x100]] and ![[pic.png|A bicycle]] end."],
+		["images", 'Here ![alt words](img.png "Title") and ![ref alt][r] and ![shortcut] end.'],
+		["table", "Lead in here.\n\n| a | b |\n| - | - |\n| c | d |\n\nLead out here."],
+		["headings", "# Top Heading\n\nBody one here.\n\n## Sub Heading\n\nBody two here."],
+		["tags", "Body with #tag/nested and #other here now."],
+		["autolinks", "Mail <me@example.com> and site <https://example.com/x> now."],
+		["comments", "Before %%hidden%% after.\n\n<!--\nblock hidden\n-->\nTail prose here."],
+		["soft-code-span", "Before `first\n%%literal%%\nlast` after."],
+		["mixed", "---\nkey: value\n---\n# H One\n\nText `c` and ![a](i.png) and ![[E]] and #t and https://x.com/y here.\n\n| p | q |"],
+	];
+	let sweepRuns = 0;
+	let sweepBad = "";
+	for (const [id, src] of corpus) {
+		for (let mask = 0; mask < 1 << keys.length; mask++) {
+			const over: Partial<typeof OPTS> = {};
+			for (let b = 0; b < keys.length; b++) over[keys[b]!] = (mask & (1 << b)) !== 0;
+			sweepRuns += 1;
+			for (const c of extractChunks(src, { ...OPTS, ...over })) {
+				const fail = (why: string): void => {
+					if (sweepBad === "") sweepBad = `${id} mask=${mask}: ${why}`;
+				};
+				if (c.sourceIndex.length !== c.text.length) fail("length");
+				if (c.text.length > 0 && c.sourceStart !== c.sourceIndex[0]) fail("sourceStart");
+				if (c.text.length > 0 && c.sourceEnd !== c.sourceIndex[c.text.length - 1]! + 1) fail("sourceEnd");
+				for (let i = 0; i < c.text.length; i++) {
+					const at = c.sourceIndex[i]!;
+					if (!Number.isInteger(at) || at < 0 || at >= src.length) fail(`bounds at ${i}`);
+					if (i > 0 && at < c.sourceIndex[i - 1]!) fail(`non-monotonic at ${i}`);
+					// Numeric UTF-16 comparison: charCodeAt, not a spread.
+					if (c.text.charCodeAt(i) !== 32 && src.charCodeAt(at) !== c.text.charCodeAt(i)) {
+						fail(`char at ${i}`);
+					}
+				}
+			}
+		}
+	}
+	check(`NRL-21 sourceIndex lockstep over ${sweepRuns} option combinations`, sweepBad === "", sweepBad);
+	check("NRL-21 sweep really ran every combination", sweepRuns === corpus.length * (1 << keys.length) && sweepRuns === 15 * 512, String(sweepRuns));
 }
 
 console.log("");

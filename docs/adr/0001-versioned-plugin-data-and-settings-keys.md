@@ -66,6 +66,10 @@ positions }`) and a settings key set that differs from what the code stored.
    a toggle may not. Rendering a switch that does nothing is the dead-toggle
    defect, so the switches appear when the behaviour does.
 
+   *Superseded in part by ADR 0008 (NRL-21).* The rule stands, but four of those
+   five keys are now read by extraction and have their own toggle.
+   `offlinePreferred` is the only key still reserved.
+
 7. **Unknown keys are preserved at every level.** `normaliseSettings` starts
    from a copy of its input and validates known keys over it (including inside
    `highlight`). `loadPluginData` does the same at the container root.

@@ -139,6 +139,32 @@ function hostSpan(url: string): { start: number; end: number } {
 const FOOTNOTE_REF = /^\[\^[^\]\s]+\]/;
 
 /**
+ * An embed alias that is display sizing rather than prose: `200` or `200x100`.
+ * Obsidian reads those as pixel dimensions, so they are layout and say nothing.
+ */
+const EMBED_SIZING_ALIAS = /^\d+(?:[xX]\d+)?$/;
+
+/**
+ * Does an embed target name a file rather than a note?
+ *
+ * `![[pic.png]]` and `![[report.pdf]]` transclude content this module cannot
+ * reach, and their target is a destination, not prose: an image path must never
+ * be read aloud (R-M09). So for those only a meaningful alias is speakable,
+ * which is also where Obsidian puts an image embed's alt text. A note target
+ * (`![[Some Note]]`, `![[Some Note.md]]`) is a title the author wrote, and
+ * reduces exactly as a wikilink target does.
+ *
+ * Any extension but markdown counts, rather than a list of media types, so an
+ * embeddable format we do not know about errs towards silence.
+ */
+function isFileTarget(target: string): boolean {
+	const path = target.split("#")[0]!;
+	const name = path.slice(path.lastIndexOf("/") + 1);
+	const ext = /\.([A-Za-z0-9]{1,8})$/.exec(name);
+	return ext !== null && !/^(?:md|markdown)$/i.test(ext[1]!);
+}
+
+/**
  * Math is spoken as the single word "equation" (docs/adr/0004).
  *
  * Size rule: display math (`$$...$$`) always says "equation". Inline math
@@ -282,6 +308,44 @@ function cleanLine(
 		const word = "equation";
 		for (let k = 0; k < word.length - 1; k++) emit(word[k]!, open);
 		emit(word[word.length - 1]!, lastDollar);
+	};
+
+	/**
+	 * The spoken label of a `[[wikilink]]` or `![[embed]]`, given the offsets of
+	 * the content between the brackets.
+	 *
+	 * Shared by both constructs so a target reduces the same way in each; the
+	 * unchanged `[[` branch is what keeps this honest. An embed differs in two
+	 * ways only, and both are about not speaking layout or paths: a numeric
+	 * alias is pixel sizing, and a file target is a destination.
+	 */
+	const emitWikiLabel = (innerStart: number, close: number, isEmbed: boolean): void => {
+		const pipe = raw.indexOf("|", innerStart);
+		const hasPipe = pipe !== -1 && pipe < close;
+		const alias = hasPipe ? raw.slice(pipe + 1, close) : "";
+		const useAlias =
+			hasPipe && alias.trim() !== "" && !(isEmbed && EMBED_SIZING_ALIAS.test(alias.trim()));
+		if (useAlias) {
+			// The alias is display text the author wrote, so nested markup in
+			// it is stripped the same way as a markdown link label.
+			const inner = cleanLine(alias, rawStart + pipe + 1, opts);
+			for (let k = 0; k < inner.text.length; k++) {
+				emit(inner.text[k]!, inner.index[k] ?? rawStart + pipe + 1);
+			}
+			return;
+		}
+		const targetEnd = hasPipe ? pipe : close;
+		if (isEmbed && isFileTarget(raw.slice(innerStart, targetEnd))) return;
+		// The target is a path, not prose, so it is emitted directly rather
+		// than re-cleaned: the tag branch would otherwise eat `#Section`
+		// when stripTags is on. A `#` separates note from heading and is
+		// read as a pause. `#^id` is a block id, opaque and unspeakable.
+		for (let k = innerStart; k < targetEnd; k++) {
+			const c = raw[k]!;
+			if (c === "#" && raw[k + 1] === "^") break;
+			if (c === "#" || /\s/.test(c)) pushSpace(rawStart + k);
+			else emit(c, rawStart + k);
+		}
 	};
 
 	let openComment: CommentCloser | undefined;
@@ -442,12 +506,22 @@ function cleanLine(
 			}
 		}
 
-		// Obsidian embed `![[...]]`: dropped. Must precede the image branch, which
-		// would stop at the first `]` of `]]` and speak the second. Whether embeds
-		// should be spoken is a setting that extract does not read yet (NRL-21).
+		// Obsidian embed `![[...]]`. Must precede the image branch, which would
+		// stop at the first `]` of `]]` and speak the second; that ordering is
+		// also what keeps the two constructs on their own settings, since an
+		// embed obeys speakEmbeds and a markdown image obeys speakImageAlt.
+		//
+		// With speakEmbeds on, what is spoken is a label for the local
+		// reference, never the transcluded file's contents: extractChunks holds
+		// only this note's source, and sourceIndex is an offset into it, so text
+		// from another file has nowhere to map back to.
 		if (ch === "!" && raw[i + 1] === "[" && raw[i + 2] === "[") {
 			const close = inlineContainerClose(raw, i + 3, "]]");
 			if (close !== -1) {
+				if (opts.speakEmbeds) {
+					pushSpace(rawStart + i);
+					emitWikiLabel(i + 3, close, true);
+				}
 				i = close + 2;
 				pushSpace(rawStart + i);
 				continue;
@@ -469,30 +543,8 @@ function cleanLine(
 				i += 2;
 				continue;
 			}
-			const innerStart = i + 2;
-			const pipe = raw.indexOf("|", innerStart);
-			const hasAlias = pipe !== -1 && pipe < close && raw.slice(pipe + 1, close).trim() !== "";
 			pushSpace(rawStart + i);
-			if (hasAlias) {
-				// The alias is display text the author wrote, so nested markup in
-				// it is stripped the same way as a markdown link label.
-				const inner = cleanLine(raw.slice(pipe + 1, close), rawStart + pipe + 1, opts);
-				for (let k = 0; k < inner.text.length; k++) {
-					emit(inner.text[k]!, inner.index[k] ?? rawStart + pipe + 1);
-				}
-			} else {
-				// The target is a path, not prose, so it is emitted directly rather
-				// than re-cleaned: the tag branch would otherwise eat `#Section`
-				// when stripTags is on. A `#` separates note from heading and is
-				// read as a pause. `#^id` is a block id, opaque and unspeakable.
-				const targetEnd = pipe !== -1 && pipe < close ? pipe : close;
-				for (let k = innerStart; k < targetEnd; k++) {
-					const c = raw[k]!;
-					if (c === "#" && raw[k + 1] === "^") break;
-					if (c === "#" || /\s/.test(c)) pushSpace(rawStart + k);
-					else emit(c, rawStart + k);
-				}
-			}
+			emitWikiLabel(i + 2, close, false);
 			i = close + 2;
 			pushSpace(rawStart + i);
 			continue;
@@ -514,7 +566,17 @@ function cleanLine(
 			}
 		}
 
-		// Image: dropped entirely, alt text is not prose.
+		// Markdown image `![alt](dest "title")`, `![alt][ref]` or `![alt]`.
+		//
+		// The destination and any quoted title are a path, so neither is ever
+		// spoken, in either position. The alt text is the image's accessible
+		// description, which is exactly what a reading feature should be able to
+		// offer, so speakImageAlt reads it (R-M09, ADR 0008). It is re-cleaned
+		// the way the link branch re-cleans a label, so nested markup, escapes
+		// and complete comment spans inside the alt go through the existing
+		// recursion rather than a second implementation, and
+		// inlineContainerClose has already refused to end the label on a
+		// delimiter hidden inside a comment or a code span.
 		if (ch === "!" && raw[i + 1] === "[") {
 			const close = inlineContainerClose(raw, i + 2, "]");
 			if (close === -1) {
@@ -525,6 +587,19 @@ function cleanLine(
 			if (raw[after] === "(") {
 				const paren = raw.indexOf(")", after);
 				after = paren === -1 ? after + 1 : paren + 1;
+			} else if (raw[after] === "[") {
+				// Reference form. The tail names a link reference, not prose, and
+				// consuming it here is what stops `![alt][ref]` reaching the link
+				// branch below and speaking "ref".
+				const refClose = raw.indexOf("]", after);
+				after = refClose === -1 ? after : refClose + 1;
+			}
+			if (opts.speakImageAlt) {
+				pushSpace(rawStart + i);
+				const inner = cleanLine(raw.slice(i + 2, close), rawStart + i + 2, opts);
+				for (let k = 0; k < inner.text.length; k++) {
+					emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 2);
+				}
 			}
 			i = after;
 			pushSpace(rawStart + i);
@@ -667,6 +742,8 @@ interface StripOptions {
 	stripTags: boolean;
 	skipInlineCode: boolean;
 	speakUrls: boolean;
+	speakImageAlt: boolean;
+	speakEmbeds: boolean;
 }
 
 /**
@@ -944,9 +1021,12 @@ function flowDepthDelta(line: string): number {
  * Anything else is a horizontal rule and the note is read normally. An
  * unterminated fence is never frontmatter, so it cannot swallow the document.
  *
- * Returns the line number of the closing fence, or null.
+ * Returns the line numbers of both fences, or null. The opening fence is
+ * reported as well as the closing one because spoken frontmatter has to tell a
+ * fence line from an interior line, and leading blank lines mean the opener is
+ * not necessarily line 0.
  */
-function detectFrontmatter(lines: string[]): { endLine: number } | null {
+function detectFrontmatter(lines: string[]): { startLine: number; endLine: number } | null {
 	let open = 0;
 	while (open < lines.length && lines[open]!.replace(/^\uFEFF/, "").trim() === "") open += 1;
 	if (open >= lines.length || !isFrontmatterFence(lines[open]!)) return null;
@@ -955,7 +1035,7 @@ function detectFrontmatter(lines: string[]): { endLine: number } | null {
 	let flowDepth = 0;
 	for (let n = open + 1; n < lines.length; n++) {
 		const line = lines[n]!;
-		if (isFrontmatterFence(line)) return sawKey ? { endLine: n } : null;
+		if (isFrontmatterFence(line)) return sawKey ? { startLine: open, endLine: n } : null;
 		if (flowDepth > 0) {
 			flowDepth = Math.max(0, flowDepth + flowDepthDelta(line));
 			continue;
@@ -990,12 +1070,19 @@ export interface ExtractOptions {
 	skipInlineCode: boolean;
 	skipTables: boolean;
 	skipHeadings: boolean;
+	/** The YAML frontmatter block, as docs/adr/0002 defines one. */
+	skipFrontmatter: boolean;
+	/** A markdown image's alt text. Its destination is never spoken. */
+	speakImageAlt: boolean;
+	/** An Obsidian embed, spoken as a label for its local reference. */
+	speakEmbeds: boolean;
 }
 
 /**
  * Turn a markdown note into speakable chunks.
  *
- * Frontmatter is located up front by shape (see detectFrontmatter). The rest
+ * Frontmatter is located up front by shape (see detectFrontmatter) and then
+ * either skipped or spoken as source-mapped metadata, per skipFrontmatter. The rest
  * works line by line. It tracks fence state, because that decides whether a
  * `#` is a tag or a heading, and a little block state (list, indented code,
  * whether the previous line was blank or paragraph text), because that
@@ -1049,6 +1136,22 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,
 		speakUrls: opts.speakUrls,
+		speakImageAlt: opts.speakImageAlt,
+		speakEmbeds: opts.speakEmbeds,
+	};
+	/*
+	 * Frontmatter is metadata, not markdown prose, so a spoken line is cleaned
+	 * with its own options. Tags are never stripped, because a `#` in a value is
+	 * part of that value rather than an Obsidian tag, and inline code is never
+	 * skipped, because a backtick in a YAML string is a character. URLs still
+	 * follow speakUrls, so a `source:` field does not read out a path. Nothing
+	 * is reserialised: the line's own characters are emitted with their true raw
+	 * offsets, so `tags: [a, b]` is heard exactly as it was written.
+	 */
+	const frontmatterOpts: StripOptions = {
+		...stripOpts,
+		stripTags: false,
+		skipInlineCode: false,
 	};
 
 	let paraText = "";
@@ -1117,7 +1220,37 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		//
 		// Skipped lines are dropped whole. lineStarts are fixed up front, so
 		// every later sourceIndex entry is still a true raw offset.
-		if (frontmatter && lineNo <= frontmatter.endLine) continue;
+		//
+		// Nothing here touches prevBlank/prevPara/inList/inFence, in either
+		// position: the block is its own paragraph, and leaving prevBlank at its
+		// initial true is what lets an indented line right after the fence still
+		// be recognised as code.
+		if (frontmatter && lineNo <= frontmatter.endLine) {
+			// The closing fence ends the block, so buffered metadata becomes its
+			// own chunk rather than merging into the first prose line.
+			if (lineNo === frontmatter.endLine) flushParagraph();
+			// Both fences are markup and are never spoken, in either position.
+			if (
+				opts.skipFrontmatter ||
+				lineNo === frontmatter.startLine ||
+				lineNo === frontmatter.endLine
+			) {
+				continue;
+			}
+			// A blank line and a YAML `#` comment carry no metadata.
+			if (raw.trim() === "" || FM_COMMENT.test(raw)) continue;
+			// blockComments stays false and the returned openComment/openCode are
+			// deliberately discarded: a frontmatter value must never be able to
+			// open a document-level comment or code span and silence the note
+			// body, which is the one direction ADR 0006 exists to prevent. An
+			// unmatched delimiter in a value is YAML text, which Obsidian shows
+			// in its properties table, so it is not hidden content. A *complete*
+			// `%%` or `<!--` span inside a value is still suppressed, by the same
+			// branch that suppresses one in prose (ADR 0008).
+			const meta = cleanLine(raw, lineStart, frontmatterOpts);
+			if (meta.text.trim() !== "") appendToParagraph(meta, lineStart);
+			continue;
+		}
 
 		// Hidden lines must not change blank, paragraph, list, code or math state.
 		// In particular, a different comment delimiter cannot close this one.

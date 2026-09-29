@@ -26,22 +26,26 @@ export interface Settings {
 	 * default. See docs/adr/0001 for why the mix is kept rather than
 	 * normalised.
 	 *
-	 * `skipInlineCode`, `speakImageAlt`, `speakEmbeds`, `skipFrontmatter` and
-	 * `offlinePreferred` are reserved: stored and migrated, but not yet read by
-	 * extraction or rendered as toggles. A toggle appears when its behaviour
-	 * does, never before.
+	 * All nine content keys are read by `extractChunks` and have their own
+	 * toggle as of NRL-21 (docs/adr/0008). `offlinePreferred` is the one key
+	 * still reserved: stored and migrated, but not yet read by anything and so
+	 * deliberately without a toggle. A toggle appears when its behaviour does,
+	 * never before.
 	 */
-	/** Skip fenced (and, once parsed, indented) code blocks. */
+	/** Skip fenced and indented code blocks. */
 	skipCodeBlocks: boolean;
-	/** Skip `inline code`. Written together with skipCodeBlocks until the UI splits them. */
+	/** Skip `inline code`. Its own toggle since NRL-21. */
 	skipInlineCode: boolean;
 	/** Read bare URLs aloud. Link labels are read regardless. */
 	speakUrls: boolean;
 	skipTags: boolean;
 	skipTables: boolean;
 	skipHeadings: boolean;
+	/** Skip the YAML properties block (docs/adr/0002 decides what one is). */
 	skipFrontmatter: boolean;
+	/** Read an image's alt text. Its destination is never read. */
 	speakImageAlt: boolean;
+	/** Read an `![[embed]]` as a label for its local reference, not its target file. */
 	speakEmbeds: boolean;
 	/** Prefer voices that need no download. Reserved for voice metadata. */
 	offlinePreferred: boolean;
@@ -88,9 +92,10 @@ export const DEFAULT_SETTINGS: Settings = {
 		// Follow the theme: one fixed hex cannot suit light and dark themes.
 		color: "",
 	},
-	// The first six reproduce what the pre-v1 defaults did, so nobody's
-	// reading changes on upgrade. The reserved keys take their srs.md
-	// defaults; extraction does not read them yet, so they change nothing.
+	// The first six reproduce what the pre-v1 defaults did, so nobody's reading
+	// changes on upgrade. The rest take their srs.md R-M09 defaults. One of
+	// those, speakImageAlt, is now read by extraction and so does change what an
+	// existing user hears: that is deliberate, and docs/adr/0008 records why.
 	skipCodeBlocks: true,
 	skipInlineCode: true,
 	speakUrls: false,

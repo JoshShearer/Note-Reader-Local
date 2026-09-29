@@ -233,6 +233,9 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			skipInlineCode: this.settings.skipInlineCode,
 			skipTables: this.settings.skipTables,
 			skipHeadings: this.settings.skipHeadings,
+			skipFrontmatter: this.settings.skipFrontmatter,
+			speakImageAlt: this.settings.speakImageAlt,
+			speakEmbeds: this.settings.speakEmbeds,
 		});
 		t("chunks extracted", `${chunks.length}`);
 
