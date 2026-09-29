@@ -525,6 +525,33 @@ export class KokoroEngine implements SpeechEngine {
 	}
 
 	/**
+	 * Get the Kokoro worker as a blob URL.
+	 *
+	 * The worker code is embedded in main.js at build time as a base64 string.
+	 * If that is not available (older build or fallback), fetch from the plugin file.
+	 */
+	private async getWorkerBlobUrl(): Promise<string> {
+		// Check if the inlined worker code is available
+		const globalWithWorker = typeof globalThis !== "undefined" ? (globalThis as Record<string, unknown>) : {};
+		const workerCodeBase64 = globalWithWorker.KOKORO_WORKER_CODE as string | undefined;
+
+		if (workerCodeBase64) {
+			// Decode the base64 worker code and create a blob URL
+			const binaryString = atob(workerCodeBase64);
+			const bytes = new Uint8Array(binaryString.length);
+			for (let i = 0; i < binaryString.length; i++) {
+				bytes[i] = binaryString.charCodeAt(i);
+			}
+			const url = URL.createObjectURL(new Blob([bytes.buffer], { type: "text/javascript" }));
+			this.blobs.set("__worker__", url);
+			return url;
+		}
+
+		// Fall back to reading from the plugin file
+		return await this.blobFor(this.store.workerPath, "text/javascript");
+	}
+
+	/**
 	 * Load the model, giving up on threads rather than on loading.
 	 *
 	 * The worker already falls back from a thread pool to a single thread when
@@ -587,7 +614,7 @@ export class KokoroEngine implements SpeechEngine {
 			// document's origin, so the Worker is same-origin, whereas any
 			// `app://<vault-hash>` resource URL Obsidian hands out is a
 			// different origin and cannot construct a Worker at all.
-			const workerBlob = await this.blobFor(this.store.workerPath, "text/javascript");
+			const workerBlob = await this.getWorkerBlobUrl();
 			const ortBlob = await this.blobFor(
 				this.store.ortFile("ort-wasm-simd-threaded.jsep.mjs"),
 				"text/javascript",

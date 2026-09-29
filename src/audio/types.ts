@@ -126,8 +126,18 @@ export interface WordTiming {
 	durationMs: number;
 }
 
+export type BlockType = "heading" | "paragraph" | "list" | "quote" | "other";
+
 /** A unit of text handed to an engine as a single utterance. */
 export interface SpeechChunk {
+	/** Stable unique identifier for this segment. */
+	id: string;
+	/** Ordinal position in the document's sequence. */
+	sequence: number;
+	/** Block type from the source markdown. */
+	blockType: BlockType;
+	/** Vault-relative path to the note this chunk came from. */
+	filePath: string;
 	/** Speakable text, already stripped of markdown. */
 	text: string;
 	/**

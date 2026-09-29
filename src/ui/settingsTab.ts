@@ -406,15 +406,19 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Look ahead")
-			.setDesc("Passages synthesised ahead of the one playing. Higher is smoother but uses more work.")
+			.setDesc(
+				"Passages synthesised ahead of the one playing. Higher is smoother but uses more work. Applies immediately if something is playing.",
+			)
 			.addSlider((slider) =>
 				slider
 					.setLimits(0, 8, 1)
 					.setDynamicTooltip()
 					.setValue(this.plugin.settings.bufferAhead)
+					// Goes through the plugin rather than writing the setting
+					// directly, so the running player widens or narrows its
+					// window now instead of on the next load.
 					.onChange(async (value) => {
-						this.plugin.settings.bufferAhead = value;
-						await this.plugin.saveSettings();
+						await this.plugin.setBufferAhead(value);
 					}),
 			);
 	}

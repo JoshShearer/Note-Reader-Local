@@ -13,6 +13,14 @@ export const PLUGIN_DATA_VERSION = 2;
 /** The v1 default highlight colour, which v2 replaces with "" (theme). */
 const V1_DEFAULT_HIGHLIGHT = "#ffd54f";
 
+export interface ReadingPosition {
+	filePath: string;
+	segmentId: string;
+	segmentIndex: number;
+	sourceOffset: number;
+	updatedAt: number;
+}
+
 export interface PluginData {
 	/**
 	 * Schema version. A number rather than a literal because a file
@@ -21,10 +29,9 @@ export interface PluginData {
 	version: number;
 	settings: Settings;
 	/**
-	 * Per-note reading positions. Reserved: nothing writes it yet, but the
-	 * container has to be safe to put it in before anything does.
+	 * Per-note reading positions. Maps vault-relative file paths to positions.
 	 */
-	positions: Record<string, unknown>;
+	positions: Record<string, ReadingPosition>;
 	/** Anything else at the root belongs to someone else and is kept. */
 	[key: string]: unknown;
 }
@@ -127,7 +134,7 @@ export function loadPluginData(raw: unknown): PluginData {
 		...raw,
 		version: raw.version,
 		settings: normaliseSettings(raw.settings),
-		positions: isRecord(raw.positions) ? raw.positions : {},
+		positions: isRecord(raw.positions) ? (raw.positions as Record<string, ReadingPosition>) : {},
 	};
 	return data.version === 1 ? migrateV1(data) : data;
 }

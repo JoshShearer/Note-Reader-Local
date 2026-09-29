@@ -39,7 +39,16 @@ function runner(overrides: Partial<ProcessRunner>): ProcessRunner {
 }
 
 const TEXT = "Testing one two three.";
-const CHUNK = { text: TEXT, sourceIndex: [], sourceStart: 0, sourceEnd: TEXT.length };
+const CHUNK = {
+	id: "espeak-test-chunk",
+	sequence: 0,
+	blockType: "paragraph" as const,
+	filePath: "test.md",
+	text: TEXT,
+	sourceIndex: [],
+	sourceStart: 0,
+	sourceEnd: TEXT.length,
+};
 
 console.log("espeak: isAvailable() distinguishes its failure modes (NRL-25)");
 {

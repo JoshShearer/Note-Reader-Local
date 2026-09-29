@@ -104,6 +104,10 @@ function numbered(n: number): SpeechChunk[] {
 	return Array.from({ length: n }, (_, i) => {
 		const text = `Sentence ${i}.`;
 		return {
+			id: `chunk-${i}`,
+			sequence: i,
+			blockType: "paragraph" as const,
+			filePath: "test.md",
 			text,
 			sourceIndex: Array.from(text, (_, k) => i * 100 + k),
 			sourceStart: i * 100,

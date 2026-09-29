@@ -863,6 +863,10 @@ function splitSentences(text: string, index: number[], rawStart: number, ctx: Se
 		if (e <= s) continue;
 		pieces.push({
 			chunk: {
+				id: "",
+				sequence: 0,
+				blockType: "other",
+				filePath: "",
 				text: text.slice(s, e),
 				sourceIndex: index.slice(s, e),
 				sourceStart: index[s] ?? rawStart,
@@ -1022,6 +1026,10 @@ function splitOversized(chunk: SpeechChunk, ctx: SegmentContext): SpeechChunk[] 
 			}
 		}
 		out.push({
+			id: chunk.id,
+			sequence: chunk.sequence,
+			blockType: chunk.blockType,
+			filePath: chunk.filePath,
 			text: chunk.text.slice(cursor, end),
 			sourceIndex: chunk.sourceIndex.slice(cursor, end),
 			sourceStart: chunk.sourceIndex[cursor] ?? chunk.sourceStart,
@@ -1280,10 +1288,12 @@ export function extractChunks(
 	source: string,
 	opts: ExtractOptions,
 	src: SegmenterSource = platformSegmenters,
+	filePath: string = "",
 ): SpeechChunk[] {
 	const chunks: SpeechChunk[] = [];
 	const lines = source.split("\n");
 	const segmentCtx: SegmentContext = { locale: opts.locale, src };
+	let chunkSequence = 0;
 
 	// Per-line raw offsets, because a math block skips ahead several lines at
 	// once and every sourceIndex entry must still be a true raw offset.
@@ -1615,6 +1625,24 @@ export function extractChunks(
 	}
 
 	flushParagraph();
+
+	// Inject identity fields into chunks
+	for (let i = 0; i < chunks.length; i++) {
+		const chunk = chunks[i]!;
+		const hash = (str: string) => {
+			let h = 0;
+			for (let j = 0; j < str.length; j++) {
+				const char = str.charCodeAt(j);
+				h = ((h << 5) - h) + char;
+				h = h & h; // Convert to 32-bit integer
+			}
+			return Math.abs(h).toString(16);
+		};
+		chunk.id = `${hash(filePath + i + chunk.sourceStart)}`;
+		chunk.sequence = i;
+		chunk.filePath = filePath;
+		chunk.blockType = "paragraph"; // Default; would need more context to detect heading/list/quote
+	}
 
 	return chunks;
 }

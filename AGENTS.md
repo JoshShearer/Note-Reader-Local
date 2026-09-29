@@ -20,7 +20,7 @@ There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The
 are local and nothing runs them for you.
 
 ```bash
-npm test          # 13 suites: extract, engine, player, paths, kokoro, settings, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types
+npm test          # 14 suites: extract, engine, player, paths, kokoro, settings, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -111,8 +111,10 @@ Each of these is a promise the product makes. Breaking one is a BLOCK, not a con
 The working tree passes its gates. The audit against `srs.md` that opened this repo found
 2 of 16 MUST requirements fully met. That count has not been re-run since, and several
 tickets have closed gaps against it, so treat it as a floor rather than as current state.
-One confirmed move: R-M14 (backend capability detection) is met as of NRL-22, because
-every capability that differs across the four engines now gates the control it affects,
+Two confirmed moves: R-M01 (standard Obsidian Community Plugin) is met as of NRL-16, with
+all release infrastructure in place (README.md, LICENSE, versions.json, SLSA Level 3 workflow,
+and ORT runtime checksum validation). R-M14 (backend capability detection) is met as of NRL-22,
+because every capability that differs across the four engines now gates the control it affects,
 and the ones that gate nothing have no control to gate.
 
 R-M09 (configurable content exclusions) did **not** move, and the reason matters because

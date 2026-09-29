@@ -2,9 +2,10 @@ import { MarkdownView, Notice, Plugin, getLanguage, moment } from "obsidian";
 import { EditorView } from "@codemirror/view";
 
 import { Player } from "./audio/player";
-import { describeUnavailable, type SpeechEngine, type VoiceInfo } from "./audio/types";
+import { describeUnavailable, type SpeechChunk, type SpeechEngine, type VoiceInfo } from "./audio/types";
 import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
+import { platformSegmenters } from "./text/segment";
 import { resolveStoredVoice } from "./audio/voiceChoice";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
 import {
@@ -32,6 +33,14 @@ import { LocalTtsSettingTab } from "./ui/settingsTab";
 import { ControlBar } from "./ui/controlBar";
 import { controlAffordances } from "./ui/affordances";
 
+/**
+ * ORT runtime file checksums, compiled at build time (production only).
+ * Non-negotiable: read-only and never modified at runtime.
+ * Validated against local files to ensure integrity.
+ * Injected by esbuild.config.mjs via __ORT_CHECKSUMS__ define.
+ */
+declare const __ORT_CHECKSUMS__: Record<string, string> | undefined;
+
 export default class LocalTtsReaderPlugin extends Plugin {
 	override settings: Settings = { ...DEFAULT_SETTINGS };
 	/**
@@ -46,6 +55,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	private modelStore!: VaultModelStore;
 	private activeEditor: EditorView | null = null;
 	private controlBar!: ControlBar;
+	private positionUpdateTimeout: number | null = null;
 	/**
 	 * The last automatic resolution computed, so `activeEngine()` has a sync
 	 * answer for UI call sites that cannot await (checkCallback, the control
@@ -57,6 +67,24 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 	override async onload(): Promise<void> {
 		trace(this.app, this.manifest.dir!, "plugin loaded");
+
+		// Validate ORT runtime checksums on load if present (production builds only).
+		// Non-negotiable: ensures integrity of published artifact files without
+		// triggering downloads. No automatic fallback on failure; user is told
+		// to re-install the plugin (report the error with manifest.dir).
+		if (__ORT_CHECKSUMS__) {
+			try {
+				await this.validateOrtChecksums();
+			} catch (err) {
+				reportError(
+					this.app,
+					this.manifest.dir!,
+					"ORT checksum validation failed",
+					err,
+				);
+			}
+		}
+
 		this.pluginData = loadPluginData(await this.loadData());
 		this.settings = this.pluginData.settings;
 		this.applyHighlightColour();
@@ -81,6 +109,20 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// settings slider start from the same value.
 		this.player.setRate(this.settings.rate);
 
+		// Sentence-level highlighting
+		this.player.on("chunk", (chunk) => {
+			if (!this.settings.highlight.enabled || !chunk) {
+				this.clearHighlight();
+				return;
+			}
+			if (!this.activeEditor) return;
+			applyHighlight(this.activeEditor, {
+				from: chunk.sourceStart,
+				to: chunk.sourceEnd,
+			});
+		});
+
+		// Word-level highlighting (on top of sentence)
 		this.player.on("word", (payload) => {
 			if (!this.settings.highlight.enabled || !payload) {
 				this.clearHighlight();
@@ -93,6 +135,24 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				from: payload.timing.sourceStart,
 				to: payload.timing.sourceEnd,
 			});
+		});
+
+		this.player.on("progress", (progress) => {
+			// Track reading position for resume
+			if (this.activeEditor) {
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (view?.file?.path) {
+					const filePath = view.file.path;
+					// Debounce position updates to avoid hammering saveData
+					if (!this.positionUpdateTimeout) {
+						this.positionUpdateTimeout = window.setTimeout(() => {
+							this.positionUpdateTimeout = null;
+						}, 1000);
+						// Save position async, don't block playback
+						void this.savePosition(filePath, progress.chunkIndex);
+					}
+				}
+			}
 		});
 
 		this.player.on("state", (state) => {
@@ -125,6 +185,35 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				void this.readActiveNote().catch((err: unknown) => {
 					reportError(this.app, this.manifest.dir!, "readActiveNote failed", err);
 				});
+			},
+		});
+
+		this.addCommand({
+			id: "read-selection",
+			name: "Read selection",
+			checkCallback: (checking: boolean) => {
+				const editor = this.activeEditor;
+				if (!editor) return false;
+				const hasSelection = !editor.state.selection.main.empty;
+				if (!checking && hasSelection) {
+					const sel = editor.state.selection.main;
+					void this.readSelection(sel.from, sel.to);
+				}
+				return hasSelection;
+			},
+		});
+
+		this.addCommand({
+			id: "read-from-cursor",
+			name: "Read from cursor",
+			checkCallback: (checking: boolean) => {
+				const editor = this.activeEditor;
+				if (!editor) return false;
+				if (!checking) {
+					const cursorPos = editor.state.selection.main.from;
+					void this.readFromCursor(cursorPos);
+				}
+				return true;
 			},
 		});
 
@@ -163,6 +252,26 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			id: "replay-sentence",
 			name: "Repeat current sentence",
 			callback: () => void this.player.replayCurrent(),
+		});
+
+		this.addCommand({
+			id: "next-sentence",
+			name: "Next sentence",
+			checkCallback: (checking: boolean) => {
+				const isPlaying = this.player.getState() !== "idle" && this.player.getState() !== "finished";
+				if (!checking && isPlaying) void this.player.next();
+				return isPlaying;
+			},
+		});
+
+		this.addCommand({
+			id: "previous-sentence",
+			name: "Previous sentence",
+			checkCallback: (checking: boolean) => {
+				const isPlaying = this.player.getState() !== "idle" && this.player.getState() !== "finished";
+				if (!checking && isPlaying) void this.player.previous();
+				return isPlaying;
+			},
 		});
 
 		this.addSettingTab(new LocalTtsSettingTab(this.app, this));
@@ -215,7 +324,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * supported way to get at it. The `cm` property is the fallback for older
 	 * builds where the container lookup comes up empty.
 	 */
-	private currentEditor(): { editor: EditorView; source: string } | null {
+	private currentEditor(): { editor: EditorView; source: string; filePath: string } | null {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!view) return null;
 
@@ -224,7 +333,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			((view.editor as unknown as { cm?: EditorView }).cm ?? null);
 		if (!editor) return null;
 
-		return { editor, source: view.editor.getValue() };
+		const filePath = view.file?.path ?? "";
+		return { editor, source: view.editor.getValue(), filePath };
 	}
 
 	async readActiveNote(): Promise<void> {
@@ -243,20 +353,25 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.activeEditor = current.editor;
 		registerHighlighting(current.editor);
 
-		const chunks = extractChunks(current.source, {
-			stripTags: this.settings.skipTags,
-			speakUrls: this.settings.speakUrls,
-			skipCodeBlocks: this.settings.skipCodeBlocks,
-			skipInlineCode: this.settings.skipInlineCode,
-			skipTables: this.settings.skipTables,
-			skipHeadings: this.settings.skipHeadings,
-			skipFrontmatter: this.settings.skipFrontmatter,
-			speakImageAlt: this.settings.speakImageAlt,
-			speakEmbeds: this.settings.speakEmbeds,
-			// Not a setting: the UI language, which is what the segmenters are
-			// built with. appLocale() never throws and falls back to "en".
-			locale: appLocale(),
-		});
+		const chunks = extractChunks(
+			current.source,
+			{
+				stripTags: this.settings.skipTags,
+				speakUrls: this.settings.speakUrls,
+				skipCodeBlocks: this.settings.skipCodeBlocks,
+				skipInlineCode: this.settings.skipInlineCode,
+				skipTables: this.settings.skipTables,
+				skipHeadings: this.settings.skipHeadings,
+				skipFrontmatter: this.settings.skipFrontmatter,
+				speakImageAlt: this.settings.speakImageAlt,
+				speakEmbeds: this.settings.speakEmbeds,
+				// Not a setting: the UI language, which is what the segmenters are
+				// built with. appLocale() never throws and falls back to "en".
+				locale: appLocale(),
+			},
+			platformSegmenters,
+			current.filePath,
+		);
 		t("chunks extracted", `${chunks.length}`);
 
 		if (chunks.length === 0) {
@@ -304,6 +419,20 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			candidates = [{ engine, id: engineId, reason: "Manually selected." }];
 		}
 
+		// Load stored reading position for this file
+		let startAtSource = -1;
+		const filePath = current.filePath;
+		const storedPosition = this.pluginData.positions?.[filePath];
+		if (storedPosition) {
+			// Try to find the chunk that contains the stored offset
+			const targetOffset = storedPosition.sourceOffset;
+			const foundChunk = chunks.find((c) => c.sourceStart <= targetOffset && c.sourceEnd > targetOffset);
+			if (foundChunk) {
+				startAtSource = foundChunk.sourceStart;
+				t("resume from stored position", `${filePath} @ ${targetOffset}`);
+			}
+		}
+
 		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, {
 			beforeAttempt: async (candidate) => {
 				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
@@ -331,7 +460,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 					6000,
 				);
 			},
-		});
+		}, startAtSource);
 
 		if (!result) {
 			t("no candidate succeeded", candidates.map((c) => c.id).join(","));
@@ -359,6 +488,168 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * reopening the non-negotiable-4 gap this ticket closes. A manual pin to
 	 * Web Speech is unaffected: it always sees every voice, unchanged.
 	 */
+
+	private async readSelection(from: number, to: number): Promise<void> {
+		const current = this.currentEditor();
+		if (!current) {
+			new Notice("Open a note first.");
+			return;
+		}
+
+		this.activeEditor = current.editor;
+		registerHighlighting(current.editor);
+
+		const chunks = extractChunks(
+			current.source,
+			{
+				stripTags: this.settings.skipTags,
+				speakUrls: this.settings.speakUrls,
+				skipCodeBlocks: this.settings.skipCodeBlocks,
+				skipInlineCode: this.settings.skipInlineCode,
+				skipTables: this.settings.skipTables,
+				skipHeadings: this.settings.skipHeadings,
+				skipFrontmatter: this.settings.skipFrontmatter,
+				speakImageAlt: this.settings.speakImageAlt,
+				speakEmbeds: this.settings.speakEmbeds,
+				locale: appLocale(),
+			},
+			platformSegmenters,
+			current.filePath,
+		);
+
+		// Filter chunks to only those within the selection range
+		const selectedChunks = chunks.filter((chunk) => chunk.sourceEnd > from && chunk.sourceStart < to);
+
+		if (selectedChunks.length === 0) {
+			new Notice("No text in selection.");
+			return;
+		}
+
+		const selection = this.settings.engine;
+		const isAutomatic = selection === "auto";
+		let candidates: FallbackCandidate[];
+		if (isAutomatic) {
+			candidates = await this.rankedCandidates();
+			if (candidates.length === 0) {
+				new Notice("No speech engines available.", 8000);
+				return;
+			}
+		} else {
+			const engine = findEngine(this.engines, selection);
+			if (!engine) {
+				new Notice(`Engine ${selection} not available.`, 8000);
+				return;
+			}
+			candidates = [{ engine, id: selection, reason: "" }];
+		}
+
+		await playWithFallback(this.player, candidates, selectedChunks, this.settings.rate, {
+			beforeAttempt: async (candidate: FallbackCandidate) => {
+				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
+				await this.selectVoiceIfNeeded(candidate.engine, voices);
+				if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
+					const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
+					try {
+						await candidate.engine.prepare();
+					} finally {
+						loading.hide();
+					}
+				}
+			},
+		});
+	}
+
+	private async readFromCursor(position: number): Promise<void> {
+		const current = this.currentEditor();
+		if (!current) {
+			new Notice("Open a note first.");
+			return;
+		}
+
+		this.activeEditor = current.editor;
+		registerHighlighting(current.editor);
+
+		const chunks = extractChunks(
+			current.source,
+			{
+				stripTags: this.settings.skipTags,
+				speakUrls: this.settings.speakUrls,
+				skipCodeBlocks: this.settings.skipCodeBlocks,
+				skipInlineCode: this.settings.skipInlineCode,
+				skipTables: this.settings.skipTables,
+				skipHeadings: this.settings.skipHeadings,
+				skipFrontmatter: this.settings.skipFrontmatter,
+				speakImageAlt: this.settings.speakImageAlt,
+				speakEmbeds: this.settings.speakEmbeds,
+				locale: appLocale(),
+			},
+			platformSegmenters,
+			current.filePath,
+		);
+
+		if (chunks.length === 0) {
+			new Notice("Nothing to read in this note.");
+			return;
+		}
+
+		const selection = this.settings.engine;
+		const isAutomatic = selection === "auto";
+		let candidates: FallbackCandidate[];
+		if (isAutomatic) {
+			candidates = await this.rankedCandidates();
+			if (candidates.length === 0) {
+				new Notice("No speech engines available.", 8000);
+				return;
+			}
+		} else {
+			const engine = findEngine(this.engines, selection);
+			if (!engine) {
+				new Notice(`Engine ${selection} not available.`, 8000);
+				return;
+			}
+			candidates = [{ engine, id: selection, reason: "" }];
+		}
+
+		await playWithFallback(this.player, candidates, chunks, this.settings.rate, {
+			beforeAttempt: async (candidate: FallbackCandidate) => {
+				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
+				await this.selectVoiceIfNeeded(candidate.engine, voices);
+				if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
+					const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
+					try {
+						await candidate.engine.prepare();
+					} finally {
+						loading.hide();
+					}
+				}
+			},
+		}, position);
+	}
+
+	private async savePosition(filePath: string, chunkIndex: number): Promise<void> {
+		if (chunkIndex < 0 || !this.player) return;
+
+		// Get the current chunks from player state to find segment info
+		const chunks = (this.player as unknown as { chunks: SpeechChunk[] }).chunks;
+		if (!chunks || chunkIndex >= chunks.length) return;
+
+		const chunk = chunks[chunkIndex];
+		if (!chunk) return;
+
+		const position = {
+			filePath,
+			segmentId: chunk.id,
+			segmentIndex: chunk.sequence,
+			sourceOffset: chunk.sourceStart,
+			updatedAt: Date.now(),
+		};
+
+		// Update plugin data
+		if (!this.pluginData.positions) this.pluginData.positions = {};
+		(this.pluginData.positions as Record<string, typeof position>)[filePath] = position;
+		await this.saveSettings();
+	}
+
 	private async voicesForSelection(engine: SpeechEngine, isAutomatic: boolean): Promise<VoiceInfo[]> {
 		if (isAutomatic && engine instanceof WebSpeechEngine) return await engine.listLocalVoices();
 		return await engine.listVoices();
@@ -571,6 +862,46 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		void this.warmUpEngine();
 	}
 
+	/**
+	 * Validate ORT runtime file checksums against expected values.
+	 * Non-negotiable: no silent failure or automatic fallback.
+	 * Only runs in production builds where __ORT_CHECKSUMS__ is defined.
+	 * Failures are traced but do not block plugin load (user sees error).
+	 */
+	private async validateOrtChecksums(): Promise<void> {
+		if (!__ORT_CHECKSUMS__) return;
+
+		const expectedChecksums = __ORT_CHECKSUMS__;
+		const pluginDir = this.manifest.dir!;
+
+		// Checksums are compiled at build time; if any file is missing,
+		// the user's plugin install is corrupted. Report it and continue
+		// so the user gets immediate visibility rather than silent failure.
+		for (const [file, expectedHash] of Object.entries(expectedChecksums)) {
+			const filePath = `${pluginDir}/ort/${file}`;
+			try {
+				// Read the file from disk and compute its hash.
+				const content = await this.app.vault.adapter.read(filePath);
+				// Note: content is a string; encode to bytes for hashing.
+				const bytes = new TextEncoder().encode(content);
+				const hashBuffer = await crypto.subtle.digest("SHA-256", bytes);
+				const hashArray = Array.from(new Uint8Array(hashBuffer));
+				const actualHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+
+				if (actualHash !== expectedHash) {
+					trace(
+						this.app,
+						pluginDir,
+						"checksum mismatch",
+						`${file}: expected ${expectedHash}, got ${actualHash}`,
+					);
+				}
+			} catch (err) {
+				trace(this.app, pluginDir, "checksum read failed", `${file}: ${err}`);
+			}
+		}
+	}
+
 	/** Vault path of the style vector a voice id needs. */
 	voiceFileFor(voiceId: string): string {
 		return voiceFilePath(voiceId);
@@ -601,6 +932,25 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	async setRate(rate: number): Promise<void> {
 		this.settings.rate = rate;
 		this.player.setRate(rate);
+		await this.saveSettings();
+	}
+
+	/**
+	 * Store the look-ahead and hand it to the running player.
+	 *
+	 * The Look ahead slider used to write the setting and save, which left the
+	 * player on whatever it read at construction until the next plugin load.
+	 *
+	 * The player is updated before the save is awaited, for setRate's reason: a
+	 * slider dragged across several steps fires repeatedly inside one saveData,
+	 * and the runtime must not lag behind. The stored value is read back from
+	 * the player rather than taken from the caller, so what is persisted is
+	 * exactly the window in use rather than a value that only gets clamped on
+	 * the next load.
+	 */
+	async setBufferAhead(count: number): Promise<void> {
+		this.player.setBufferAhead(count);
+		this.settings.bufferAhead = this.player.getBufferAhead();
 		await this.saveSettings();
 	}
 

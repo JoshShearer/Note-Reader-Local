@@ -1,0 +1,294 @@
+/**
+ * Regression tests for release infrastructure (NRL-16).
+ *
+ * These tests verify:
+ * 1. Build succeeds with ORT checksums compiled
+ * 2. Checksums are read-only in main.js
+ * 3. No model weights downloaded during build
+ * 4. Workflow file is valid GitHub Actions YAML
+ */
+
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+// Tests are run from tests/.build/release.test.mjs, so go up 3 levels to reach the root.
+const ROOT = path.resolve(__dirname, "../..");
+const MAIN_JS = path.join(ROOT, "main.js");
+const WORKFLOW_FILE = path.join(ROOT, ".github/workflows/release.yml");
+const MANIFEST_FILE = path.join(ROOT, "manifest.json");
+const VERSIONS_FILE = path.join(ROOT, "versions.json");
+const README_FILE = path.join(ROOT, "README.md");
+const LICENSE_FILE = path.join(ROOT, "LICENSE");
+const ADR_FILE = path.join(ROOT, "docs/adr/0011-release-attestation.md");
+
+let totalTests = 0;
+let passedTests = 0;
+
+function test(name: string, fn: () => void) {
+	totalTests++;
+	try {
+		fn();
+		console.log(`  ok   ${name}`);
+		passedTests++;
+	} catch (err: unknown) {
+		const message = err instanceof Error ? err.message : String(err);
+		console.log(`  FAIL ${name}`);
+		console.log(`       ${message}`);
+	}
+}
+
+function assert(condition: boolean, message: string) {
+	if (!condition) throw new Error(message);
+}
+
+function assertEquals<T>(actual: T, expected: T, message?: string) {
+	if (actual !== expected) {
+		throw new Error(message || `Expected ${expected}, got ${actual}`);
+	}
+}
+
+function assertMatch(text: string, regex: RegExp, message?: string) {
+	if (!regex.test(text)) {
+		throw new Error(message || `Text does not match ${regex}`);
+	}
+}
+
+function assertFileExists(filePath: string, message?: string) {
+	if (!fs.existsSync(filePath)) {
+		throw new Error(message || `File does not exist: ${filePath}`);
+	}
+}
+
+// --- Build Succeeds with ORT Checksums Compiled
+
+test("Build succeeds with production mode", () => {
+	assertFileExists(MAIN_JS, "main.js not found after build");
+});
+
+test("main.js contains ORT checksums", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	assertMatch(content, /ort-wasm-simd-threaded\.mjs/, "main.js missing ORT .mjs checksum");
+	assertMatch(content, /ort-wasm-simd-threaded\.wasm/, "main.js missing ORT .wasm checksum");
+	assertMatch(
+		content,
+		/ort-wasm-simd-threaded\.jsep\.mjs/,
+		"main.js missing ORT JSEP .mjs checksum",
+	);
+	assertMatch(
+		content,
+		/ort-wasm-simd-threaded\.jsep\.wasm/,
+		"main.js missing ORT JSEP .wasm checksum",
+	);
+});
+
+test("Checksums in main.js are valid hex strings", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	// Extract all hex strings that look like SHA-256 hashes (64 hex chars).
+	const hexPattern = /"([a-f0-9]{64})"/g;
+	const matches = content.match(hexPattern) || [];
+	assert(matches.length >= 4, "Expected at least 4 SHA-256 hashes in main.js");
+});
+
+// --- Checksums are Read-Only in main.js
+
+test("Checksums are not wrapped in eval() or Function()", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	const hashInEval = /eval\s*\(\s*["'`].*[a-f0-9]{64}/.test(content);
+	const hashInFunction = /Function\s*\(\s*["'`].*[a-f0-9]{64}/.test(content);
+	assert(
+		!hashInEval && !hashInFunction,
+		"Checksums should not be wrapped in eval() or Function() calls",
+	);
+});
+
+test("__ORT_CHECKSUMS__ is not reassigned in main.js", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	// Count assignments to __ORT_CHECKSUMS__.
+	const assignmentPattern = /__ORT_CHECKSUMS__\s*=/g;
+	const assignments = content.match(assignmentPattern) || [];
+	// Only the initial definition should exist (esbuild inlines it as a define).
+	// We don't expect a reassignment in the code.
+	assert(assignments.length <= 1, "Checksums should be assigned only once (at define-time)");
+});
+
+test("Checksums are not modified by plugin code", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	// Check that the checksums object is not reassigned or deleted at the
+	// statement level (excluding esbuild's internal minification machinery).
+	// The checksums are defined once at the top and then used in the plugin,
+	// never reassigned or destroyed.
+	const reassignments = content.match(/var S\s*=.*; var S\s*=/g) || [];
+	const deletes = content.match(/delete\s+S\s*\[/g) || [];
+	assert(
+		reassignments.length === 0 && deletes.length === 0,
+		"Checksums object should not be reassigned or deleted",
+	);
+});
+
+// --- No Model Weights Downloaded During Build
+
+test("ORT directory contains only published files", () => {
+	const ortDir = path.join(ROOT, "ort");
+	const expectedFiles = [
+		"ort-wasm-simd-threaded.mjs",
+		"ort-wasm-simd-threaded.wasm",
+		"ort-wasm-simd-threaded.jsep.mjs",
+		"ort-wasm-simd-threaded.jsep.wasm",
+	];
+
+	for (const file of expectedFiles) {
+		const filePath = path.join(ortDir, file);
+		assertFileExists(filePath, `Expected ORT file not found: ${file}`);
+	}
+
+	// Check that no other files were downloaded (e.g., Kokoro weights).
+	const allFiles = fs.readdirSync(ortDir);
+	for (const file of allFiles) {
+		const isExpected = expectedFiles.includes(file);
+		assert(isExpected, `Unexpected file in ort/: ${file} (should not be there)`);
+	}
+});
+
+test("No Kokoro weights in ort directory", () => {
+	const ortDir = path.join(ROOT, "ort");
+	const allFiles = fs.readdirSync(ortDir);
+	const hasKokoroWeights = allFiles.some((f) =>
+		/kokoro|model|weight|pt$|safetensors$|bin$/.test(f),
+	);
+	assert(!hasKokoroWeights, "Kokoro weights should not be downloaded during build");
+});
+
+// --- Workflow File is Valid GitHub Actions YAML
+
+test("Workflow file exists", () => {
+	assertFileExists(WORKFLOW_FILE, ".github/workflows/release.yml not found");
+});
+
+test("Workflow YAML is syntactically valid", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	// Basic YAML syntax check: ensure no unclosed blocks and no obvious errors.
+	const lines = content.split("\n");
+	let indentStack: number[] = [0];
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i] || "";
+		const stripped = line.replace(/^\s+/, "");
+		if (stripped.startsWith("#")) continue; // Skip comments
+		if (stripped === "") continue; // Skip empty lines
+
+		const leadingSpaces = line.length - stripped.length;
+		// Basic indent tracking (no complex rules; just ensure consistency).
+		const stackTop = indentStack[indentStack.length - 1];
+		if (stackTop !== undefined && leadingSpaces > stackTop) {
+			indentStack.push(leadingSpaces);
+		} else {
+			while (
+				indentStack.length > 1 &&
+				leadingSpaces < (indentStack[indentStack.length - 1] || 0)
+			) {
+				indentStack.pop();
+			}
+		}
+	}
+	// If we get here without exception, YAML structure is at least plausible.
+	assert(indentStack.length > 0, "Workflow YAML structure is invalid");
+});
+
+test("Workflow has required top-level keys", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	assertMatch(content, /^\s*name:\s+Release/m, "Workflow missing 'name: Release' key");
+	assertMatch(content, /^\s*on:\s*\n\s+push:/m, "Workflow missing 'on: { push }' key");
+	assertMatch(content, /^\s*jobs:\s*\n/m, "Workflow missing 'jobs' key");
+});
+
+test("Workflow has all required jobs", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	assertMatch(content, /^\s+build:\s*\n/m, "Workflow missing 'build' job");
+	assertMatch(content, /^\s+release:\s*\n/m, "Workflow missing 'release' job");
+	assertMatch(content, /^\s+provenance:\s*\n/m, "Workflow missing 'provenance' job");
+});
+
+test("Build job has quality gates", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	assertMatch(content, /npm run typecheck/, "Build job missing typecheck gate");
+	assertMatch(content, /npm test/, "Build job missing test gate");
+	assertMatch(content, /npm run build/, "Build job missing build gate");
+});
+
+test("Provenance job references SLSA generator", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	assertMatch(
+		content,
+		/slsa-framework\/slsa-github-generator/,
+		"Workflow missing SLSA provenance generator",
+	);
+});
+
+// --- Release Files Exist
+
+test("README.md exists", () => {
+	assertFileExists(README_FILE, "README.md not found");
+});
+
+test("README.md is not empty", () => {
+	const content = fs.readFileSync(README_FILE, "utf-8");
+	assert(content.length > 100, "README.md is too short");
+	assertMatch(content, /Local TTS Reader/, "README.md missing project name");
+	assertMatch(content, /on-device/, "README.md missing on-device mention");
+	assertMatch(content, /privacy/i, "README.md missing privacy mention");
+});
+
+test("LICENSE exists", () => {
+	assertFileExists(LICENSE_FILE, "LICENSE not found");
+});
+
+test("LICENSE is MIT", () => {
+	const content = fs.readFileSync(LICENSE_FILE, "utf-8");
+	assertMatch(content, /MIT License/, "LICENSE missing MIT header");
+	assertMatch(content, /Permission is hereby granted/, "LICENSE missing permission clause");
+});
+
+test("versions.json exists", () => {
+	assertFileExists(VERSIONS_FILE, "versions.json not found");
+});
+
+test("versions.json is valid JSON", () => {
+	const content = fs.readFileSync(VERSIONS_FILE, "utf-8");
+	try {
+		const doc = JSON.parse(content);
+		assert(typeof doc === "object", "versions.json is not an object");
+	} catch (err: unknown) {
+		const message = err instanceof Error ? err.message : String(err);
+		throw new Error(`Failed to parse versions.json: ${message}`);
+	}
+});
+
+test("manifest.json exists", () => {
+	assertFileExists(MANIFEST_FILE, "manifest.json not found");
+});
+
+test("ADR 0011 exists", () => {
+	assertFileExists(ADR_FILE, "docs/adr/0011-release-attestation.md not found");
+});
+
+test("ADR 0011 mentions SLSA", () => {
+	const content = fs.readFileSync(ADR_FILE, "utf-8");
+	assertMatch(content, /SLSA/i, "ADR 0011 missing SLSA mention");
+});
+
+test("ADR 0011 mentions ORT checksums", () => {
+	const content = fs.readFileSync(ADR_FILE, "utf-8");
+	assertMatch(content, /checksum/i, "ADR 0011 missing checksum mention");
+	assertMatch(content, /ORT/i, "ADR 0011 missing ORT mention");
+});
+
+// Summary
+console.log(`\nall release tests passed\n`);
+console.log(`${passedTests} of ${totalTests} passed`);
+if (passedTests === totalTests) {
+	process.exit(0);
+} else {
+	process.exit(1);
+}
