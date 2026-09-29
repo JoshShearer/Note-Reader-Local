@@ -20,7 +20,7 @@ There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The
 are local and nothing runs them for you.
 
 ```bash
-npm test          # 11 suites: extract, engine, player, paths, kokoro, settings, highlightColour, affordances, engineSelection, webspeechVoices, fallback
+npm test          # 14 suites: extract, engine, player, paths, kokoro, settings, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -35,9 +35,10 @@ npm run test:obsidian  # CDP smoke test; needs Obsidian on --remote-debugging-po
 
 `tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running
 speech-dispatcher daemon (here with the `speech-dispatcher-espeak-ng` output module). It
-does not call the `espeak-ng` binary, which is not installed on this machine, so the
-`espeak.ts` engine has no real-binary coverage. It is a Linux desktop test and will fail
-elsewhere.
+is a Linux desktop test and will fail elsewhere. `tests/espeak.test.ts` covers `espeak.ts`
+with a fake `ProcessRunner` only: the `espeak-ng` binary itself is not installed on this
+machine (confirmed via `which espeak-ng`), so there is still no real-binary coverage for
+that engine, only for speech-dispatcher.
 
 ---
 

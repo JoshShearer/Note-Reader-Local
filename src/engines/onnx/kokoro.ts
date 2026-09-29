@@ -1,4 +1,5 @@
 import type {
+	EngineAvailability,
 	EngineCapabilities,
 	EngineId,
 	SpeechEngine,
@@ -381,15 +382,30 @@ export class KokoroEngine implements SpeechEngine {
 		await this.load();
 	}
 
-	async isAvailable(): Promise<boolean> {
-		for (const file of REQUIRED_FILES) {
-			if (!(await this.store.exists(file))) return false;
+	async isAvailable(): Promise<EngineAvailability> {
+		try {
+			for (const file of REQUIRED_FILES) {
+				if (!(await this.store.exists(file))) {
+					return {
+						available: false,
+						reason: "Kokoro's model files have not been downloaded. Download the model from settings.",
+					};
+				}
+			}
+			// The weights are the big one; any build we know how to load will do.
+			for (const candidate of ALL_WEIGHTS) {
+				if (await this.store.exists(candidate.path)) return { available: true };
+			}
+			// Same wording thrown from loadOnce() (kokoro.ts below): the point
+			// of this ticket is that this exact sentence finally reaches the
+			// user, not a paraphrase of it.
+			return { available: false, reason: "Kokoro weights are missing. Download them from settings." };
+		} catch (err) {
+			return {
+				available: false,
+				reason: `Could not check whether Kokoro is installed: ${err instanceof Error ? err.message : String(err)}`,
+			};
 		}
-		// The weights are the big one; any build we know how to load will do.
-		for (const candidate of ALL_WEIGHTS) {
-			if (await this.store.exists(candidate.path)) return true;
-		}
-		return false;
 	}
 
 	/** Which weights build is on disk and would be used, if any. */

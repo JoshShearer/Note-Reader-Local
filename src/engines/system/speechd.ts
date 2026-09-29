@@ -1,4 +1,5 @@
 import type {
+	EngineAvailability,
 	EngineCapabilities,
 	EngineId,
 	SpeechEngine,
@@ -64,6 +65,18 @@ interface SpdVoiceRow {
 	variant: string;
 }
 
+/**
+ * Count the module names listed under `spd-say -O`'s "OUTPUT MODULES"
+ * header. The header matching alone (the old check) says nothing about
+ * whether any module actually follows it.
+ */
+function countOutputModules(output: string): number {
+	const lines = output.split("\n");
+	const headerAt = lines.findIndex((l) => /OUTPUT MODULES/i.test(l));
+	if (headerAt === -1) return 0;
+	return lines.slice(headerAt + 1).filter((l) => l.trim().length > 0).length;
+}
+
 /** Parse `spd-say -L`, whose columns are NAME, LANGUAGE, VARIANT. */
 function parseVoiceList(output: string): SpdVoiceRow[] {
 	const lines = output.split("\n");
@@ -102,16 +115,46 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 
 	constructor(private readonly runner: ProcessRunner) {}
 
-	async isAvailable(): Promise<boolean> {
-		if (!(await this.runner.which("spd-say"))) return false;
+	async isAvailable(): Promise<EngineAvailability> {
+		if (!(await this.runner.which("spd-say"))) {
+			return {
+				available: false,
+				reason:
+					"Speech Dispatcher is unavailable because spd-say could not be found. Install or configure Speech Dispatcher and retry.",
+			};
+		}
 		try {
-			// -O lists configured output modules. An empty list means a daemon
-			// is installed but has no synthesiser behind it, which is the state
-			// that makes this engine look present but silent.
+			// -O lists configured output modules. spd-say's client autospawns
+			// the daemon on connect (verified on this machine: pointing it at
+			// an empty XDG_RUNTIME_DIR still started a fresh daemon rather than
+			// failing), so "daemon unreachable" is not a state this probe can
+			// normally observe when the spd-say binary itself exists - a failed
+			// autospawn surfaces as a non-zero exit or a thrown run() below,
+			// not as a distinguishable third case.
 			const { code, stdout } = await this.runner.run("spd-say", ["-O"]);
-			return code === 0 && /OUTPUT MODULES/i.test(stdout.toString());
-		} catch {
-			return false;
+			const text = stdout.toString();
+			if (code !== 0 || !/OUTPUT MODULES/i.test(text)) {
+				return {
+					available: false,
+					reason: "Speech Dispatcher is unavailable: spd-say could not be reached.",
+				};
+			}
+			// The header line matching is not enough: it says nothing about
+			// whether any module actually follows it. A daemon with no
+			// synthesiser configured previously read as available here.
+			if (countOutputModules(text) === 0) {
+				return {
+					available: false,
+					reason:
+						"Speech Dispatcher is installed but has no output module configured. Install a synthesizer (e.g. speech-dispatcher-espeak-ng) and configure it.",
+				};
+			}
+			return { available: true };
+		} catch (err) {
+			return {
+				available: false,
+				reason: `Could not check Speech Dispatcher: ${err instanceof Error ? err.message : String(err)}`,
+			};
 		}
 	}
 

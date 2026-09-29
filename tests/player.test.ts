@@ -142,7 +142,7 @@ function makeEngine(opts: { durationPerChunk?: number; failOn?: number } = {}): 
 			ownsPlayback: false,
 		},
 		async isAvailable() {
-			return true;
+			return { available: true };
 		},
 		async listVoices() {
 			return [];
@@ -1030,7 +1030,7 @@ function makeOwningEngine(opts: { enginePause?: boolean; halfPair?: boolean } = 
 			ownsPlayback: true,
 		},
 		async isAvailable() {
-			return true;
+			return { available: true };
 		},
 		async listVoices() {
 			return [];

@@ -141,7 +141,7 @@ function makeEngine(opts: { failOn?: number; label?: string } = {}): {
 		label: opts.label ?? "fake",
 		capabilities: CAPS,
 		async isAvailable() {
-			return true;
+			return { available: true };
 		},
 		async listVoices() {
 			return [];
@@ -172,7 +172,7 @@ function makeHangingEngine(): { engine: SpeechEngine } {
 		label: "hanging",
 		capabilities: CAPS,
 		async isAvailable() {
-			return true;
+			return { available: true };
 		},
 		async listVoices() {
 			return [];
