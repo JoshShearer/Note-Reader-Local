@@ -493,6 +493,7 @@ console.log("word timings cover the sentence");
 		skipFrontmatter: true,
 		speakImageAlt: true,
 		speakEmbeds: false,
+		locale: "en",
 	});
 	const chunk = chunks[0]!;
 	const words = allocateWordTimings(chunk, 2000);

@@ -1,4 +1,11 @@
 import type { SpeechChunk } from "../audio/types";
+import {
+	type SegmenterSource,
+	graphemeBoundaries,
+	platformSegmenters,
+	sentenceBoundaries,
+	wordBoundaries,
+} from "./segment";
 
 /**
  * Markdown to speakable text, preserving a mapping back to source offsets.
@@ -794,44 +801,101 @@ function verbatimLine(raw: string, rawStart: number): Cleaned {
 	return { text: chars.join(""), index };
 }
 
-/** Split cleaned text into sentence-ish pieces with offsets preserved. */
-function splitSentences(text: string, index: number[], rawStart: number): SpeechChunk[] {
-	const chunks: SpeechChunk[] = [];
-	const bounds: Array<[number, number]> = [];
+/**
+ * Everything the splitters need that is not the text itself.
+ *
+ * One object rather than two extra parameters on three call sites, so a
+ * future addition cannot reach two of them and miss the third.
+ */
+interface SegmentContext {
+	/** Obsidian's UI language, from appLocale(). Never a detected language. */
+	locale: string;
+	src: SegmenterSource;
+}
 
-	const re = /[.!?…]+["')\]]*\s+/g;
+/** A candidate chunk, plus how the boundary that opens it was found. */
+interface Piece {
+	chunk: SpeechChunk;
+	/**
+	 * The legacy regex produced the boundary at this piece's start. Only such
+	 * a boundary may be erased by mergeShort; see there for why.
+	 */
+	legacyOpen: boolean;
+}
+
+/**
+ * Split cleaned text into sentence-ish pieces with offsets preserved.
+ *
+ * Known gap, recorded rather than fixed: a boundary is used where it is
+ * found. `splitOversized` snaps its cuts back to a grapheme cluster boundary
+ * and this does not, so a sentence boundary that ICU supplies immediately
+ * before a `SpacingMark` or a combining mark ends a piece inside a combining
+ * sequence. Found in NRL-28 verification; degenerate text only, since it
+ * needs a terminator followed directly by a combining mark, and no surrogate
+ * pair was split across 32,000 fuzz cases. Closing it means snapping here
+ * too, which moves where every boundary lands and wants its own fail-first
+ * change.
+ */
+function splitSentences(text: string, index: number[], rawStart: number, ctx: SegmentContext): SpeechChunk[] {
+	const pieces: Piece[] = [];
+	const bounds: Array<{ from: number; to: number; legacyOpen: boolean }> = [];
+
 	let last = 0;
-	let m: RegExpExecArray | null;
-	while ((m = re.exec(text)) !== null) {
-		bounds.push([last, m.index + m[0].length]);
-		last = m.index + m[0].length;
+	// The first piece has no opening boundary at all. It can never be folded
+	// backwards, so the flag it carries is never read.
+	let legacyOpen = true;
+	for (const boundary of sentenceBoundaries(text, ctx.locale, ctx.src)) {
+		if (boundary.at <= last) continue;
+		bounds.push({ from: last, to: boundary.at, legacyOpen });
+		last = boundary.at;
+		legacyOpen = boundary.legacy;
 	}
-	if (last < text.length) bounds.push([last, text.length]);
+	if (last < text.length) bounds.push({ from: last, to: text.length, legacyOpen });
 
-	for (const [from, to] of bounds) {
-		// Trim, keeping offsets aligned to the trimmed region.
-		let s = from;
-		let e = to;
+	for (const bound of bounds) {
+		// Trim, keeping offsets aligned to the trimmed region. The flag travels
+		// on the same object, so a whitespace-only piece drops it along with
+		// itself rather than leaving two arrays to drift apart.
+		let s = bound.from;
+		let e = bound.to;
 		while (s < e && /\s/.test(text[s]!)) s += 1;
 		while (e > s && /\s/.test(text[e - 1]!)) e -= 1;
 		if (e <= s) continue;
-		chunks.push({
-			text: text.slice(s, e),
-			sourceIndex: index.slice(s, e),
-			sourceStart: index[s] ?? rawStart,
-			sourceEnd: (index[e - 1] ?? rawStart) + 1,
+		pieces.push({
+			chunk: {
+				text: text.slice(s, e),
+				sourceIndex: index.slice(s, e),
+				sourceStart: index[s] ?? rawStart,
+				sourceEnd: (index[e - 1] ?? rawStart) + 1,
+			},
+			legacyOpen: bound.legacyOpen,
 		});
 	}
 
-	return mergeShort(chunks);
+	return mergeShort(pieces, ctx);
 }
 
-/** Fold runt fragments forward so we do not synthesise a word at a time. */
-function mergeShort(chunks: SpeechChunk[]): SpeechChunk[] {
+/**
+ * Fold runt fragments forward so we do not synthesise a word at a time.
+ *
+ * Only a boundary the legacy regex also found may be erased. ICU segments a
+ * Chinese paragraph into sentences of six or seven characters, every one of
+ * them under MIN_CHUNK_CHARS, so a merge that did not check this would fold
+ * all of them straight back into the single chunk that R-M10 exists to
+ * prevent. That is the half of this fix that a regex swap alone cannot do.
+ *
+ * English is untouched by the check wherever the terminator is ASCII, which
+ * is the guard in `sentenceBoundaries` doing its job: no ICU-only boundary
+ * survives it there, so every boundary is a legacy one and still merges
+ * exactly as before. A note that really does end a sentence with `．` or `。`
+ * gets the new pacing, which is the point.
+ */
+function mergeShort(pieces: Piece[], ctx: SegmentContext): SpeechChunk[] {
 	const out: SpeechChunk[] = [];
-	for (const chunk of chunks) {
+	for (const piece of pieces) {
+		const chunk = piece.chunk;
 		const prev = out[out.length - 1];
-		if (prev && chunk.text.length < MIN_CHUNK_CHARS) {
+		if (prev && piece.legacyOpen && chunk.text.length < MIN_CHUNK_CHARS) {
 			// The join inserts a space that exists in neither input, so the
 			// offset map needs an entry for it too. Without this every position
 			// after the join shifts by one and highlights land mid-word.
@@ -843,7 +907,7 @@ function mergeShort(chunks: SpeechChunk[]): SpeechChunk[] {
 		}
 		out.push({ ...chunk });
 	}
-	return out.flatMap(splitOversized);
+	return out.flatMap((chunk) => splitOversized(chunk, ctx));
 }
 
 /**
@@ -857,28 +921,108 @@ function sourceOffsetOfSpace(afterPrev: number, firstOfNext: number): number {
 	return afterPrev;
 }
 
-/** Hard-split anything past the engine's comfort zone, at a word boundary. */
-function splitOversized(chunk: SpeechChunk): SpeechChunk[] {
+/**
+ * Hard-split anything past the engine's comfort zone, at a word boundary.
+ *
+ * MAX_CHUNK_CHARS is a target, not a guarantee, and it has to be: a single
+ * extended grapheme cluster can be longer than it - "a" followed by 300
+ * combining acutes is 301 UTF-16 units and exactly one cluster - so a strict
+ * cap is unsatisfiable without destroying the character. Where the two
+ * conflict the cluster wins, which is the one place a piece may exceed the
+ * cap, and it still makes forward progress because the piece it emits is that
+ * whole cluster.
+ *
+ * Three preferences, in order: the last space past the halfway mark, as
+ * before; then the last word boundary in the window, which is the only thing
+ * that helps a script with no spaces at all; then the raw cap. Whichever wins
+ * is snapped back to a grapheme boundary, so no piece can end inside a
+ * surrogate pair, an emoji sequence or a combining sequence.
+ *
+ * The first two preferences are floored against the same constant and, since
+ * NRL-28's verification, against the same *measurement*: the number of units
+ * the piece would actually carry, counting no trailing space. The space
+ * branch has always measured that, because it cuts at the space rather than
+ * after it and the loop below then skips the space entirely. The word branch
+ * did not, and that one-unit difference was the whole of finding B1; see the
+ * comment on the trim below.
+ */
+function splitOversized(chunk: SpeechChunk, ctx: SegmentContext): SpeechChunk[] {
 	if (chunk.text.length <= MAX_CHUNK_CHARS) return [chunk];
+
+	const length = chunk.text.length;
+	// A flag per position beats a binary search here: the scan is O(n) once,
+	// and snapping walks backwards over a cluster whose length is the only
+	// thing bounding it.
+	const isGraphemeBoundary = new Uint8Array(length + 1);
+	isGraphemeBoundary[0] = 1;
+	isGraphemeBoundary[length] = 1;
+	for (const at of graphemeBoundaries(chunk.text, ctx.src)) isGraphemeBoundary[at] = 1;
+	const words = wordBoundaries(chunk.text, ctx.locale, ctx.src);
 
 	const out: SpeechChunk[] = [];
 	let cursor = 0;
-	while (cursor < chunk.text.length) {
-		let end = Math.min(cursor + MAX_CHUNK_CHARS, chunk.text.length);
-		if (end < chunk.text.length) {
+	let wordCursor = 0;
+	while (cursor < length) {
+		let end = Math.min(cursor + MAX_CHUNK_CHARS, length);
+		if (end < length) {
 			const window = chunk.text.slice(cursor, end);
 			const breakAt = window.lastIndexOf(" ");
-			if (breakAt > MAX_CHUNK_CHARS * 0.5) end = cursor + breakAt;
+			if (breakAt > MAX_CHUNK_CHARS * 0.5) {
+				end = cursor + breakAt;
+			} else {
+				// No late space. `words` is sorted, so one shared cursor walks
+				// it across every iteration rather than rescanning it.
+				while (wordCursor < words.length && words[wordCursor]! <= cursor) wordCursor += 1;
+				let candidate = -1;
+				for (let w = wordCursor; w < words.length && words[w]! <= end; w++) candidate = words[w]!;
+				// A word starts immediately *after* a space, so a candidate
+				// sitting behind one is the same cut the space branch just
+				// looked at, one unit later. Moving it back onto the space run
+				// makes the two branches name the same offset for the same
+				// cut, and only then is the shared floor comparing like with
+				// like. Without this, a space at exactly cursor + 110 was
+				// rejected at 110 by the space branch and re-accepted at 111
+				// by this one, so `"a" * 110 + " " + "b" * 300` split as
+				// 111/220/80 where the merge base gave 220/191 (NRL-28 B1,
+				// measured against fb71812). Only " " is trimmed, because
+				// " " is the only thing the space branch looks for and the
+				// only thing the cursor loop below skips.
+				while (candidate > cursor && chunk.text[candidate - 1] === " ") candidate -= 1;
+				// The same halfway floor the space branch uses, and needed for
+				// the same reason. Without it `"hi "` followed by 300 unbroken
+				// characters breaks at the only word boundary in the window and
+				// emits a three-unit chunk, where the cap alone gave 220.
+				//
+				// No cursor can turn this into a runt. Both floors are
+				// measured from `cursor`, so the position of the piece in the
+				// chunk cannot enter into it, and the trim above only ever
+				// moves a candidate earlier - so the word branch can accept
+				// nothing the space branch rejected, and what it does accept
+				// is more than half the cap of real content with a non-space
+				// character at its end. The one thing that can still take a
+				// piece below the floor is the grapheme snap below walking
+				// back inside a single cluster, which is bounded by that
+				// cluster's length and is the deliberate exception this
+				// function exists to make.
+				if (candidate - cursor > MAX_CHUNK_CHARS * 0.5) end = candidate;
+			}
+			while (end > cursor && isGraphemeBoundary[end] !== 1) end -= 1;
+			if (end <= cursor) {
+				// The piece opens with a cluster longer than the cap. Emit the
+				// whole cluster: it cannot be divided, and stopping short would
+				// mean no progress at all.
+				end = cursor + 1;
+				while (end < length && isGraphemeBoundary[end] !== 1) end += 1;
+			}
 		}
-		const piece = chunk.text.slice(cursor, end);
 		out.push({
-			text: piece,
+			text: chunk.text.slice(cursor, end),
 			sourceIndex: chunk.sourceIndex.slice(cursor, end),
 			sourceStart: chunk.sourceIndex[cursor] ?? chunk.sourceStart,
 			sourceEnd: (chunk.sourceIndex[end - 1] ?? chunk.sourceEnd - 1) + 1,
 		});
 		cursor = end;
-		while (cursor < chunk.text.length && chunk.text[cursor] === " ") cursor += 1;
+		while (cursor < length && chunk.text[cursor] === " ") cursor += 1;
 	}
 	return out;
 }
@@ -1096,6 +1240,15 @@ export interface ExtractOptions {
 	speakImageAlt: boolean;
 	/** An Obsidian embed, spoken as a label for its local reference. */
 	speakEmbeds: boolean;
+	/**
+	 * The language Obsidian's UI is in, from appLocale(). Not a setting and not
+	 * a detected language: nothing here inspects the note to guess what it is
+	 * written in, and nothing here chooses a voice. It is only the locale the
+	 * sentence and word segmenters are built with, and it is required rather
+	 * than optional for the reason the nine content keys are - an optional
+	 * field with a default is how a dead option hides (see CONTEXT.md).
+	 */
+	locale: string;
 }
 
 /**
@@ -1117,9 +1270,14 @@ export interface ExtractOptions {
  * table row still flushes the buffer: those keep their own pacing rather than
  * being folded into surrounding prose.
  */
-export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk[] {
+export function extractChunks(
+	source: string,
+	opts: ExtractOptions,
+	src: SegmenterSource = platformSegmenters,
+): SpeechChunk[] {
 	const chunks: SpeechChunk[] = [];
 	const lines = source.split("\n");
+	const segmentCtx: SegmentContext = { locale: opts.locale, src };
 
 	// Per-line raw offsets, because a math block skips ahead several lines at
 	// once and every sourceIndex entry must still be a true raw offset.
@@ -1180,7 +1338,7 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 
 	const flushParagraph = (): void => {
 		if (paraText.trim() !== "") {
-			chunks.push(...splitSentences(paraText, paraIndex, paraStart));
+			chunks.push(...splitSentences(paraText, paraIndex, paraStart, segmentCtx));
 		}
 		paraText = "";
 		paraIndex = [];
@@ -1373,7 +1531,7 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 				const open = lineStart + mathOpen;
 				const last = lineStarts[closeLine]! + closeAt + 1;
 				flushParagraph();
-				chunks.push(...splitSentences("equation", [open, open, open, open, open, open, open, last], open));
+				chunks.push(...splitSentences("equation", [open, open, open, open, open, open, open, last], open, segmentCtx));
 				lineNo = closeLine;
 				appendRemainder(lines[closeLine]!, closeAt + 2, lineStarts[closeLine]!);
 				continue;
@@ -1436,7 +1594,7 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 
 		if (isStructural) {
 			flushParagraph();
-			chunks.push(...splitSentences(cleaned.text, cleaned.index, lineStart + prefixChars));
+			chunks.push(...splitSentences(cleaned.text, cleaned.index, lineStart + prefixChars, segmentCtx));
 			continue;
 		}
 
