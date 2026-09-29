@@ -25,6 +25,8 @@ is what makes highlighting possible, and it is the load-bearing idea in the code
 | **engine** | A speech backend implementing `SpeechEngine`. Four exist: `kokoro`, `espeak`, `speechd`, `webspeech`. |
 | **capabilities** | What an engine can do (`EngineCapabilities`). The UI reads these before offering a control. |
 | **affordance** | What the UI does with a capability: enabled or disabled, plus a reason. `src/ui/affordances.ts`, pure so bare-Node tests can drive it. |
+| **`SegmenterSource`** | Where `Intl.Segmenter` instances come from. Injected, so the no-segmenter path is a value (`noSegmenters`) rather than a deleted global. `src/text/segment.ts`. |
+| **legacy boundary** | A sentence boundary the old ASCII regex found. Only these may be erased by `mergeShort`; an ICU-only one must survive or CJK folds back into one chunk. |
 | **`ownsPlayback`** | The engine makes sound itself rather than returning audio. Decides who applies the playback rate. |
 | **weights build** | A quantisation of the Kokoro model: `gpu` (fp32), `fast` (q4f16), `small` (q8). |
 | **backend plan** | The ordered list of (device, weights) attempts Kokoro will make, with a WASM tail as fallback. |
@@ -45,6 +47,8 @@ note markdown
 extract.ts ──────────► SpeechChunk[]   text + sourceIndex + sourceStart/End
       │                                 (block scan, then per-character inline scan,
       │                                  plus one forward lookahead for code spans)
+      │   └─► segment.ts ───► sentence boundaries (ICU ∪ regex), grapheme
+      │                       boundaries for the hard split, word boundaries
       ▼
 Player ──────────────► orchestrates: synthesise ahead, play, advance, emit events
       │
@@ -69,6 +73,7 @@ src/
 ├── settings/index.ts           Settings type, defaults, normaliseSettings()
 ├── settings/data.ts            data.json container: version (v2), v0 and v1 migrations, save round trip
 ├── text/extract.ts             markdown → SpeechChunk[] with source offsets
+├── text/segment.ts             sentence/grapheme/word boundaries, injected SegmenterSource, pure (ADR 0009)
 ├── audio/
 │   ├── types.ts                SpeechEngine, EngineCapabilities, SpeechChunk, VoiceInfo
 │   ├── player.ts               the single playback controller
@@ -160,8 +165,24 @@ These are design-level, not bugs, and they shape any new work:
   features the spec imagines have nothing to switch on yet.
 - **There is no engine fallback chain.** Selection is a stored id; if it fails, the user
   gets a notice telling them to change a dropdown.
-- **Segmentation is a single regex** (`/[.!?…]+["')\]]*\s+/g`) with no `Intl.Segmenter`,
-  so CJK text is never split.
+- **Segmentation is `Intl.Segmenter` unioned with the old regex, not either alone**
+  (NRL-28, ADR 0009). `src/text/segment.ts` owns it, pure and dependency-free, and the
+  segmenters arrive through an injected `SegmenterSource` so the no-segmenter path is
+  exercised without mutating a global. Three things about it are load-bearing and are
+  not simplifications waiting to happen. The **union**: ICU removes English boundaries
+  the regex produces (after `e.g.`, after an ellipsis, after `U.S.A.`) and adds none, so
+  replacing the regex would lengthen English chunks. The **ASCII guard**: an ICU-only
+  boundary counts only when the *terminator* before it is at or above U+0080, because
+  ICU splits `[!note] Callout body` after the `!` and that is a real Obsidian callout
+  marker. Reaching that terminator takes two walks back, over whitespace *and* over
+  `\p{Pf}` / `\p{Pe}`, because the legacy regex already allows a run of closers
+  (`["')\]]*`) and that class is ASCII-only: with the whitespace walk alone,
+  smart-punctuated `“First.” “Second.” “Third.” Tail text here now.` spoke as four
+  runts where the straight-quoted form is one chunk. And **legacy-only merging**:
+  `mergeShort` may erase only a
+  boundary the regex also found, because ICU's CJK sentences are 6 or 7 characters, all
+  below the 40-character merge floor, so an unguarded merge folds them back into one
+  chunk and undoes the whole thing.
 - **A `"streamed"` `synthesize()` resolving does not mean the audio finished.** On speechd
   it resolves when `spd-say -w` returns, and `-w` is not an audio-end signal: for a message
   queued behind another it returns when the *preceding* message ends, and for one submitted

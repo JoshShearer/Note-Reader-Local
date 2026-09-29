@@ -1,7 +1,18 @@
 import { extractChunks } from "../src/text/extract.ts";
+import {
+	legacySentenceBoundaries,
+	noSegmenters,
+	platformSegmenters,
+	sentenceBoundaries,
+	uax29GraphemeBoundaries,
+} from "../src/text/segment.ts";
 
 // Mirrors DEFAULT_SETTINGS, so a fixture written without overrides asserts what
-// a user with untouched settings actually hears.
+// a user with untouched settings actually hears. `locale` is not a setting: it
+// is the Obsidian UI language, which main.ts reads from appLocale() at the one
+// call site. "en" is both the appLocale() fallback and the worst case for this
+// suite's non-English fixtures, since it is what a user with an English UI
+// reading a Chinese note actually gets.
 const OPTS = {
 	stripTags: true,
 	speakUrls: false,
@@ -12,6 +23,7 @@ const OPTS = {
 	skipFrontmatter: true,
 	speakImageAlt: true,
 	speakEmbeds: false,
+	locale: "en",
 };
 
 let failures = 0;
@@ -23,6 +35,40 @@ function check(name: string, cond: boolean, detail = ""): void {
 		failures += 1;
 		console.log(`  FAIL ${name} ${detail}`);
 	}
+}
+
+/**
+ * Every spoken code UNIT is the raw code unit its sourceIndex entry claims.
+ *
+ * Numeric and UTF-16-based on purpose. The obvious spelling,
+ * `[...text].every((ch, i) => raw[sourceIndex[i]] === ch)`, iterates code
+ * POINTS, so its `i` stops matching the `sourceIndex` slot as soon as a
+ * fixture holds an astral character. Measured on `"x😀yz"` with a correct
+ * index: the spread form compares the two-unit `😀` against the one-unit
+ * `raw[1]`, returns false on correct data, and reads only 4 of the 5
+ * `sourceIndex` slots - the trailing ones are never inspected at all. It is
+ * therefore unusable on astral input in either direction, which is why no
+ * astral fixture could join the shared corpora before this.
+ *
+ * A synthesised space (32) is exempt, since it exists in neither input.
+ * `allow` covers the one other exemption: a character of the synthetic word
+ * "equation" maps to a `$` of the math span it replaces (ADR 0004).
+ */
+function unitsMatch(
+	text: string,
+	sourceIndex: number[],
+	raw: string,
+	allow?: (text: string, i: number, at: number) => boolean,
+): boolean {
+	if (sourceIndex.length !== text.length) return false;
+	for (let i = 0; i < text.length; i++) {
+		const at = sourceIndex[i]!;
+		if (text.charCodeAt(i) === 32) continue;
+		if (raw.charCodeAt(at) === text.charCodeAt(i)) continue;
+		if (allow && allow(text, i, at)) continue;
+		return false;
+	}
+	return true;
 }
 
 console.log("frontmatter, code fences and tables are skipped");
@@ -254,7 +300,7 @@ console.log("frontmatter detection (NRL-7)");
 	);
 	check(
 		"skipped frontmatter: every index entry points at the character it spoke",
-		cChunks.every((k) => [...k.text].every((ch, i) => ch === " " || c[k.sourceIndex[i]!] === ch)),
+		cChunks.every((k) => unitsMatch(k.text, k.sourceIndex, c)),
 	);
 
 	// (d) An unterminated opening fence must not swallow the document.
@@ -325,7 +371,9 @@ console.log("wikilinks and embeds (NRL-6)");
 		extractChunks(src, OPTS).every(
 			(k) =>
 				k.sourceIndex.length === k.text.length &&
-				[...k.text].every((ch, i) => ch === " " || src[k.sourceIndex[i]!] === ch),
+				// Numeric UTF-16 indexing, never a spread; see unitsMatch for
+				// what a spread does to an astral fixture.
+				unitsMatch(k.text, k.sourceIndex, src),
 		);
 
 	const plain = "See [[Some Note]] today please.";
@@ -410,7 +458,9 @@ console.log("code and bare URL toggles (NRL-10)");
 		extractChunks(src, opts).every(
 			(k) =>
 				k.sourceIndex.length === k.text.length &&
-				[...k.text].every((ch, i) => ch === " " || src[k.sourceIndex[i]!] === ch),
+				// Numeric UTF-16 indexing, never a spread; see unitsMatch for
+				// what a spread does to an astral fixture.
+				unitsMatch(k.text, k.sourceIndex, src),
 		);
 	// Offset of the spoken `word` in the first chunk that contains it.
 	const offsetOf = (src: string, opts: typeof OPTS, word: string): number | undefined => {
@@ -540,10 +590,10 @@ console.log("inline markup (NRL-9)");
 		extractChunks(src, opts).every(
 			(k) =>
 				k.sourceIndex.length === k.text.length &&
-				[...k.text].every((ch, i) => {
-					if (ch === " " || src[k.sourceIndex[i]!] === ch) return true;
-					const at = k.text.lastIndexOf("equation", i);
-					return at !== -1 && i < at + 8 && src[k.sourceIndex[i]!] === "$";
+				// Numeric UTF-16 indexing, never a spread; see unitsMatch.
+				unitsMatch(k.text, k.sourceIndex, src, (text, i, at) => {
+					const word = text.lastIndexOf("equation", i);
+					return word !== -1 && i < word + 8 && src.charCodeAt(at) === 36;
 				}),
 		);
 	// Raw offset of the first char of `word` in the first chunk containing it.
@@ -703,7 +753,9 @@ console.log("block markup (NRL-8)");
 		extractChunks(src, opts).every(
 			(k) =>
 				k.sourceIndex.length === k.text.length &&
-				[...k.text].every((ch, i) => ch === " " || src[k.sourceIndex[i]!] === ch),
+				// Numeric UTF-16 indexing, never a spread; see unitsMatch for
+				// what a spread does to an astral fixture.
+				unitsMatch(k.text, k.sourceIndex, src),
 		);
 	const offsetOf = (src: string, word: string, opts = OPTS): number | undefined => {
 		const k = extractChunks(src, opts).find((c) => c.text.includes(word));
@@ -837,7 +889,9 @@ console.log("angle-bracket autolinks (NRL-39)");
 		extractChunks(src, opts).every(
 			(k) =>
 				k.sourceIndex.length === k.text.length &&
-				[...k.text].every((ch, i) => ch === " " || src[k.sourceIndex[i]!] === ch),
+				// Numeric UTF-16 indexing, never a spread; see unitsMatch for
+				// what a spread does to an astral fixture.
+				unitsMatch(k.text, k.sourceIndex, src),
 		);
 	const offsetOf = (src: string, opts: typeof OPTS, word: string): number | undefined => {
 		const k = extractChunks(src, opts).find((c) => c.text.includes(word));
@@ -1199,7 +1253,12 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 
 console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 {
-	type Key = keyof typeof OPTS;
+	/*
+	 * The content toggles only: every key of OPTS whose value is a boolean.
+	 * `locale` is a string and is not a toggle, so a plain `keyof typeof OPTS`
+	 * would let this sweep try to write `true` into it.
+	 */
+	type Key = { [K in keyof typeof OPTS]: (typeof OPTS)[K] extends boolean ? K : never }[keyof typeof OPTS];
 	const say = (src: string, over: Partial<typeof OPTS> = {}): string =>
 		extractChunks(src, { ...OPTS, ...over }).map((c) => c.text).join(" ");
 
@@ -1565,6 +1624,424 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 	}
 	check(`NRL-21 sourceIndex lockstep over ${sweepRuns} option combinations`, sweepBad === "", sweepBad);
 	check("NRL-21 sweep really ran every combination", sweepRuns === corpus.length * (1 << keys.length) && sweepRuns === 16 * 512, String(sweepRuns));
+}
+
+console.log("NRL-28 Unicode sentence segmentation and grapheme-safe splitting (R-M10)");
+{
+	const texts = (src: string, opts = OPTS): string[] => extractChunks(src, opts).map((c) => c.text);
+	const same = (got: string[], want: string[]): boolean =>
+		got.length === want.length && got.every((x, i) => x === want[i]);
+
+	/*
+	 * A lone surrogate is a chunk an engine cannot pronounce and a highlight
+	 * cannot land on. Written out rather than using String.isWellFormed, which
+	 * is ES2024 and this repo's lib is ES2022.
+	 */
+	const wellFormed = (s: string): boolean => {
+		for (let i = 0; i < s.length; i++) {
+			const u = s.charCodeAt(i);
+			if (u >= 0xd800 && u <= 0xdbff) {
+				const next = s.charCodeAt(i + 1);
+				if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+				i += 1;
+			} else if (u >= 0xdc00 && u <= 0xdfff) {
+				return false;
+			}
+		}
+		return true;
+	};
+
+	// Node has Intl.Segmenter, so the test can hold ICU itself as the oracle
+	// for what a grapheme cluster is, independently of src/text/segment.ts.
+	const GR = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+	const clusterCount = (s: string): number => [...GR.segment(s)].length;
+	/** A piece that opens with a combining mark was cut out of a cluster. */
+	const opensMidCluster = (s: string): boolean => {
+		if (s.length === 0) return false;
+		const first = [...GR.segment(s)][0]!.segment;
+		return /^[\p{Grapheme_Extend}\p{Emoji_Modifier}\u200d]/u.test(first);
+	};
+
+	/*
+	 * Offset lockstep, numeric and UTF-16-based. Never `[...k.text]`, for the
+	 * reason spelled out on unitsMatch: on an astral fixture a spread's index
+	 * stops matching the sourceIndex slot, it compares a two-unit string
+	 * against a one-unit one, and it leaves the trailing slots unread. Two of
+	 * the fixtures below are astral. Returns the first failure, or "".
+	 */
+	const lockstepBad = (src: string, opts = OPTS): string => {
+		for (const k of extractChunks(src, opts)) {
+			if (k.sourceIndex.length !== k.text.length) return "length";
+			if (k.text.length > 0 && k.sourceStart !== k.sourceIndex[0]) return "sourceStart";
+			if (k.text.length > 0 && k.sourceEnd !== k.sourceIndex[k.text.length - 1]! + 1) return "sourceEnd";
+			for (let i = 0; i < k.text.length; i++) {
+				const at = k.sourceIndex[i]!;
+				if (!Number.isInteger(at) || at < 0 || at >= src.length) return `bounds at ${i}`;
+				if (i > 0 && at < k.sourceIndex[i - 1]!) return `non-monotonic at ${i}`;
+				if (k.text.charCodeAt(i) !== 32 && src.charCodeAt(at) !== k.text.charCodeAt(i)) return `char at ${i}`;
+			}
+		}
+		return "";
+	};
+
+	// (a) Chinese. Full-width terminators and no inter-sentence space, so the
+	// ASCII-terminator-plus-whitespace regex can never see a boundary here.
+	const zh1 = "\u8fd9\u662f\u7b2c\u4e00\u53e5\u3002";
+	const zh2 = "\u8fd9\u662f\u7b2c\u4e8c\u53e5\u3002";
+	const zh3 = "\u7b2c\u4e09\u53e5\u7ed3\u675f\u4e86\u3002";
+	const zh = zh1 + zh2 + zh3;
+	check("NRL-28 Chinese splits at the full-width stop", same(texts(zh), [zh1, zh2, zh3]), JSON.stringify(texts(zh)));
+	check("NRL-28 Chinese offsets stay in lockstep", lockstepBad(zh) === "", lockstepBad(zh));
+
+	// (b) Japanese.
+	const ja1 = "\u3053\u308c\u306f\u4e00\u6587\u76ee\u3067\u3059\u3002";
+	const ja2 = "\u3053\u308c\u306f\u4e8c\u6587\u76ee\u3067\u3059\u3002";
+	const ja = ja1 + ja2;
+	check("NRL-28 Japanese splits at the full-width stop", same(texts(ja), [ja1, ja2]), JSON.stringify(texts(ja)));
+	check("NRL-28 Japanese offsets stay in lockstep", lockstepBad(ja) === "", lockstepBad(ja));
+
+	/*
+	 * (c) Right-to-left. The exact shape of the fix: the Arabic question mark
+	 * U+061F is a boundary only ICU knows about, so it survives, while the
+	 * ASCII "." boundary is still erased by mergeShort exactly as it is today.
+	 * Both halves matter - keeping every new boundary would repace English.
+	 */
+	const ar1 = "\u0647\u0630\u0627 \u0646\u0635 \u0639\u0631\u0628\u064a.";
+	const ar2 = "\u0648\u0647\u0630\u0627 \u0633\u0624\u0627\u0644\u061f";
+	const ar3 = "\u0648\u0647\u0630\u0627 \u0627\u0644\u0623\u062e\u064a\u0631.";
+	const ar = [ar1, ar2, ar3].join(" ");
+	check(
+		"NRL-28 Arabic keeps the U+061F boundary and still merges the ASCII one",
+		same(texts(ar), [`${ar1} ${ar2}`, ar3]),
+		JSON.stringify(texts(ar)),
+	);
+	check("NRL-28 Arabic offsets stay in lockstep", lockstepBad(ar) === "", lockstepBad(ar));
+
+	// (d) Astral emoji across the hard cut. The EMOJI drop test reads one
+	// UTF-16 unit, so a lone surrogate matches none of its ranges and an astral
+	// emoji survives cleanLine; a BMP one would simply be dropped before it
+	// ever reached the splitter. The trailing-U+FE0F shape is dropped and is
+	// out of scope here.
+	const emoji = "a".repeat(219) + "\u{1f600}" + "b".repeat(10) + ".";
+	const emojiChunks = extractChunks(emoji, OPTS);
+	check(
+		"NRL-28 no chunk is cut through a surrogate pair",
+		emojiChunks.every((c) => wellFormed(c.text)),
+		emojiChunks.map((c) => `${c.text.length}u`).join(","),
+	);
+	check("NRL-28 the astral emoji survives whole in one chunk", emojiChunks.some((c) => c.text.includes("\u{1f600}")));
+	check("NRL-28 emoji offsets stay in lockstep", lockstepBad(emoji) === "", lockstepBad(emoji));
+
+	// (e) Combining sequence across the hard cut.
+	const comb = "a".repeat(219) + "e\u0301" + "b".repeat(10) + ".";
+	const combChunks = extractChunks(comb, OPTS);
+	check(
+		"NRL-28 no chunk opens with an orphaned combining mark",
+		combChunks.every((c) => !opensMidCluster(c.text)),
+		combChunks.map((c) => `${c.text.length}u`).join(","),
+	);
+	check("NRL-28 combining offsets stay in lockstep", lockstepBad(comb) === "", lockstepBad(comb));
+
+	/*
+	 * (f) The cap is a target, not a guarantee: a single grapheme cluster can
+	 * be longer than it, so the only honest rule is "at most 220 units unless
+	 * the whole piece is one cluster". Replaces an older assertion that allowed
+	 * 240, which no code path could reach.
+	 */
+	const capBad = (src: string, opts = OPTS): string => {
+		for (const c of extractChunks(src, opts)) {
+			if (c.text.length > 220 && clusterCount(c.text) !== 1) return `${c.text.length}u / ${clusterCount(c.text)} clusters`;
+		}
+		return "";
+	};
+
+	// (g) One grapheme longer than the cap. It must be preserved rather than
+	// cut or dropped, and the loop must still terminate.
+	const zalgo = `a${"\u0301".repeat(300)} tail.`;
+	const zalgoChunks = extractChunks(zalgo, OPTS);
+	check("NRL-28 an oversized single grapheme is emitted whole", zalgoChunks[0]?.text.length === 301, `${zalgoChunks[0]?.text.length}`);
+	check("NRL-28 that piece really is one cluster", clusterCount(zalgoChunks[0]?.text ?? "") === 1);
+	check("NRL-28 the split still terminates and keeps the tail", zalgoChunks.map((c) => c.text).join("|").endsWith("tail."), JSON.stringify(zalgoChunks.map((c) => c.text.length)));
+	check("NRL-28 cap holds on the oversized-grapheme fixture", capBad(zalgo) === "", capBad(zalgo));
+	check("NRL-28 zalgo offsets stay in lockstep", lockstepBad(zalgo) === "", lockstepBad(zalgo));
+
+	// (h) The ticket's "Worse" paragraph: a long spaceless CJK paragraph used
+	// to be cut at exactly 220 units, mid-sentence. Every piece must now end at
+	// a sentence terminator.
+	const cjkPara = zh1.repeat(60);
+	const cjkChunks = extractChunks(cjkPara, OPTS);
+	check(
+		"NRL-28 a long CJK paragraph is never cut mid-sentence",
+		cjkChunks.every((c) => c.text.endsWith("\u3002")),
+		`${cjkChunks.length} chunks, first ${cjkChunks[0]?.text.length}u`,
+	);
+	check("NRL-28 long CJK offsets stay in lockstep", lockstepBad(cjkPara) === "", lockstepBad(cjkPara));
+
+	// (i) A single CJK sentence past the cap still has to be hard-split, and
+	// that split must be grapheme-safe even with no space anywhere in it.
+	const cjkLong = "\u8fd9".repeat(300) + "\u3002";
+	const cjkLongChunks = extractChunks(cjkLong, OPTS);
+	check("NRL-28 an oversized spaceless sentence is split", cjkLongChunks.length > 1, `${cjkLongChunks.length}`);
+	check("NRL-28 its pieces respect the cap", capBad(cjkLong) === "", capBad(cjkLong));
+	check("NRL-28 its pieces are well formed", cjkLongChunks.every((c) => wellFormed(c.text) && !opensMidCluster(c.text)));
+	check("NRL-28 oversized sentence offsets stay in lockstep", lockstepBad(cjkLong) === "", lockstepBad(cjkLong));
+
+	/*
+	 * (j) The word-boundary preference must not produce a runt.
+	 *
+	 * It only runs when the window holds no space past the halfway mark, and
+	 * `"hi "` followed by 300 unbroken characters is exactly that: the only
+	 * word boundary in the window is at 3. Without the same halfway floor the
+	 * space branch uses, this chunked as 3 + 220 + 81 where the cap alone gave
+	 * 220 + 84. Found by running the real module against the merge base, not
+	 * by any fixture in the suite, so it is pinned here.
+	 */
+	const runt = `hi ${"x".repeat(300)}.`;
+	check(
+		"NRL-28 a lone early word boundary does not beat the cap",
+		extractChunks(runt, OPTS).map((c) => c.text.length).join(",") === "220,84",
+		extractChunks(runt, OPTS).map((c) => c.text.length).join(","),
+	);
+	check(
+		"NRL-28 that shape is identical without a segmenter too",
+		extractChunks(runt, OPTS, noSegmenters).map((c) => c.text.length).join(",") === "220,84",
+		extractChunks(runt, OPTS, noSegmenters).map((c) => c.text.length).join(","),
+	);
+
+	/*
+	 * (k) English prose is not the same thing as ASCII prose.
+	 *
+	 * The ICU-only guard asks whether the last non-whitespace character before
+	 * a boundary is at or above U+0080, and its comment says it is testing the
+	 * terminator. Those are the same character only when nothing follows the
+	 * terminator. Obsidian's smart punctuation turns a straight closing quote
+	 * into a curly one, and the legacy regex's closer class is ASCII-only
+	 * (`["')\]]*`), so `stop." ` breaks and `stop.” ` does not. Without this
+	 * the curly form gained an ICU-only boundary that mergeShort then refused
+	 * to fold, and `“First.” “Second.” “Third.” Tail text here now.` spoke as
+	 * four utterances of 8, 9, 8 and 19 units where the straight-quoted form
+	 * spoke as one of 47. Measured against the merge base fb71812 by bundling
+	 * both extractors.
+	 *
+	 * The rule: walking back over a final or closing punctuation mark as well
+	 * as over whitespace reaches the terminator the comment always meant, so a
+	 * boundary with an ASCII terminator is rejected however it is punctuated.
+	 * `》`, `」` and `）` still ride on the non-ASCII terminator underneath
+	 * them, which is what keeps CJK working.
+	 */
+	const quoted = (q: [string, string]): string =>
+		`${q[0]}First.${q[1]} ${q[0]}Second.${q[1]} ${q[0]}Third.${q[1]} Tail text here now.`;
+	const straight = quoted(['"', '"']);
+	const curly = quoted(["\u201c", "\u201d"]);
+	// Both of these are one 47-unit chunk on the merge base. The straight form
+	// gets there by finding three legacy boundaries and folding all three;
+	// the curly form by finding none at all.
+	check("NRL-28 straight-quoted English is one chunk, as before", same(texts(straight), [straight]), JSON.stringify(texts(straight).map((c) => c.length)));
+	check("NRL-28 curly-quoted English is one chunk, not four runts", same(texts(curly), [curly]), JSON.stringify(texts(curly).map((c) => c.length)));
+	for (const [id, closer] of [["curly double", "\u201d"], ["curly single", "\u2019"], ["guillemet", "\u00bb"], ["single guillemet", "\u203a"], ["fullwidth paren", "\uff09"]] as const) {
+		const s = `He said \u201cstop.${closer} Then he left the room quietly and slowly.`;
+		check(`NRL-28 a ${id} closer leaves English where the merge base had it`, same(texts(s), [s]), JSON.stringify(texts(s)));
+	}
+	// The ASCII closer still breaks, exactly as it always has: the legacy
+	// regex owns that boundary and nothing here touches it.
+	const asciiCloser = "He said \u201cstop.\" Then he left the room quietly and slowly.";
+	check(
+		"NRL-28 an ASCII closer still breaks where the legacy regex says",
+		same(texts(asciiCloser), ["He said \u201cstop.\"", "Then he left the room quietly and slowly."]),
+		JSON.stringify(texts(asciiCloser)),
+	);
+	check(
+		"NRL-28 the guard still admits a non-ASCII terminator behind a closer",
+		same(texts(`\u4ed6\u8bf4\u300c${zh1}\u300d${zh2}`), [`\u4ed6\u8bf4\u300c${zh1}\u300d`, zh2]),
+		JSON.stringify(texts(`\u4ed6\u8bf4\u300c${zh1}\u300d${zh2}`)),
+	);
+
+	// The cap rule over every fixture in this section at once.
+	const corpus = [zh, ja, ar, emoji, comb, zalgo, cjkPara, cjkLong, runt, curly, straight];
+	check("NRL-28 cap holds over every fixture", corpus.every((s) => capBad(s) === ""), corpus.map((s) => capBad(s)).join("|"));
+	check("NRL-28 lockstep holds over every fixture", corpus.every((s) => lockstepBad(s) === ""), corpus.map((s) => lockstepBad(s)).join("|"));
+	check(
+		"NRL-28 no fixture produces a malformed or mid-cluster piece",
+		corpus.every((s) => extractChunks(s, OPTS).every((c) => wellFormed(c.text) && !opensMidCluster(c.text))),
+	);
+}
+
+/*
+ * NRL-28, the other segmenter position.
+ *
+ * This Node has Intl.Segmenter, so without an injected source the fallback
+ * would never execute in this suite at all and its first run would be on a
+ * user's WebView. `noSegmenters` is how it gets exercised, and it is a value
+ * rather than a deleted global so nothing here can leak into a later block.
+ */
+console.log("NRL-28 the no-segmenter position and the offline fallbacks (R-M10)");
+{
+	const NATIVE = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+	const nativeGraphemes = (s: string): number[] =>
+		[...NATIVE.segment(s)].map((p) => p.index).filter((at) => at > 0);
+
+	// (a) The legacy rule is the old regex, unchanged, and is still what the
+	// fallback path uses on its own.
+	check("NRL-28 legacy rule breaks after a terminator plus space", legacySentenceBoundaries("One two. Three four.").join(",") === "9");
+	check("NRL-28 legacy rule needs the whitespace", legacySentenceBoundaries("One.Two").length === 0);
+	check("NRL-28 legacy rule keeps a trailing closer", legacySentenceBoundaries('He said "stop." Then left.').join(",") === "16");
+	check("NRL-28 legacy rule finds nothing in CJK", legacySentenceBoundaries("\u8fd9\u662f\u7b2c\u4e00\u53e5\u3002\u8fd9\u662f\u7b2c\u4e8c\u53e5\u3002").length === 0);
+	check(
+		"NRL-28 with no sentence segmenter the union is exactly the legacy set",
+		sentenceBoundaries("One two. Three four.", "en", noSegmenters).every((b) => b.legacy) &&
+			sentenceBoundaries("One two. Three four.", "en", noSegmenters).map((b) => b.at).join(",") === "9",
+	);
+	check(
+		"NRL-28 with no sentence segmenter CJK has no boundary at all",
+		sentenceBoundaries("\u8fd9\u662f\u7b2c\u4e00\u53e5\u3002\u8fd9\u662f\u7b2c\u4e8c\u53e5\u3002", "en", noSegmenters).length === 0,
+	);
+
+	/*
+	 * (b) The offline UAX 29 breaker, against ICU as the oracle. These are the
+	 * shapes that a naive code-point walk gets wrong: it would keep a surrogate
+	 * pair together and nothing else.
+	 */
+	const graphemeFixtures: Array<[string, string]> = [
+		["regional indicator pair", "\u{1f1ec}\u{1f1e7}"],
+		["three regional indicators", "\u{1f1ec}\u{1f1e7}\u{1f1fa}"],
+		["ZWJ family of three", "\u{1f468}\u200d\u{1f469}\u200d\u{1f466}"],
+		["301-unit single cluster", `a${"\u0301".repeat(300)}`],
+		["variation selector", "\u2764\ufe0f"],
+		["keycap", "1\ufe0f\u20e3"],
+		["skin tone", "\u{1f44d}\u{1f3fd}"],
+		["tag sequence flag", "\u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}"],
+		["hangul jamo", "\u1100\u1161\u11a8"],
+		["CRLF", "a\r\nb"],
+		["devanagari conjunct", "\u0915\u094d\u0937\u093f"],
+		["bengali conjunct", "\u0995\u09cd\u09b7"],
+		["ZWNJ blocks the conjunct", "\u0915\u200c\u094d\u0915"],
+		["prepended concatenation mark", "\u0600\u0661"],
+		["thai sara am", "\u0e01\u0e33"],
+		["doubled ZWJ", "\u0e01\u2764\u200d\u200d\u{1f600}\u2764"],
+		["lone high surrogate", "\ud83d"],
+		["lone low surrogate", "\ude00"],
+		["plain ascii", "hello world"],
+		["CJK", "\u8fd9\u662f\u7b2c\u4e00\u53e5\u3002"],
+		["arabic", "\u0647\u0630\u0627 \u0646\u0635"],
+		["empty", ""],
+	];
+	for (const [id, s] of graphemeFixtures) {
+		check(
+			`NRL-28 offline grapheme breaker agrees with ICU on ${id}`,
+			uax29GraphemeBoundaries(s).join(",") === nativeGraphemes(s).join(","),
+			`offline [${uax29GraphemeBoundaries(s)}] icu [${nativeGraphemes(s)}]`,
+		);
+	}
+	check(
+		"NRL-28 the 301-unit sequence really is one cluster, so the cap cannot hold",
+		uax29GraphemeBoundaries(`a${"\u0301".repeat(300)}`).length === 0,
+	);
+
+	/*
+	 * (c) Whole-extractor equivalence on ASCII. This is the acceptance
+	 * criterion "the existing extract fixtures pass unchanged", made
+	 * structural: with no segmenter at all the union collapses to the legacy
+	 * set, so ASCII output must be identical in both positions, byte for byte
+	 * and offset for offset.
+	 */
+	const asciiCorpus: Array<[string, string]> = [
+		["frontmatter", "---\ntitle: A Note\ntags: [a, b]\nsource: https://example.com/a/b\n# yaml comment\n---\nBody prose here."],
+		["fenced", "Intro line here.\n\n```js\nconst x = 1;\n```\n\nOutro line here."],
+		["inline-code", "Call `git commit -m x` to save it all now."],
+		["links", "See [the docs](https://example.com/p) and [ref][r] and https://bare.example.org/x now."],
+		["wikilinks", "Go to [[Some Note|the alias]] and [[Other#Head]] and [[Third#^abc]] now."],
+		["embeds", "Here ![[Some Note]] and ![[pic.png|200x100]] and ![[pic.png|A bicycle]] end."],
+		["images", 'Here ![alt words](img.png "Title") and ![ref alt][r] and ![shortcut] end.'],
+		["table", "Lead in here.\n\n| a | b |\n| - | - |\n| c | d |\n\nLead out here."],
+		["headings", "# Top Heading\n\nBody one here.\n\n## Sub Heading\n\nBody two here."],
+		["comments", "Before %%hidden%% after.\n\n<!--\nblock hidden\n-->\nTail prose here."],
+		["soft-code-span", "Before `first\n%%literal%%\nlast` after."],
+		["callout-marker", "[!note] Callout body text here."],
+		["abbreviations", "Dr. Smith arrived. See e.g. the thing. He lives in the U.S.A. now."],
+		["ellipsis", "Wait... then what happened next in this rather long story of ours?"],
+		["long-hard-split", `One two three. Four five six. ${"word ".repeat(120).trim()}.`],
+		["math", "Before $$\nx = 1\n$$ after."],
+	];
+	const sameChunks = (src: string): string => {
+		const a = extractChunks(src, OPTS);
+		const b = extractChunks(src, OPTS, noSegmenters);
+		if (a.length !== b.length) return `count ${a.length} vs ${b.length}`;
+		for (let i = 0; i < a.length; i++) {
+			const x = a[i]!;
+			const y = b[i]!;
+			if (x.text !== y.text) return `text[${i}]`;
+			if (x.sourceStart !== y.sourceStart) return `sourceStart[${i}]`;
+			if (x.sourceEnd !== y.sourceEnd) return `sourceEnd[${i}]`;
+			if (x.sourceIndex.join(",") !== y.sourceIndex.join(",")) return `sourceIndex[${i}]`;
+		}
+		return "";
+	};
+	let asciiChecked = 0;
+	for (const [id, src] of asciiCorpus) {
+		check(`NRL-28 ${id} fixture is ASCII-only, so the guard provably cannot fire`, !/[^\u0000-\u007f]/.test(src));
+		check(`NRL-28 ${id} is byte-identical with and without a segmenter`, sameChunks(src) === "", sameChunks(src));
+		asciiChecked += 1;
+	}
+	check("NRL-28 the ASCII equivalence corpus really ran", asciiChecked === asciiCorpus.length && asciiChecked === 16, String(asciiChecked));
+
+	/*
+	 * (d) The honest consequence of having no segmenter: CJK collapses back to
+	 * one chunk. R-M10's "MAY fall back to paragraphs or safe-sized chunks" is
+	 * what licenses that, and pinning it here stops the fallback quietly
+	 * growing an English-shaped rule for CJK later.
+	 */
+	const zh = "\u8fd9\u662f\u7b2c\u4e00\u53e5\u3002\u8fd9\u662f\u7b2c\u4e8c\u53e5\u3002\u7b2c\u4e09\u53e5\u7ed3\u675f\u4e86\u3002";
+	check("NRL-28 without a segmenter CJK is one chunk again", extractChunks(zh, OPTS, noSegmenters).length === 1);
+	check("NRL-28 with one it is three", extractChunks(zh, OPTS).length === 3);
+
+	/*
+	 * (e) Grapheme safety does not depend on ICU. With no segmenter these cuts
+	 * are placed by uax29GraphemeBoundaries alone.
+	 */
+	const wellFormed = (s: string): boolean => {
+		for (let i = 0; i < s.length; i++) {
+			const u = s.charCodeAt(i);
+			if (u >= 0xd800 && u <= 0xdbff) {
+				const next = s.charCodeAt(i + 1);
+				if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+				i += 1;
+			} else if (u >= 0xdc00 && u <= 0xdfff) {
+				return false;
+			}
+		}
+		return true;
+	};
+	const emoji = "a".repeat(219) + "\u{1f600}" + "b".repeat(10) + ".";
+	const comb = "a".repeat(219) + "e\u0301" + "b".repeat(10) + ".";
+	const zalgo = `a${"\u0301".repeat(300)} tail.`;
+	const fallbackEmoji = extractChunks(emoji, OPTS, noSegmenters);
+	check("NRL-28 fallback never cuts a surrogate pair", fallbackEmoji.every((c) => wellFormed(c.text)), fallbackEmoji.map((c) => c.text.length).join(","));
+	check(
+		"NRL-28 fallback never orphans a combining mark",
+		extractChunks(comb, OPTS, noSegmenters).every((c) => !/^[\p{Grapheme_Extend}\p{Emoji_Modifier}\u200d]/u.test(c.text)),
+	);
+	check("NRL-28 fallback keeps an oversized cluster whole", extractChunks(zalgo, OPTS, noSegmenters)[0]?.text.length === 301);
+	check(
+		"NRL-28 fallback still terminates on every fixture",
+		[emoji, comb, zalgo, zh].every((s) => extractChunks(s, OPTS, noSegmenters).length > 0),
+	);
+
+	/*
+	 * (f) Locale tolerance. appLocale() reads Obsidian's UI language, which is
+	 * not contractually a well-formed BCP 47 tag, and Intl.Segmenter throws
+	 * RangeError on a bad one. A bad tag must cost the locale, never the
+	 * segmentation.
+	 */
+	check("NRL-28 a malformed locale tag does not throw", (() => {
+		try {
+			return extractChunks(zh, { ...OPTS, locale: "en_US" }).length === 3;
+		} catch {
+			return false;
+		}
+	})());
+	check("NRL-28 a regional tag is accepted as given", extractChunks(zh, { ...OPTS, locale: "zh-cn" }).length === 3);
+	check("NRL-28 platformSegmenters really has segmenters here", platformSegmenters.sentence("en") !== undefined && platformSegmenters.grapheme() !== undefined);
+	check("NRL-28 noSegmenters really has none", noSegmenters.sentence("en") === undefined && noSegmenters.grapheme() === undefined && noSegmenters.word("en") === undefined);
 }
 
 console.log("");

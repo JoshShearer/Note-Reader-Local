@@ -236,6 +236,9 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			skipFrontmatter: this.settings.skipFrontmatter,
 			speakImageAlt: this.settings.speakImageAlt,
 			speakEmbeds: this.settings.speakEmbeds,
+			// Not a setting: the UI language, which is what the segmenters are
+			// built with. appLocale() never throws and falls back to "en".
+			locale: appLocale(),
 		});
 		t("chunks extracted", `${chunks.length}`);
 

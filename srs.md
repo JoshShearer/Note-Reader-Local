@@ -340,6 +340,17 @@ The implementation SHOULD use `Intl.Segmenter` where supported rather than imple
 
 The segmenter MUST support Unicode text.
 
+Amended by ADR 0009 (NRL-28):
+
+- Sentence boundaries are the **union** of `Intl.Segmenter` and the previous ASCII regex, not a replacement. ICU removes English boundaries the regex produces (after `e.g.`, after `...`, after `U.S.A.`), so replacing the regex would lengthen English chunks. An ICU-only boundary is accepted only when the **terminator** before it is at or above U+0080, which admits `。`, `？`, `！` and `؟` and by construction admits none where the terminator is ASCII. Reaching the terminator means walking back over whitespace and over closing or final punctuation (`\p{Pe}`, `\p{Pf}`), because the regex's own closer class `["')\]]*` is ASCII-only and would otherwise let smart-punctuated prose break where the same prose in straight quotes does not.
+- Merging short fragments MUST NOT erase a boundary only `Intl.Segmenter` found. ICU segments a Chinese paragraph into sentences of six or seven characters, every one below the 40-character merge floor, so an unguarded merge folds them all back into the single chunk this requirement exists to prevent.
+- The hard chunk cap is a **target, not a guarantee**, and MUST NOT cut inside an extended grapheme cluster. A single cluster can exceed the cap - `a` followed by 300 combining acutes is 301 UTF-16 units and one cluster - and where the two conflict the cluster wins and is emitted whole, which also guarantees forward progress. This is the only case in which a chunk may exceed the cap.
+- Where `Intl.Segmenter` is absent, grapheme boundaries come from a bundled offline UAX 29 breaker rather than code-point iteration, so a cut still cannot land inside a surrogate pair, an emoji sequence or a combining sequence. Sentence segmentation in that position falls back to the ASCII regex, under the "MAY fall back" clause above, which means CJK collapses to a single chunk when no segmenter exists.
+- The segmenter locale is Obsidian's UI language, from `appLocale()`. Nothing inspects the note to detect a language and nothing selects a voice from it. A malformed locale tag costs the locale, never the segmentation.
+- All offsets remain UTF-16 code-unit indices, as R-M11 requires.
+
+Not met by this requirement and tracked separately: word-level granularity inside a run of Han. `findWords` has no separator there, so a whole CJK sentence is one word span and the highlight covers it for its full duration.
+
 ---
 
 ### R-M11 — Source Mapping

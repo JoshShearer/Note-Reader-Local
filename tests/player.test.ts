@@ -178,6 +178,7 @@ function chunksOf(src: string): SpeechChunk[] {
 		skipFrontmatter: true,
 		speakImageAlt: true,
 		speakEmbeds: false,
+		locale: "en",
 	});
 }
 
