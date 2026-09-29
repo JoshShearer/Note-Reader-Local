@@ -481,6 +481,8 @@ interface TTSCapabilities {
 }
 ```
 
+Implemented as `EngineCapabilities` in `src/audio/types.ts`, where `timing` (`native` | `measured` | `estimated` | `none`) supersedes `wordBoundary`: it carries the same yes/no plus how far the timings can be trusted. Every other field is implemented under the name given here.
+
 Controls unsupported by the current backend MUST be disabled, hidden, or clearly marked unavailable.
 
 ---

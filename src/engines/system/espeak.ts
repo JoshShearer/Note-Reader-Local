@@ -29,6 +29,13 @@ const CAPABILITIES: EngineCapabilities = {
 	rate: true,
 	pitch: true,
 	desktopOnly: true,
+	// Same WAV-into-the-player path as Kokoro, so pausing the element works.
+	pause: true,
+	resume: true,
+	// The WAV carries no marks; word timings are apportioned, not reported.
+	sentenceBoundary: false,
+	// A local binary with a built-in voice list. Nothing here can need a network.
+	offlineStatus: true,
 	// `--stdout` gives us a WAV, so the player owns playback and its speed.
 	ownsPlayback: false,
 };

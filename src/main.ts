@@ -20,6 +20,7 @@ import { createModelStore, type VaultModelStore } from "./ui/modelStore";
 import { reportError, trace } from "./diagnostics";
 import { LocalTtsSettingTab } from "./ui/settingsTab";
 import { ControlBar } from "./ui/controlBar";
+import { controlAffordances } from "./ui/affordances";
 
 export default class LocalTtsReaderPlugin extends Plugin {
 	override settings: Settings = { ...DEFAULT_SETTINGS };
@@ -86,6 +87,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		});
 
 		this.controlBar = new ControlBar(this);
+		this.refreshEngineAffordances();
 
 		this.addRibbonIcon("audio-lines", "Read this note aloud", () => {
 			void this.readActiveNote().catch((err: unknown) => {
@@ -106,7 +108,23 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.addCommand({
 			id: "toggle-playback",
 			name: "Pause or resume reading",
-			callback: () => this.player.toggle(),
+			// Gated for the same reason the control bar's button is (R-M14), and
+			// it has to be gated here too: disabling the button alone still left
+			// the palette able to reach a state the player cannot leave. On an
+			// engine the player cannot pause, pause() stops an <audio> element
+			// that is not the thing making the sound and sets state "paused"
+			// anyway, and resume() then calls play() on a source-less element,
+			// which rejects. The reading never comes back.
+			//
+			// checkCallback hides the command instead of showing a reason, which
+			// is the other half of what R-M14 permits. A palette entry has no
+			// tooltip to put a reason in, and an entry that runs and does
+			// nothing is the defect, not the absence.
+			checkCallback: (checking: boolean) => {
+				if (!this.canPause()) return false;
+				if (!checking) this.player.toggle();
+				return true;
+			},
 		});
 
 		this.addCommand({
@@ -135,7 +153,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 	/** Load the selected engine's heavy resources ahead of the first request. */
 	private async warmUpEngine(): Promise<void> {
-		const engine = findEngine(this.engines, this.settings.engine);
+		const engine = this.activeEngine();
 		if (!engine?.prepare) return;
 		try {
 			if (!(await engine.isAvailable())) return;
@@ -302,9 +320,47 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		return this.modelStore;
 	}
 
+	/** The engine `settings.engine` names, or null if the registry has no such id. */
+	activeEngine(): SpeechEngine | null {
+		return findEngine(this.engines, this.settings.engine) ?? null;
+	}
+
+	/**
+	 * Point the control bar at the active engine's capabilities.
+	 *
+	 * A direct call rather than an event: there is one writer (`setEngine`) and
+	 * one subscriber, and the plugin is not an event source today. The cost is
+	 * that a second writer of `settings.engine` would leave the bar stale with
+	 * no symptom, which is why `setEngine` must stay the only one.
+	 */
+	private refreshEngineAffordances(): void {
+		const engine = this.activeEngine();
+		this.controlBar.setEngine(engine?.capabilities ?? null, engine?.label ?? "This engine");
+	}
+
+	/**
+	 * Whether the active engine's audio can actually be paused and resumed.
+	 *
+	 * Read from the same module the control bar reads, so the button and the
+	 * command cannot disagree about it. Evaluated per call rather than cached:
+	 * the palette asks on open, which is always after `setEngine`.
+	 */
+	private canPause(): boolean {
+		const engine = this.activeEngine();
+		return controlAffordances(engine?.capabilities ?? null, engine?.label ?? "This engine")
+			.playPause.enabled;
+	}
+
+	/**
+	 * The only permitted writer of `settings.engine`.
+	 *
+	 * Anything that depends on which engine is active is refreshed from here, so
+	 * changing engine takes effect without reloading the plugin.
+	 */
 	async setEngine(id: EngineId): Promise<void> {
 		this.settings.engine = id;
 		await this.saveSettings();
+		this.refreshEngineAffordances();
 		void this.warmUpEngine();
 	}
 
@@ -367,7 +423,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	async setVoice(voiceId: string): Promise<void> {
 		this.settings.voiceId = voiceId;
 		await this.saveSettings();
-		const engine = findEngine(this.engines, this.settings.engine);
+		const engine = this.activeEngine();
 		const voices = (await engine?.listVoices()) ?? [];
 		const wanted = voices.find((v) => v.id === voiceId);
 		if (engine && wanted) await engine.selectVoice(wanted);

@@ -91,8 +91,22 @@
 	cursor: pointer;
 }
 
-.local-tts-cb-btn:hover {
+.local-tts-cb-btn:hover:not(:disabled) {
 	background: var(--background-modifier-hover);
+}
+
+/*
+ * A control the active engine cannot honour. Disabled and visibly so, rather
+ * than hidden: R-M14 allows either, and a button that disappears when the
+ * engine changes is harder to understand than one that stays put with a
+ * tooltip. The hover rules are narrowed to :not(:disabled) above and below,
+ * since lighting up on hover reads as "this works".
+ */
+.local-tts-cb-btn:disabled,
+.local-tts-cb-speed-btn:disabled,
+.local-tts-cb-speed-value.is-unavailable {
+	opacity: 0.45;
+	cursor: not-allowed;
 }
 
 .local-tts-cb-btn-primary {
@@ -100,7 +114,7 @@
 	color: var(--text-on-accent);
 }
 
-.local-tts-cb-btn-primary:hover {
+.local-tts-cb-btn-primary:hover:not(:disabled) {
 	background: var(--interactive-accent-hover);
 	color: var(--text-on-accent);
 }
@@ -138,7 +152,7 @@
 	cursor: pointer;
 }
 
-.local-tts-cb-speed-btn:hover {
+.local-tts-cb-speed-btn:hover:not(:disabled) {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }

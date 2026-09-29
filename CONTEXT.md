@@ -23,7 +23,8 @@ is what makes highlighting possible, and it is the load-bearing idea in the code
 | **source offset** | A character position in the note's **raw markdown**, not in the spoken text. |
 | **`sourceIndex`** | Per-character array on a chunk: `sourceIndex[i]` is the raw offset that produced `text[i]`. Survives stripping. |
 | **engine** | A speech backend implementing `SpeechEngine`. Four exist: `kokoro`, `espeak`, `speechd`, `webspeech`. |
-| **capabilities** | What an engine can do (`EngineCapabilities`). The UI is supposed to read these before offering a control. |
+| **capabilities** | What an engine can do (`EngineCapabilities`). The UI reads these before offering a control. |
+| **affordance** | What the UI does with a capability: enabled or disabled, plus a reason. `src/ui/affordances.ts`, pure so bare-Node tests can drive it. |
 | **`ownsPlayback`** | The engine makes sound itself rather than returning audio. Decides who applies the playback rate. |
 | **weights build** | A quantisation of the Kokoro model: `gpu` (fp32), `fast` (q4f16), `small` (q8). |
 | **backend plan** | The ordered list of (device, weights) attempts Kokoro will make, with a WASM tail as fallback. |
@@ -87,6 +88,7 @@ src/
 └── ui/
     ├── settingsTab.ts          all settings rendering
     ├── controlBar.ts           transport controls
+    ├── affordances.ts          capabilities -> which controls to offer, and why not, pure
     ├── highlight.ts            CodeMirror StateField + decoration
     ├── highlightColour.ts      highlight colour setting -> CSS variable, pure (ADR 0005)
     ├── modelStore.ts           downloads, vault file IO for model assets
@@ -128,8 +130,11 @@ These are design-level, not bugs, and they shape any new work:
 - `Player` is a **chunk-queue player, not a reading session**. It holds no file path and
   no document identity, which is why per-note reading position (R-M12) cannot simply be
   bolted on.
-- **Capabilities are advertised but almost never consumed.** Three call sites total, one
-  of which is a label. The UI offers controls the active engine cannot honour.
+- **Capabilities are consumed for the transport controls only.** `src/ui/affordances.ts`
+  gates play/pause, the rate nudges and the highlight toggle, and the settings engine list
+  reports each engine's limitations. `pitch` still gates nothing (there is no pitch control
+  in the UI at all), and no engine declares `sentenceBoundary`, so the sentence-level
+  features the spec imagines have nothing to switch on yet.
 - **There is no engine fallback chain.** Selection is a stored id; if it fails, the user
   gets a notice telling them to change a dropdown.
 - **Segmentation is a single regex** (`/[.!?…]+["')\]]*\s+/g`) with no `Intl.Segmenter`,
