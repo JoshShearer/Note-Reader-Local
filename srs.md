@@ -280,6 +280,7 @@ In particular:
 - Emphasis markers are dropped. An underscore between letters or digits is part of an identifier (`snake_case_name` is spoken intact); only a flanking `_` is emphasis. `*` and `~~` with whitespace on both sides, and a single `~`, are spoken as text.
 - `==highlight==` speaks its text without the equals signs; `a == b` is text.
 - Inline HTML tags from a known-element list are dropped and their text content kept; `<br>` and other breaking elements separate words.
+- The brackets of an autolink (`<https://example.com>`, `<me@example.com>`) are never spoken, in either position of the URL setting. What is spoken of the address itself is governed by R-M09 (ADR 0007).
 - HTML comments (`<!-- ... -->`), including multi-line ones, are never spoken. An unclosed comment hides the rest of the note.
 - Footnote references (`[^1]`) are dropped, and a definition's `[^1]:` marker with them.
 - Math is spoken as the word "equation": display math always, inline math only when it has 4 or more tokens, with a currency heuristic so prices such as `$5` are read as written (ADR 0004).
@@ -313,6 +314,7 @@ embeds: false
 When spoken, these are reduced as follows:
 
 - A bare URL (`https://...`, `http://...` or `www....`) is spoken as its host only: no scheme, no userinfo (credentials such as `user:secret@` are never spoken), no leading `www.`, no port, path, query or fragment. `See https://example.com/a/b?c=d now.` is spoken as `See example.com now.` Markdown links (`[label](url)`) and wikilinks are unaffected by the URL setting; their label is always spoken (ADR 0003).
+- An autolink `<scheme://...>` is reduced to its host by the same rule as a bare URL, and `<addr@host>` and `<mailto:addr@host>` follow the same setting: silent when URLs are not spoken, the domain only when they are, and the mailbox never. No `<` or `>` is spoken in either position. An autolink stops at its closing `>`, so a sentence period after it is still spoken, unlike the bare-URL form (ADR 0007).
 - Fenced and indented code blocks are spoken verbatim, one paragraph per block, with whitespace runs collapsed, and both follow the code-block setting. The fence lines and any info string (e.g. `js`) are never spoken. An indented block starts only after a blank line or at document start, and inside a list an indented line is item content, not code (CommonMark).
 - Inline code is spoken verbatim without the backticks. Its content is not treated as markdown.
 

@@ -810,6 +810,170 @@ console.log("block markup (NRL-8)");
 	}
 }
 
+console.log("angle-bracket autolinks (NRL-39)");
+{
+	const urlsOn = { ...OPTS, speakUrls: true };
+	const spokenWith = (src: string, opts: typeof OPTS): string =>
+		extractChunks(src, opts).map((c) => c.text).join(" ");
+	const lockstepWith = (src: string, opts: typeof OPTS): boolean =>
+		extractChunks(src, opts).every(
+			(k) =>
+				k.sourceIndex.length === k.text.length &&
+				[...k.text].every((ch, i) => ch === " " || src[k.sourceIndex[i]!] === ch),
+		);
+	const offsetOf = (src: string, opts: typeof OPTS, word: string): number | undefined => {
+		const k = extractChunks(src, opts).find((c) => c.text.includes(word));
+		return k ? k.sourceIndex[k.text.indexOf(word)] : undefined;
+	};
+
+	// [source, spoken with speakUrls off, spoken with speakUrls on].
+	// `secretbox`, `user` and `secret` are sentinels: an autolink must never
+	// speak a mailbox or credentials in either position (docs/adr/0007).
+	const autolinks: Array<[string, string, string]> = [
+		// The two ticket reproductions.
+		["See <https://x.com> ok.", "See ok.", "See x.com ok."],
+		["Mail <me@example.com> now.", "Mail now.", "Mail example.com now."],
+		["Mail <secretbox@example.com> now.", "Mail now.", "Mail example.com now."],
+		["Mail <mailto:secretbox@example.com> now.", "Mail now.", "Mail example.com now."],
+		// A generic scheme reduces to its host exactly as https does.
+		["Get <ftp://files.example.com/x> now.", "Get now.", "Get files.example.com now."],
+		// CommonMark allows a scheme of 2 to 32 characters, so both ends of
+		// that range are autolinks.
+		["Get <ab://x.com> now.", "Get now.", "Get x.com now."],
+		[`Get <${"a".repeat(32)}://x.com> now.`, "Get now.", "Get x.com now."],
+		["Log in at <https://user:secret@example.com/x> now.", "Log in at now.", "Log in at example.com now."],
+		// Consumption stops at ">", so the sentence period is prose and is
+		// still spoken. A bare URL swallows it, because its extent is only
+		// known by whitespace; an autolink's extent is delimited.
+		["See <https://x.com>.", "See .", "See x.com ."],
+		// Alone on a line.
+		["<https://x.com>", "", "x.com"],
+		["<secretbox@example.com>", "", "example.com"],
+		// Case is not significant in a scheme or a domain, and the host keeps
+		// the author's own casing: it is raw characters, not a synthetic word.
+		["Go <HTTPS://X.COM> ok.", "Go ok.", "Go X.COM ok."],
+		["Go <MAILTO:SECRETBOX@EXAMPLE.COM> ok.", "Go ok.", "Go EXAMPLE.COM ok."],
+		// More than one on a line, and two with nothing between them.
+		["Two <https://a.com> and <https://b.com> here.", "Two and here.", "Two a.com and b.com here."],
+		["Two <https://a.com><https://b.com> here.", "Two here.", "Two a.com b.com here."],
+		// Nested markup: a link label and a highlight are both re-cleaned.
+		["See [a <https://x.com> b](t) now.", "See a b now.", "See a x.com b now."],
+		["Some ==hi <https://x.com> there== ok.", "Some hi there ok.", "Some hi x.com there ok."],
+		// Port, query and fragment are not the host; a trailing dot is trimmed
+		// (ADR 0003 clause 3).
+		["Go <http://localhost:8080/p> ok.", "Go ok.", "Go localhost ok."],
+		["Go <https://x.com/a?b=1#c> ok.", "Go ok.", "Go x.com ok."],
+		["Go <https://x.com.> ok.", "Go ok.", "Go x.com ok."],
+		// A non-ASCII host is letters, so it survives the host walk intact.
+		["Go <https://пример.рф/x> ok.", "Go ok.", "Go пример.рф ok."],
+		// Block contexts still reach the inline scanner.
+		["# <https://x.com> title", "title", "x.com title"],
+		["- <secretbox@example.com> item", "item", "example.com item"],
+		["> quoted <https://x.com> here", "quoted here", "quoted x.com here"],
+	];
+	for (const [src, off, on] of autolinks) {
+		const gotOff = spokenWith(src, OPTS);
+		check(`speakUrls false: ${JSON.stringify(src)} -> ${JSON.stringify(off)}`, gotOff === off, `got: ${JSON.stringify(gotOff)}`);
+		const gotOn = spokenWith(src, urlsOn);
+		check(`speakUrls true: ${JSON.stringify(src)} -> ${JSON.stringify(on)}`, gotOn === on, `got: ${JSON.stringify(gotOn)}`);
+		for (const [label, got] of [["false", gotOff], ["true", gotOn]] as const) {
+			check(`no angle bracket spoken (speakUrls ${label}): ${JSON.stringify(src)}`, !/[<>]/.test(got), `got: ${JSON.stringify(got)}`);
+			check(`no mailbox or credentials spoken (speakUrls ${label}): ${JSON.stringify(src)}`, !/secretbox|user|secret/.test(got), `got: ${JSON.stringify(got)}`);
+			check(`no scheme or mailto spoken (speakUrls ${label}): ${JSON.stringify(src)}`, !/:\/\/|mailto/.test(got), `got: ${JSON.stringify(got)}`);
+		}
+	}
+
+	// Raw offsets: the word after an autolink, and the host itself.
+	const urlRepro = "See <https://x.com> ok.";
+	const mailRepro = "Mail <me@example.com> now.";
+	for (const opts of [OPTS, urlsOn]) {
+		const afterUrl = offsetOf(urlRepro, opts, "ok");
+		check(`word after a URL autolink maps to its raw offset (speakUrls ${opts.speakUrls})`, afterUrl === urlRepro.indexOf("ok"), `got: ${afterUrl} want ${urlRepro.indexOf("ok")}`);
+		const afterMail = offsetOf(mailRepro, opts, "now");
+		check(`word after an email autolink maps to its raw offset (speakUrls ${opts.speakUrls})`, afterMail === mailRepro.indexOf("now"), `got: ${afterMail} want ${mailRepro.indexOf("now")}`);
+	}
+	const hostOffsets: Array<[string, string]> = [
+		["See <https://x.com> ok.", "x.com"],
+		["Mail <me@example.com> now.", "example.com"],
+		["Mail <mailto:secretbox@example.com> now.", "example.com"],
+		["Get <ftp://files.example.com/x> now.", "files.example.com"],
+		["Log in at <https://user:secret@example.com/x> now.", "example.com"],
+	];
+	for (const [src, host] of hostOffsets) {
+		// Each host occurs once, after any userinfo, so lastIndexOf is its raw offset.
+		const got = offsetOf(src, urlsOn, host);
+		check(`host of ${JSON.stringify(src)} maps to its raw host`, got === src.lastIndexOf(host), `got: ${got} want ${src.lastIndexOf(host)}`);
+	}
+
+	// Guards: nothing that is not a complete autolink changes. These hold
+	// before and after the fix; they pin what must not regress.
+	const unchanged: Array<[string, string]> = [
+		["a < b and c > d", "a < b and c > d"],
+		["x<y and z>w", "x<y and z>w"],
+		["a <b and c> d", "a <b and c> d"],
+		["x <i am here> y", "x <i am here> y"],
+		["a <span foo> b", "a <span foo> b"],
+		// A dotless domain is not positive evidence of an address, so it stays
+		// text rather than risk swallowing a word (docs/adr/0007).
+		["Ping <a@b> soon.", "Ping <a@b> soon."],
+		// A scheme of one character, or of more than 32, is not an autolink:
+		// CommonMark requires 2 to 32. Obsidian renders these literally, so
+		// consuming one would silently delete text the reader can see, and
+		// `x<y://z>w` would lose the join between `x` and `w` as well.
+		["ratio a<b://c> d", "ratio a<b://c> d"],
+		["x<y://z>w", "x<y://z>w"],
+		[`See <${"a".repeat(33)}://x.com> ok.`, `See <${"a".repeat(33)}://x.com> ok.`],
+		// Known HTML tags still win, and NRL-9's handling is untouched.
+		["Some <b>bold</b> and <br/> text.", "Some bold and text."],
+		["un<b>bold</b>ed", "unbolded"],
+		["a </b> b", "a b"],
+		// The HTML comment branch runs first and still hides its content.
+		["A <!-- hidden secret --> B.", "A B."],
+		// An href inside a tag is not an autolink.
+		['A <a href="https://x.com/p">link</a> here.', "A link here."],
+	];
+	for (const [src, want] of unchanged) {
+		for (const opts of [OPTS, urlsOn]) {
+			const got = spokenWith(src, opts);
+			check(`unchanged (speakUrls ${opts.speakUrls}): ${JSON.stringify(src)} -> ${JSON.stringify(want)}`, got === want, `got: ${JSON.stringify(got)}`);
+		}
+	}
+
+	// Inline code is not markdown, so an autolink inside it is literal when the
+	// code is spoken and silent when it is not.
+	const inCode = "Use `<https://x.com>` now.";
+	const codeSpoken = spokenWith(inCode, { ...urlsOn, skipInlineCode: false });
+	check("autolink inside spoken inline code is literal", codeSpoken === "Use <https://x.com> now.", `got: ${JSON.stringify(codeSpoken)}`);
+	check("autolink inside skipped inline code is silent", spokenWith(inCode, urlsOn) === "Use now.", `got: ${JSON.stringify(spokenWith(inCode, urlsOn))}`);
+	const inFence = "```\n<https://x.com>\n```\nAfter.";
+	const fenceSpoken = spokenWith(inFence, { ...urlsOn, skipCodeBlocks: false });
+	check("autolink inside a spoken fence is literal", fenceSpoken === "<https://x.com> After.", `got: ${JSON.stringify(fenceSpoken)}`);
+
+	// Scope boundaries. These three are unchanged from before the fix: an
+	// incomplete or escaped autolink is not recognised, so the bare-URL branch
+	// keeps its NRL-10 behaviour and the stray "<" stays text. Recognising a
+	// half-open bracket would risk eating the rest of the line, which is the
+	// same trade the HTML element whitelist makes. Pinned so the boundary is a
+	// decision rather than drift; moving it is a separate ticket.
+	const boundaries: Array<[string, string, string]> = [
+		["See <https://x.com and more here.", "See < and more here.", "See < x.com and more here."],
+		["See <https://x.com y> now.", "See < y> now.", "See < x.com y> now."],
+		["A \\<https://x.com> b.", "A < b.", "A < x.com b."],
+	];
+	for (const [src, off, on] of boundaries) {
+		const gotOff = spokenWith(src, OPTS);
+		check(`scope boundary unchanged (speakUrls false): ${JSON.stringify(src)}`, gotOff === off, `got: ${JSON.stringify(gotOff)}`);
+		const gotOn = spokenWith(src, urlsOn);
+		check(`scope boundary unchanged (speakUrls true): ${JSON.stringify(src)}`, gotOn === on, `got: ${JSON.stringify(gotOn)}`);
+	}
+
+	for (const src of [...autolinks.map(([s]) => s), ...unchanged.map(([s]) => s), ...boundaries.map(([s]) => s), inCode, inFence]) {
+		for (const opts of [OPTS, urlsOn]) {
+			check(`sourceIndex lockstep for ${JSON.stringify(src)} (speakUrls ${opts.speakUrls})`, lockstepWith(src, opts));
+		}
+	}
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);
