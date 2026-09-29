@@ -268,11 +268,11 @@ The processor MUST handle at least:
 - Italic text.
 - External links.
 - Obsidian wikilinks.
-- YAML frontmatter. Detected by shape at the top of the note, ignoring leading blank lines, and skipped only when closed and `key:`-shaped (ADR 0002).
+- YAML frontmatter. Detected by shape at the top of the note, ignoring leading blank lines, and treated as frontmatter only when closed and `key:`-shaped (ADR 0002). Whether it is then skipped or spoken is governed by `skipFrontmatter` (R-M09, ADR 0008).
 - Fenced code blocks.
 - Inline code.
-- Images.
-- Obsidian embeds.
+- Images. The alt text is governed by `speakImageAlt`; the destination and any quoted title are never spoken (R-M09, ADR 0008).
+- Obsidian embeds. Governed by `speakEmbeds`, and spoken as a label for the local reference rather than by transcluding the target (R-M09, ADR 0008).
 
 Markdown syntax SHOULD NOT itself be spoken unless meaningful to the content.
 In particular:
@@ -321,7 +321,10 @@ When spoken, these are reduced as follows:
 - A bare URL (`https://...`, `http://...` or `www....`) is spoken as its host only: no scheme, no userinfo (credentials such as `user:secret@` are never spoken), no leading `www.`, no port, path, query or fragment. `See https://example.com/a/b?c=d now.` is spoken as `See example.com now.` Markdown links (`[label](url)`) and wikilinks are unaffected by the URL setting; their label is always spoken (ADR 0003).
 - An autolink `<scheme://...>` is reduced to its host by the same rule as a bare URL, and `<addr@host>` and `<mailto:addr@host>` follow the same setting: silent when URLs are not spoken, the domain only when they are, and the mailbox never. No `<` or `>` is spoken in either position. An autolink stops at its closing `>`, so a sentence period after it is still spoken, unlike the bare-URL form (ADR 0007).
 - Fenced and indented code blocks are spoken verbatim, one paragraph per block, with whitespace runs collapsed, and both follow the code-block setting. The fence lines and any info string (e.g. `js`) are never spoken. An indented block starts only after a blank line or at document start, and inside a list an indented line is item content, not code (CommonMark).
-- Inline code is spoken verbatim without the backticks. Its content is not treated as markdown.
+- Inline code is spoken verbatim without the backticks. Its content is not treated as markdown. Inline code and code blocks have separate settings and separate toggles.
+- Frontmatter is spoken as its own paragraph of source-mapped `key: value` text, before the first prose line. Both `---` fences, blank lines and YAML `#` comment lines are never spoken. No YAML is parsed and nothing is reserialised: no words are added, nothing is reordered, and every character keeps its own raw source offset. A `#` in a value is part of that value rather than a tag, a backtick in a value is a character rather than code, and a heading- or table-shaped value is unaffected by the heading and table settings; URL reduction still applies, so a `source:` field does not read out a path. A frontmatter line MUST NOT be able to open a comment or code span that reaches the note body: an unmatched `%%`, `<!--` or backtick run ends at its own line. A complete comment span inside a value is still excluded (ADR 0008).
+- An image's alt text is spoken without its brackets, re-cleaned as a link label is, so nested markup and complete comment spans inside it are handled identically. The destination and any quoted title are never spoken, in either position of the setting, and this includes the `[ref]` tail of the reference form (ADR 0008).
+- An Obsidian embed is spoken as a label for the reference written in this note, never by transcluding the target, because a transcluded file has no offset in this note's source to highlight. The label is a meaningful alias if there is one, otherwise the target reduced exactly as a wikilink target is (`#` a pause, `#^blockid` dropped). A numeric alias (`200`, `200x100`) is display sizing and is ignored. A target naming a file rather than a note is a destination, so only its alias is spoken and `![[pic.png]]` says nothing. "Naming a file" is decided by a dot in the target's final path segment: `.md` and `.markdown` are a note, and any other extension is a file, whatever its length and whatever characters it contains, so `![[document.webmanifest]]` and `![[archive.tar-gz]]` say nothing. The consequence in each direction is deliberate: a note whose *title* holds a dot (`![[Version 1.2 notes]]`) is silent and an alias is how it is spoken, while a target with no dot at all (`![[Dockerfile]]`) is a note name and is read as the label, because an extensionless file cannot be told from a note title and a note embed keeps wikilink parity (ADR 0008 clauses 5 and 5a).
 
 ---
 
@@ -446,7 +449,13 @@ interface TTSSettings {
 The implemented key set is `Settings` in `src/settings/index.ts`. Polarity is
 deliberately mixed: `skipX` for content read by default, `speakX` for content
 dropped by default. A key MAY be stored before extraction reads it, but MUST NOT
-be given a settings toggle until it does (see `docs/adr/0001`).
+be given a settings toggle until it does (see `docs/adr/0001`). `offlinePreferred`
+is the only such reserved key; every content key is read by extraction and has
+its own toggle, and no toggle writes a second key (`docs/adr/0008`).
+
+A change to a content setting SHALL apply on the next read. A read already in
+progress keeps the segments it was given, so its audio and highlighting stay in
+step.
 
 Settings normalisation MUST preserve keys it does not recognise, at every level,
 because the normalised object is what gets saved.

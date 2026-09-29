@@ -115,9 +115,15 @@ every capability that differs across the four engines now gates the control it a
 and the ones that gate nothing have no control to gate. The remaining gap is tracked in
 Linear. Notable reproduced defects, so you do not rediscover them:
 
-- `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` are stored in plugin data (now v2) but
-  never read by `extract.ts`; they have no toggle by design (`docs/adr/0001`). Making
-  those exclusions configurable is NRL-21.
+- `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` became live `ExtractOptions` fields in
+  NRL-21 (`docs/adr/0008`), and all nine content keys now have one toggle each in the
+  settings tab's "Content" group. `offlinePreferred` is the only reserved key left, and
+  still has no toggle by design (`docs/adr/0001` clause 6). Two consequences worth knowing:
+  `speakImageAlt` defaults to `true`, so this is the one upgrade that changes what an
+  existing user hears; and spoken frontmatter runs its lines through `cleanLine` with
+  `blockComments` false and discards the returned `openComment`/`openCode`, which is what
+  stops a YAML value opening a comment or code span that silences the note body. Do not
+  "simplify" either half of that.
 - Pause is still a no-op on speechd and webspeech: `Player.pause()` pauses an `<audio>`
   element those two engines never fill. NRL-22 only stopped the UI from offering it, by
   declaring `pause: false` and `resume: false` on both and gating the button and the

@@ -80,5 +80,9 @@ Following it exactly fixes the first failure and keeps the second.
   horizontal-rule cases to its source position.
 - A note whose visible text happens to be a fenced block of `key: value` lines
   after leading blank lines will not be read. This is the accepted cost.
-- Frontmatter skipping is still unconditional. `skipFrontmatter` (added by
-  NRL-5, ADR 0001) is stored but not read; wiring it is NRL-21.
+- ~~Frontmatter skipping is still unconditional. `skipFrontmatter` (added by
+  NRL-5, ADR 0001) is stored but not read; wiring it is NRL-21.~~ *Superseded by
+  ADR 0008 (NRL-21).* `skipFrontmatter` now governs whether a detected block is
+  skipped or spoken. Every judgement above is unchanged; `detectFrontmatter` only
+  widened its return to report the opening fence as well as the closing one, so a
+  spoken block can tell a fence line from an interior one.

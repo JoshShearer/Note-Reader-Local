@@ -490,6 +490,9 @@ console.log("word timings cover the sentence");
 		skipInlineCode: true,
 		skipTables: true,
 		skipHeadings: false,
+		skipFrontmatter: true,
+		speakImageAlt: true,
+		speakEmbeds: false,
 	});
 	const chunk = chunks[0]!;
 	const words = allocateWordTimings(chunk, 2000);

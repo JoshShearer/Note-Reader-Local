@@ -175,6 +175,9 @@ function chunksOf(src: string): SpeechChunk[] {
 		skipInlineCode: true,
 		skipTables: true,
 		skipHeadings: false,
+		skipFrontmatter: true,
+		speakImageAlt: true,
+		speakEmbeds: false,
 	});
 }
 
