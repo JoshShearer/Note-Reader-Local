@@ -31,6 +31,24 @@ export interface EngineCapabilities {
 	/** Requires a local binary or daemon, so unavailable on mobile. */
 	desktopOnly: boolean;
 	/**
+	 * A pause that actually stops the sound.
+	 *
+	 * Deliberately not derived from `ownsPlayback`, even though the two are
+	 * exact opposites today. The player pauses its own `<audio>` element, which
+	 * only ever holds a `kind: "buffer"` result, so an engine that streams or
+	 * speaks live is unpausable *as currently driven* - not necessarily
+	 * unpausable in principle. speechSynthesis has pause()/resume(); the plugin
+	 * simply never calls them. Keeping this its own field means making that
+	 * work flips one boolean and does not touch rate routing.
+	 */
+	pause: boolean;
+	/** Can come back from a pause. Nothing should offer one without the other. */
+	resume: boolean;
+	/** Engine reports where each sentence starts, not just each word. */
+	sentenceBoundary: boolean;
+	/** Engine can say whether a given voice needs the network to speak. */
+	offlineStatus: boolean;
+	/**
 	 * The engine makes the sound itself, rather than handing back audio.
 	 *
 	 * This decides who applies the speed setting. An engine that owns playback

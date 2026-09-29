@@ -30,6 +30,20 @@ const CAPABILITIES: EngineCapabilities = {
 	rate: true,
 	pitch: true,
 	desktopOnly: false,
+	// False describes the plugin, not the platform. speechSynthesis does have
+	// pause() and resume(); this engine never calls them, and the player pauses
+	// an <audio> element a `kind: "live"` result never fills. So today pressing
+	// pause here changes an icon and nothing else. Declaring true because the
+	// browser API could is exactly the lie this field exists to stop. NRL-23 is
+	// expected to wire the real calls up and flip these two.
+	pause: false,
+	resume: false,
+	// onboundary drops every event whose name is not "word", so sentence marks
+	// never reach us even from engines that emit them.
+	sentenceBoundary: false,
+	// System voices may be network-backed (Chrome ships several) and the API
+	// does not say which, so this engine cannot answer the question honestly.
+	offlineStatus: false,
 	// speechSynthesis speaks straight to the sound card.
 	ownsPlayback: true,
 };

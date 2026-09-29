@@ -230,6 +230,15 @@ const CAPABILITIES: EngineCapabilities = {
 	// Kokoro has no pitch control; the voice files carry the style instead.
 	pitch: false,
 	desktopOnly: false,
+	// The worker hands back a finished buffer, so the element the player pauses
+	// is the one actually making the sound.
+	pause: true,
+	resume: true,
+	// The worker returns audio plus word timings and nothing coarser.
+	sentenceBoundary: false,
+	// Every voice is a file in the vault and the worker refuses remote fetches,
+	// so "does this voice need the network" has a definite answer: no.
+	offlineStatus: true,
 	// Kokoro returns samples; the player decides how fast to play them.
 	ownsPlayback: false,
 };

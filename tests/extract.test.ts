@@ -974,6 +974,202 @@ console.log("angle-bracket autolinks (NRL-39)");
 	}
 }
 
+console.log("Obsidian comment exclusion (NRL-38)");
+{
+	// Exercise the public extraction seam; diagnostics contain fixture IDs only.
+	const cases: Array<[string, string, string, Partial<typeof OPTS>?]> = [
+		["inline-repro", "Before %%my secret%% after.", "Before after."],
+		["block-repro", "%%\nhidden block\nline two\n%%\nVisible.", "Visible."],
+		["inline-adjacent", "Before%%one%%%%two%%after.", "Before after."],
+		["inline-multiple", "Before %%one%% middle %%two%% after.", "Before middle after."],
+		["empty", "Before %%%% after.", "Before after."],
+		["block-tail", "Before.\n%% hidden\nstill hidden\n%% after.", "Before. after."],
+		["block-only", "%%\nhidden\n%%", ""],
+		["block-unclosed", "Before.\n%% hidden\nnot visible", "Before."],
+		["block-unclosed-standalone", "Before.\n%%\nnot visible", "Before."],
+		["inline-unmatched", "Before %% visible\nStill visible.", "Before %% visible Still visible."],
+		["percent", "Save 50% off today.", "Save 50% off today."],
+		["escaped-opener", "Before \\%%literal after.", "Before %%literal after."],
+		["escaped-first-of-pair", "Before \\%%literal%% after.", "Before %%literal%% after."],
+		["first-closer", "Before %%one %%middle%% two%% after.", "Before middle after."],
+		["html-inside-inline", "Before %%<!-- hidden%% after.", "Before after."],
+		["obsidian-inside-html", "Before <!-- %% hidden --> after.", "Before after."],
+		["html-inside-block", "Before.\n%%\n<!--\n```\n$$\n\n%% after.\nVisible.", "Before. after. Visible."],
+		["obsidian-inside-html-block", "Before <!--\n%%\n```\n$$\n--> after.\nVisible.", "Before after. Visible."],
+		["wrong-html-closer", "%%\n--> hidden\n%% after.", "after."],
+		["wrong-obsidian-closer", "<!--\n%% hidden\n--> after.", "after."],
+		["tail-comments", "%%\nhidden\n%% after %%more%% tail <!--gone--> end.", "after tail end."],
+		["tail-html-continuation", "%%\nhidden\n%% after <!--more\nhidden\n--> tail.", "after tail."],
+		["tail-obsidian-continuation", "<!--hidden\n--> %%more\nhidden\n%% after.", "after."],
+		["link-label", "Before [label %%hidden%% end](target) after.", "Before label end after."],
+		["wiki-alias", "Before [[target|label %%hidden%% end]] after.", "Before label end after."],
+		["highlight", "Before ==label %%hidden%% end== after.", "Before label end after."],
+		["local-label-state", "[%%literal](target) after.\nVisible.", "%%literal after. Visible."],
+		["local-html-state", "[label <!--hidden](target) after.\nVisible.", "label after. Visible."],
+		["heading-tracking", "# %%hidden\nhidden\n%% after.", "after.", { skipHeadings: true }],
+		["heading-html-tracking", "# Heading <!--hidden\nhidden\n--> after.", "after.", { skipHeadings: true }],
+		["table-tracking", "| cell <!--hidden\nhidden\n--> after.", "after."],
+		["table-inline", "| %%hidden%% visible |\nafter.", "| visible | after.", { skipTables: false }],
+		["inline-code-spoken", "Before `%%literal%%` after.", "Before %%literal%% after.", { skipInlineCode: false }],
+		["inline-code-skipped", "Before `%%literal%%` after.", "Before after."],
+		["double-tick-code-spoken", "Before ``%%literal%%`` after.", "Before %%literal%% after.", { skipInlineCode: false }],
+		["double-tick-code-skipped", "Before ``%%literal%%`` after.", "Before after."],
+		["code-inner-tick", "Before ``one ` %%literal%% two`` after.", "Before one ` %%literal%% two after.", { skipInlineCode: false }],
+		["code-inner-tick-skipped", "Before ``one ` %%literal%% two`` after.", "Before after."],
+		["label-comment-bracket", "Before [label %%hidden] private%% end](target) after.", "Before label end after."],
+		["alias-comment-brackets", "Before [[target|label %%hidden]] private%% end]] after.", "Before label end after."],
+		["image-comment-bracket", "Before ![label %%hidden] private%% end](target) after.", "Before after."],
+		["embed-comment-brackets", "Before ![[target|label %%hidden]] private%% end]] after.", "Before after."],
+		["image-html-bracket", "Before ![label <!--hidden] private--> end](target) after.", "Before after."],
+		["embed-html-brackets", "Before ![[target|label <!--hidden]] private--> end]] after.", "Before after."],
+		["highlight-comment-equals", "Before ==label %%hidden== private%% end== after.", "Before label end after."],
+		["label-html-bracket", "Before [label <!--hidden] private--> end](target) after.", "Before label end after."],
+		["highlight-html-equals", "Before ==label <!--hidden== private--> end== after.", "Before label end after."],
+		["label-code-delimiter", "Before [label `] %%literal%%` end](target) after.", "Before label ] %%literal%% end after.", { skipInlineCode: false }],
+		["highlight-code-delimiter", "Before ==label `== %%literal%%` end== after.", "Before label == %%literal%% end after.", { skipInlineCode: false }],
+		["fenced-spoken", "```\n%%literal\n```\nafter.", "%%literal after.", { skipCodeBlocks: false }],
+		["fenced-skipped", "```\n%%literal\n```\nafter.", "after."],
+		["indented-spoken", "    %%literal\nafter.", "%%literal after.", { skipCodeBlocks: false }],
+		["indented-skipped", "    %%literal\nafter.", "after."],
+		["hidden-blanks", "Before\n%%\n\n%%\n    after.", "Before after."],
+		["paragraphs", "Before.\n\n%%\nhidden\n%%\n\nafter.", "Before. after."],
+		["crlf", "Before.\r\n%%\r\nhidden\r\n%% after.", "Before. after."],
+		["utf16", "𐐀lpha %%hidden%% élan after.", "𐐀lpha élan after."],
+		["unconditional", "Before %%hidden%% after.", "Before after.", { stripTags: false, skipCodeBlocks: false, skipInlineCode: false, skipTables: false, skipHeadings: true, speakUrls: true }],
+	];
+	for (const [id, src, expected, overrides] of cases) {
+		const chunks = extractChunks(src, { ...OPTS, ...overrides });
+		check(`NRL-38 ${id}: visible output`, chunks.map(c => c.text).join(" ") === expected);
+		check(`NRL-38 ${id}: UTF-16 mapping and bounds`, chunks.every(c => {
+			if (c.sourceIndex.length !== c.text.length || c.sourceStart !== c.sourceIndex[0] ||
+				c.sourceEnd !== c.sourceIndex[c.text.length - 1]! + 1) return false;
+			for (let i = 0; i < c.text.length; i++) {
+				const at = c.sourceIndex[i]!;
+				if (at < 0 || at >= src.length || (i > 0 && at < c.sourceIndex[i - 1]!)) return false;
+				if (c.text[i] !== " " && src[at] !== c.text[i]) return false;
+			}
+			return true;
+		}));
+		// Each sentinel occurs once outside the removed spans. Checking raw
+		// offsets, rather than sourceStart + text position, catches shifted maps.
+		for (const word of ["after", "middle", "tail", "Visible"]) {
+			if (!expected.includes(word)) continue;
+			const c = chunks.find(c => c.text.includes(word));
+			check(`NRL-38 ${id}: ${word} offset`, c?.sourceIndex[c.text.indexOf(word)] === src.indexOf(word));
+		}
+	}
+	const paced = extractChunks("Before.\n\n%%\nhidden\n%%\n\nafter.", OPTS);
+	check("NRL-38 paragraph boundaries retained", paced.length === 2);
+}
+
+console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
+{
+	// Every fixture below is synthetic. SENTINEL marks text a renderer hides,
+	// so it must never be spoken; diagnostics carry fixture IDs only.
+	const cases: Array<[string, string, string, Partial<typeof OPTS>?]> = [
+		// The recorded regression: a code span crossing a soft line break kept
+		// its literal %% before NRL-38 and lost it after.
+		["span-3line", "Before `first\n%%literal%%\nlast` after.", "Before first %%literal%% last after.", { skipInlineCode: false }],
+		["span-5line", "Before `one\n%%two%%\nthree\n%%four%%\nfive` after.", "Before one %%two%% three %%four%% five after.", { skipInlineCode: false }],
+		["span-html-3line", "Before `first\n<!--literal-->\nlast` after.", "Before first <!--literal--> last after.", { skipInlineCode: false }],
+		["span-double-run", "Before ``one\n%%two%%\nthree`` after.", "Before one %%two%% three after.", { skipInlineCode: false }],
+		["span-comment-on-closing-line", "Before `first\nmid\n%%literal%% last` after.", "Before first mid %%literal%% last after.", { skipInlineCode: false }],
+		["span-second-run-on-line", "Before `a` and `b\n%%c%%\nd` after.", "Before a and b %%c%% d after.", { skipInlineCode: false }],
+		// The closer lookahead is a disclosure guard, not an optimisation: an
+		// unmatched run is literal text in CommonMark, so carrying an open-span
+		// flag would stop the %% on the next line opening a real block comment
+		// and SENTINEL would be read aloud. First paragraph proves the guard,
+		// second proves the fix is still in force in the same document.
+		["guard-no-closer-then-span", "Before `x\n%%\nSENTINEL\n%%\ntail.\n\nNext `first\n%%literal%%\nlast` end.", "Before x tail. Next first %%literal%% last end.", { skipInlineCode: false }],
+		// A run of a different length is not a closer, so still no carry.
+		["guard-run-length-mismatch", "Before `one\n%%SENTINEL%%\nthree`` after.", "Before one three after.", { skipInlineCode: false }],
+		// Each of these interrupts a paragraph in CommonMark, so a code span
+		// cannot reach past it and the scan must stop there.
+		["guard-blank-interrupt", "Before `x\n\n%%SENTINEL%%\nafter.", "Before x after.", { skipInlineCode: false }],
+		["guard-heading-interrupt", "Before `x\n# H\n%%SENTINEL%%\nlast` after.", "Before x H last after.", { skipInlineCode: false }],
+		["guard-fence-interrupt", "Before `x\n```\n%%SENTINEL%%\n```\nlast` after.", "Before x last after.", { skipInlineCode: false }],
+		["guard-quote-interrupt", "Before `x\n> q\n%%SENTINEL%%\nlast` after.", "Before x q last after.", { skipInlineCode: false }],
+		["guard-list-interrupt", "Before `x\n- i\n%%SENTINEL%%\nlast` after.", "Before x i last after.", { skipInlineCode: false }],
+		["guard-table-interrupt", "Before `x\n| a |\n%%SENTINEL%%\nlast` after.", "Before x last after.", { skipInlineCode: false }],
+		["guard-setext-interrupt", "Before `x\n---\n%%SENTINEL%%\nlast` after.", "Before x last after.", { skipInlineCode: false }],
+		// A table row reaches the carry site as plain paragraph text when tables
+		// are spoken, and a span cannot leave its own row, so the opening line
+		// is checked as well as every line scanned.
+		["guard-table-row-opener", "| c `a\n%%SENTINEL%%\nb` end |", "| c a b end |", { skipInlineCode: false, skipTables: false }],
+		// A comment that hides the lines after it ends the paragraph too, so a
+		// run on its far side is not a closer. Read off Obsidian 1.13.7's own
+		// Reading-view parser, which puts `comment` in interruptParagraph and
+		// already has `html` there, so neither an opening `%%` line nor an
+		// opening `<!--` can sit inside a code span. Without this the carry
+		// makes the comment branch skip the opener and SENTINEL is spoken.
+		["guard-block-opener-in-carry", "Before `x\n%%\nSENTINEL\n%%\ny ` z.", "Before x y z.", { skipInlineCode: false }],
+		["guard-html-opener-in-carry", "Before `x\n<!--\nSENTINEL\n-->\ny ` z.", "Before x y z.", { skipInlineCode: false }],
+		["guard-unclosed-block-opener-in-carry", "Before `x\n%%\nSENTINEL ` y.", "Before x", { skipInlineCode: false }],
+		["guard-double-run-block-opener", "Before ``x\n%%\nSENTINEL\n%%\ny `` z.", "Before x y z.", { skipInlineCode: false }],
+		["guard-indented-block-opener", "Before `x\n  %%\nSENTINEL\n  %%\ny ` z.", "Before x y z.", { skipInlineCode: false }],
+		["guard-html-opener-mid-line", "Before `x\ntext <!--\nSENTINEL\n-->\ny ` z.", "Before x text y z.", { skipInlineCode: false }],
+		// The other side of that rule: a comment that closes on its own line
+		// hides nothing after it, so it does not end the paragraph and stays
+		// literal inside the span. Obsidian agrees: its block-comment tokenizer
+		// bails on a second `%` before the newline, so `%%literal%%` is never a
+		// block opener, and `<!--literal-->` closes on the line.
+		["span-inline-pair-stays-literal", "Before `x\n%%literal%%\ny ` z.", "Before x %%literal%% y z.", { skipInlineCode: false }],
+		["span-html-pair-stays-literal", "Before `x\n<!--literal-->\ny ` z.", "Before x <!--literal--> y z.", { skipInlineCode: false }],
+		// `%%` that is not at the start of its line is not a block opener, so it
+		// hides nothing and the paragraph continues.
+		["span-percent-after-text", "Before `x\ntext %%\ny ` z.", "Before x text %% y z.", { skipInlineCode: false }],
+		// An escape leaves no unmatched run, so nothing is carried.
+		["guard-escaped-backtick", "Before \\`x\n%%SENTINEL%%\nlast after.", "Before `x last after.", { skipInlineCode: false }],
+		// Unchanged on d9f68ed: proof the fix is confined to the comment branch.
+		["control-no-markers", "Before `first\nmiddle\nlast` after.", "Before first middle last after.", { skipInlineCode: false }],
+		["control-two-line", "Before `first\nlast` after.", "Before first last after.", { skipInlineCode: false }],
+		["control-single-line", "Before `first %%literal%% last` after.", "Before first %%literal%% last after.", { skipInlineCode: false }],
+		// Out of scope (see the ticket): a soft-wrapped span is not silenced by
+		// skipInlineCode. Pinned so its own ticket changes it deliberately.
+		["pin-skipped-code", "Before `first\n%%literal%%\nlast` after.", "Before first last after.", { skipInlineCode: true }],
+		// The paragraph join added a second space after any line whose last
+		// mapped character was already one.
+		["join-inline-comment", "Before %%hidden%%\nafter.", "Before after."],
+		["join-block-close-then-inline", "%%hidden\n%% before %%hidden%%\nafter.", "before after."],
+		["join-comment-trailing-space", "Before %%hidden%% \nafter.", "Before after."],
+		["join-crlf-unmatched-opener", "Before %% visible\r\nStill visible.", "Before %% visible Still visible."],
+		["join-image", "Before ![alt](target)\nafter.", "Before after."],
+		["join-tag", "Before #tag\nafter.", "Before after."],
+		["join-url", "Before https://example.com\nafter.", "Before after."],
+		["join-single-space-unchanged", "Before %% visible\nStill visible.", "Before %% visible Still visible."],
+	];
+	for (const [id, src, expected, overrides] of cases) {
+		const chunks = extractChunks(src, { ...OPTS, ...overrides });
+		const spoken = chunks.map(c => c.text).join(" ");
+		check(`NRL-42 ${id}: visible output`, spoken === expected);
+		check(`NRL-42 ${id}: no doubled space`, !spoken.includes("  "));
+		if (src.includes("SENTINEL")) {
+			check(`NRL-42 ${id}: hidden text not disclosed`, !spoken.includes("SENTINEL"));
+		}
+		check(`NRL-42 ${id}: UTF-16 mapping and bounds`, chunks.every(c => {
+			if (c.sourceIndex.length !== c.text.length || c.sourceStart !== c.sourceIndex[0] ||
+				c.sourceEnd !== c.sourceIndex[c.text.length - 1]! + 1) return false;
+			for (let i = 0; i < c.text.length; i++) {
+				const at = c.sourceIndex[i]!;
+				if (at < 0 || at >= src.length || (i > 0 && at < c.sourceIndex[i - 1]!)) return false;
+				if (c.text[i] !== " " && src[at] !== c.text[i]) return false;
+			}
+			return true;
+		}));
+		// Raw-offset sentinel for the first word after each span or join. Each
+		// of these occurs once in its fixture's source, outside any dropped
+		// span, so a shifted map shows up here rather than only in the text.
+		for (const word of ["after", "last", "tail", "end", "Still"]) {
+			if (!expected.includes(word) || src.indexOf(word) !== src.lastIndexOf(word)) continue;
+			const c = chunks.find(c => c.text.includes(word));
+			check(`NRL-42 ${id}: ${word} offset`, c?.sourceIndex[c.text.indexOf(word)] === src.indexOf(word));
+		}
+	}
+	// A confirmed span does not fold the paragraph break away.
+	const paced = extractChunks("Before `x\n%%\nSENTINEL\n%%\ntail.\n\nNext `first\n%%literal%%\nlast` end.", { ...OPTS, skipInlineCode: false });
+	check("NRL-42 paragraph boundaries retained", paced.length === 2);
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);

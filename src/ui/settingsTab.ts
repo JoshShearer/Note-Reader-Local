@@ -3,6 +3,7 @@ import type LocalTtsReaderPlugin from "../main";
 import { KOKORO_VOICES, KOKORO_WEIGHTS, probeGpu } from "../engines/onnx/kokoro";
 import { downloadModel, downloadVoice } from "./modelStore";
 import { isAcceptableColourInput } from "./highlightColour";
+import { controlAffordances, engineLimitations } from "./affordances";
 
 export class LocalTtsSettingTab extends PluginSettingTab {
 	/** Detaches the Speed slider from the player's rate event. */
@@ -69,11 +70,17 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 					cls: `local-tts-engine-state ${status.available ? "is-ok" : "is-missing"}`,
 					text: status.available ? "ready" : status.reason || "unavailable",
 				});
-				if (status.available && status.engine.capabilities.timing === "none") {
-					row.createSpan({
-						cls: "local-tts-engine-note",
-						text: "no word highlighting",
-					});
+				// Every limitation, not just the highlighting one: the point of
+				// declaring capabilities is that the user can see all of them
+				// before picking an engine.
+				if (status.available) {
+					const limits = engineLimitations(status.engine.capabilities, status.engine.label);
+					if (limits.length > 0) {
+						row.createSpan({
+							cls: "local-tts-engine-note",
+							text: limits.map((l) => l.text).join(", "),
+						});
+					}
 				}
 			}
 		});
@@ -400,15 +407,29 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	private renderHighlightSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName("Highlighting").setHeading();
 
-		new Setting(containerEl)
+		// On an engine that reports no timings there is nothing to highlight, so
+		// the toggle is disabled and says why. The stored preference is left
+		// alone on purpose, the same as "Look ahead" above: switching to
+		// speech-dispatcher and back must not silently turn highlighting off.
+		const active = this.plugin.activeEngine();
+		const highlightToggle = controlAffordances(
+			active?.capabilities ?? null,
+			active?.label ?? "This engine",
+		).highlightToggle;
+
+		const highlightSetting = new Setting(containerEl)
 			.setName("Highlight words")
 			.setDesc("Mark the word currently being spoken.")
-			.addToggle((toggle) =>
+			.addToggle((toggle) => {
 				toggle.setValue(this.plugin.settings.highlight.enabled).onChange(async (value) => {
 					this.plugin.settings.highlight.enabled = value;
 					await this.plugin.saveSettings();
-				}),
-			);
+				});
+				if (!highlightToggle.enabled) toggle.setDisabled(true);
+			});
+		if (!highlightToggle.enabled) {
+			highlightSetting.descEl.createDiv({ text: highlightToggle.reason });
+		}
 
 		// A free-text field alone would accept "not a colour" and quietly
 		// highlight nothing. Invalid input is refused with a visible error and
