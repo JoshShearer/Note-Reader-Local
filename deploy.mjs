@@ -23,7 +23,7 @@ try {
 // it also contains user settings and may contain diagnostic logs or models.
 await mkdir(dest, { recursive: true });
 
-for (const item of ["main.js", "kokoro-worker.js", "manifest.json", "styles.css", "ort"]) {
+for (const item of ["main.js", "manifest.json", "styles.css", "ort"]) {
 	await cp(item, path.join(dest, item), { recursive: true });
 	console.log(`  ${item}`);
 }
