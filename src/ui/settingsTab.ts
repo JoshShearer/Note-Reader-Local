@@ -354,8 +354,19 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				const voices = await engine.listVoices();
 				dropdown.selectEl.empty();
 				if (voices.length === 0) dropdown.addOption("", "No voices found");
-				for (const voice of voices) {
-					dropdown.addOption(voice.id, `${voice.name} (${voice.lang})${voiceNetworkMarker(voice)}`);
+				else {
+					// Group voices by language tag, sort within each group,
+					// and add visual language headers
+					const grouped = groupVoicesByLanguage(voices);
+					for (const [lang, voicesInLang] of grouped) {
+						// Add language header (disabled option)
+						dropdown.addOption(`__lang_${lang}`, `-- ${lang} --`);
+						// Add voices in this language
+						for (const voice of voicesInLang) {
+							const label = `  ${voice.name}${voice.isVariant ? " (variant)" : ""}${voiceNetworkMarker(voice)}`;
+							dropdown.addOption(voice.id, label);
+						}
+					}
 				}
 				// An id saved by an older build may name the same voice in an
 				// old format. Show that voice selected; it is persisted in the
@@ -662,6 +673,40 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				);
 		}
 	}
+}
+
+/**
+ * Group voices by BCP-47 language tag, sort within each group
+ * (non-variants first, then alphabetically), and return as a sorted Map.
+ */
+function groupVoicesByLanguage(voices: VoiceInfo[]): Map<string, VoiceInfo[]> {
+	const grouped = new Map<string, VoiceInfo[]>();
+
+	// Group by language tag
+	for (const voice of voices) {
+		const lang = voice.lang;
+		if (!grouped.has(lang)) {
+			grouped.has(lang);
+			grouped.set(lang, []);
+		}
+		grouped.get(lang)!.push(voice);
+	}
+
+	// Sort within each group: non-variants first, then alphabetically
+	for (const voicesInLang of grouped.values()) {
+		voicesInLang.sort((a, b) => {
+			if (a.isVariant !== b.isVariant) {
+				return a.isVariant ? 1 : -1; // Non-variants first
+			}
+			return a.name.localeCompare(b.name); // Alphabetically
+		});
+	}
+
+	// Sort language groups alphabetically and return as new Map
+	const sorted = new Map(
+		Array.from(grouped.entries()).sort(([langA], [langB]) => langA.localeCompare(langB)),
+	);
+	return sorted;
 }
 
 function errText(err: unknown): string {

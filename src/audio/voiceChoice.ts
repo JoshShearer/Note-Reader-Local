@@ -93,19 +93,23 @@ export function pickLocaleVoice(voices: VoiceInfo[], locale: string, preferOffli
  * Resolve the stored voice id against what the engine offers now.
  *
  * Order: exact id, then the engine's own remap of an old id format (silent),
- * then a locale-based substitute with a notice naming both voices.
+ * then language-based matching (note language > app locale) with a notice
+ * naming both voices and which signal matched.
  *
  * `preferOffline` only ever reaches `pickLocaleVoice`, below both the exact
  * and remapped branches, both of which `return` before it is called. A pin
  * (exact match or a remapped old-format id) is therefore structurally unable
  * to be overridden by this preference, regardless of its value - the pin is
- * absolute, as required.
+ * absolute, as required. It is threaded through both the note-language and
+ * app-locale attempts below, so whichever one actually wins still applies
+ * the same offline tiebreak.
  */
 export function resolveStoredVoice(
 	engine: SpeechEngine,
 	storedId: string,
 	voices: VoiceInfo[],
-	locale: string,
+	noteLang: string | undefined,
+	appLocale: string,
 	preferOffline = false,
 ): StoredVoiceResolution {
 	const exact = voices.find((v) => v.id === storedId);
@@ -114,14 +118,31 @@ export function resolveStoredVoice(
 	const remapped = storedId ? engine.resolveVoiceId?.(storedId, voices) : undefined;
 	if (remapped) return { voice: remapped, id: remapped.id, notice: null };
 
-	const choice = pickLocaleVoice(voices, locale, preferOffline);
+	// Try note language first if provided, then app locale
+	let choice: LocaleVoice | undefined;
+	let usedNoteLangMatch = false;
+
+	if (noteLang) {
+		choice = pickLocaleVoice(voices, noteLang, preferOffline);
+		if (choice) usedNoteLangMatch = choice.matched;
+	}
+
+	if (!choice?.matched) {
+		choice = pickLocaleVoice(voices, appLocale, preferOffline);
+	}
+
 	if (!choice) throw new Error("No voices to choose from");
 	const { voice, matched } = choice;
 
 	const missing = storedId ? `The voice "${storedId}" is not available in ${engine.label}.` : `No ${engine.label} voice was selected.`;
-	const why = matched
-		? `it matches the app language (${locale})`
-		: `no voice matches the app language (${locale})`;
+	let why: string;
+	if (usedNoteLangMatch && noteLang) {
+		why = `it matches the note language (${noteLang})`;
+	} else if (matched) {
+		why = `it matches the app language (${appLocale})`;
+	} else {
+		why = `no voice matches the note or app language (${noteLang || appLocale})`;
+	}
 	const notice = `${missing} Using "${voice.name}" (${voice.lang}) instead; ${why}. Pick another in settings.`;
 	return { voice, id: voice.id, notice };
 }

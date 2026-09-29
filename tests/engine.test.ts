@@ -495,24 +495,24 @@ console.log("voice ids resolve across the format change");
 	check("new id resolves to itself", resolve("speechd:English (America)+Adam") === "speechd:English (America)+Adam");
 	check("absent id does not resolve", resolve("speechd:Klingon+none") === undefined);
 
-	const old = resolveStoredVoice(spd2, "speechd:Afrikaans+Adam+Adam", voices, "en");
+	const old = resolveStoredVoice(spd2, "speechd:Afrikaans+Adam+Adam", voices, undefined, "en");
 	check("old id: corrected voice", old.id === "speechd:Afrikaans+Adam", `got ${old.id}`);
 	check("old id: no notice", old.notice === null, `got ${old.notice}`);
 
-	const same = resolveStoredVoice(spd2, "speechd:English (Great Britain)", voices, "en");
+	const same = resolveStoredVoice(spd2, "speechd:English (Great Britain)", voices, undefined, "en");
 	check("current id: same voice, no notice", same.id === "speechd:English (Great Britain)" && same.notice === null);
 
-	const gone = resolveStoredVoice(spd2, "speechd:Klingon+none", voices, "en-US");
+	const gone = resolveStoredVoice(spd2, "speechd:Klingon+none", voices, undefined, "en-US");
 	check("absent id: substitutes by locale, not voices[0]", gone.id === "speechd:English (America)", `got ${gone.id}`);
 	check("absent id: notice names the missing voice", !!gone.notice?.includes("Klingon"), `got ${gone.notice}`);
 	check("absent id: notice names the substitute", !!gone.notice?.includes("English (America)"), `got ${gone.notice}`);
 
 	// Another engine's id, e.g. the kokoro default, still gets a notice.
-	const cross = resolveStoredVoice(spd2, "kokoro:af_heart", voices, "en-GB");
+	const cross = resolveStoredVoice(spd2, "kokoro:af_heart", voices, undefined, "en-GB");
 	check("cross-engine id: locale substitute", cross.id === "speechd:English (Great Britain)", `got ${cross.id}`);
 	check("cross-engine id: notice", cross.notice !== null);
 
-	const empty = resolveStoredVoice(spd2, "", voices, "fr");
+	const empty = resolveStoredVoice(spd2, "", voices, undefined, "fr");
 	check("empty id: notice even with no locale match", empty.notice !== null);
 	check("empty id: notice says no language match", !!empty.notice?.includes("fr"), `got ${empty.notice}`);
 }

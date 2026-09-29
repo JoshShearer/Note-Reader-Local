@@ -145,7 +145,7 @@ console.log("resolveStoredVoice: a pin is absolute, preferOffline cannot touch i
 	const localAlternative = v("local-alt", "en-US", true);
 	const voices = [pinned, localAlternative];
 
-	const resolved = resolveStoredVoice(engine, "pinned-network", voices, "en-US", true);
+	const resolved = resolveStoredVoice(engine, "pinned-network", voices, undefined, "en-US", true);
 	check(
 		"exact pin with local:false is untouched even when preferOffline=true and a local alternative exists",
 		resolved.id === "pinned-network" && resolved.voice.local === false,
@@ -160,7 +160,7 @@ console.log("resolveStoredVoice: a pin is absolute, preferOffline cannot touch i
 	const voices = [remapTarget, localAlternative];
 	const engine = fakeEngine((storedId, vs) => (storedId === "old-format-id" ? vs.find((x) => x.id === "current-id") : undefined));
 
-	const resolved = resolveStoredVoice(engine, "old-format-id", voices, "en-US", true);
+	const resolved = resolveStoredVoice(engine, "old-format-id", voices, undefined, "en-US", true);
 	check(
 		"remapped id with local:false is untouched even when preferOffline=true and a local alternative exists",
 		resolved.id === "current-id" && resolved.voice.local === false,
@@ -175,13 +175,52 @@ console.log("resolveStoredVoice: a pin is absolute, preferOffline cannot touch i
 	const engine = fakeEngine();
 	const net = v("net", "en-US", false);
 	const loc = v("loc", "en-US", true);
-	const resolved = resolveStoredVoice(engine, "gone", [net, loc], "en-US", true);
+	const resolved = resolveStoredVoice(engine, "gone", [net, loc], undefined, "en-US", true);
 	check(
 		"no pin: preferOffline reaches the locale substitute and picks the local voice",
 		resolved.id === "loc",
 		JSON.stringify(resolved),
 	);
 	check("no pin: notice fires", resolved.notice !== null);
+}
+{
+	// NRL-34 merge: noteLang takes priority over appLocale, and preferOffline
+	// must still apply to WHICHEVER tier actually wins - the note-language
+	// tier here, since it matches. Proves the two features compose rather
+	// than one silently overriding the other after the manual merge.
+	const engine = fakeEngine();
+	const net = v("fr-net", "fr-FR", false);
+	const loc = v("fr-loc", "fr-FR", true);
+	const enVoice = v("en-loc", "en-US", true);
+	const resolved = resolveStoredVoice(engine, "gone", [net, loc, enVoice], "fr-FR", "en-US", true);
+	check(
+		"noteLang matches: preferOffline still tiebreaks within the noteLang tier",
+		resolved.id === "fr-loc",
+		JSON.stringify(resolved),
+	);
+	check(
+		"noteLang matches: notice names the note language, not the app locale",
+		!!resolved.notice?.includes("note language"),
+		String(resolved.notice),
+	);
+}
+{
+	// noteLang given but matches nothing: falls through to appLocale, and
+	// preferOffline still applies there too.
+	const engine = fakeEngine();
+	const net = v("en-net", "en-US", false);
+	const loc = v("en-loc", "en-US", true);
+	const resolved = resolveStoredVoice(engine, "gone", [net, loc], "de-DE", "en-US", true);
+	check(
+		"noteLang misses: falls through to appLocale with preferOffline intact",
+		resolved.id === "en-loc",
+		JSON.stringify(resolved),
+	);
+	check(
+		"noteLang misses: notice names the app language, not the note language",
+		!!resolved.notice?.includes("app language"),
+		String(resolved.notice),
+	);
 }
 
 console.log("");
