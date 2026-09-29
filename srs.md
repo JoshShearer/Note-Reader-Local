@@ -85,6 +85,8 @@ TTS Backend Interface
 
 Native/system TTS is preferred.
 
+As of ADR 0010 (NRL-24), automatic selection ranks by confirmed real-time quality rather than a fixed native-first order: a live GPU/fp32 local neural voice may be preferred over native/system TTS when confirmed live (a real GPU adapter answering right now, plus the fp32 weights already on disk - never merely planned, never triggering a download). Native/system TTS remains the default whenever that GPU path is not confirmed live. This does not reopen the "no silent cloud fallback" rule below: automatic selection never picks a Web Speech voice unless it is confirmed local, and a manual pin still overrides all of this.
+
 WebGPU/WASM local neural TTS is a fallback architecture and MUST NOT be confused with native operating-system TTS.
 
 Cloud synthesis is deliberately excluded.
@@ -1066,6 +1068,8 @@ There MUST NOT be a silent cloud fallback.
 ## Linux Backend
 
 Linux desktop SHALL preferentially use Speech Dispatcher.
+
+As of ADR 0010 (NRL-24), automatic selection may choose a confirmed-live GPU/fp32 Kokoro ahead of Speech Dispatcher. Absent that confirmed-live GPU path, Speech Dispatcher remains preferred on Linux, ahead of espeak-ng and ahead of any Web Speech voice not confirmed local. A manual pin to any engine still overrides all of this.
 
 Architecture:
 

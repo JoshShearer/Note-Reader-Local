@@ -1,9 +1,16 @@
-import type { EngineId } from "../audio/types";
+import type { EngineSelection } from "../engines/selection";
 import { isStorableColour } from "../ui/highlightColour";
 
 export interface Settings {
-	/** Which engine produces audio. */
-	engine: EngineId;
+	/**
+	 * Which engine produces audio, or "auto" to let the plugin pick by
+	 * confirmed quality (docs/adr/0010). "auto" is resolved to a concrete
+	 * EngineId in exactly two places, both in main.ts: `activeEngine()`
+	 * (sync, cached) and `rankedCandidates()`/`resolveAutomaticChoice()`
+	 * (async, authoritative). Nothing outside main.ts and settingsTab.ts
+	 * ever sees `"auto"`.
+	 */
+	engine: EngineSelection;
 	/** Voice id, scoped to the engine (`espeak:en-us`, `kokoro:af_heart`). */
 	voiceId: string;
 	/** Playback rate multiplier. */
@@ -83,7 +90,11 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-	engine: "kokoro",
+	// A deliberate first-run behaviour change (docs/adr/0010), the same shape
+	// as speakImageAlt's default flip in NRL-21/ADR 0008: anyone who has
+	// genuinely never touched the engine dropdown now gets Automatic instead
+	// of a doomed default of unavailable Kokoro on a fresh install.
+	engine: "auto",
 	voiceId: "kokoro:af_heart",
 	rate: 1,
 	pitch: 0,
@@ -132,6 +143,15 @@ function bool(value: unknown, fallback: boolean): boolean {
 	return typeof value === "boolean" ? value : fallback;
 }
 
+/**
+ * Every value `Settings.engine` is allowed to hold.
+ *
+ * Kept in sync with `EngineId` by hand rather than derived, the same as the
+ * kokoroDevice/kokoroWeights checks below: there is no runtime list of
+ * `EngineId`'s members to iterate, since it is a type, not a value.
+ */
+const VALID_ENGINE_SELECTIONS: EngineSelection[] = ["auto", "kokoro", "espeak", "speechd", "webspeech"];
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -157,7 +177,14 @@ export function normaliseSettings(raw: unknown): Settings {
 
 	return {
 		...data,
-		engine: (data.engine ?? DEFAULT_SETTINGS.engine) as EngineId,
+		// Previously an unvalidated cast that let anything through data.json
+		// masquerade as an EngineId. Now validated the same way as
+		// kokoroDevice/kokoroWeights below - and a manual pin a user actually
+		// saved (e.g. "kokoro") is one of these valid values, so it round-trips
+		// unchanged rather than being coerced to "auto" (non-negotiable 10).
+		engine: VALID_ENGINE_SELECTIONS.includes(data.engine as EngineSelection)
+			? (data.engine as EngineSelection)
+			: DEFAULT_SETTINGS.engine,
 		voiceId: typeof data.voiceId === "string" ? data.voiceId : DEFAULT_SETTINGS.voiceId,
 		rate: clampNumber(data.rate, RATE_MIN, RATE_MAX, DEFAULT_SETTINGS.rate),
 		pitch: clampNumber(data.pitch, -50, 50, DEFAULT_SETTINGS.pitch),

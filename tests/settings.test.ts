@@ -322,6 +322,61 @@ console.log("flipping a content toggle preserves keys nobody recognises (NRL-21)
 	}
 }
 
+console.log("engine: EngineSelection widens the type, defaults to auto (NRL-24, docs/adr/0010)");
+{
+	check("DEFAULT_SETTINGS.engine is auto", DEFAULT_SETTINGS.engine === "auto", DEFAULT_SETTINGS.engine);
+
+	check(
+		"normaliseSettings({}) -> auto",
+		(normaliseSettings({}) as unknown as Json).engine === "auto",
+		(normaliseSettings({}) as unknown as Json).engine,
+	);
+	check(
+		"normaliseSettings({engine: garbage}) -> auto (closes the latent unvalidated-cast gap)",
+		(normaliseSettings({ engine: "not-a-real-engine" }) as unknown as Json).engine === "auto",
+		(normaliseSettings({ engine: "not-a-real-engine" }) as unknown as Json).engine,
+	);
+	check(
+		"normaliseSettings({engine: 'kokoro'}) -> kokoro, a manual pin is never coerced to auto",
+		(normaliseSettings({ engine: "kokoro" }) as unknown as Json).engine === "kokoro",
+		(normaliseSettings({ engine: "kokoro" }) as unknown as Json).engine,
+	);
+	for (const id of ["espeak", "speechd", "webspeech"] as const) {
+		check(
+			`normaliseSettings({engine: '${id}'}) -> ${id}`,
+			(normaliseSettings({ engine: id }) as unknown as Json).engine === id,
+			(normaliseSettings({ engine: id }) as unknown as Json).engine,
+		);
+	}
+	check(
+		"normaliseSettings({engine: 'auto'}) -> auto, round-trips rather than being treated as unknown",
+		(normaliseSettings({ engine: "auto" }) as unknown as Json).engine === "auto",
+		(normaliseSettings({ engine: "auto" }) as unknown as Json).engine,
+	);
+
+	// The real user-facing path, not just the pure function: a data.json with
+	// no engine key at all, loaded and saved once, the way onload() does.
+	const saved = roundTrip({ version: PLUGIN_DATA_VERSION, settings: {}, positions: {} });
+	check(
+		"a full load -> save round trip with no engine key yields auto",
+		saved.settings?.engine === "auto",
+		JSON.stringify(saved.settings?.engine),
+	);
+
+	// And the inverse: an existing user's saved manual pin is not destroyed
+	// by widening the type (non-negotiable 10).
+	const pinned = roundTrip({
+		version: PLUGIN_DATA_VERSION,
+		settings: { ...DEFAULT_SETTINGS, engine: "espeak" },
+		positions: {},
+	});
+	check(
+		"an existing manual pin survives the auto-default change",
+		pinned.settings?.engine === "espeak",
+		JSON.stringify(pinned.settings?.engine),
+	);
+}
+
 if (failures > 0) {
 	console.log(`\n${failures} failure(s)`);
 	process.exit(1);

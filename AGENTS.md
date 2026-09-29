@@ -20,7 +20,7 @@ There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The
 are local and nothing runs them for you.
 
 ```bash
-npm test          # 8 suites: extract, engine, player, paths, kokoro, settings, highlightColour, affordances
+npm test          # 11 suites: extract, engine, player, paths, kokoro, settings, highlightColour, affordances, engineSelection, webspeechVoices, fallback
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -159,6 +159,16 @@ ADR 0009's grapheme-safety consequence, and the comment on `splitSentences` itse
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
 
+- `DEFAULT_SETTINGS.engine` became `"auto"` in NRL-24 (docs/adr/0010), the same shape as
+  `speakImageAlt`'s default flip in NRL-21/ADR 0008: a genuinely fresh install, or any
+  `data.json` predating this build, now speaks via automatic quality-ranked selection
+  instead of the old default of unavailable Kokoro. `Settings.engine` widened to
+  `EngineSelection = "auto" | EngineId`; a saved manual pin round-trips unchanged through
+  `normaliseSettings()`'s new validation, never coerced to `"auto"`. Unverified as of NRL-24
+  Implement: whether `SpeechSynthesisVoice.localService` (the fail-closed gate that keeps
+  Web Speech out of the automatic chain unless a voice is confirmed local) reports anything
+  meaningful inside Obsidian's own Electron/Chromium on Linux, and real GPU detection
+  end-to-end in that same build - both only checkable in a real Obsidian, not bare Node.
 - `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` became live `ExtractOptions` fields in
   NRL-21 (`docs/adr/0008`), and all nine content keys now have one toggle each in the
   settings tab's "Content" group. `offlinePreferred` is the only reserved key left, and
