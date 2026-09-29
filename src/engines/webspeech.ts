@@ -30,14 +30,16 @@ const CAPABILITIES: EngineCapabilities = {
 	rate: true,
 	pitch: true,
 	desktopOnly: false,
-	// False describes the plugin, not the platform. speechSynthesis does have
-	// pause() and resume(); this engine never calls them, and the player pauses
-	// an <audio> element a `kind: "live"` result never fills. So today pressing
-	// pause here changes an icon and nothing else. Declaring true because the
-	// browser API could is exactly the lie this field exists to stop. NRL-23 is
-	// expected to wire the real calls up and flip these two.
-	pause: false,
-	resume: false,
+	// A true mid-utterance pause: this engine implements pause()/resume() with
+	// speechSynthesis's own, so the sentence is held where it is rather than
+	// stopped and re-read. Measured in Chromium 154 off the sink monitor
+	// (NRL-23): 0 ms of audio across a 2.7 s pause, 2000 ms more after the
+	// resume, so the utterance was held rather than ended. Not measured in
+	// Obsidian's own Electron build, whose voices come from a different
+	// backend; if it turns out to be a no-op there, delete the two methods
+	// below and the player falls back to stop-and-retain with no other change.
+	pause: true,
+	resume: true,
 	// onboundary drops every event whose name is not "word", so sentence marks
 	// never reach us even from engines that emit them.
 	sentenceBoundary: false,
@@ -160,7 +162,9 @@ export class WebSpeechEngine implements SpeechEngine {
 			const onAbort = (): void => {
 				if (settled) return;
 				settled = true;
-				window.speechSynthesis.cancel();
+				// Stop pressed while paused arrives here, which is exactly the
+				// case cancelSpeech() exists for.
+				this.cancelSpeech();
 				cleanup();
 				reject(new DOMException("Aborted", "AbortError"));
 			};
@@ -207,8 +211,42 @@ export class WebSpeechEngine implements SpeechEngine {
 		});
 	}
 
+	/**
+	 * Hold the utterance where it is, and let it go on again.
+	 *
+	 * A pair, and the player refuses either one alone. Both are safe to call
+	 * when nothing is speaking: pause() on an idle queue is a no-op, and
+	 * resume() on one is how the cancel path below un-wedges itself.
+	 */
+	pause(): void {
+		if (hasSpeechSynthesis()) window.speechSynthesis.pause();
+	}
+
+	resume(): void {
+		if (hasSpeechSynthesis()) window.speechSynthesis.resume();
+	}
+
+	/**
+	 * Cancel, then un-pause.
+	 *
+	 * `cancel()` while the queue is paused leaves some Chromium builds paused
+	 * with an empty queue, and every later `speak()` then goes nowhere: pause
+	 * followed by Stop would end the plugin's ability to speak at all. The
+	 * `resume()` is ordered after the cancel so there is nothing left to be
+	 * audible, and the sink monitor measured 0 ms of audio out of this pair
+	 * (NRL-23). Chromium 154 did not reproduce the wedge itself - the next
+	 * utterance started with or without this line - so treat it as cheap
+	 * insurance against the older Chromium in Obsidian rather than as a fix for
+	 * something reproduced here.
+	 */
+	private cancelSpeech(): void {
+		if (!hasSpeechSynthesis()) return;
+		window.speechSynthesis.cancel();
+		window.speechSynthesis.resume();
+	}
+
 	async stop(): Promise<void> {
-		if (hasSpeechSynthesis()) window.speechSynthesis.cancel();
+		this.cancelSpeech();
 	}
 
 	async dispose(): Promise<void> {

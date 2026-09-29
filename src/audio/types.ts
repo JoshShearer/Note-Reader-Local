@@ -31,15 +31,16 @@ export interface EngineCapabilities {
 	/** Requires a local binary or daemon, so unavailable on mobile. */
 	desktopOnly: boolean;
 	/**
-	 * A pause that actually stops the sound.
+	 * The player can stop this engine's sound and come back to it, by whatever
+	 * route suits the engine.
 	 *
-	 * Deliberately not derived from `ownsPlayback`, even though the two are
-	 * exact opposites today. The player pauses its own `<audio>` element, which
-	 * only ever holds a `kind: "buffer"` result, so an engine that streams or
-	 * speaks live is unpausable *as currently driven* - not necessarily
-	 * unpausable in principle. speechSynthesis has pause()/resume(); the plugin
-	 * simply never calls them. Keeping this its own field means making that
-	 * work flips one boolean and does not touch rate routing.
+	 * Deliberately not derived from `ownsPlayback`. The two were exact
+	 * opposites until NRL-23 and are not any more: speechd and webspeech both
+	 * own playback and both are now pausable. What differs between engines is
+	 * the *granularity* a resume comes back at, not whether the sound stops:
+	 * a buffer engine and webspeech resume mid-utterance, while speechd stops
+	 * the sentence and re-reads it from the start (srs.md:250). Anything that
+	 * needs to know which, asks the player, not this field.
 	 */
 	pause: boolean;
 	/** Can come back from a pause. Nothing should offer one without the other. */
@@ -185,6 +186,24 @@ export interface SpeechEngine {
 	 * delays whatever the user asked for instead.
 	 */
 	cancelPending?(): void;
+	/**
+	 * Hold the current utterance without discarding it, and let it go on.
+	 *
+	 * A PAIR. An engine that implements one of these without the other is a
+	 * programming error, not an engine with half a pause: the player refuses
+	 * the pair outright, reports it, and falls back to stopping the utterance.
+	 * A pause there is no way back from is the defect this exists to remove.
+	 *
+	 * Only meaningful for an engine that owns playback. For a buffer engine the
+	 * player holds the sound in its own `<audio>` element and will never call
+	 * these. An engine that owns playback and implements neither is not thereby
+	 * unpausable: it gets the player's stop-and-retain fallback (srs.md:250),
+	 * which is exactly what speechd relies on.
+	 *
+	 * Synchronous, idempotent, and must not throw.
+	 */
+	pause?(): void;
+	resume?(): void;
 	/**
 	 * Map a stored voice id that no longer matches exactly onto the voice it
 	 * meant, when the engine changed its id format. Returns undefined when the

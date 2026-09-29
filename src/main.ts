@@ -110,11 +110,14 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			name: "Pause or resume reading",
 			// Gated for the same reason the control bar's button is (R-M14), and
 			// it has to be gated here too: disabling the button alone still left
-			// the palette able to reach a state the player cannot leave. On an
-			// engine the player cannot pause, pause() stops an <audio> element
-			// that is not the thing making the sound and sets state "paused"
-			// anyway, and resume() then calls play() on a source-less element,
-			// which rejects. The reading never comes back.
+			// the palette able to reach a state the player could not leave.
+			//
+			// All four engines currently declare pause, so this never hides
+			// today. It is not dead: an engine that owns playback, implements
+			// neither SpeechEngine.pause() nor resume(), and cannot take the
+			// player's stop-and-retain route either would declare false, and the
+			// palette must not offer it a command that parks a reading nothing
+			// can restart. The reason is the capability, never ownsPlayback.
 			//
 			// checkCallback hides the command instead of showing a reason, which
 			// is the other half of what R-M14 permits. A palette entry has no

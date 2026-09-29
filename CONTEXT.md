@@ -149,6 +149,48 @@ shared control.
 the only thing that decides what is spoken next. Engines do not know about each other,
 about documents, or about the editor.
 
+**Pause is routed by who is holding the sound, and resume granularity differs by
+engine.** `Player.pauseRoute()` picks one of three, in this order, and `resume()` undoes
+whatever `pause()` recorded rather than deciding again:
+
+| route | chosen when | engines | what a resume does |
+|---|---|---|---|
+| `engine` | engine implements **both** `pause()` and `resume()` | webspeech | `speechSynthesis.resume()`: continues mid-utterance, roughly at the word |
+| `element` | `!ownsPlayback`, and the default when no engine is set | kokoro, espeak | `<audio>.play()`: continues at the exact sample |
+| `restart` | neither of the above | speechd | re-speaks the **current sentence from its start** |
+
+The differences are deliberate and are `srs.md:250` verbatim: where a backend cannot pause
+an active utterance, the controller may pause by stopping synthesis while retaining the
+segment and position. So no ADR: this is the spec's own fallback, not a deviation from it.
+Three consequences worth knowing before touching any of it:
+
+- The route is **never** decided from `SynthResult.kind`. On an engine that owns playback
+  `synthesize()` does not resolve until the utterance is over, so the kind is unknown at
+  exactly the moment pause is pressed. `ownsPlayback` is all there is to go on.
+- `pause()` must not touch `this.controller`. `run()` reads `this.controller?.signal` once
+  on entry and returns if it is missing, so nulling it kills the run loop and leaves a
+  resume nothing to restart. Only `stop()` may. For the same reason the `restart` route's
+  `++runToken` is load bearing: without it the superseded `run()` iteration comes back from
+  its await and advances the index, so a pause silently eats a sentence.
+- On the `engine` route the loop deliberately stays parked inside `await synthesize()`. Not
+  bumping the token and not aborting the chunk scope is the whole mechanism of a
+  mid-utterance resume.
+- On the `element` route both of `audio.play()`'s callbacks **outlive their own run**, so
+  both re-check the `runToken` captured before the call. A real `HTMLAudioElement` settles
+  that promise asynchronously, and `pause()` on this route does not bump the token, so a
+  `stop()` or a fresh `play()` can land in between. The success half would otherwise revive
+  a dead run's state and prime a queue `stop()` has already cleared, on a signal nothing
+  can abort; the failure half would report a notice about a reading the user had abandoned
+  and then `stop()` the playback that replaced it. A superseded rejection is therefore
+  swallowed on purpose: nothing awaits it, and whoever started the replacement owns its own
+  failures. Only this route needs the guard, and only this route primes - `restart` implies
+  `ownsPlayback`, which `primeBuffer` refuses and whose `restartCurrent` re-enters `run()`'s
+  own priming, and `engine` is webspeech alone, which also owns playback.
+
+`EngineCapabilities.pause` therefore answers "can the player stop this engine's sound and
+come back to it", not "does the engine have a pause API". All four engines now say yes, so
+it is no longer the inverse of `ownsPlayback` and must not be inferred from it.
+
 ---
 
 ## Known structural gaps

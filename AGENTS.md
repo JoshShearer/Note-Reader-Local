@@ -168,11 +168,6 @@ rediscover them:
   `blockComments` false and discards the returned `openComment`/`openCode`, which is what
   stops a YAML value opening a comment or code span that silences the note body. Do not
   "simplify" either half of that.
-- Pause is still a no-op on speechd and webspeech: `Player.pause()` pauses an `<audio>`
-  element those two engines never fill. NRL-22 only stopped the UI from offering it, by
-  declaring `pause: false` and `resume: false` on both and gating the button and the
-  palette command through `src/ui/affordances.ts`. The capability fields already exist, so
-  NRL-23 wires the real calls and flips the two booleans rather than adding anything.
 - Stop and Repeat on speechd do reach the daemon as of NRL-41: `synthesize()` subscribes to
   the `AbortSignal` the player already hands it and issues `spd-say -S`. Do not "simplify"
   either half of that. `-S` is SSIP `STOP ALL`, which is **not** connection-scoped, and that
