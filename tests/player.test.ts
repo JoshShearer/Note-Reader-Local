@@ -208,7 +208,7 @@ console.log("player walks the queue and highlights in order");
 	let finished = false;
 	player.on("finished", () => (finished = true));
 
-	const playing = player.play(engine, chunks, 1);
+	const playing = player.play(engine, chunks, 1, 0);
 
 	// Each chunk: play, advance the clock to the end, let `ended` fire.
 	for (let i = 0; i < chunks.length; i++) {
@@ -247,7 +247,7 @@ console.log("pause and resume move the audio element");
 	const { engine } = makeEngine();
 	const player = new Player({ bufferAhead: 0 });
 	const chunks = chunksOf(SRC);
-	const playing = player.play(engine, chunks, 1);
+	const playing = player.play(engine, chunks, 1, 0);
 	await tick();
 
 	player.pause();
@@ -270,7 +270,7 @@ console.log("rate is applied to audio and to the timeline");
 	const player = new Player({ bufferAhead: 0 });
 	// play() only settles when the queue drains, and nothing advances the fake
 	// clock here, so this is deliberately not awaited.
-	const playing = player.play(engine, chunksOf(SRC), 1.5);
+	const playing = player.play(engine, chunksOf(SRC), 1.5, 0);
 	await tick();
 	check("playbackRate set on the element", fakeAudio.playbackRate === 1.5, `got ${fakeAudio.playbackRate}`);
 	player.stop();
@@ -293,7 +293,7 @@ console.log("rate is applied once, not twice");
 	};
 
 	const player = new Player({ bufferAhead: 0 });
-	const playing = player.play(spy, chunksOf(SRC), 1.5);
+	const playing = player.play(spy, chunksOf(SRC), 1.5, 0);
 	await tick();
 	check("buffer engine asked to render at natural speed", seen[0] === 1, `got ${seen[0]}`);
 	check("player still plays it faster", fakeAudio.playbackRate === 1.5, `got ${fakeAudio.playbackRate}`);
@@ -308,7 +308,7 @@ console.log("rate is applied once, not twice");
 	};
 	seen.length = 0;
 	const player2 = new Player({ bufferAhead: 0 });
-	const playing2 = player2.play(owning, chunksOf(SRC), 1.5);
+	const playing2 = player2.play(owning, chunksOf(SRC), 1.5, 0);
 	await tick();
 	check("engine that owns playback is given the rate", seen[0] === 1.5, `got ${seen[0]}`);
 	player2.stop();
@@ -326,7 +326,7 @@ console.log("an engine failure surfaces and stops playback");
 	let finished = false;
 	player.on("finished", () => (finished = true));
 
-	const playing = player.play(engine, chunksOf(SRC), 1);
+	const playing = player.play(engine, chunksOf(SRC), 1, 0);
 	await tick();
 	fakeAudio.advance(fakeAudio.currentTime + 1.2, 1.0);
 	await playing;
@@ -341,7 +341,7 @@ console.log("stop() mid-playback aborts cleanly");
 {
 	const { engine } = makeEngine();
 	const player = new Player({ bufferAhead: 0 });
-	const playing = player.play(engine, chunksOf(SRC), 1);
+	const playing = player.play(engine, chunksOf(SRC), 1, 0);
 	await tick();
 	player.stop();
 	await playing.catch(() => undefined);
@@ -353,7 +353,7 @@ console.log("prefetch synthesises ahead of the current chunk");
 {
 	const { engine, calls } = makeEngine();
 	const player = new Player({ bufferAhead: 3 });
-	const playing = player.play(engine, chunksOf(SRC), 1);
+	const playing = player.play(engine, chunksOf(SRC), 1, 0);
 	await tick();
 	check("prefetched beyond the first chunk", calls.length >= 2, `got ${calls.length} after first tick`);
 	check(
@@ -372,7 +372,7 @@ console.log("buffer engine prefetches exactly bufferAhead + 1 chunks");
 	const chunks = chunksOf(SRC);
 	check("fixture has enough chunks", chunks.length >= 5, `got ${chunks.length}`);
 	const player = new Player({ bufferAhead: 2 });
-	const playing = player.play(engine, chunks, 1);
+	const playing = player.play(engine, chunks, 1, 0);
 	await tick();
 	check("current chunk plus two ahead", calls.length === 3, `got ${calls.length}`);
 	player.stop();
@@ -417,7 +417,7 @@ console.log("an engine that owns playback is never prefetched");
 	const player = new Player({ bufferAhead: 2 });
 	let finished = false;
 	player.on("finished", () => (finished = true));
-	await player.play(owning, chunks, 1);
+	await player.play(owning, chunks, 1, 0);
 
 	check("finished the queue", finished);
 	check("at most one synthesize in flight", peak === 1, `peak ${peak}`);
@@ -440,7 +440,7 @@ console.log("raising look ahead fills the window on a running player");
 	const { engine, calls } = makeEngine();
 	const chunks = numbered(10);
 	const player = new Player({ bufferAhead: 2 });
-	const playing = player.play(engine, chunks, 1);
+	const playing = player.play(engine, chunks, 1, 0);
 	await tick();
 	check("starts at the constructor window", calls.length === 3, `got ${calls.length}`);
 
@@ -456,7 +456,7 @@ console.log("lowering look ahead issues no further prefetch and keeps issued wor
 {
 	const { engine, calls } = makeEngine();
 	const player = new Player({ bufferAhead: 6 });
-	const playing = player.play(engine, numbered(10), 1);
+	const playing = player.play(engine, numbered(10), 1, 0);
 	await tick();
 	check("starts at six ahead", calls.length === 7, `got ${calls.length}`);
 
@@ -494,7 +494,7 @@ console.log("a raised look ahead still never reaches an engine that owns playbac
 	};
 
 	const player = new Player({ bufferAhead: 0 });
-	const playing = player.play(owning, numbered(10), 1);
+	const playing = player.play(owning, numbered(10), 1, 0);
 	await tick();
 	player.setBufferAhead(8);
 	await tick();
@@ -508,7 +508,7 @@ console.log("look ahead set while paused fills on resume");
 {
 	const { engine, calls } = makeEngine();
 	const player = new Player({ bufferAhead: 2 });
-	const playing = player.play(engine, numbered(10), 1);
+	const playing = player.play(engine, numbered(10), 1, 0);
 	await tick();
 	check("playing before pause", player.getState() === "playing", `got ${player.getState()}`);
 	check("window is three before pause", calls.length === 3, `got ${calls.length}`);
@@ -534,7 +534,7 @@ console.log("look ahead set while idle applies on the next play");
 	player.setBufferAhead(5);
 	check("no synthesis from a setter while idle", calls.length === 0, `got ${calls.length}`);
 
-	const playing = player.play(engine, numbered(10), 1);
+	const playing = player.play(engine, numbered(10), 1, 0);
 	await tick();
 	check("next play uses the new window", calls.length === 6, `got ${calls.length}`);
 	player.stop();
@@ -567,7 +567,7 @@ console.log("a clamped look ahead is the window that is actually used");
 {
 	const { engine, calls } = makeEngine();
 	const player = new Player({ bufferAhead: 2 });
-	const playing = player.play(engine, numbered(10), 1);
+	const playing = player.play(engine, numbered(10), 1, 0);
 	await tick();
 	player.setBufferAhead(-5);
 	await tick();
@@ -586,7 +586,7 @@ console.log("changing look ahead does not touch the rate");
 	const player = new Player({ bufferAhead: 2 });
 	const rates: number[] = [];
 	player.on("rate", (r) => rates.push(r));
-	const playing = player.play(engine, numbered(10), 1.5);
+	const playing = player.play(engine, numbered(10), 1.5, 0);
 	await tick();
 	check("rate is 1.5 before", player.getRate() === 1.5, `got ${player.getRate()}`);
 	player.setBufferAhead(6);
@@ -607,7 +607,7 @@ console.log("a stop while resuming does not start work on a queue that is gone")
 	// on a signal nothing can abort, because stop() has nulled the controller.
 	const { engine, calls } = makeEngine();
 	const player = new Player({ bufferAhead: 2 });
-	const playing = player.play(engine, numbered(10), 1);
+	const playing = player.play(engine, numbered(10), 1, 0);
 	await tick();
 	check("playing before pause", player.getState() === "playing", `got ${player.getState()}`);
 
@@ -703,7 +703,7 @@ async function playUntil(
 	target: number,
 	progress: Array<{ chunkIndex: number; total: number }>,
 ): Promise<{ playing: Promise<void> }> {
-	const playing = player.play(engine, chunks, 1);
+	const playing = player.play(engine, chunks, 1, 0);
 	await tick();
 	while ((progress.at(-1)?.chunkIndex ?? -1) < target) {
 		fakeAudio.advance(fakeAudio.currentTime + 0.2, fakeAudio.currentTime);
@@ -838,7 +838,7 @@ console.log("replay on an engine that owns playback stops the utterance first");
 	player.on("progress", (p) => progress.push(p));
 	const errors: string[] = [];
 	player.on("error", (e) => errors.push(e.message));
-	const playing = player.play(owning, numbered(5), 1);
+	const playing = player.play(owning, numbered(5), 1, 0);
 	await new Promise((r) => setTimeout(r, 90)); // chunk 0 done, chunk 1 speaking
 	check("speaking chunk 1 before replay", player.getIndex() === 1, `got ${player.getIndex()}`);
 
@@ -899,7 +899,7 @@ console.log("both abort paths reach the signal an ownsPlayback engine was handed
 	};
 
 	const player = new Player({ bufferAhead: 2 });
-	const playing = player.play(owning, numbered(3), 1);
+	const playing = player.play(owning, numbered(3), 1, 0);
 	await tick();
 	void player.replayCurrent();
 	await tick();
@@ -923,7 +923,7 @@ console.log("stop after a replay still aborts prefetches");
 		},
 	};
 	const player = new Player({ bufferAhead: 2 });
-	const playing = player.play(slow, numbered(6), 1);
+	const playing = player.play(slow, numbered(6), 1, 0);
 	await tick();
 	void player.replayCurrent();
 	await tick();
@@ -974,13 +974,13 @@ console.log("setRate emits a rate event, only when the rate changes");
 	check("getRate reflects setRate", player.getRate() === 1.5, String(player.getRate()));
 
 	const { engine } = makeEngine();
-	const playing = player.play(engine, chunksOf(SRC), 1.25);
+	const playing = player.play(engine, chunksOf(SRC), 1.25, 0);
 	await tick();
 	check("play() with a different rate emits it once", JSON.stringify(rates) === "[1.5,1.25]", JSON.stringify(rates));
 	player.stop();
 	await playing.catch(() => undefined);
 
-	const again = player.play(engine, chunksOf(SRC), 1.25);
+	const again = player.play(engine, chunksOf(SRC), 1.25, 0);
 	await tick();
 	check("play() at the current rate emits nothing", rates.length === 2, JSON.stringify(rates));
 	player.stop();
@@ -1096,7 +1096,7 @@ console.log("an engine that owns playback reaches state playing while it speaks"
 	const fake = makeOwningEngine();
 	const player = new Player({ bufferAhead: 2 });
 	fake.observe(() => player.getState());
-	const playing = player.play(fake.engine, numbered(3), 1);
+	const playing = player.play(fake.engine, numbered(3), 1, 0);
 
 	for (let i = 0; i < 3; i++) {
 		await tick();
@@ -1122,7 +1122,7 @@ console.log("pause stops the sound on an engine that cannot pause itself");
 	fake.observe(() => player.getState());
 	const states: string[] = [];
 	player.on("state", (s) => states.push(s));
-	const playing = player.play(fake.engine, numbered(3), 1);
+	const playing = player.play(fake.engine, numbered(3), 1, 0);
 	await tick();
 
 	check("speaking chunk 0 before the pause", player.getIndex() === 0 && player.getState() === "playing", `${player.getIndex()} ${player.getState()}`);
@@ -1161,7 +1161,7 @@ console.log("pause asks a live engine to pause rather than cutting it off");
 	const fake = makeOwningEngine({ enginePause: true });
 	const player = new Player({ bufferAhead: 2 });
 	fake.observe(() => player.getState());
-	const playing = player.play(fake.engine, numbered(2), 1);
+	const playing = player.play(fake.engine, numbered(2), 1, 0);
 	await tick();
 
 	player.pause();
@@ -1199,7 +1199,7 @@ console.log("an engine that declares pause without resume is refused, not half-u
 	fake.observe(() => player.getState());
 	const errors: string[] = [];
 	player.on("error", (e) => errors.push(e.message));
-	const playing = player.play(fake.engine, numbered(2), 1);
+	const playing = player.play(fake.engine, numbered(2), 1, 0);
 	await tick();
 
 	player.pause();
@@ -1219,7 +1219,7 @@ console.log("a rejected resume reports an error instead of hanging in paused");
 	const player = new Player({ bufferAhead: 0 });
 	const errors: string[] = [];
 	player.on("error", (e) => errors.push(e.message));
-	const playing = player.play(engine, chunksOf(SRC), 1);
+	const playing = player.play(engine, chunksOf(SRC), 1, 0);
 	await tick();
 
 	player.pause();
@@ -1252,7 +1252,7 @@ console.log("rate is still applied exactly once across a pause and resume");
 		},
 	};
 	const player = new Player({ bufferAhead: 0 });
-	const playing = player.play(spy, chunksOf(SRC), 1.5);
+	const playing = player.play(spy, chunksOf(SRC), 1.5, 0);
 	await tick();
 	player.pause();
 	void player.resume();
@@ -1268,7 +1268,7 @@ console.log("rate is still applied exactly once across a pause and resume");
 	const fake = makeOwningEngine();
 	const player2 = new Player({ bufferAhead: 0 });
 	fake.observe(() => player2.getState());
-	const playing2 = player2.play(fake.engine, numbered(3), 1.5);
+	const playing2 = player2.play(fake.engine, numbered(3), 1.5, 0);
 	await tick();
 	player2.pause();
 	await tick();
@@ -1299,7 +1299,7 @@ console.log("a resume rejected after its run was superseded reports nothing and 
 	const player = new Player({ bufferAhead: 0 });
 	const errors: string[] = [];
 	player.on("error", (e) => errors.push(e.message));
-	const first = player.play(engine, numbered(10), 1);
+	const first = player.play(engine, numbered(10), 1, 0);
 	await tick();
 	player.pause();
 	check("paused before the resume", player.getState() === "paused", player.getState());
@@ -1314,7 +1314,7 @@ console.log("a resume rejected after its run was superseded reports nothing and 
 	void player.resume();
 	fakeAudio.play = realPlay;
 
-	const second = player.play(engine, numbered(10), 1);
+	const second = player.play(engine, numbered(10), 1, 0);
 	await tick();
 	check("the replacement run is playing", player.getState() === "playing", player.getState());
 	const atTakeover = calls.length;
@@ -1345,7 +1345,7 @@ console.log("a live resume still reports its own failure");
 	const player = new Player({ bufferAhead: 0 });
 	const errors: string[] = [];
 	player.on("error", (e) => errors.push(e.message));
-	const playing = player.play(engine, numbered(10), 1);
+	const playing = player.play(engine, numbered(10), 1, 0);
 	await tick();
 	player.pause();
 
@@ -1367,7 +1367,7 @@ console.log("a resume resolved after a newer play() neither revives it nor prime
 	// replacement and fill a window against a queue it does not belong to.
 	const { engine, calls } = makeEngine();
 	const player = new Player({ bufferAhead: 0 });
-	const first = player.play(engine, numbered(10), 1);
+	const first = player.play(engine, numbered(10), 1, 0);
 	await tick();
 	player.pause();
 
@@ -1383,7 +1383,7 @@ console.log("a resume resolved after a newer play() neither revives it nor prime
 	void player.resume();
 	fakeAudio.play = realPlay;
 
-	const second = player.play(engine, numbered(10), 1);
+	const second = player.play(engine, numbered(10), 1, 0);
 	await tick();
 	player.pause();
 	check("the replacement is paused", player.getState() === "paused", player.getState());
@@ -1435,7 +1435,7 @@ console.log("pause and resume on an engine that owns playback prefetch nothing, 
 
 		const player = new Player({ bufferAhead: 2 });
 		fake.observe(() => player.getState());
-		const playing = player.play(counted, numbered(12), 1);
+		const playing = player.play(counted, numbered(12), 1, 0);
 		await tick();
 		check(`${route}: one utterance before the pause`, fake.calls.length === 1, JSON.stringify(fake.calls));
 

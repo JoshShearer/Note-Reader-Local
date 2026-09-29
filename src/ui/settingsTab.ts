@@ -9,6 +9,8 @@ import { controlAffordances, engineLimitations } from "./affordances";
 export class LocalTtsSettingTab extends PluginSettingTab {
 	/** Detaches the Speed slider from the player's rate event. */
 	private offRate: (() => void) | null = null;
+	/** Detaches the Pitch slider from the player's pitch event. */
+	private offPitch: (() => void) | null = null;
 
 	constructor(
 		app: App,
@@ -20,6 +22,8 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	override hide(): void {
 		this.offRate?.();
 		this.offRate = null;
+		this.offPitch?.();
+		this.offPitch = null;
 		this.plugin.stopReading();
 		super.hide();
 	}
@@ -30,6 +34,8 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		// display() re-runs on engine change; detach the old slider first.
 		this.offRate?.();
 		this.offRate = null;
+		this.offPitch?.();
+		this.offPitch = null;
 
 		this.renderEngineSection(containerEl);
 		this.renderVoiceSection(containerEl);
@@ -440,11 +446,36 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				});
 			});
 
+		// Add pitch slider if the engine supports it
+		const engine = this.plugin.activeEngine();
+		if (engine?.capabilities.pitch) {
+			new Setting(containerEl)
+				.setName("Pitch")
+				.setDesc("Change how high or low the voice sounds. Applies to future synthesis only.")
+				.addSlider((slider) => {
+					slider
+						.setLimits(-50, 50, 1)
+						.setDynamicTooltip()
+						.setValue(this.plugin.getPlayer().getPitch())
+						.onChange(async (value) => {
+							await this.plugin.setPitch(value);
+						});
+					// Follow the player, so changes update both places
+					this.offPitch = this.plugin.getPlayer().on("pitch", (pitch) => {
+						if (slider.getValue() !== pitch) slider.setValue(pitch);
+					});
+				});
+		} else if (engine) {
+			// Engine doesn't support pitch, show disabled message
+			new Setting(containerEl)
+				.setName("Pitch")
+				.setDesc(`Not available: ${engine.label} does not support pitch control.`);
+		}
+
 		// The player never prefetches for an engine that speaks as it
 		// synthesises, so the slider would do nothing there. The stored value is
 		// left alone so switching back to a buffer engine restores it. Resolved
 		// engine, same reason as renderVoiceSection above.
-		const engine = this.plugin.activeEngine();
 		if (engine?.capabilities.ownsPlayback) {
 			new Setting(containerEl)
 				.setName("Look ahead")

@@ -108,6 +108,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// settings before anything observes it, so the control bar and the
 		// settings slider start from the same value.
 		this.player.setRate(this.settings.rate);
+		this.player.setPitch(this.settings.pitch);
 
 		// Sentence-level highlighting
 		this.player.on("chunk", (chunk) => {
@@ -433,7 +434,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			}
 		}
 
-		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, {
+		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: async (candidate) => {
 				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
 				await this.selectVoiceIfNeeded(candidate.engine, voices);
@@ -543,7 +544,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			candidates = [{ engine, id: selection, reason: "" }];
 		}
 
-		await playWithFallback(this.player, candidates, selectedChunks, this.settings.rate, {
+		await playWithFallback(this.player, candidates, selectedChunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: async (candidate: FallbackCandidate) => {
 				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
 				await this.selectVoiceIfNeeded(candidate.engine, voices);
@@ -610,7 +611,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			candidates = [{ engine, id: selection, reason: "" }];
 		}
 
-		await playWithFallback(this.player, candidates, chunks, this.settings.rate, {
+		await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: async (candidate: FallbackCandidate) => {
 				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
 				await this.selectVoiceIfNeeded(candidate.engine, voices);
@@ -932,6 +933,18 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	async setRate(rate: number): Promise<void> {
 		this.settings.rate = rate;
 		this.player.setRate(rate);
+		await this.saveSettings();
+	}
+
+	/**
+	 * Change pitch, applied to future synthesis only.
+	 *
+	 * Like rate, both the control bar and the settings slider observe the
+	 * "pitch" event from the player to avoid feedback loops.
+	 */
+	async setPitch(pitch: number): Promise<void> {
+		this.settings.pitch = pitch;
+		this.player.setPitch(pitch);
 		await this.saveSettings();
 	}
 
