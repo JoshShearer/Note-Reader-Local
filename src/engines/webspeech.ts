@@ -1,4 +1,5 @@
 import type {
+	EngineAvailability,
 	EngineCapabilities,
 	EngineId,
 	SpeechEngine,
@@ -111,9 +112,18 @@ export class WebSpeechEngine implements SpeechEngine {
 	private voices: VoiceInfo[] = [];
 	private voicesLoaded = false;
 
-	async isAvailable(): Promise<boolean> {
-		if (!hasSpeechSynthesis()) return false;
-		return (await waitForVoices()).length > 0;
+	async isAvailable(): Promise<EngineAvailability> {
+		if (!hasSpeechSynthesis()) {
+			return { available: false, reason: "This platform has no Web Speech API." };
+		}
+		const voices = await waitForVoices();
+		if (voices.length === 0) {
+			return {
+				available: false,
+				reason: "No voices are installed for this platform's speech synthesis. Install a system voice and retry.",
+			};
+		}
+		return { available: true };
 	}
 
 	async listVoices(): Promise<VoiceInfo[]> {

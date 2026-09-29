@@ -1,4 +1,5 @@
 import type {
+	EngineAvailability,
 	EngineCapabilities,
 	EngineId,
 	SpeechEngine,
@@ -98,14 +99,26 @@ export class EspeakEngine implements SpeechEngine {
 
 	constructor(private readonly runner: ProcessRunner) {}
 
-	async isAvailable(): Promise<boolean> {
+	async isAvailable(): Promise<EngineAvailability> {
 		const path = await this.runner.which("espeak-ng");
-		if (!path) return false;
+		if (!path) {
+			return {
+				available: false,
+				reason: "espeak-ng is not installed. Install the espeak-ng package and retry.",
+			};
+		}
 		try {
 			const { code, stdout } = await this.runner.run("espeak-ng", ["--version"]);
-			return code === 0 && stdout.toString().trim().length > 0;
-		} catch {
-			return false;
+			if (code === 0 && stdout.toString().trim().length > 0) return { available: true };
+			return {
+				available: false,
+				reason: "espeak-ng was found but is not responding to --version. Reinstall the espeak-ng package.",
+			};
+		} catch (err) {
+			return {
+				available: false,
+				reason: `Could not check espeak-ng: ${err instanceof Error ? err.message : String(err)}`,
+			};
 		}
 	}
 
@@ -141,8 +154,10 @@ export class EspeakEngine implements SpeechEngine {
 			"--stdout",
 		];
 
-		const { code, stdout, stderr } = await this.runner.run("espeak-ng", args, req.chunk.text, signal);
-		if (code !== 0) throw new Error(`espeak-ng failed: ${stderr.trim() || `exit ${code}`}`);
+		const { code, stdout } = await this.runner.run("espeak-ng", args, req.chunk.text, signal);
+		// Fixed string only, mirroring speechd.ts's own precedent: raw stderr
+		// is unaudited process output, not something to surface verbatim.
+		if (code !== 0) throw new Error(`Speech synthesis failed (espeak-ng exited with code ${code}).`);
 
 		const audio = toArrayBuffer(stdout);
 		if (audio.byteLength === 0) throw new Error("espeak-ng produced no audio");

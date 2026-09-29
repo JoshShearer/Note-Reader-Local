@@ -9,6 +9,36 @@
 
 export type EngineId = "kokoro" | "espeak" | "speechd" | "webspeech";
 
+/**
+ * The result of `SpeechEngine.isAvailable()`.
+ *
+ * A discriminated union rather than a bare boolean, so a reason can never be
+ * read without first narrowing `available` to `false`, and never disagree
+ * with the boolean it accompanies (NRL-25's clarification).
+ */
+export type EngineAvailability = { available: true } | { available: false; reason: string };
+
+/**
+ * Joins an `EngineAvailability` reason with a generic next step for the
+ * user, guaranteeing exactly one sentence break between them.
+ *
+ * Most reasons are fixed strings that already end in a period, but the
+ * catch-all branch in every engine's `isAvailable()` interpolates a caught
+ * error's `.message`, which usually does not. Concatenating that directly
+ * against a following sentence reads as a run-on ("...vault adapter Pick
+ * another engine in settings."), which undercuts the whole point of this
+ * ticket: the message has to be genuinely readable, not just non-generic.
+ *
+ * Pure and exported so it can be unit tested: `main.ts`, the only caller,
+ * imports `obsidian` at module scope and cannot be bundled in bare Node,
+ * the same structural blocker documented for `registry.ts`.
+ */
+export function describeUnavailable(reason: string, nextStep: string): string {
+	const trimmed = reason.trim();
+	const punctuated = /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+	return `${punctuated} ${nextStep}`;
+}
+
 export type TimingPrecision =
 	/** Engine reports exact word ranges (e.g. Android onRangeStart). */
 	| "native"
@@ -160,7 +190,7 @@ export interface SpeechEngine {
 	readonly capabilities: EngineCapabilities;
 
 	/** Cheap probe: is the backing binary, daemon or model present? */
-	isAvailable(): Promise<boolean>;
+	isAvailable(): Promise<EngineAvailability>;
 	listVoices(): Promise<VoiceInfo[]>;
 	selectVoice(voice: VoiceInfo): Promise<void>;
 	synthesize(req: SynthRequest, signal: AbortSignal): Promise<SynthResult>;

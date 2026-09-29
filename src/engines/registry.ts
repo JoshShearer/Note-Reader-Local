@@ -65,12 +65,8 @@ export async function probeEngines(engines: SpeechEngine[]): Promise<EngineStatu
 				return { engine, available: false, reason: "Not available on mobile" };
 			}
 			try {
-				const available = await engine.isAvailable();
-				return {
-					engine,
-					available,
-					reason: available ? "" : "Not installed or not responding",
-				};
+				const result = await engine.isAvailable();
+				return { engine, available: result.available, reason: result.available ? "" : result.reason };
 			} catch (err) {
 				return {
 					engine,

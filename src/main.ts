@@ -2,7 +2,7 @@ import { MarkdownView, Notice, Plugin, getLanguage, moment } from "obsidian";
 import { EditorView } from "@codemirror/view";
 
 import { Player } from "./audio/player";
-import type { SpeechEngine, VoiceInfo } from "./audio/types";
+import { describeUnavailable, type SpeechEngine, type VoiceInfo } from "./audio/types";
 import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
 import { resolveStoredVoice } from "./audio/voiceChoice";
@@ -182,7 +182,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		const engine = this.activeEngine();
 		if (!engine?.prepare) return;
 		try {
-			if (!(await engine.isAvailable())) return;
+			if (!(await engine.isAvailable()).available) return;
 			const started = Date.now();
 			await engine.prepare();
 			trace(
@@ -292,11 +292,11 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			t("engine matched", engineId);
 
 			t("checking isAvailable", engineId);
-			const available = await engine.isAvailable();
-			t("isAvailable returned", `${engineId}=${available}`);
-			if (!available) {
+			const availability = await engine.isAvailable();
+			t("isAvailable returned", `${engineId}=${availability.available}`);
+			if (!availability.available) {
 				new Notice(
-					`Local TTS Reader: ${engine.label} is not available. Pick another engine in settings.`,
+					`Local TTS Reader: ${describeUnavailable(availability.reason, "Pick another engine in settings.")}`,
 					8000,
 				);
 				return;
@@ -435,7 +435,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		return await Promise.all(
 			this.engines.map(async (engine): Promise<EngineProbe> => {
 				if (engine instanceof KokoroEngine) {
-					const available = await engine.isAvailable();
+					const available = (await engine.isAvailable()).available;
 					const plan = await engine.plannedBackend();
 					return {
 						id: "kokoro",
@@ -446,7 +446,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				if (engine instanceof WebSpeechEngine) {
 					return { id: "webspeech", available: await engine.hasLocalVoice() };
 				}
-				return { id: engine.id, available: await engine.isAvailable() };
+				return { id: engine.id, available: (await engine.isAvailable()).available };
 			}),
 		);
 	}

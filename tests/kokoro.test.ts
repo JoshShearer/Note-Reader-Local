@@ -81,20 +81,64 @@ console.log("whatever is actually downloaded wins over the preference");
 		weights: "fast",
 	});
 	check("falls back to the installed build", (await engine.installedWeights())?.path === SMALL);
-	check("reports itself available", await engine.isAvailable());
+	check("reports itself available", (await engine.isAvailable()).available);
 }
 
-console.log("no weights at all is not available");
+console.log("no weights at all is not available (NRL-25: distinguishable reason)");
+let weightsMissingReason = "";
 {
 	const engine = new KokoroEngine(fakeStore(CORE), { device: "wasm", weights: "fast" });
 	check("no build found", (await engine.installedWeights()) === null);
-	check("not available without weights", !(await engine.isAvailable()));
+	const result = await engine.isAvailable();
+	check("not available without weights", result.available === false);
+	if (!result.available) weightsMissingReason = result.reason;
+	check(
+		"reason is the exact wording thrown elsewhere in this file (kokoro.ts's own irony fix)",
+		weightsMissingReason === "Kokoro weights are missing. Download them from settings.",
+		weightsMissingReason,
+	);
 }
 
-console.log("missing core files are not papered over by weights");
+console.log("missing core files are not papered over by weights (NRL-25: distinguishable reason)");
 {
 	const engine = new KokoroEngine(fakeStore([FAST]), { device: "wasm", weights: "fast" });
-	check("tokenizer and config are required", !(await engine.isAvailable()));
+	const result = await engine.isAvailable();
+	check("tokenizer and config are required", result.available === false);
+	check(
+		"reason is DIFFERENT from the weights-missing reason",
+		!result.available && result.reason !== weightsMissingReason && result.reason.length > 0,
+		!result.available ? result.reason : "available:true",
+	);
+}
+
+console.log("a store that throws is reported, not propagated (NRL-25)");
+{
+	const failingStore: ModelStore = {
+		dir: "models",
+		modelBase: "local-model://kokoro/",
+		workerPath: "plugin/kokoro-worker.js",
+		ortFile: (name: string) => `plugin/ort/${name}`,
+		async readPluginFile() {
+			return new ArrayBuffer(0);
+		},
+		async exists() {
+			throw new Error("EIO reading vault adapter");
+		},
+		async read() {
+			return new ArrayBuffer(0);
+		},
+		async readOptional() {
+			return null;
+		},
+	};
+	const engine = new KokoroEngine(failingStore, { device: "wasm", weights: "fast" });
+	const result = await engine.isAvailable();
+	check("throwing store: not available, does not propagate", result.available === false);
+	check(
+		"throwing store: reason carries the thrown message",
+		!result.available && result.reason.includes("EIO reading vault adapter"),
+		!result.available ? result.reason : "available:true",
+	);
 }
 
 /**

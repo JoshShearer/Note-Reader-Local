@@ -27,7 +27,7 @@ console.log("speech-dispatcher is usable here");
 const runner = getProcessRunner();
 const spd = new SpeechDispatcherEngine(runner);
 check("spd-say on PATH", (await runner.which("spd-say")) !== null);
-check("reports available", await spd.isAvailable());
+check("reports available", (await spd.isAvailable()).available);
 
 // A trimmed copy of real `spd-say -L` output. The NAME column already
 // carries the variant, which is what the old id format got wrong.
@@ -345,6 +345,129 @@ console.log("speechd: aborting mid-utterance stops the daemon, not just the clie
 	check("dispose never issues -C", !h.calls.some((c) => c.args.includes("-C")), JSON.stringify(h.calls.map((c) => c.args)));
 	ac.abort();
 	await p;
+}
+
+console.log("speechd: isAvailable() distinguishes its failure modes (fake runner, NRL-25)");
+{
+	// Binary missing entirely.
+	const runner2: ProcessRunner = {
+		async run() {
+			throw new Error("should not run when which() fails");
+		},
+		async spawn() {
+			throw new Error("not used");
+		},
+		async which() {
+			return null;
+		},
+	};
+	const spd2 = new SpeechDispatcherEngine(runner2);
+	const result = await spd2.isAvailable();
+	check("binary missing: not available", result.available === false);
+	check(
+		"binary missing: reason names spd-say",
+		!result.available && result.reason.includes("spd-say"),
+		!result.available ? result.reason : "available:true",
+	);
+}
+{
+	// This is the regression test for the latent bug this ticket fixes: the
+	// old check was `/OUTPUT MODULES/i.test(stdout)`, which only confirms the
+	// header line is present, never that any module name follows it. A
+	// daemon with the header and zero modules configured must NOT be
+	// reported available.
+	const runner2: ProcessRunner = {
+		async run(_cmd, args) {
+			if (args[0] === "-O") return { code: 0, stderr: "", stdout: Buffer.from("OUTPUT MODULES\n") };
+			throw new Error(`unexpected call: ${args.join(" ")}`);
+		},
+		async spawn() {
+			throw new Error("not used");
+		},
+		async which() {
+			return "/usr/bin/spd-say";
+		},
+	};
+	const spd2 = new SpeechDispatcherEngine(runner2);
+	const result = await spd2.isAvailable();
+	check(
+		"header present but zero modules: not available (regression for the latent bug)",
+		result.available === false,
+		JSON.stringify(result),
+	);
+	check(
+		"zero modules: reason mentions output module",
+		!result.available && /output module/i.test(result.reason),
+		!result.available ? result.reason : "available:true",
+	);
+}
+{
+	// -O reachable, real modules present: available.
+	const runner2: ProcessRunner = {
+		async run(_cmd, args) {
+			if (args[0] === "-O") {
+				return { code: 0, stderr: "", stdout: Buffer.from("OUTPUT MODULES\nespeak-ng\nopenjtalk\n") };
+			}
+			throw new Error(`unexpected call: ${args.join(" ")}`);
+		},
+		async spawn() {
+			throw new Error("not used");
+		},
+		async which() {
+			return "/usr/bin/spd-say";
+		},
+	};
+	const spd2 = new SpeechDispatcherEngine(runner2);
+	const result = await spd2.isAvailable();
+	check("real modules present: available", result.available === true, JSON.stringify(result));
+}
+{
+	// -O reachable but returns something unrelated / non-zero: the generic
+	// "could not be reached" bucket, deliberately not a fake "daemon
+	// unreachable" distinction the probe cannot actually produce (spd-say
+	// autospawns the daemon on connect, verified for real on this machine).
+	const runner2: ProcessRunner = {
+		async run(_cmd, args) {
+			if (args[0] === "-O") return { code: 1, stderr: "", stdout: Buffer.from("") };
+			throw new Error(`unexpected call: ${args.join(" ")}`);
+		},
+		async spawn() {
+			throw new Error("not used");
+		},
+		async which() {
+			return "/usr/bin/spd-say";
+		},
+	};
+	const spd2 = new SpeechDispatcherEngine(runner2);
+	const result = await spd2.isAvailable();
+	check("non-zero exit: not available", result.available === false, JSON.stringify(result));
+	check(
+		"non-zero exit: generic could-not-be-reached reason",
+		!result.available && /could not be reached/i.test(result.reason),
+		!result.available ? result.reason : "available:true",
+	);
+}
+{
+	// run() throws: caught, not propagated, reason carries the message.
+	const runner2: ProcessRunner = {
+		async run() {
+			throw new Error("ECONNREFUSED talking to spd-say");
+		},
+		async spawn() {
+			throw new Error("not used");
+		},
+		async which() {
+			return "/usr/bin/spd-say";
+		},
+	};
+	const spd2 = new SpeechDispatcherEngine(runner2);
+	const result = await spd2.isAvailable();
+	check("probe throws: not available, does not propagate", result.available === false);
+	check(
+		"probe throws: reason carries the thrown message",
+		!result.available && result.reason.includes("ECONNREFUSED talking to spd-say"),
+		!result.available ? result.reason : "available:true",
+	);
 }
 
 console.log("voice ids resolve across the format change");

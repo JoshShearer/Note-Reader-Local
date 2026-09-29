@@ -42,7 +42,11 @@ function withVoices(voices: FakeVoice[]): void {
 		removeEventListener: () => undefined,
 	};
 	Object.defineProperty(globalThis, "window", {
-		value: { speechSynthesis },
+		// A zero-voices case falls through to waitForVoices()'s poll loop,
+		// which calls window.setTimeout - fire it on a microtask instead of
+		// a real delay, or the empty-voices test would take VOICE_TIMEOUT_MS
+		// (5s) of real wall time to resolve.
+		value: { speechSynthesis, setTimeout: (fn: () => void) => void Promise.resolve().then(fn) },
 		configurable: true,
 		writable: true,
 	});
@@ -104,6 +108,46 @@ console.log("listLocalVoices() returns only the local ones, mapped like listVoic
 
 	const all = await engine.listVoices();
 	check("listVoices() is unaffected: still returns all three", all.length === 3, String(all.length));
+}
+
+console.log("isAvailable() distinguishes its failure modes (NRL-25)");
+{
+	// No window/speechSynthesis at all.
+	Object.defineProperty(globalThis, "window", {
+		value: undefined,
+		configurable: true,
+		writable: true,
+	});
+	Object.defineProperty(globalThis, "speechSynthesis", {
+		value: undefined,
+		configurable: true,
+		writable: true,
+	});
+	const engine = new WebSpeechEngine();
+	const result = await engine.isAvailable();
+	check("no API: not available", result.available === false);
+	check(
+		"no API: reason names the Web Speech API",
+		!result.available && /web speech api/i.test(result.reason),
+		!result.available ? result.reason : "available:true",
+	);
+}
+{
+	withVoices([]);
+	const engine = new WebSpeechEngine();
+	const result = await engine.isAvailable();
+	check("zero voices: not available", result.available === false);
+	check(
+		"zero voices: reason names voices installed, a DIFFERENT reason than no-API",
+		!result.available && /voice/i.test(result.reason) && /install/i.test(result.reason),
+		!result.available ? result.reason : "available:true",
+	);
+}
+{
+	withVoices([{ voiceURI: "local-1", name: "System Voice", lang: "en-US", localService: true }]);
+	const engine = new WebSpeechEngine();
+	const result = await engine.isAvailable();
+	check("at least one voice: available", result.available === true, JSON.stringify(result));
 }
 
 console.log("");
