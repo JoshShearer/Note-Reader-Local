@@ -49,9 +49,9 @@ extract.ts ──────────► SpeechChunk[]   text + sourceIndex 
 Player ──────────────► orchestrates: synthesise ahead, play, advance, emit events
       │
       ├─► SpeechEngine.synthesize() ──► SynthResult
-      │        kind: "buffer"   audio + word timings   (kokoro, espeak)
-      │        kind: "live"     engine fires onWord    (webspeech)
-      │        kind: "streamed" engine already spoke   (speechd)
+      │        kind: "buffer"   audio + word timings    (kokoro, espeak)
+      │        kind: "live"     engine fires onWord     (webspeech)
+      │        kind: "streamed" engine makes the sound  (speechd)
       │
       ├─► words.ts ────────────► WordTiming[]  offsets + ms, apportioned by syllables
       │
@@ -151,3 +151,13 @@ These are design-level, not bugs, and they shape any new work:
   gets a notice telling them to change a dropdown.
 - **Segmentation is a single regex** (`/[.!?…]+["')\]]*\s+/g`) with no `Intl.Segmenter`,
   so CJK text is never split.
+- **A `"streamed"` `synthesize()` resolving does not mean the audio finished.** On speechd
+  it resolves when `spd-say -w` returns, and `-w` is not an audio-end signal: for a message
+  queued behind another it returns when the *preceding* message ends, and for one submitted
+  just after a stop it returned in 39-62 ms while its own audio ran for seconds. (Measured
+  in NRL-41 off the sink monitor with `parec`, precisely because `-w` could not be trusted;
+  every number in that ticket comes from the capture, not from `-w`.) So `Player.run()`'s
+  await does not pace this engine's queue: the Player runs one chunk ahead of the audio, and
+  a Stop leaves that already-queued chunk to play out - about 830 ms, unchanged either side
+  of NRL-41 and tracked as NRL-43. Anyone measuring speechd must capture audio rather than
+  time `-w`.

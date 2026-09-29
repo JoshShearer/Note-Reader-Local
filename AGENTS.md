@@ -123,6 +123,18 @@ Linear. Notable reproduced defects, so you do not rediscover them:
   declaring `pause: false` and `resume: false` on both and gating the button and the
   palette command through `src/ui/affordances.ts`. The capability fields already exist, so
   NRL-23 wires the real calls and flips the two booleans rather than adding anything.
+- Stop and Repeat on speechd do reach the daemon as of NRL-41: `synthesize()` subscribes to
+  the `AbortSignal` the player already hands it and issues `spd-say -S`. Do not "simplify"
+  either half of that. `-S` is SSIP `STOP ALL`, which is **not** connection-scoped, and that
+  is the only reason it works at all, since our own client has been SIGKILLed by the time it
+  runs; the cost is that it also cuts off whatever another client sharing the daemon (a
+  screen reader) is saying at that instant. So it must never fire unless one of our own
+  utterances is in flight, which is why an abort seen on entry, a successful utterance and an
+  idle `dispose()` all deliberately send nothing. `-C` (`CANCEL ALL`) stays banned: it would
+  flush the other client's whole queue. `tests/engine.test.ts` pins all five cases and the
+  reasoning lives on `stopDaemon()`. What remains is the one chunk already queued behind the
+  spoken one, about 830 ms, which `-S` cannot reach; NRL-43 tracks it, and `CONTEXT.md`
+  explains why the Player runs a chunk ahead on this engine.
 - `cleanLine` is called once per source line, but since NRL-42 that is no longer the whole
   story: an inline code span may cross a soft line break, so `Cleaned.openCode` carries the
   length of a run left open and `codeSpanClosesLater` confirms a later line closes it. The
