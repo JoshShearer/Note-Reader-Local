@@ -810,6 +810,94 @@ console.log("block markup (NRL-8)");
 	}
 }
 
+console.log("Obsidian comment exclusion (NRL-38)");
+{
+	// Exercise the public extraction seam; diagnostics contain fixture IDs only.
+	const cases: Array<[string, string, string, Partial<typeof OPTS>?]> = [
+		["inline-repro", "Before %%my secret%% after.", "Before after."],
+		["block-repro", "%%\nhidden block\nline two\n%%\nVisible.", "Visible."],
+		["inline-adjacent", "Before%%one%%%%two%%after.", "Before after."],
+		["inline-multiple", "Before %%one%% middle %%two%% after.", "Before middle after."],
+		["empty", "Before %%%% after.", "Before after."],
+		["block-tail", "Before.\n%% hidden\nstill hidden\n%% after.", "Before. after."],
+		["block-only", "%%\nhidden\n%%", ""],
+		["block-unclosed", "Before.\n%% hidden\nnot visible", "Before."],
+		["block-unclosed-standalone", "Before.\n%%\nnot visible", "Before."],
+		["inline-unmatched", "Before %% visible\nStill visible.", "Before %% visible Still visible."],
+		["percent", "Save 50% off today.", "Save 50% off today."],
+		["escaped-opener", "Before \\%%literal after.", "Before %%literal after."],
+		["escaped-first-of-pair", "Before \\%%literal%% after.", "Before %%literal%% after."],
+		["first-closer", "Before %%one %%middle%% two%% after.", "Before middle after."],
+		["html-inside-inline", "Before %%<!-- hidden%% after.", "Before after."],
+		["obsidian-inside-html", "Before <!-- %% hidden --> after.", "Before after."],
+		["html-inside-block", "Before.\n%%\n<!--\n```\n$$\n\n%% after.\nVisible.", "Before. after. Visible."],
+		["obsidian-inside-html-block", "Before <!--\n%%\n```\n$$\n--> after.\nVisible.", "Before after. Visible."],
+		["wrong-html-closer", "%%\n--> hidden\n%% after.", "after."],
+		["wrong-obsidian-closer", "<!--\n%% hidden\n--> after.", "after."],
+		["tail-comments", "%%\nhidden\n%% after %%more%% tail <!--gone--> end.", "after tail end."],
+		["tail-html-continuation", "%%\nhidden\n%% after <!--more\nhidden\n--> tail.", "after tail."],
+		["tail-obsidian-continuation", "<!--hidden\n--> %%more\nhidden\n%% after.", "after."],
+		["link-label", "Before [label %%hidden%% end](target) after.", "Before label end after."],
+		["wiki-alias", "Before [[target|label %%hidden%% end]] after.", "Before label end after."],
+		["highlight", "Before ==label %%hidden%% end== after.", "Before label end after."],
+		["local-label-state", "[%%literal](target) after.\nVisible.", "%%literal after. Visible."],
+		["local-html-state", "[label <!--hidden](target) after.\nVisible.", "label after. Visible."],
+		["heading-tracking", "# %%hidden\nhidden\n%% after.", "after.", { skipHeadings: true }],
+		["heading-html-tracking", "# Heading <!--hidden\nhidden\n--> after.", "after.", { skipHeadings: true }],
+		["table-tracking", "| cell <!--hidden\nhidden\n--> after.", "after."],
+		["table-inline", "| %%hidden%% visible |\nafter.", "| visible | after.", { skipTables: false }],
+		["inline-code-spoken", "Before `%%literal%%` after.", "Before %%literal%% after.", { skipInlineCode: false }],
+		["inline-code-skipped", "Before `%%literal%%` after.", "Before after."],
+		["double-tick-code-spoken", "Before ``%%literal%%`` after.", "Before %%literal%% after.", { skipInlineCode: false }],
+		["double-tick-code-skipped", "Before ``%%literal%%`` after.", "Before after."],
+		["code-inner-tick", "Before ``one ` %%literal%% two`` after.", "Before one ` %%literal%% two after.", { skipInlineCode: false }],
+		["code-inner-tick-skipped", "Before ``one ` %%literal%% two`` after.", "Before after."],
+		["label-comment-bracket", "Before [label %%hidden] private%% end](target) after.", "Before label end after."],
+		["alias-comment-brackets", "Before [[target|label %%hidden]] private%% end]] after.", "Before label end after."],
+		["image-comment-bracket", "Before ![label %%hidden] private%% end](target) after.", "Before after."],
+		["embed-comment-brackets", "Before ![[target|label %%hidden]] private%% end]] after.", "Before after."],
+		["image-html-bracket", "Before ![label <!--hidden] private--> end](target) after.", "Before after."],
+		["embed-html-brackets", "Before ![[target|label <!--hidden]] private--> end]] after.", "Before after."],
+		["highlight-comment-equals", "Before ==label %%hidden== private%% end== after.", "Before label end after."],
+		["label-html-bracket", "Before [label <!--hidden] private--> end](target) after.", "Before label end after."],
+		["highlight-html-equals", "Before ==label <!--hidden== private--> end== after.", "Before label end after."],
+		["label-code-delimiter", "Before [label `] %%literal%%` end](target) after.", "Before label ] %%literal%% end after.", { skipInlineCode: false }],
+		["highlight-code-delimiter", "Before ==label `== %%literal%%` end== after.", "Before label == %%literal%% end after.", { skipInlineCode: false }],
+		["fenced-spoken", "```\n%%literal\n```\nafter.", "%%literal after.", { skipCodeBlocks: false }],
+		["fenced-skipped", "```\n%%literal\n```\nafter.", "after."],
+		["indented-spoken", "    %%literal\nafter.", "%%literal after.", { skipCodeBlocks: false }],
+		["indented-skipped", "    %%literal\nafter.", "after."],
+		["hidden-blanks", "Before\n%%\n\n%%\n    after.", "Before after."],
+		["paragraphs", "Before.\n\n%%\nhidden\n%%\n\nafter.", "Before. after."],
+		["crlf", "Before.\r\n%%\r\nhidden\r\n%% after.", "Before. after."],
+		["utf16", "𐐀lpha %%hidden%% élan after.", "𐐀lpha élan after."],
+		["unconditional", "Before %%hidden%% after.", "Before after.", { stripTags: false, skipCodeBlocks: false, skipInlineCode: false, skipTables: false, skipHeadings: true, speakUrls: true }],
+	];
+	for (const [id, src, expected, overrides] of cases) {
+		const chunks = extractChunks(src, { ...OPTS, ...overrides });
+		check(`NRL-38 ${id}: visible output`, chunks.map(c => c.text).join(" ") === expected);
+		check(`NRL-38 ${id}: UTF-16 mapping and bounds`, chunks.every(c => {
+			if (c.sourceIndex.length !== c.text.length || c.sourceStart !== c.sourceIndex[0] ||
+				c.sourceEnd !== c.sourceIndex[c.text.length - 1]! + 1) return false;
+			for (let i = 0; i < c.text.length; i++) {
+				const at = c.sourceIndex[i]!;
+				if (at < 0 || at >= src.length || (i > 0 && at < c.sourceIndex[i - 1]!)) return false;
+				if (c.text[i] !== " " && src[at] !== c.text[i]) return false;
+			}
+			return true;
+		}));
+		// Each sentinel occurs once outside the removed spans. Checking raw
+		// offsets, rather than sourceStart + text position, catches shifted maps.
+		for (const word of ["after", "middle", "tail", "Visible"]) {
+			if (!expected.includes(word)) continue;
+			const c = chunks.find(c => c.text.includes(word));
+			check(`NRL-38 ${id}: ${word} offset`, c?.sourceIndex[c.text.indexOf(word)] === src.indexOf(word));
+		}
+	}
+	const paced = extractChunks("Before.\n\n%%\nhidden\n%%\n\nafter.", OPTS);
+	check("NRL-38 paragraph boundaries retained", paced.length === 2);
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);
