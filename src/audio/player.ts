@@ -41,10 +41,29 @@ export interface PlayerOptions {
 	bufferAhead?: number;
 }
 
+const BUFFER_AHEAD_MIN = 0;
+const BUFFER_AHEAD_MAX = 8;
+const BUFFER_AHEAD_DEFAULT = 2;
+
+/**
+ * An integer look-ahead in range, or the default.
+ *
+ * Deliberately the same rule `normaliseSettings` applies to the stored value,
+ * and deliberately not imported from there: the player knows nothing about
+ * settings, and a dependency that way round would drag plugin data into the
+ * audio layer. If the range moves, it moves in both places.
+ */
+function normaliseBufferAhead(value: unknown): number {
+	const n = typeof value === "number" ? value : Number(value);
+	if (!Number.isFinite(n)) return BUFFER_AHEAD_DEFAULT;
+	return Math.round(Math.max(BUFFER_AHEAD_MIN, Math.min(BUFFER_AHEAD_MAX, n)));
+}
+
 export class Player {
 	private readonly emitter = new Emitter<PlayerEvents>();
 	private readonly audio: HTMLAudioElement;
-	private readonly bufferAhead: number;
+	/** Not readonly: the Look ahead slider changes this mid-session (setBufferAhead). */
+	private bufferAhead: number;
 
 	private chunks: SpeechChunk[] = [];
 	private engine: SpeechEngine | null = null;
@@ -78,7 +97,7 @@ export class Player {
 	private frame: number | null = null;
 
 	constructor(options: PlayerOptions = {}) {
-		this.bufferAhead = options.bufferAhead ?? 2;
+		this.bufferAhead = normaliseBufferAhead(options.bufferAhead);
 		this.audio = new Audio();
 		this.audio.preload = "auto";
 	}
@@ -380,8 +399,20 @@ export class Player {
 
 	resume(): void {
 		if (this.state !== "paused") return;
+		// A real HTMLAudioElement resolves play() asynchronously, so a stop()
+		// or a fresh play() can land before this callback runs. Everything
+		// below belongs to the run that was paused: reviving its state is
+		// wrong, and priming its buffer is worse, because stop() has already
+		// cleared `pending`, called cancelPending() and nulled the controller,
+		// so the work would be un-abortable and nobody would ever await it.
+		const token = this.runToken;
 		void this.audio.play().then(() => {
+			if (token !== this.runToken) return;
 			this.setState("playing");
+			// A Look ahead change made while paused was stored but not acted
+			// on, because a paused player should not start work it may never
+			// need. This is that moment.
+			this.primeBuffer(this.index);
 			this.tick();
 		});
 	}
@@ -408,6 +439,37 @@ export class Player {
 
 	getRate(): number {
 		return this.rate;
+	}
+
+	/**
+	 * Change how many chunks are synthesised ahead of the one playing.
+	 *
+	 * The Look ahead slider used to write only `settings.bufferAhead`, so the
+	 * running player kept the value it read in its constructor and the control
+	 * did nothing until the plugin was reloaded.
+	 *
+	 * Raising it fills the wider window at once while preparing or playing;
+	 * while paused the value is stored and resume() fills it; while idle or
+	 * finished the next play() picks it up through run()'s own priming.
+	 *
+	 * Lowering it is deliberately passive. `primeBuffer` only ever adds, and
+	 * skips anything already in `pending`, so a smaller window stops further
+	 * excess prefetch without aborting synthesis the session already shares, or
+	 * disturbing the caches, the index or the rate.
+	 *
+	 * The value is validated here rather than trusted: this is the runtime
+	 * authority and callers reach it from the settings tab, from plugin load,
+	 * and from anywhere a future control is added.
+	 */
+	setBufferAhead(count: number): void {
+		this.bufferAhead = normaliseBufferAhead(count);
+		// Only a state where a queue is live can fill immediately. Anything
+		// else has its own priming moment: resume(), or the next play().
+		if (this.state === "preparing" || this.state === "playing") this.primeBuffer(this.index);
+	}
+
+	getBufferAhead(): number {
+		return this.bufferAhead;
 	}
 
 	/**
