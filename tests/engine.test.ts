@@ -43,7 +43,16 @@ const SPD_LIST = [
 ].join("\n");
 
 const TEXT = "Testing one two three.";
-const CHUNK = { text: TEXT, sourceIndex: [], sourceStart: 0, sourceEnd: TEXT.length };
+const CHUNK = {
+	id: "test1",
+	sequence: 0,
+	blockType: "paragraph" as const,
+	filePath: "test.md",
+	text: TEXT,
+	sourceIndex: [],
+	sourceStart: 0,
+	sourceEnd: TEXT.length,
+};
 
 /** Fake runner: canned voice list, scripted reply for every speaking call. */
 function fakeRunner(reply: Partial<RunResult> & { stdoutText?: string }) {
