@@ -53,11 +53,9 @@ class NodeProcessRunner implements ProcessRunner {
 				resolve({ stdout: Buffer.concat(stdout), stderr: stderr.join(""), code: code ?? 0 });
 			});
 
-			if (stdin !== undefined) {
-				child.stdin.write(stdin);
-				return;
-			}
-			child.stdin.end();
+			// Always close stdin. A reader like `spd-say -e` waits for EOF before
+			// it speaks, so writing without ending hangs it forever.
+			child.stdin.end(stdin);
 		});
 	}
 

@@ -51,6 +51,12 @@ export interface VoiceInfo {
 	lang: string;
 	gender: "male" | "female" | "neutral";
 	engineId: EngineId;
+	/**
+	 * A modified form of a base voice, e.g. one of speech-dispatcher's
+	 * espeak-ng variants. Used to prefer the plain voice when choosing a
+	 * default, since the variants are thousands of novelty timbres.
+	 */
+	isVariant?: boolean;
 }
 
 /**
@@ -161,6 +167,12 @@ export interface SpeechEngine {
 	 * delays whatever the user asked for instead.
 	 */
 	cancelPending?(): void;
+	/**
+	 * Map a stored voice id that no longer matches exactly onto the voice it
+	 * meant, when the engine changed its id format. Returns undefined when the
+	 * voice is genuinely gone; the caller decides what to substitute.
+	 */
+	resolveVoiceId?(storedId: string, voices: VoiceInfo[]): VoiceInfo | undefined;
 	/** What the engine actually ended up running on, for the settings UI. */
 	runtimeInfo?(): string | null;
 }
