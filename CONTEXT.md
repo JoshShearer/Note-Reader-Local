@@ -219,8 +219,30 @@ These are design-level, not bugs, and they shape any new work:
   a position against the note it is actually reading rather than whichever note is in
   front. What it still does not hold is a document, a revision or a vault handle, and
   every play site still re-extracts from the active view (`src/main.ts` calls
-  `extractChunks` on `current.source` at **361**, **507** and **577**) rather than from
+  `extractChunks` on `current.source` at **413**, **570** and **646**) rather than from
   the file a position was keyed by, so R-M12 is only half bolted on.
+- **A stored offset is resolved by `Player`, not by the caller.** `main.ts` passes
+  `storedPosition.sourceOffset` straight through as `play()`'s `startAtSource`; it does not
+  pre-resolve it to a chunk. This is not tidiness, it is the whole of R-M12's nearest-valid
+  rule. `Player.play` matches on `sourceEnd > off`, so an offset sitting in a span nothing was
+  spoken from - a skipped code block, a skipped table - resolves forward to the chunk after
+  it, and an offset past the end falls back to the last chunk. A caller that requires
+  `sourceStart <= off < sourceEnd` first cannot express either case: it finds no chunk, passes
+  -1, and `-1` means "the top of the note". That is how a reading position from inside a code
+  block silently restarted the note, and it is why the pre-filter is gone rather than patched.
+  The empty-queue guard in `play()` is what makes the `chunks.length - 1` expression safe, and
+  it must stay between the `start` computation and `this.index = start`.
+- **The `positions` map is re-keyed on vault rename and pruned on delete, in
+  `settings/data.ts`, not in `main.ts`.** `moveReadingPositions` / `dropReadingPositions` are
+  pure and obsidian-free, which is what keeps them in the bare-Node suite; main.ts cannot run
+  there at all. One predicate, `key === path || key.startsWith(path + "/")`, covers a file
+  (exact key only) and a folder (the subtree), with no type branch and no reliance on how
+  Obsidian sequences descendant events. Both are idempotent, and both return the input
+  *unchanged* when nothing matched, which is how the handlers skip a pointless write.
+  Renaming or deleting the note currently being read stops that reading first, and the
+  comparison is against the **old** path: the queue is not retargeted (its `id` hashes
+  `filePath`), so `getFilePath()` keeps answering with the pre-rename name until the next
+  `play()`.
 - **Capabilities are consumed for the transport controls only.** `src/ui/affordances.ts`
   gates play/pause, the rate nudges and the highlight toggle, and the settings engine list
   reports each engine's limitations. `pitch` still gates nothing (there is no pitch control

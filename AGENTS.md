@@ -20,7 +20,7 @@ There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The
 are local and nothing runs them for you.
 
 ```bash
-npm test          # 16 suites: extract, engine, player, paths, kokoro, settings, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform
+npm test          # 17 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -161,6 +161,38 @@ ADR 0009's grapheme-safety consequence, and the comment on `splitSentences` itse
 
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
+
+- Rename and delete handlers exist as of NRL-51: `this.app.vault.on("rename")` and
+  `("delete")` in `onload`, both through `registerEvent`. One path-boundary-safe prefix
+  sweep covers files and folders with no type branch, and it is idempotent, so it does not
+  matter whether Obsidian also fires a rename per descendant (undocumented in the typings,
+  unverified without a real Obsidian). The sweep lives in `src/settings/data.ts` as
+  `moveReadingPositions` / `dropReadingPositions`, not in main.ts, because main.ts cannot
+  run in the suite at all. Both handlers assign a new map to the `positions` *field*; the
+  root container is never rebuilt.
+  **A rename or a delete stops an in-flight reading of that note, and the comparison is
+  against `oldPath` / the deleted path, not the new one.** Both halves are load-bearing.
+  The queue is not retargeted - `SpeechChunk.id` hashes `filePath`, so rewriting it without
+  recomputing the id would desynchronise the field from its own definition - and the queue
+  therefore keeps reporting the *old* path until the next `play()`. So a handler that
+  compared `newPath === player.getFilePath()` would never fire, and one that skipped the
+  stop would let the next progress event write the old key back, recreating the orphan the
+  handler just cleaned. The cost is user-visible: the audio stops on rename. A rename or a
+  delete also leaves two `saveData()` calls in flight and nothing serialises them, so the
+  write that lands last is not guaranteed to be the handler's - which for a delete means the
+  orphan can reappear, since the stop's save recreates the key the drop removed. Sub-second
+  and self-healing; a save queue is a separate change.
+- Reading positions are throttled with a leading edge and a trailing flush, in
+  `src/settings/positionThrottle.ts`, not in main.ts, and the window is flushed from the
+  player's `state` subscription on `paused` / `idle` / `finished` rather than from
+  `stopReading()` or the `toggle()` call sites. The captured pending index is written, never
+  `getIndex()`, because on natural completion `getIndex()` is `chunks.length` and resolves to
+  no chunk. The pre-change gate recorded nothing inside its window and its timer only
+  nulled the handle, so the last position of a read was simply never persisted; measured
+  with a replica of it, 5 progress events produced 2 saves and index 4 was dropped. A second
+  in-flight save race exists on a rate nudge and is pre-existing. The `registerEvent` wiring
+  and the state-subscription flush are **not covered by the suite** and cannot be: `obsidian`
+  has no runtime, so nothing in main.ts runs under bare Node.
 
 - `DEFAULT_SETTINGS.engine` became `"auto"` in NRL-24 (docs/adr/0010), the same shape as
   `speakImageAlt`'s default flip in NRL-21/ADR 0008: a genuinely fresh install, or any

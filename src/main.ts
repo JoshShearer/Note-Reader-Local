@@ -1,4 +1,4 @@
-import { MarkdownView, Notice, Plugin, TFile, getLanguage, moment } from "obsidian";
+import { MarkdownView, Notice, Plugin, TFile, type TAbstractFile, getLanguage, moment } from "obsidian";
 import { EditorView } from "@codemirror/view";
 
 import { Player } from "./audio/player";
@@ -24,7 +24,14 @@ import {
 	type RankedCandidate,
 } from "./engines/selection";
 import { DEFAULT_SETTINGS, type Settings } from "./settings";
-import { loadPluginData, serialisePluginData, type PluginData } from "./settings/data";
+import {
+	loadPluginData,
+	serialisePluginData,
+	dropReadingPositions,
+	moveReadingPositions,
+	type PluginData,
+} from "./settings/data";
+import { PositionThrottle } from "./settings/positionThrottle";
 import { applyHighlight, registerHighlighting } from "./ui/highlight";
 import { WORD_HIGHLIGHT_VAR, applyWordHighlightColour } from "./ui/highlightColour";
 import { createModelStore, type VaultModelStore } from "./ui/modelStore";
@@ -55,7 +62,12 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	private modelStore!: VaultModelStore;
 	private activeEditor: EditorView | null = null;
 	private controlBar!: ControlBar;
-	private positionUpdateTimeout: number | null = null;
+	/**
+	 * Throttled reading-position writes. Its own module because main.ts cannot be
+	 * tested at all (obsidian has no runtime) and the window needs a clock the
+	 * test owns; see src/settings/positionThrottle.ts.
+	 */
+	private positionThrottle!: PositionThrottle;
 	/**
 	 * The last automatic resolution computed, so `activeEngine()` has a sync
 	 * answer for UI call sites that cannot await (checkCallback, the control
@@ -110,6 +122,27 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.player.setRate(this.settings.rate);
 		this.player.setPitch(this.settings.pitch);
 
+		this.positionThrottle = new PositionThrottle({
+			save: (chunkIndex) => {
+				void this.savePosition(chunkIndex).catch((err: unknown) => {
+					reportError(this.app, this.manifest.dir!, "save reading position failed", err);
+				});
+			},
+			currentFilePath: () => this.player.getFilePath(),
+			timers: {
+				setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+				clearTimeout: (handle) => window.clearTimeout(handle as number),
+			},
+		});
+
+		// After the loadPluginData() call above and not before: a vault event
+		// arriving first would hit a `!`-initialised field. Registered through
+		// registerEvent, so both are torn down with the plugin.
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => this.handleVaultRename(file, oldPath)),
+		);
+		this.registerEvent(this.app.vault.on("delete", (file) => this.handleVaultDelete(file)));
+
 		// Sentence-level highlighting
 		this.player.on("chunk", (chunk) => {
 			if (!this.settings.highlight.enabled || !chunk) {
@@ -148,21 +181,30 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			// non-empty path rather than an active editor, so a read whose note
 			// is no longer in front still records where it got to; otherwise
 			// closing the view would silently discard the last position.
+			//
+			// The throttle writes the first event of a window immediately and
+			// keeps the newest of the rest for a trailing flush, so a saveData per
+			// progress event is avoided without losing the last one before a stop.
 			const filePath = this.player.getFilePath();
-			if (filePath) {
-				// Debounce position updates to avoid hammering saveData
-				if (!this.positionUpdateTimeout) {
-					this.positionUpdateTimeout = window.setTimeout(() => {
-						this.positionUpdateTimeout = null;
-					}, 1000);
-					// Save position async, don't block playback
-					void this.savePosition(filePath, progress.chunkIndex);
-				}
-			}
+			if (filePath) this.positionThrottle.note(filePath, progress.chunkIndex);
 		});
 
 		this.player.on("state", (state) => {
 			if (state === "finished" || state === "idle") this.clearHighlight();
+			// Every state change that ends the user's attention closes the window,
+			// which is what makes the final second survive. One place rather than
+			// patching stopReading() and the two toggle() call sites: setState is
+			// the only route into all of them, and it early-returns on an unchanged
+			// state, so a stop from idle cannot re-save a stale queue.
+			//
+			// "finished" is in the set for a reason that is easy to miss: on
+			// natural completion getIndex() is chunks.length, so there is no chunk
+			// to read. The flush writes its captured index instead, and that is the
+			// last chunk - without this it would be lost whenever its progress
+			// event landed inside an open window.
+			if (state === "paused" || state === "idle" || state === "finished") {
+				this.positionThrottle.flush();
+			}
 		});
 
 		this.player.on("error", (err) => {
@@ -317,6 +359,10 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	override onunload(): void {
+		// Before the player, and unconditionally: a trailing flush that fired
+		// after dispose would call savePosition on an unloaded plugin. Nothing
+		// cleared the window handle before this - it leaked on every path.
+		this.positionThrottle?.dispose();
 		this.controlBar?.destroy();
 		this.player?.dispose();
 		document.body.style.removeProperty(WORD_HIGHLIGHT_VAR);
@@ -430,18 +476,23 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			candidates = [{ engine, id: engineId, reason: "Manually selected." }];
 		}
 
-		// Load stored reading position for this file
+		// Resume from the stored position for this file, if there is one.
+		//
+		// The offset is passed through as stored rather than resolved to a chunk
+		// here. Player.findIndex is the same search done better: it matches on
+		// `sourceEnd >`, so an offset sitting in a span nothing was spoken from
+		// (a skipped code block) still resolves to the chunk after it. The
+		// pre-filter this replaces required `sourceStart <= off < sourceEnd`, so
+		// such an offset found no chunk and startAtSource stayed -1, which Player
+		// read as "the top of the note" - a stored position from inside a code
+		// block restarted the note. Past-the-end was the same hole, and Player
+		// owns the nearest-valid fallback for it too (srs.md:441, R-M12).
 		let startAtSource = -1;
 		const filePath = current.filePath;
 		const storedPosition = this.pluginData.positions?.[filePath];
 		if (storedPosition) {
-			// Try to find the chunk that contains the stored offset
-			const targetOffset = storedPosition.sourceOffset;
-			const foundChunk = chunks.find((c) => c.sourceStart <= targetOffset && c.sourceEnd > targetOffset);
-			if (foundChunk) {
-				startAtSource = foundChunk.sourceStart;
-				t("resume from stored position", `${filePath} @ ${targetOffset}`);
-			}
+			startAtSource = storedPosition.sourceOffset;
+			t("resume from stored position", `${filePath} @ ${startAtSource}`);
 		}
 
 		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
@@ -687,12 +738,33 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		if (timerMs > 0) this.player.setTimer(timerMs);
 	}
 
-	private async savePosition(filePath: string, chunkIndex: number): Promise<void> {
+	/**
+	 * Record where the reading has reached, under the key the chunk itself owns.
+	 *
+	 * The path is not a parameter, and that is the point rather than tidiness:
+	 * with no path argument there is no call site that *can* write a position
+	 * under a key the chunk does not belong to, so the class of defect closes
+	 * instead of being fixed at one site. It used to take the path as an argument
+	 * and ignore chunk.filePath, which let a caller save the active view's note
+	 * against a queue holding another.
+	 *
+	 * Nothing here reads chunk.text. The record is built from the chunk's id,
+	 * sequence and sourceStart, so no note content can reach data.json's
+	 * neighbours, a log, or a save error (non-negotiable 1).
+	 *
+	 * The container is mutated before the await, so a caller that returns
+	 * immediately - a Stop, a pause, a rename's handler - has already recorded
+	 * the position in memory; only the disk write is outstanding.
+	 */
+	private async savePosition(chunkIndex: number): Promise<void> {
 		if (chunkIndex < 0 || !this.player) return;
 
 		// The player owns the queue, so it answers rather than being cast open.
 		const chunk = this.player.getChunk(chunkIndex);
 		if (!chunk) return;
+
+		const filePath = chunk.filePath;
+		if (!filePath) return;
 
 		const position = {
 			filePath,
@@ -702,10 +774,102 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			updatedAt: Date.now(),
 		};
 
-		// Update plugin data
+		// Add to the container; never rebuild it. A whitelist rebuild here is the
+		// defect non-negotiable 10 exists for: saveSettings() runs on every rate
+		// nudge, so one erases every reading position the user has.
 		if (!this.pluginData.positions) this.pluginData.positions = {};
-		(this.pluginData.positions as Record<string, typeof position>)[filePath] = position;
+		this.pluginData.positions[filePath] = position;
 		await this.saveSettings();
+	}
+
+	/**
+	 * A vault rename carries every stored position under the old prefix.
+	 *
+	 * The order is load bearing. Stopping first is not tidiness: the queue's
+	 * chunks still carry the old filePath, so Player.getFilePath() keeps
+	 * reporting it and the next progress event would write the old key straight
+	 * back, about a second after this cleaned it. Stopping first means the
+	 * stop's own save records the final position under the old path
+	 * synchronously, and the re-key below moves that exact value to the new path,
+	 * so the renamed note resumes where the user actually was.
+	 *
+	 * Retargeting the queue instead was rejected on evidence: SpeechChunk.id
+	 * hashes filePath, so rewriting it without recomputing the id would
+	 * desynchronise the field from its own definition.
+	 *
+	 * The cost is visible: the audio stops. An alternative is a stale position
+	 * under the new name and a fresh orphan, which is worse.
+	 *
+	 * Known race, unchanged in kind from the pre-existing one between a rate
+	 * nudge and a position write: the stop's save and this one are two
+	 * saveData() calls, and nothing serialises them. The re-key is issued second
+	 * and mutates the same object, so whichever resolves last is what lands. The
+	 * window between the two is one await, and no user action happens inside it.
+	 * Not fixed here because the fix is a save queue, which is a separate change
+	 * from this ticket.
+	 *
+	 * TAbstractFile, not TFile, and no branch on the type: a folder event reaches
+	 * the same handler, and an exact-key-only handler would orphan every position
+	 * under a renamed folder. The sweep is idempotent, so it does not matter
+	 * whether Obsidian also reports each descendant.
+	 */
+	private handleVaultRename(file: TAbstractFile, oldPath: string): void {
+		const newPath = file.path;
+		// Also the guard on a double-fired folder event.
+		if (oldPath === newPath) return;
+		// oldPath, not newPath. The queue still carries the old filePath on every
+		// chunk, so getFilePath() reports the pre-rename path until the next
+		// play(); comparing against newPath would never match a read that is
+		// actually in progress. This is the observable consequence, not a
+		// theoretical one: stopReading() leaves the queue in place by design, so
+		// the accessor keeps answering with the old name for as long as the
+		// player lives.
+		if (oldPath === this.player.getFilePath()) this.stopReading();
+
+		const before = this.pluginData.positions;
+		const after = moveReadingPositions(before, oldPath, newPath);
+		// Identity, not equality: nothing matched, so there is nothing to write.
+		if (after === before) return;
+
+		this.pluginData.positions = after;
+		trace(this.app, this.manifest.dir!, "position keys renamed", `${oldPath} -> ${newPath}`);
+		void this.saveSettings().catch((err: unknown) => {
+			reportError(this.app, this.manifest.dir!, "save after rename failed", err);
+		});
+	}
+
+	/**
+	 * A vault delete drops every stored position under the deleted path, so
+	 * entries cannot outlive the notes they describe.
+	 *
+	 * It does stop a read of the deleted note, and that is load-bearing rather
+	 * than tidiness. The queue is untouched by the delete, so the player keeps
+	 * reporting the deleted path and the next progress event writes that key
+	 * straight back - one save later, recreating exactly the orphan this handler
+	 * exists to remove. Stopping first makes the stop's own save land first and
+	 * the drop last.
+	 *
+	 * Same comparison as a rename, and for the same reason: the queue still
+	 * reports the old name, which for a delete is the only name it has.
+	 */
+	private handleVaultDelete(file: TAbstractFile): void {
+		const path = file.path;
+		if (path === this.player.getFilePath()) this.stopReading();
+
+		const before = this.pluginData.positions;
+		const after = dropReadingPositions(before, path);
+		if (after === before) return;
+
+		this.pluginData.positions = after;
+		trace(
+			this.app,
+			this.manifest.dir!,
+			"position keys dropped",
+			`${path} (${Object.keys(before).length - Object.keys(after).length})`,
+		);
+		void this.saveSettings().catch((err: unknown) => {
+			reportError(this.app, this.manifest.dir!, "save after delete failed", err);
+		});
 	}
 
 	private async voicesForSelection(engine: SpeechEngine, isAutomatic: boolean): Promise<VoiceInfo[]> {
