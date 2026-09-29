@@ -143,3 +143,83 @@ export function loadPluginData(raw: unknown): PluginData {
 export function serialisePluginData(data: PluginData, settings: Settings): PluginData {
 	return { ...data, settings };
 }
+
+/**
+ * Does `key` name `path` itself, or something inside it?
+ *
+ * One predicate for both a file and a folder, because Obsidian's `rename` and
+ * `delete` callbacks hand the same TAbstractFile either way and the typings do
+ * not promise anything about how a folder's descendants are sequenced. The
+ * trailing separator is what keeps `Notes2/x.md` alive when `Notes` is
+ * renamed: a bare `startsWith("Notes")` would take it too.
+ */
+function covers(key: string, path: string): boolean {
+	return key === path || key.startsWith(`${path}/`);
+}
+
+/**
+ * Re-key every stored position under `oldPath` to sit under `newPath`.
+ *
+ * Returns the input object unchanged when there is nothing to do, which is both
+ * a cheap early-out and the signal main.ts uses to decide there is no save to
+ * make. Callers must check identity rather than comparing contents.
+ *
+ * Each moved value's own `filePath` is rewritten to match its new key, so the
+ * key and the field cannot disagree. srs.md:425 includes filePath in the
+ * persisted shape; the code never reads it back today, but it is part of the
+ * contract and a rename is the one moment it is knowable to be wrong.
+ *
+ * Pure, and returns a new map rather than editing the one it was given, so a
+ * caller holding the old container is not surprised.
+ *
+ * Two passes, and the order is load-bearing. A rename can land on a path that
+ * already holds a position - Obsidian has taken the note that was there, so
+ * that position is the stale one and the moved value has to win. One pass
+ * cannot guarantee that: Object.entries yields insertion order, so a key that
+ * is not being moved but sorts after the moved one would be written last and
+ * silently clobber it. Copying everything unmatched first and overwriting
+ * with the moved values afterwards makes the result independent of the order
+ * the keys happen to be in.
+ */
+export function moveReadingPositions(
+	positions: Record<string, ReadingPosition>,
+	oldPath: string,
+	newPath: string,
+): Record<string, ReadingPosition> {
+	if (oldPath === newPath) return positions;
+	const next: Record<string, ReadingPosition> = {};
+	let moved = false;
+	for (const [key, value] of Object.entries(positions)) {
+		if (!covers(key, oldPath)) next[key] = value;
+	}
+	for (const [key, value] of Object.entries(positions)) {
+		if (!covers(key, oldPath)) continue;
+		const newKey = newPath + key.slice(oldPath.length);
+		next[newKey] = { ...value, filePath: newKey };
+		moved = true;
+	}
+	// Identity, not equality: "nothing matched" has to be distinguishable from
+	// "matched and produced the same contents", or every rename of an untracked
+	// file would write data.json for no reason.
+	return moved ? next : positions;
+}
+
+/**
+ * Remove every stored position under `path`.
+ *
+ * Idempotent by construction, so a delete that arrives twice (Obsidian does not
+ * document whether a folder's descendants are reported individually) is
+ * harmless. Returns the input object unchanged when nothing matched, for the
+ * same reason moveReadingPositions does.
+ */
+export function dropReadingPositions(
+	positions: Record<string, ReadingPosition>,
+	path: string,
+): Record<string, ReadingPosition> {
+	if (Object.keys(positions).every((key) => !covers(key, path))) return positions;
+	const next: Record<string, ReadingPosition> = {};
+	for (const [key, value] of Object.entries(positions)) {
+		if (!covers(key, path)) next[key] = value;
+	}
+	return next;
+}

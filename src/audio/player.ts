@@ -159,11 +159,15 @@ export class Player {
 	 * main.ts reads a position's file and its chunk identity as a pair out of
 	 * this one queue, so the two accessors are a unit.
 	 *
-	 * A choice, not a forced one. The trailing-save hazard this comment used to
-	 * claim does not exist: main.ts's position gate is leading-edge, so every
-	 * save is driven by a progress event, and stop() emits none. Clearing the
-	 * queue would not lose a position; it is kept so the accessors keep
-	 * answering for the last reading handed to the player.
+	 * The queue outliving stop() is load-bearing since NRL-51, which is what this
+	 * comment used to get wrong. It claimed the trailing-save hazard did not
+	 * exist because every save was driven by a progress event and stop() emits
+	 * none. That is true of the old leading-edge gate, which recorded nothing
+	 * inside its window and so had nothing to lose - but it is a reason that
+	 * gate lost the last position of every read, not a reason the hazard is
+	 * absent. The gate is now a throttle with a trailing flush, and the flush
+	 * runs on the state change that stop() causes, so the queue has to still be
+	 * there when it does.
 	 */
 	getFilePath(): string {
 		return this.chunks[0]?.filePath ?? "";
@@ -197,9 +201,29 @@ export class Player {
 		let start = 0;
 		if (startAtSource >= 0) {
 			// Land on the first chunk that has not already been passed.
+			//
+			// `sourceEnd >` rather than a containment test is the point: an offset
+			// inside a span nothing was spoken from (a skipped code block, a
+			// skipped table) belongs to the chunk after it, which is the nearest
+			// valid position. A caller that pre-resolves the offset against
+			// `sourceStart <= off < sourceEnd` cannot do this and silently sends
+			// such an offset to -1, which reads here as "the top of the note";
+			// that is why startAtSource is passed through as stored.
 			const found = chunks.findIndex((c) => c.sourceEnd > startAtSource);
-			start = found === -1 ? 0 : found;
+			// Past the end is the LAST chunk, not the first. A stored offset from a
+			// longer version of the note, or from one that has since been
+			// truncated, must resume at the end rather than restart from the top
+			// (srs.md:441, R-M12).
+			start = found === -1 ? chunks.length - 1 : found;
 		}
+		// ORDERING IS LOAD BEARING, and this is the only thing making the line
+		// above safe. For an empty queue `chunks.length - 1` is -1, which is
+		// harmless only because this returns before `this.index = start` below.
+		// Hoisted above the computation, or applied to this.index directly, it
+		// would leave a player holding nothing reporting getIndex() === -1, which
+		// reaches main.ts's progress handler and is swallowed there by its
+		// `chunkIndex < 0` guard: silent degradation, not a crash.
+		// tests/player.test.ts pins this case.
 		if (chunks.length === 0) {
 			this.setState("finished");
 			return;

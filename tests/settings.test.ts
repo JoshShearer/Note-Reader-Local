@@ -8,7 +8,14 @@
  * objects standing in for `data.json`.
  */
 
-import { loadPluginData, serialisePluginData, PLUGIN_DATA_VERSION } from "../src/settings/data.ts";
+import {
+	loadPluginData,
+	serialisePluginData,
+	moveReadingPositions,
+	dropReadingPositions,
+	PLUGIN_DATA_VERSION,
+	type ReadingPosition,
+} from "../src/settings/data.ts";
 import { DEFAULT_SETTINGS, normaliseSettings } from "../src/settings/index.ts";
 
 let failures = 0;
@@ -375,6 +382,120 @@ console.log("engine: EngineSelection widens the type, defaults to auto (NRL-24, 
 		pinned.settings?.engine === "espeak",
 		JSON.stringify(pinned.settings?.engine),
 	);
+}
+
+console.log("a rename carries the position, and only the renamed note's (NRL-51)");
+{
+	// Annotated, not inferred: an inferred object literal gives the map exact
+	// keys, and then indexing the result at "Archive/a.md" is a type error for
+	// a key the function is being tested for creating.
+	//
+	// Obsidian hands the same TAbstractFile to the rename and delete callbacks
+	// whether it is a TFile or a TFolder, so these cover both. Fail-first: before
+	// NRL-51 there was no vault rename handler at all (rg "registerEvent" src/
+	// matched nothing) and positions only ever gained keys, so both functions
+	// were absent and every case below threw.
+	const positions: Record<string, ReadingPosition> = {
+		"Notes/a.md": { filePath: "Notes/a.md", segmentId: "s1", segmentIndex: 1, sourceOffset: 120, updatedAt: 1 },
+		"Notes/b.md": { filePath: "Notes/b.md", segmentId: "s2", segmentIndex: 2, sourceOffset: 240, updatedAt: 2 },
+		"Notes2/c.md": { filePath: "Notes2/c.md", segmentId: "s3", segmentIndex: 3, sourceOffset: 360, updatedAt: 3 },
+	};
+
+	const moved = moveReadingPositions(positions, "Notes/a.md", "Archive/a.md");
+check("the renamed note's key moved", moved["Archive/a.md"]?.sourceOffset === 120, JSON.stringify(Object.keys(moved)));
+check("the value's own filePath was rewritten to match its new key", moved["Archive/a.md"]?.filePath === "Archive/a.md", String(moved["Archive/a.md"]?.filePath));
+check("the old key is gone", moved["Notes/a.md"] === undefined, JSON.stringify(Object.keys(moved)));
+check("a sibling note is untouched", moved["Notes/b.md"]?.sourceOffset === 240, JSON.stringify(Object.keys(moved)));
+check("a note under a similarly-named folder is untouched", moved["Notes2/c.md"]?.sourceOffset === 360, JSON.stringify(Object.keys(moved)));
+check("the rest of each value survives the move", moved["Archive/a.md"]?.segmentId === "s1" && moved["Archive/a.md"]?.segmentIndex === 1 && moved["Archive/a.md"]?.updatedAt === 1, JSON.stringify(moved["Archive/a.md"]));
+check("the input map was not edited in place", positions["Notes/a.md"]?.sourceOffset === 120 && positions["Archive/a.md"] === undefined, JSON.stringify(Object.keys(positions)));
+
+const swept = moveReadingPositions(positions, "Notes", "Archive");
+check("a folder rename sweeps the subtree", swept["Archive/a.md"]?.sourceOffset === 120 && swept["Archive/b.md"]?.sourceOffset === 240, JSON.stringify(Object.keys(swept)));
+check("a folder rename rewrites each value's filePath", swept["Archive/b.md"]?.filePath === "Archive/b.md", String(swept["Archive/b.md"]?.filePath));
+check("Notes2 survives a Notes -> Archive rename (trailing separator)", swept["Notes2/c.md"]?.sourceOffset === 360, JSON.stringify(Object.keys(swept)));
+check("a folder rename leaves the old keys gone", swept["Notes/a.md"] === undefined && swept["Notes/b.md"] === undefined, JSON.stringify(Object.keys(swept)));
+
+// Identity, not just equal contents. main.ts's handler keys its save on
+// `after === before`, so "nothing matched" has to be distinguishable, or
+// every rename of an untracked file writes data.json for nothing.
+	const noop = moveReadingPositions(positions, "Notes", "Notes");
+	check("oldPath === newPath returns the same object", noop === positions);
+	const unmatched = moveReadingPositions(positions, "Elsewhere", "Somewhere");
+	check("a rename of an untracked path returns the same object", unmatched === positions);
+
+	// Renamed onto a path that already has a position. Obsidian has taken the
+	// destination note, so its stored position is the stale one and the moved
+	// value must win - pinned because the other order would resurrect a position
+	// for a note that no longer exists under that name.
+	const onto = moveReadingPositions(positions, "Notes/a.md", "Notes/b.md");
+	check("a rename onto an occupied path replaces the occupant's position", onto["Notes/b.md"]?.sourceOffset === 120, JSON.stringify(onto["Notes/b.md"]));
+	check("and the occupant's own filePath does not survive", onto["Notes/b.md"]?.filePath === "Notes/b.md", String(onto["Notes/b.md"]?.filePath));
+}
+
+console.log("a delete drops the position, and only the deleted note's (NRL-51)");
+{
+	const positions: Record<string, ReadingPosition> = {
+	"Notes/a.md": { filePath: "Notes/a.md", segmentId: "s1", segmentIndex: 1, sourceOffset: 120, updatedAt: 1 },
+	"Notes/b.md": { filePath: "Notes/b.md", segmentId: "s2", segmentIndex: 2, sourceOffset: 240, updatedAt: 2 },
+	"Notes2/c.md": { filePath: "Notes2/c.md", segmentId: "s3", segmentIndex: 3, sourceOffset: 360, updatedAt: 3 },
+};
+
+const dropped = dropReadingPositions(positions, "Notes/a.md");
+check("the deleted note's entry is gone", dropped["Notes/a.md"] === undefined, JSON.stringify(Object.keys(dropped)));
+check("a sibling survives", dropped["Notes/b.md"]?.sourceOffset === 240, JSON.stringify(Object.keys(dropped)));
+check("a similarly-named folder's note survives", dropped["Notes2/c.md"]?.sourceOffset === 360, JSON.stringify(Object.keys(dropped)));
+check("the input map was not edited in place", positions["Notes/a.md"]?.sourceOffset === 120, JSON.stringify(Object.keys(positions)));
+
+const swept = dropReadingPositions(positions, "Notes");
+check("a folder delete drops the subtree", swept["Notes/a.md"] === undefined && swept["Notes/b.md"] === undefined, JSON.stringify(Object.keys(swept)));
+check("a folder delete leaves the prefix sibling", swept["Notes2/c.md"]?.sourceOffset === 360, JSON.stringify(Object.keys(swept)));
+
+// Idempotent by construction, so a delete that arrives twice - a folder's
+// descendants, then the folder - costs nothing and cannot resurrect anything.
+const twice = dropReadingPositions(dropReadingPositions(positions, "Notes"), "Notes");
+check("dropping a folder twice is stable", JSON.stringify(Object.keys(twice)) === JSON.stringify(["Notes2/c.md"]), JSON.stringify(Object.keys(twice)));
+
+const unmatched = dropReadingPositions(positions, "Elsewhere");
+check("a delete of an untracked path returns the same object", unmatched === positions);
+}
+
+console.log("rename and delete keep the rest of data.json intact (NRL-51, non-negotiable 10)");
+{
+// The rule is about the ROOT container, and `positions` is a named field of
+// it rather than the container itself. Both handlers assign a new map to that
+// one field; loadPluginData and serialisePluginData keep spreading `...data`
+// / `...raw`, so a foreign root key still has nowhere to go but out. This is
+// the proof, and it sits beside the two existing pins at 86-97 and 303-320
+// because that is the defect: a whitelist rebuild erases reading positions
+// on the next rate nudge.
+const raw = {
+	version: PLUGIN_DATA_VERSION,
+	settings: { ...DEFAULT_SETTINGS, futureSetting: "keep-me" },
+	positions: {
+		"Notes/a.md": { filePath: "Notes/a.md", segmentId: "s1", segmentIndex: 1, sourceOffset: 120, updatedAt: 1 },
+		"Notes/b.md": { filePath: "Notes/b.md", segmentId: "s2", segmentIndex: 2, sourceOffset: 240, updatedAt: 2 },
+	},
+	otherFeature: { enabled: true },
+};
+
+/** What main.ts's handlers do: load, replace the one field, serialise, write. */
+const withPositions = (next: (p: Json) => Json): Json => {
+	const data = loadPluginData(raw);
+	return JSON.parse(JSON.stringify(serialisePluginData({ ...data, positions: next(data.positions) }, data.settings)));
+};
+
+const renamed = withPositions((p) => moveReadingPositions(p, "Notes", "Archive"));
+check("the renamed position is stored under the new path", renamed.positions?.["Archive/a.md"]?.sourceOffset === 120, JSON.stringify(renamed.positions));
+check("a rename keeps an unknown root key", renamed.otherFeature?.enabled === true, JSON.stringify(Object.keys(renamed)));
+check("a rename keeps an unknown settings key", renamed.settings?.futureSetting === "keep-me", JSON.stringify(renamed.settings));
+check("a rename leaves the version alone", renamed.version === PLUGIN_DATA_VERSION, String(renamed.version));
+
+const afterDelete = withPositions((p) => dropReadingPositions(p, "Notes/a.md"));
+check("the surviving position is still there", afterDelete.positions?.["Notes/b.md"]?.sourceOffset === 240, JSON.stringify(afterDelete.positions));
+check("a delete keeps an unknown root key", afterDelete.otherFeature?.enabled === true, JSON.stringify(Object.keys(afterDelete)));
+check("a delete keeps an unknown settings key", afterDelete.settings?.futureSetting === "keep-me", JSON.stringify(afterDelete.settings));
+check("a delete leaves the version alone", afterDelete.version === PLUGIN_DATA_VERSION, String(afterDelete.version));
 }
 
 if (failures > 0) {

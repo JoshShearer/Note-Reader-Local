@@ -221,7 +221,11 @@ console.log("player exposes the file it is reading and the chunks it holds (NRL-
 	check("NRL-50 no file before play()", player.getFilePath() === "");
 	check("NRL-50 no chunk before play()", player.getChunk(0) === undefined);
 
-	const playing = player.play(engine, chunks, 1);
+	// The 4th argument is pitch, which is required. It was omitted here at HEAD,
+	// which is why `npm run typecheck` was already red on this file before NRL-51:
+	// tsc exited 2 on a clean tree with exactly these two errors. Fixed in passing
+	// because this file is now in the diff; see the implementation summary.
+	const playing = player.play(engine, chunks, 1, 1);
 
 	check("NRL-50 the player reports the file it was given", player.getFilePath() === "Notes/a.md", player.getFilePath());
 	check("NRL-50 chunk 0 is the first chunk", player.getChunk(0)?.text === chunks[0]?.text);
@@ -267,7 +271,7 @@ console.log("player exposes the file it is reading and the chunks it holds (NRL-
 		platformSegmenters,
 		"Notes/b.md",
 	);
-	const playingB = player.play(engine, otherChunks, 1);
+	const playingB = player.play(engine, otherChunks, 1, 1);
 	check("NRL-50 a new read replaces the file", player.getFilePath() === "Notes/b.md", player.getFilePath());
 	for (let i = 0; i < otherChunks.length; i++) {
 		await tick();
@@ -275,6 +279,202 @@ console.log("player exposes the file it is reading and the chunks it holds (NRL-
 		await tick();
 	}
 	await playingB;
+	player.dispose();
+}
+
+console.log("stop() is synchronous and leaves the queue readable (NRL-51)");
+{
+	/*
+	 * The two facts the vault rename and delete handlers in main.ts are built on,
+	 * and neither can be exercised through main.ts because obsidian has no
+	 * runtime. Both are properties of Player alone, so they are pinned here
+	 * rather than left as a claim in a comment.
+	 *
+	 * (1) stop() sets state to "idle" with no await on the way, so main.ts's
+	 *     state subscription has already run PositionThrottle.flush() by the
+	 *     time stopReading() returns. The handlers depend on that order: they
+	 *     stop first, so the stop's own savePosition has written the final
+	 *     position under the OLD path, and the re-key that follows moves that
+	 *     exact value. If stop() ever became async, the re-key would run first
+	 *     and the stop's save would recreate the old key a moment later.
+	 * (2) getFilePath() still answers after stop(). That is why the handlers
+	 *     compare against oldPath: the queue is not retargeted on a rename, so
+	 *     the accessor keeps reporting the pre-rename name, and a handler
+	 *     comparing newPath === getFilePath() could never fire.
+	 */
+	const { engine } = makeEngine();
+	const player = new Player({ bufferAhead: 1 });
+	const chunks = extractChunks(
+		SRC,
+		{
+			stripTags: true,
+			speakUrls: false,
+			skipCodeBlocks: true,
+			skipInlineCode: true,
+			skipTables: true,
+			skipHeadings: false,
+			skipFrontmatter: true,
+			speakImageAlt: true,
+			speakEmbeds: false,
+			locale: "en",
+		},
+		platformSegmenters,
+		"Notes/a.md",
+	);
+
+	const states: string[] = [];
+	player.on("state", (s) => states.push(s));
+	const playing = player.play(engine, chunks, 1, 1);
+	await tick();
+	check("NRL-51 the read is under way before the stop", player.getState() === "playing", player.getState());
+	check("NRL-51 the queue reports its file while reading", player.getFilePath() === "Notes/a.md", player.getFilePath());
+
+	states.length = 0;
+	player.stop();
+	// Read before any await: if the emit were deferred, this array would be empty.
+	check("NRL-51 stop() emits state idle with no await in between", states.join(",") === "idle", JSON.stringify(states));
+	check("NRL-51 getState() answers idle the moment stop() returns", player.getState() === "idle", player.getState());
+	check(
+		"NRL-51 the queue still reports its file after stop(), so a rename must be matched on oldPath",
+		player.getFilePath() === "Notes/a.md",
+		player.getFilePath(),
+	);
+	check(
+		"NRL-51 the chunk a pending position refers to is still there after stop()",
+		player.getChunk(0)?.filePath === "Notes/a.md",
+		String(player.getChunk(0)?.filePath),
+	);
+
+	player.dispose();
+	await playing.catch(() => undefined);
+}
+
+/*
+ * A note with a real gap in it: extraction drops the fenced code block, so
+ * offsets 68..257 belong to no chunk. The next valid position for an offset in
+ * that range is the chunk after the gap, which is what `sourceEnd >` finds and
+ * what a `sourceStart <= off < sourceEnd` test cannot.
+ */
+const GAP_SRC = [
+	"The first sentence runs long enough that no merge will fold it away.",
+	"The second sentence runs long enough that no merge will fold it either.",
+	"",
+	"```js",
+	"const dropped = 1;",
+	"const alsoDropped = 2;",
+	"```",
+	"",
+	"The third sentence sits after the dropped code block entirely.",
+	"The fourth sentence closes the note and is long enough to stand.",
+].join("\n");
+
+console.log("an out-of-range stored offset resolves to the nearest valid chunk (NRL-51)");
+{
+	// Measured with this file's own chunksOf, not assumed: SRC gives 5 chunks
+	// with sourceEnd [.., 359], so chunks.length - 1 is 4 and a fix landing on 0
+	// is caught rather than coinciding with it.
+	const { engine } = makeEngine();
+
+	const outOfRange = new Player({ bufferAhead: 1 });
+	const chunks = chunksOf(SRC);
+	check("NRL-51 the out-of-range fixture has several chunks", chunks.length > 2, String(chunks.length));
+	const playing = outOfRange.play(engine, chunks, 1, 1, 999999);
+	check(
+		"NRL-51 an offset far past the end lands on the LAST chunk, not the first",
+		outOfRange.getIndex() === chunks.length - 1,
+		`index ${outOfRange.getIndex()} of ${chunks.length}`,
+	);
+	outOfRange.stop();
+	await playing.catch(() => undefined);
+	outOfRange.dispose();
+
+	// Just past the end is the same case, and it is the one a real shortened
+	// note produces: a stored offset at sourceEnd, not at 999999.
+	const justPast = new Player({ bufferAhead: 1 });
+	const last = chunks[chunks.length - 1]!;
+	const playingPast = justPast.play(engine, chunks, 1, 1, last.sourceEnd);
+	check(
+		"NRL-51 an offset exactly at the final sourceEnd lands on the LAST chunk",
+		justPast.getIndex() === chunks.length - 1,
+		`index ${justPast.getIndex()} of ${chunks.length}`,
+	);
+	justPast.stop();
+	await playingPast.catch(() => undefined);
+	justPast.dispose();
+
+	// A valid offset must not move. This one passes against the unfixed code
+	// too, and is here as the guard against the fix over-reaching, not as a
+	// fail-first: a fallback that fired on every resolve would send a mid-note
+	// offset to the end of the note.
+	const valid = new Player({ bufferAhead: 1 });
+	const target = chunks[2]!.sourceStart + 5;
+	const playingValid = valid.play(engine, chunks, 1, 1, target);
+	check(
+		// Passes before and after: a guard against the fix over-reaching, not a
+		// fail-first. A fallback that fired on every resolve would put a
+		// mid-note offset at the end of the note.
+		"NRL-51 a valid offset lands on the chunk that contains it, unchanged",
+		valid.getIndex() === 2,
+		`index ${valid.getIndex()} for offset ${target}`,
+	);
+	valid.stop();
+	await playingValid.catch(() => undefined);
+	valid.dispose();
+
+	// A gap offset. Player already resolved this correctly before NRL-51; what
+	// failed was main.ts, whose find() rewrote a gap offset to -1 and so asked
+	// for the top of the note. Pinned here because it is the half of that fix
+	// that lets main.ts's pre-filter go: if the search ever changes to
+	// `sourceStart <=`, this fails.
+	const gap = new Player({ bufferAhead: 1 });
+	const gapChunks = chunksOf(GAP_SRC);
+	check("NRL-51 the gap fixture has a gap", gapChunks.length === 4, String(gapChunks.length));
+	check(
+		"NRL-51 offset 162 belongs to no chunk",
+		!gapChunks.some((c) => c.sourceStart <= 162 && c.sourceEnd > 162),
+	);
+	const playingGap = gap.play(engine, gapChunks, 1, 1, 162);
+	check(
+		"NRL-51 a gap offset resolves forward to the chunk after the gap",
+		gap.getIndex() === 2,
+		`index ${gap.getIndex()}`,
+	);
+	gap.stop();
+	await playingGap.catch(() => undefined);
+	gap.dispose();
+}
+
+console.log("the empty-document path is untouched by the out-of-range fallback (NRL-51)");
+{
+	/*
+	 * Passes before AND after the fix, by design, and that is the point of it.
+	 * `chunks.length - 1` evaluates to -1 for an empty queue, so this is the
+	 * guard on the guard: it fails if anyone hoists the `chunks.length === 0`
+	 * return above the start computation, or applies the fallback to this.index
+	 * directly. Both make getIndex() answer -1 on a player holding nothing.
+	 */
+	const { engine } = makeEngine();
+	const player = new Player({ bufferAhead: 1 });
+	const states: string[] = [];
+	player.on("state", (s) => states.push(s));
+	const progress: number[] = [];
+	player.on("progress", (p) => progress.push(p.chunkIndex));
+
+	await player.play(engine, [], 1, 1, 999999);
+
+	check("NRL-51 empty queue plus an out-of-range offset does not throw", true);
+	check("NRL-51 empty queue reaches finished", player.getState() === "finished", player.getState());
+	check(
+		"NRL-51 empty queue leaves getIndex() at its initialiser, not -1",
+		player.getIndex() === 0,
+		String(player.getIndex()),
+	);
+	check(
+		"NRL-51 empty queue never emits a negative chunkIndex (main.ts would swallow it)",
+		progress.every((i) => i >= 0),
+		JSON.stringify(progress),
+	);
+	check("NRL-51 empty queue emits no progress at all", progress.length === 0, JSON.stringify(progress));
 	player.dispose();
 }
 
