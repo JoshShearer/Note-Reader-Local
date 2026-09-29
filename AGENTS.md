@@ -148,6 +148,16 @@ Linear. Notable reproduced defects, so you do not rediscover them:
   (N1, N2, F4, F5 in that ticket) remain. All were observed against the pinned merge base
   and are pre-existing rather than merge drift; `tests/extract.test.ts` pins the current
   behaviour with `pin-skipped-code` so it can only change deliberately. NRL-44 tracks it.
+- NRL-39 handed NRL-44 a second shape, on the *spoken* side this time. An autolink inside a
+  confirmed soft-wrapped code span is dropped rather than kept literal: a paragraph whose
+  backtick span opens on line 1, carries `<https://x.com>` on line 2 and closes on line 3
+  speaks `Before first X last after.` with inline code spoken, where the pre-NRL-39 base
+  spoke `Before first X < last after.` (measured on merged main at d4de134 and on base
+  1b1afe1 by bundling both extractors). So the merge removed the stray `<` without making
+  the span literal, and `srs.md` only ever promised literalness for `%%` and `<!--`, never
+  for URLs. Do **not** "fix" it by guarding the autolink branch alone: the bare-URL branch
+  would then fire on the same text and put the spoken `<` back. Literalness needs the
+  bare-URL branch guarded by `literalCodeEnd` too, which the autolink branch is not.
 
 ## Style
 
