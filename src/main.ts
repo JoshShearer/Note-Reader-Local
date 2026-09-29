@@ -15,6 +15,7 @@ import {
 import { DEFAULT_SETTINGS, type Settings } from "./settings";
 import { loadPluginData, serialisePluginData, type PluginData } from "./settings/data";
 import { applyHighlight, registerHighlighting } from "./ui/highlight";
+import { WORD_HIGHLIGHT_VAR, applyWordHighlightColour } from "./ui/highlightColour";
 import { createModelStore, type VaultModelStore } from "./ui/modelStore";
 import { reportError, trace } from "./diagnostics";
 import { LocalTtsSettingTab } from "./ui/settingsTab";
@@ -39,6 +40,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		trace(this.app, this.manifest.dir!, "plugin loaded");
 		this.pluginData = loadPluginData(await this.loadData());
 		this.settings = this.pluginData.settings;
+		this.applyHighlightColour();
 
 		this.modelStore = createModelStore(
 			this.app,
@@ -55,6 +57,10 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		}
 
 		this.player = new Player({ bufferAhead: this.settings.bufferAhead });
+		// The player is the one authority on rate (srs.md R-M16). Seed it from
+		// settings before anything observes it, so the control bar and the
+		// settings slider start from the same value.
+		this.player.setRate(this.settings.rate);
 
 		this.player.on("word", (payload) => {
 			if (!this.settings.highlight.enabled || !payload) {
@@ -149,6 +155,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	override onunload(): void {
 		this.controlBar?.destroy();
 		this.player?.dispose();
+		document.body.style.removeProperty(WORD_HIGHLIGHT_VAR);
 		for (const engine of this.engines) void engine.dispose();
 	}
 
@@ -369,15 +376,39 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	/**
 	 * Change playback speed, live if something is already reading.
 	 *
-	 * Both the control bar and the settings slider go through this, so a
-	 * change from either place is reflected everywhere: the setting persists
-	 * and a running chunk speeds up or slows down immediately rather than on
-	 * the next sentence.
+	 * Both the control bar and the settings slider call this. Neither updates
+	 * its own display afterwards: the player emits `rate` and each observes
+	 * that, so a change from either place shows in both. A running chunk
+	 * speeds up or slows down immediately rather than on the next sentence.
+	 *
+	 * The player is updated before the save is awaited: the control bar
+	 * computes each nudge from player.getRate(), so a wheel scroll firing
+	 * several ticks inside one saveData would otherwise read a stale rate and
+	 * lose all but the first.
 	 */
 	async setRate(rate: number): Promise<void> {
 		this.settings.rate = rate;
-		await this.saveSettings();
 		this.player.setRate(rate);
+		await this.saveSettings();
+	}
+
+	/**
+	 * Store a highlight colour and apply it. The caller validates; "" means
+	 * follow the theme.
+	 */
+	async setHighlightColour(color: string): Promise<void> {
+		this.settings.highlight.color = color;
+		await this.saveSettings();
+		this.applyHighlightColour();
+	}
+
+	/**
+	 * Write the colour to the custom property styles.css reads. On body
+	 * because the highlight is a CodeMirror mark inside whichever editor is
+	 * reading, and every one of those sits under body.
+	 */
+	private applyHighlightColour(): void {
+		applyWordHighlightColour(document.body.style, this.settings.highlight.color);
 	}
 
 	async saveSettings(): Promise<void> {

@@ -658,6 +658,37 @@ console.log("replay restarts from pause and does nothing when idle");
 	await playing.catch(() => undefined);
 }
 
+console.log("setRate emits a rate event, only when the rate changes");
+{
+	// The control bar and the settings slider both observe this event rather
+	// than each other (srs.md R-M16). Emitting only on change is what keeps
+	// the two-way sync from looping: a slider that echoes the value back into
+	// setRate produces no second event.
+	const player = new Player();
+	const rates: number[] = [];
+	player.on("rate", (r) => rates.push(r));
+
+	player.setRate(1.5);
+	check("setRate(1.5) emits 1.5 once", JSON.stringify(rates) === "[1.5]", JSON.stringify(rates));
+	player.setRate(1.5);
+	check("setRate with the same rate emits nothing", rates.length === 1, JSON.stringify(rates));
+	check("audio element follows setRate", fakeAudio.playbackRate === 1.5, String(fakeAudio.playbackRate));
+	check("getRate reflects setRate", player.getRate() === 1.5, String(player.getRate()));
+
+	const { engine } = makeEngine();
+	const playing = player.play(engine, chunksOf(SRC), 1.25);
+	await tick();
+	check("play() with a different rate emits it once", JSON.stringify(rates) === "[1.5,1.25]", JSON.stringify(rates));
+	player.stop();
+	await playing.catch(() => undefined);
+
+	const again = player.play(engine, chunksOf(SRC), 1.25);
+	await tick();
+	check("play() at the current rate emits nothing", rates.length === 2, JSON.stringify(rates));
+	player.stop();
+	await again.catch(() => undefined);
+}
+
 async function tick(): Promise<void> {
 	for (let i = 0; i < 12; i++) await Promise.resolve();
 	await new Promise((r) => setTimeout(r, 0));

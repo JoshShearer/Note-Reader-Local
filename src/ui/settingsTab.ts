@@ -1,9 +1,13 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting, type ColorComponent } from "obsidian";
 import type LocalTtsReaderPlugin from "../main";
 import { KOKORO_VOICES, KOKORO_WEIGHTS, probeGpu } from "../engines/onnx/kokoro";
 import { downloadModel, downloadVoice } from "./modelStore";
+import { isAcceptableColourInput } from "./highlightColour";
 
 export class LocalTtsSettingTab extends PluginSettingTab {
+	/** Detaches the Speed slider from the player's rate event. */
+	private offRate: (() => void) | null = null;
+
 	constructor(
 		app: App,
 		private readonly plugin: LocalTtsReaderPlugin,
@@ -12,6 +16,8 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	}
 
 	override hide(): void {
+		this.offRate?.();
+		this.offRate = null;
 		this.plugin.stopReading();
 		super.hide();
 	}
@@ -19,6 +25,9 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	override display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		// display() re-runs on engine change; detach the old slider first.
+		this.offRate?.();
+		this.offRate = null;
 
 		this.renderEngineSection(containerEl);
 		this.renderVoiceSection(containerEl);
@@ -342,15 +351,21 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Speed")
 			.setDesc("How fast the note is read aloud. Applies immediately if something is playing.")
-			.addSlider((slider) =>
+			.addSlider((slider) => {
 				slider
 					.setLimits(0.5, 2, 0.05)
 					.setDynamicTooltip()
-					.setValue(this.plugin.settings.rate)
+					.setValue(this.plugin.getPlayer().getRate())
 					.onChange(async (value) => {
 						await this.plugin.setRate(value);
-					}),
-			);
+					});
+				// Follow the player, so a nudge on the control bar moves this
+				// slider too. The player emits only on change, so a setValue
+				// that fires onChange cannot bounce back and forth.
+				this.offRate = this.plugin.getPlayer().on("rate", (rate) => {
+					if (slider.getValue() !== rate) slider.setValue(rate);
+				});
+			});
 
 		// The player never prefetches for an engine that speaks as it
 		// synthesises, so the slider would do nothing there. The stored value is
@@ -395,17 +410,66 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				}),
 			);
 
-		new Setting(containerEl)
+		// A free-text field alone would accept "not a colour" and quietly
+		// highlight nothing. Invalid input is refused with a visible error and
+		// the last valid colour stays in effect. Empty means follow the theme.
+		const colourSetting = new Setting(containerEl)
 			.setName("Highlight colour")
-			.addText((text) =>
-				text
-					.setPlaceholder("#ffd54f")
-					.setValue(this.plugin.settings.highlight.color)
-					.onChange(async (value) => {
-						this.plugin.settings.highlight.color = value;
-						await this.plugin.saveSettings();
-					}),
-			);
+			.setDesc("A hex colour. Leave empty to use the theme's highlight colour.");
+		const errorEl = colourSetting.descEl.createDiv({ cls: "mod-warning" });
+		errorEl.hide();
+		let picker: ColorComponent | null = null;
+		let textInput: HTMLInputElement | null = null;
+		// Set while the text field pushes its value into the picker. The
+		// picker holds #rrggbb only, so if setValue echoes through onChange it
+		// must not overwrite a #rgb or #rrggbbaa the user typed.
+		let syncingPicker = false;
+
+		colourSetting.addText((text) => {
+			textInput = text.inputEl;
+			text
+				.setPlaceholder("Theme default")
+				.setValue(this.plugin.settings.highlight.color)
+				.onChange(async (raw) => {
+					const value = raw.trim();
+					if (!isAcceptableColourInput(value)) {
+						errorEl.setText(
+							"Not a hex colour (#rgb, #rgba, #rrggbb or #rrggbbaa). The previous colour is still in use.",
+						);
+						errorEl.show();
+						return;
+					}
+					errorEl.hide();
+					await this.plugin.setHighlightColour(value);
+					const hex = toPickerHex(value);
+					if (hex && picker) {
+						syncingPicker = true;
+						picker.setValue(hex);
+						syncingPicker = false;
+					}
+				});
+		});
+		colourSetting.addColorPicker((p) => {
+			picker = p;
+			const initial = toPickerHex(this.plugin.settings.highlight.color);
+			if (initial) p.setValue(initial);
+			p.onChange(async (value) => {
+				if (syncingPicker) return;
+				errorEl.hide();
+				await this.plugin.setHighlightColour(value);
+				if (textInput) textInput.value = value;
+			});
+		});
+		colourSetting.addExtraButton((button) =>
+			button
+				.setIcon("rotate-ccw")
+				.setTooltip("Use the theme's highlight colour")
+				.onClick(async () => {
+					await this.plugin.setHighlightColour("");
+					errorEl.hide();
+					if (textInput) textInput.value = "";
+				}),
+		);
 	}
 
 	private renderStripSection(containerEl: HTMLElement): void {
@@ -463,4 +527,17 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 
 function errText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The colour picker only takes #rrggbb. Expand #rgb, drop any alpha, and
+ * return null for "" (theme default), leaving the picker as it is.
+ */
+function toPickerHex(stored: string): string | null {
+	const hex = stored.replace(/^#/, "").toLowerCase();
+	if (/^[0-9a-f]{3,4}$/.test(hex)) {
+		return `#${[...hex.slice(0, 3)].map((c) => c + c).join("")}`;
+	}
+	if (/^[0-9a-f]{6}(?:[0-9a-f]{2})?$/.test(hex)) return `#${hex.slice(0, 6)}`;
+	return null;
 }
