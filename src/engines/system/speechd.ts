@@ -41,6 +41,15 @@ const ID_PREFIX = "speechd:";
 /** ~180 wpm, used only to pace the sentence queue. */
 const CHARS_PER_SECOND = 14;
 
+/**
+ * How long to wait for a `-S` to land before speaking again anyway.
+ *
+ * The round trip measured 5 ms against the daemon on this machine, so this cap
+ * should never be reached. It exists so a wedged daemon degrades to "speaks
+ * over itself once" rather than to "never speaks again".
+ */
+const CANCEL_TIMEOUT_MS = 500;
+
 interface SpdVoiceRow {
 	name: string;
 	lang: string;
@@ -74,8 +83,14 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 	 * 0 having said nothing, so the only way to catch it is to check first.
 	 */
 	private knownNames: Set<string> | null = null;
-	/** Set while a chunk is being spoken so stop() can interrupt the daemon. */
-	private speaking = false;
+	/**
+	 * Utterances handed to the daemon and not yet finished. Read only by
+	 * dispose(); the abort path never consults it, because a listener scoped to
+	 * one call is self-evidently in flight and cannot go stale.
+	 */
+	private inFlight = 0;
+	/** A `-S` that has been issued but may not have reached the daemon yet. */
+	private cancelInFlight: Promise<void> | null = null;
 
 	constructor(private readonly runner: ProcessRunner) {}
 
@@ -167,7 +182,33 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 		const pitch = Math.round(clamp(-100, 100, req.pitch));
 		if (pitch !== 0) args.push("-p", String(pitch));
 
-		this.speaking = true;
+		const result: SynthResult = {
+			kind: "streamed",
+			estimatedMs: (req.chunk.text.length / CHARS_PER_SECOND / (req.rate || 1)) * 1000,
+			words: null,
+		};
+
+		// Already cancelled before we said anything, so the daemon has nothing
+		// of ours to stop. Issuing the stop here would silence some other
+		// client instead. The player discards this result: it re-checks the
+		// signal the moment synthesize() resolves.
+		if (signal.aborted) return result;
+
+		// A replacement utterance must not reach the daemon before the previous
+		// stop does, or that stop silences the replacement.
+		await this.awaitPendingCancel();
+		if (signal.aborted) return result;
+
+		// Killing spd-say only kills the client: the daemon already has the text
+		// and speaks it to the end, so an abort has to reach the daemon too.
+		// Registered before the spawn, and abort listeners run synchronously, so
+		// this cannot race the `finally` below the way a shared flag did.
+		const onAbort = (): void => {
+			this.cancelInFlight = this.stopDaemon();
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+
+		this.inFlight += 1;
 		try {
 			const text = defuseCommands(req.chunk.text);
 			const { stdout, code } = await this.runner.run("spd-say", args, text, signal);
@@ -177,28 +218,56 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 				throw new Error("Speech synthesis failed");
 			}
 		} finally {
-			this.speaking = false;
+			this.inFlight -= 1;
+			signal.removeEventListener("abort", onAbort);
 		}
 
-		return {
-			kind: "streamed",
-			estimatedMs: (req.chunk.text.length / CHARS_PER_SECOND / (req.rate || 1)) * 1000,
-			words: null,
-		};
+		return result;
 	}
 
-	/** Flush anything the daemon still has queued. */
-	async stop(): Promise<void> {
-		if (!this.speaking) return;
+	/**
+	 * Tell the daemon to stop the message it is speaking.
+	 *
+	 * `-S` is SSIP `STOP ALL`, not `STOP SELF`, which is the only reason this
+	 * works: by the time it runs our own client has been SIGKILLed, so a
+	 * connection-scoped stop would have nothing left to stop. The cost is that
+	 * it also interrupts whatever another client (a screen reader sharing the
+	 * daemon) is saying at that instant, so it must never be issued unless we
+	 * really do have an utterance in flight. `-C` (`CANCEL ALL`) is deliberately
+	 * never used: that would flush the other client's whole queue as well.
+	 */
+	private async stopDaemon(): Promise<void> {
 		try {
-			await this.runner.run("spd-say", ["-C"]);
+			// No signal: this must survive the very abort that asked for it.
+			await this.runner.run("spd-say", ["-S"]);
 		} catch {
-			// best effort
+			// Best effort. A failed stop must not wedge the next utterance.
+		}
+	}
+
+	/** Wait for a pending stop to land, but never indefinitely. */
+	private async awaitPendingCancel(): Promise<void> {
+		const pending = this.cancelInFlight;
+		if (!pending) return;
+		this.cancelInFlight = null;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				pending,
+				new Promise<void>((resolve) => {
+					timer = setTimeout(resolve, CANCEL_TIMEOUT_MS);
+				}),
+			]);
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
 		}
 	}
 
 	async dispose(): Promise<void> {
-		await this.stop();
+		// An utterance can still be at the daemon here, e.g. if the plugin is
+		// disabled mid-sentence. If the player stopped us first then the abort
+		// listener has already run and there is correctly nothing to do.
+		if (this.inFlight > 0) await this.stopDaemon();
 	}
 }
 
