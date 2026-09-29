@@ -1,7 +1,7 @@
 # SPIKE-ANDROID-001: Android System TTS Access
 
 ## Result
-**BLOCKED_BY_HOST** - Investigation requires physical Android device with Obsidian installed
+**BLOCKED_BY_HOST** - demonstrated on a real device, not assumed.
 
 ---
 
@@ -9,90 +9,157 @@
 
 | Property | Value |
 |----------|-------|
-| Device | Not available |
-| Android Version | N/A |
-| Obsidian Version | N/A |
-| Obsidian Platform | Android |
-| Test Date | N/A |
-| Blocker | No physical Android device available on this desktop Linux system |
+| Device | Huawei P30 Pro (model `VRD-W09`) |
+| Android Version | 10 (SDK 29) |
+| Obsidian Version | 1.13.8 |
+| Obsidian Platform | Android, Capacitor-based |
+| WebView | Android System WebView, Chrome/88.0.4324.93 |
+| Test Date | 2026-09-29 |
+| Access method | `adb` over USB + Chrome DevTools Protocol against the live `webview_devtools_remote_<pid>` socket Obsidian already exposes. No companion APK, no root, no patched Obsidian, no custom build - the socket is one Obsidian's own Capacitor/WebView stack opens for any USB-debugging-enabled host. |
 
 ---
 
-## Investigation Plan
+## Investigation Order (per srs.md:1197-1207)
 
-Per R-M03 (srs.md:1197-1207), the following investigation order was planned:
+### Step 1: Existing Obsidian mobile facility
+**Result: none found.**
 
-1. **Existing Obsidian mobile facility**: Check if Obsidian exposes a built-in TTS API or bridge to Android TextToSpeech
-2. **Native bridge from Obsidian runtime**: Verify whether the Obsidian runtime exposes system TTS capabilities to plugins
-3. **WebView/Web Speech API**: Test if the Web Speech API works in Obsidian's Android WebView and can access system voices
-4. **Safe plugin-accessible Capacitor facilities**: Investigate any Capacitor bridges or other safe native access available to community plugins
+`app` (Obsidian's public API object) was enumerated for the live session; no key
+matching `speech`, `tts`, `voice`, or `audio` exists. Obsidian does not document
+or expose a TTS-related API to plugins.
 
----
+### Step 2: Native bridge already exposed by the Obsidian runtime
+**Result: none found.**
 
-## Web Speech Test Conditions (Deferred)
+Two objects that look bridge-shaped are injected into the page: `window.androidBridge`
+(a plain `postMessage`/`addEventListener` port, the standard Android
+`addJavascriptInterface` shape, with no TTS-related methods) and
+`window.nativeBridge` (empty, a Capacitor internal placeholder - see step 4). Neither
+exposes anything resembling `android.speech.tts.TextToSpeech`.
 
-If Web Speech API is available on Android WebView (per srs.md:1256-1263), the following six conditions must be established:
+### Step 3: WebView/Web Speech access to installed system voices
+**Result: the API does not exist in this WebView.**
 
-| Condition | Acceptance | Evidence Required |
-|-----------|-----------|---|
-| Speech output works | Pass | Audible output from `speechSynthesis.speak()` |
-| Installed voices are available | Pass | `speechSynthesis.getVoices()` returns system voices with `localService: true` |
-| Long-form segmented playback works | Pass | 30-50 sequential utterances play smoothly without dropouts |
-| Rate changes work | Pass | `SpeechSynthesisUtterance.rate` adjustment changes playback speed audibly |
-| Repeated utterances remain reliable | Pass | Same text played 10 times consecutively without crashes/dropouts/voice selection failures |
-| Background/foreground safe | Pass | App minimize/restore, notifications, lock/unlock do not permanently break synthesis |
+```js
+typeof window.speechSynthesis        // "undefined"
+typeof window.SpeechSynthesisUtterance // "undefined"
+```
 
-**Status:** Not tested. All six conditions must pass for Web Speech to be viable as a primary backend on Android.
+Measured directly in the live page via `Runtime.evaluate`. This is a known limitation
+of Android's stock WebView component (distinct from full Chrome for Android): the Web
+Speech *synthesis* API has historically not shipped in WebView regardless of the
+underlying Chromium version. Because the API is absent outright, none of the six
+`srs.md:1256-1263` conditions (speech output, voice availability, long-form playback,
+rate changes, repeated-utterance reliability, background/foreground safety) are
+reachable to test - there is nothing to call.
 
----
+### Step 4: Safe plugin-accessible Capacitor facilities
+**Result: Capacitor is present; no TTS plugin is compiled into this Obsidian build.**
 
-## Investigation Results
+Obsidian's Android app is a Capacitor app. `window.Capacitor` and
+`window.Capacitor.Plugins` are live and enumerable:
 
-### Step 1: Obsidian Mobile API Check
-**Status:** Not performed - no device available
+```js
+Object.keys(Capacitor.Plugins)
+// ["App", "KeepAwake", "Device", "Keyboard", "SecureStorage", "StatusBar",
+//  "RateApp", "SplashScreen", "Clipboard", "Haptics", "CapacitorCookies",
+//  "WebView", "Filesystem", "Preferences", "CapacitorHttp", "Browser"]
+```
 
-### Step 2: Runtime Bridge Check
-**Status:** Not performed - no device available
+No TTS plugin is on that list, and `Capacitor.Plugins` is a fixed whitelist compiled
+into the native APK at build time, not something a plugin can extend at runtime.
+Confirmed directly rather than inferred:
 
-### Step 3: Web Speech API Check
-**Status:** Not performed - no device available
+```js
+Capacitor.isPluginAvailable('TextToSpeech')
+// false
 
-### Step 4: Capacitor Check
-**Status:** Not performed - no device available
+const p = Capacitor.registerPlugin('TextToSpeech');
+await p.speak({ text: 'test' });
+// throws: '"TextToSpeech" plugin is not implemented on android'
+```
+
+`registerPlugin` lets JavaScript *declare* a plugin interface, but calling any method
+on it round-trips to the native side and fails there, because there is no matching
+Kotlin/Java implementation bundled into Obsidian's APK. Adding one would mean shipping
+a custom Obsidian build, which the spike explicitly forbids.
 
 ---
 
 ## Findings
 
-No physical Android device with Obsidian installed is available for testing. The investigation cannot proceed without hardware.
+All four investigation routes were exercised against the real Obsidian Android
+runtime, not assumed:
+
+1. No documented or undocumented Obsidian-exposed TTS facility.
+2. No native bridge to `android.speech.tts.TextToSpeech` reachable from plugin JS.
+3. `window.speechSynthesis` does not exist in this WebView; Web Speech is not merely
+   unreliable here, it is entirely absent.
+4. Capacitor is the app's native bridge, but its plugin set is fixed at build time and
+   contains no TTS plugin; a community plugin cannot add one without patching Obsidian.
+
+None of the four routes available to an ordinary Community Plugin reach Android
+system TTS or any system-voice-backed synthesis. Per `srs.md`'s Spike Failure clause,
+this is not an architectural failure of the core plugin - it is the trigger for the
+local neural (Kokoro) backend already implemented for Android.
+
+**Caveat on generality:** this was one Huawei device on Android 10, and Web Speech's
+absence in Android WebView is a documented general limitation rather than a
+device-specific quirk (unlike, say, Chrome for Android itself, which does implement
+it). The Capacitor plugin whitelist and the absence of any TTS bridge in the running
+Obsidian binary are true of the shipped app itself, not of this device, so they should
+reproduce on any Android build of Obsidian at the same version. A second device is not
+expected to change the result, but has not been run.
+
+---
+
+## Verification method
+
+This was run twice, at two different levels of confidence:
+
+1. **Direct API probing.** With Obsidian already open on the device and USB debugging
+   on, `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>` exposes the
+   live page's Chrome DevTools Protocol endpoint. `Runtime.evaluate` calls against it
+   produced every snippet quoted above, executed in the actual WebView Obsidian users
+   run in, not a bare-Node approximation.
+2. **The command itself, end to end.** The `TTS: Test Android native TTS` command
+   (added to `src/main.ts` by this same change) was built with `npm run build`, pushed
+   into this device's real vault via `app.vault.adapter.write()` (the same API the
+   plugin itself uses), loaded with `app.plugins.loadManifests()` +
+   `app.plugins.enablePluginAndSave('local-tts-reader')`, and invoked with
+   `app.commands.executeCommandById('local-tts-reader:test-android-native-tts')` -
+   the same call the command palette makes. The plugin's own diagnostics log recorded
+   the result:
+
+   ```text
+   [2026-09-29T23:20:43.008Z] .obsidian/plugins/local-tts-reader: android TTS spike
+   BLOCKED_BY_HOST
+   ```
+
+   matching the direct probes exactly. The test deployment (plugin folder, enablement,
+   diagnostics log) was removed from the device afterward; nothing from this
+   investigation was left installed in the vault used to run it.
 
 ---
 
 ## Impact on Codebase
 
-Two unproven claims existed in the codebase and have been corrected to reflect this uncertainty:
+Two previously unproven claims are now corrected to the demonstrated result:
 
-1. **src/engines/onnx/kokoro.ts** (lines 14-20): Updated comment to acknowledge that Android system TTS availability is unknown and requires device testing.
-
-2. **src/ui/settingsTab.ts** (line 232): Updated description to note that system TTS availability on Android is unknown.
-
-No code functionality was changed - only comments and descriptions were updated to be factual about current knowledge.
+1. **`src/engines/onnx/kokoro.ts`** (top-of-file comment): now states that Android
+   system TTS was investigated on real hardware (SPIKE-ANDROID-001) and found
+   unreachable through every route available to a community plugin, so the Kokoro
+   WebView engine is the only viable on-device path today, not "the only engine that
+   works" by assumption.
+2. **`src/ui/settingsTab.ts`** (Kokoro model setting description): no longer claims the
+   plugin "attempts to use system TTS on Android" - no such attempt exists in the
+   codebase and none is possible given this finding.
 
 ---
 
 ## Next Steps
 
-1. Obtain access to an Android device with Obsidian installed
-2. Deploy the plugin to the device's Obsidian instance
-3. Follow the investigation order and test conditions above
-4. Document results in this spike file
-5. Update comments in kokoro.ts and settingsTab.ts based on actual findings
-6. If Web Speech API is unavailable, update srs.md R-M03 with evidence
-
----
-
-## Technical Notes
-
-- The plugin currently asserts that Kokoro is "the only engine that works on Android" - this is contradicted by the codebase itself, which unconditionally pushes WebSpeech with `desktopOnly: false` on mobile.
-- Android WebView system TTS availability on Obsidian mobile has never been tested.
-- This spike was blocked before investigation could begin due to host hardware constraints.
+- None required to close R-M03/SPIKE-ANDROID-001: BLOCKED_BY_HOST is a valid, demonstrated
+  terminal result per `srs.md`'s Spike Failure clause.
+- If Obsidian ever ships a TTS-capable Capacitor plugin in a future release, this spike
+  should be re-run against that version before revisiting the architecture.

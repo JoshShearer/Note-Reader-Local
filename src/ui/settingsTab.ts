@@ -230,7 +230,8 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			.setName("Kokoro model")
 			.setDesc(
 				"Downloaded once and kept in the vault so it survives plugin updates. " +
-					"Local neural model. Plugin attempts to use system TTS on Android; current status unknown (SPIKE-ANDROID-001 blocked on hardware).",
+					"Local neural model, and the only route to on-device speech on Android: " +
+					"real-hardware testing (SPIKE-ANDROID-001) found no reachable system TTS.",
 			);
 
 		new Setting(containerEl)

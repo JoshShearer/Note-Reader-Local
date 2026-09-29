@@ -285,6 +285,14 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "test-android-native-tts",
+			name: "Test Android native TTS",
+			callback: () => {
+				void this.testAndroidNativeTts();
+			},
+		});
+
 		this.addSettingTab(new LocalTtsSettingTab(this.app, this));
 
 		// Loading Kokoro takes seconds, and doing it on the first click is what
@@ -314,6 +322,77 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		} catch (err) {
 			trace(this.app, this.manifest.dir!, "prewarm failed", err);
 		}
+	}
+
+	/**
+	 * SPIKE-ANDROID-001 (NRL-35): the acceptance-criteria artifact itself, not
+	 * just a doc. Investigates the four routes the spec orders (srs.md:1197),
+	 * in order, and reports PASS or BLOCKED_BY_HOST via Notice.
+	 *
+	 * Steps 1 and 2 are not runtime-checkable: there is no documented Obsidian
+	 * API surface for TTS to probe, and confirming its absence is exactly what
+	 * manual investigation against a real device did (docs/spikes/SPIKE-ANDROID-001.md).
+	 * This command starts at step 3, the two routes JS can actually attempt.
+	 */
+	private async testAndroidNativeTts(): Promise<void> {
+		const PHRASE = "Obsidian text to speech test.";
+
+		// Step 3: WebView/Web Speech access to installed system voices.
+		if (typeof window !== "undefined" && "speechSynthesis" in window) {
+			try {
+				await new Promise<void>((resolve, reject) => {
+					const utterance = new SpeechSynthesisUtterance(PHRASE);
+					utterance.onstart = () => resolve();
+					utterance.onerror = (event) =>
+						reject(new Error(event.error || "speechSynthesis error"));
+					window.speechSynthesis.speak(utterance);
+					// Measured on a real Android WebView (SPIKE-ANDROID-001): the API
+					// can be entirely absent, so a WebView that accepts the call but
+					// never fires either event must not hang this command forever.
+					window.setTimeout(
+						() => reject(new Error("no onstart/onerror within 3s")),
+						3000,
+					);
+				});
+				new Notice("Android native TTS: PASS via Web Speech API.", 8000);
+				trace(this.app, this.manifest.dir!, "android TTS spike", "PASS via webspeech");
+				return;
+			} catch (err) {
+				trace(this.app, this.manifest.dir!, "android TTS spike: webspeech failed", err);
+			}
+		}
+
+		// Step 4: safe plugin-accessible Capacitor facilities. Obsidian's Android
+		// build is a Capacitor app, but `Capacitor.Plugins` only ever contains
+		// the fixed whitelist compiled into that build (App, Filesystem,
+		// Preferences, ...); a community plugin cannot add a new native plugin
+		// without a custom Obsidian build, which the spike forbids.
+		const capacitor = (
+			window as unknown as {
+				Capacitor?: {
+					isPluginAvailable?: (name: string) => boolean;
+					Plugins?: Record<string, { speak?: (opts: { text: string }) => Promise<unknown> }>;
+				};
+			}
+		).Capacitor;
+		if (capacitor?.isPluginAvailable?.("TextToSpeech")) {
+			try {
+				await capacitor.Plugins?.TextToSpeech?.speak?.({ text: PHRASE });
+				new Notice("Android native TTS: PASS via Capacitor TextToSpeech.", 8000);
+				trace(this.app, this.manifest.dir!, "android TTS spike", "PASS via capacitor");
+				return;
+			} catch (err) {
+				trace(this.app, this.manifest.dir!, "android TTS spike: capacitor failed", err);
+			}
+		}
+
+		new Notice(
+			"Android native TTS: BLOCKED_BY_HOST. No Obsidian TTS facility, native bridge, " +
+				"Web Speech API, or Capacitor TextToSpeech plugin is reachable from an ordinary " +
+				"community plugin on this device. See docs/spikes/SPIKE-ANDROID-001.md.",
+			15000,
+		);
+		trace(this.app, this.manifest.dir!, "android TTS spike", "BLOCKED_BY_HOST");
 	}
 
 	override onunload(): void {

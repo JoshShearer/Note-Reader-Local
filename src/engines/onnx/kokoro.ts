@@ -14,9 +14,12 @@ import type { DeviceRequest, FromWorker, ModelFile, ToWorker } from "./kokoro.wo
 /**
  * Kokoro, run locally in a Web Worker.
  *
- * Android system TTS availability is unknown and requires device testing (SPIKE-ANDROID-001 blocked on hardware).
- * The plugin attempts to use system TTS when available on Android. If system TTS is not reachable,
- * running the model in the WebView is the only alternative for good on-device speech without cloud services.
+ * Android system TTS is unreachable from an ordinary Obsidian Community Plugin, confirmed
+ * on real hardware rather than assumed (SPIKE-ANDROID-001, docs/spikes/SPIKE-ANDROID-001.md):
+ * Obsidian exposes no TTS facility of its own, its Capacitor bridge has no TextToSpeech
+ * plugin compiled in, and the Android WebView does not implement `window.speechSynthesis`
+ * at all. Running the model in the WebView is therefore the only route to good on-device
+ * speech on Android without a cloud service.
  *
  * Model files live in the vault rather than in the plugin folder, so they
  * survive plugin updates. The bundled onnxruntime WASM does live in the plugin

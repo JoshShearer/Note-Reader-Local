@@ -115,7 +115,17 @@ Two confirmed moves: R-M01 (standard Obsidian Community Plugin) is met as of NRL
 all release infrastructure in place (README.md, LICENSE, versions.json, SLSA Level 3 workflow,
 and ORT runtime checksum validation). R-M14 (backend capability detection) is met as of NRL-22,
 because every capability that differs across the four engines now gates the control it affects,
-and the ones that gate nothing have no control to gate.
+and the ones that gate nothing have no control to gate. R-M03's spike (SPIKE-ANDROID-001) is
+resolved as of NRL-35, and this one did need a real device, not bare-Node reasoning:
+`window.speechSynthesis` does not exist at all in Obsidian's Android WebView (Chrome/88 WebView
+on Android 10, a Huawei P30 Pro), Obsidian's Capacitor bridge has no TextToSpeech plugin compiled
+in (`Capacitor.isPluginAvailable('TextToSpeech')` is `false`), and Obsidian itself exposes no TTS
+facility to plugins. All three were measured directly against the live page over CDP, and the
+`TTS: Test Android native TTS` command this added was then built, deployed into that device's real
+vault, enabled, and run through `executeCommandById` exactly as the command palette would, landing
+the same `BLOCKED_BY_HOST` result in the plugin's own diagnostics log. Result: BLOCKED_BY_HOST,
+demonstrated rather than assumed, which is the valid terminal state the spec's Spike Failure clause
+describes and is why Kokoro-in-WebView is the Android backend rather than a native bridge.
 
 R-M09 (configurable content exclusions) did **not** move, and the reason matters because
 NRL-21's title invites the opposite conclusion. Its *configurability* half is met: all six
