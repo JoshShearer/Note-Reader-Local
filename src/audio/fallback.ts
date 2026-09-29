@@ -74,6 +74,7 @@ export async function playWithFallback(
 	chunks: SpeechChunk[],
 	rate: number,
 	hooks?: FallbackHooks,
+	startAtSource = -1,
 ): Promise<FallbackCandidate | null> {
 	for (let i = 0; i < candidates.length; i++) {
 		const candidate = candidates[i]!;
@@ -88,7 +89,7 @@ export async function playWithFallback(
 			continue;
 		}
 
-		const outcome = await attempt(player, candidate, chunks, rate);
+		const outcome = await attempt(player, candidate, chunks, rate, startAtSource);
 		if (outcome.kind === "succeeded") return candidate;
 		if (outcome.kind === "aborted") return null;
 
@@ -109,6 +110,7 @@ function attempt(
 	candidate: FallbackCandidate,
 	chunks: SpeechChunk[],
 	rate: number,
+	startAtSource = -1,
 ): Promise<AttemptOutcome> {
 	return new Promise<AttemptOutcome>((resolve) => {
 		let settled = false;
@@ -127,7 +129,7 @@ function attempt(
 			resolve(outcome);
 		}
 
-		void player.play(candidate.engine, chunks, rate).then(() => {
+		void player.play(candidate.engine, chunks, rate, startAtSource).then(() => {
 			// play() resolved without the race above ever settling: no
 			// "playing" and no "error" fired for this attempt. Either the
 			// chunk list was empty (Player's own "finished" state, nothing

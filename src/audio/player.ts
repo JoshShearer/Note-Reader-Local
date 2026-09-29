@@ -34,6 +34,8 @@ export interface PlayerEvents extends Record<string, unknown> {
 	state: PlayerState;
 	/** Active word, or null when nothing is highlighted. */
 	word: { chunkIndex: number; wordIndex: number; timing: WordTiming } | null;
+	/** Active chunk (sentence) for sentence-level highlighting. */
+	chunk: SpeechChunk | null;
 	progress: { chunkIndex: number; total: number };
 	/**
 	 * Playback rate, emitted only when it changes. The control bar and the
@@ -245,6 +247,8 @@ export class Player {
 	private announcePlaying(index: number): void {
 		this.setState("playing");
 		this.emitter.emit("progress", { chunkIndex: index, total: this.chunks.length });
+		const chunk = this.chunks[index] || null;
+		this.emitter.emit("chunk", chunk);
 	}
 
 	/** Synthesise a chunk, caching the promise so prefetch and playback share it. */
@@ -617,6 +621,22 @@ export class Player {
 		if (this.state === "idle" || this.state === "finished") return;
 		if (!this.engine || !this.controller) return;
 		if (this.index < 0 || this.index >= this.chunks.length) return;
+		await this.restartCurrent();
+	}
+
+	async next(): Promise<void> {
+		if (this.state === "idle" || this.state === "finished") return;
+		if (!this.engine || !this.controller) return;
+		if (this.index >= this.chunks.length - 1) return; // At or past last chunk
+		this.index += 1;
+		await this.restartCurrent();
+	}
+
+	async previous(): Promise<void> {
+		if (this.state === "idle" || this.state === "finished") return;
+		if (!this.engine || !this.controller) return;
+		if (this.index <= 0) return; // At or before first chunk
+		this.index -= 1;
 		await this.restartCurrent();
 	}
 
