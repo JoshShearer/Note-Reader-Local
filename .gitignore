@@ -28,6 +28,8 @@ data.json
 .DS_Store
 
 # Agent pipeline state (machine-local, never committed)
+# Main repo and worktree lanes use separate state files for isolation
 .claude/pipeline-state.json
+.claude/pipeline-state-local.json
 .claude/last-critique.md
 .claude/scratch/

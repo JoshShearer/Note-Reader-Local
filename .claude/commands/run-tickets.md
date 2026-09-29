@@ -15,10 +15,11 @@ table before the first run.
 | **There is no CI.** No `.github/`, no workflow, no hook. `.git/hooks` holds only samples. | The Verify phase has nothing to poll. It runs the gates and the probes itself. Do not write a `gh pr checks` loop; it will wait forever on a PR that no runner ever touches. |
 | **A green suite is not a working feature** (`AGENTS.md` rule 11). The suites run in bare Node against fakes. | Automated Verify also runs the real bundled module against the ticket's acceptance inputs, and drives real Obsidian over CDP when it is reachable. Nothing a human did not observe is ever described as "verified in Obsidian". PRs carry `NOT VERIFIED IN OBSIDIAN`, and Linear comments say so plainly. |
 | **Bugs must be reproduced before they are fixed** (`AGENTS.md` rule 12). | Implement begins by reproducing, not by editing. If the repro fails, the ticket blocks rather than proceeding on a guess. |
-| **One deploy slot.** `npm run deploy` writes to one fixed folder in `~/Documents/Notes`. | Tickets run strictly one at a time. Never parallelise this command, and do not start a second run in a worktree while one is live. |
+| **One deploy slot.** `npm run deploy` writes to one fixed folder in `~/Documents/Notes`. | Multiple worktrees can run phases concurrently (each with its own state file), but only one lane at a time may call `npm run deploy`. Coordinate: if two lanes both reach Finish, the first to deploy owns the slot; the second must wait or skip deploy. |
 | **A deploy is not live until Obsidian restarts.** On 2026-09-28 two tickets were "passed" against a stale in-memory build after an in-app reload. | Finish deploys `main` so the owner's vault always has the latest merged build, and the end-of-run report tells them to **fully quit and relaunch** Obsidian. A deploy never counts as evidence that the code ran. |
 | **Base branch is `main`.** It is the only branch; `origin/HEAD` resolves correctly here. | No special casing. Still assert it rather than assuming. |
 | **Reproduced defects are listed** in `AGENTS.md` "Known state", with exact triggering inputs. | Phase 0 must not ask for a repro for one of those. It is already written down. |
+| **Worktree parallelism** (new). Multiple worktrees can run phases concurrently. | Each worktree uses its own `.claude/pipeline-state-local.json` for isolation. Main repo uses `.claude/pipeline-state.json`. Only one lane may deploy at a time. |
 
 `gh` is installed and authenticated as `JoshShearer`. There is no permission classifier blocking
 `gh pr merge` in this repo, and no required review, so merge automation works. Never self-approve a
@@ -78,6 +79,15 @@ before its work starts.
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
+WORKTREE_NAME=$(basename "$REPO_ROOT")
+
+# Detect worktree context for state file isolation
+if [[ "$WORKTREE_NAME" == note-reader-local-nrl-* ]]; then
+  STATE_FILE=".claude/pipeline-state-local.json"  # Per-worktree state
+else
+  STATE_FILE=".claude/pipeline-state.json"        # Main repo state
+fi
+
 git status --short
 git rev-parse --abbrev-ref HEAD
 node --version
@@ -88,13 +98,15 @@ been touched yet and continuing could destroy someone's work:
 
 - The working tree is clean. A dirty tree means a previous run or a manual edit is in flight: stop
   and report what is dirty. Do not stash or discard it.
-- You are on `main` and it is synced with `origin/main`. If `main` is only behind, fast-forward it.
-- `node_modules` exists. If not, `npm ci`.
-- The cwd is the primary repo, not a `note-reader-local-nrl-*` worktree. This command owns the
-  deploy slot for its whole run and should hold it from one place.
-- If the state file holds an in-progress run and `--resume` was not given, resume it rather than
-  overwriting it, and say so in the first message. Starting fresh would orphan an in-flight branch
-  and PR.
+- If in `main` branch: synced with `origin/main`. If `main` is only behind, fast-forward it.
+  If in a worktree on a feature branch: any branch state is OK (agents manage it).
+- `node_modules` exists in this context (main repo or worktree). If not, `npm ci`.
+- If the state file (`.claude/pipeline-state.json` or `.claude/pipeline-state-local.json`) holds
+  an in-progress run and `--resume` was not given, resume it rather than overwriting it, and say
+  so in the first message. Starting fresh would orphan an in-flight branch and PR.
+
+**Worktree isolation:** Each worktree uses its own state file (`.claude/pipeline-state-local.json`)
+so that main repo and worktree runs do not collide. This enables concurrent parallel pipelines.
 
 Then read, in this order: `AGENTS.md` (the non-negotiables and the Known-state defect list),
 `.claude/linear.md`, and the commands this pipeline delegates to - `start-issue.md`, `ship.md`,
@@ -199,13 +211,18 @@ Machine-local, gitignored, never committed.
 `verifyVerdict`: `null` | `pass` | `fail`. It records the **automated** Verify only.
 `clarification.decidedBy`: `null` | `"owner"` (from the ticket's Decisions section) | `"pipeline"`.
 
-Add `.claude/pipeline-state.json` to `.gitignore` if it is not already there. Timestamps come from
+Add both `.claude/pipeline-state.json` and `.claude/pipeline-state-local.json` to `.gitignore` if
+they are not already there (the latter is used by worktree instances). Timestamps come from
 `date -u +%FT%TZ`, never from a guess.
 
 ## Phase subagent prompts
 
 **1. Start** - "Read `.claude/commands/start-issue.md` and follow it for `<ID>` in `<repo-root>`,
-non-interactively; the ticket is already chosen. `git checkout main && git pull --ff-only` first.
+non-interactively; the ticket is already chosen. Worktree context: if REPO_ROOT ends with
+`note-reader-local-nrl-*`, use state file `.claude/pipeline-state-local.json`; otherwise use
+`.claude/pipeline-state.json`.
+
+`git checkout main && git pull --ff-only` first (if in main repo; skip if in worktree feature branch).
 Branch from `main`. Fetch the issue and write `title`, `requirement`, `type`,
 `descriptionSnapshot` and `branch` into this ticket's state entry. Set the Linear status to In
 Progress: call `list_issue_statuses` first and use the id whose name is exactly `In Progress`, then
