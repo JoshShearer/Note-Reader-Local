@@ -269,7 +269,14 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				for (const voice of voices) {
 					dropdown.addOption(voice.id, `${voice.name} (${voice.lang})`);
 				}
-				dropdown.setValue(this.plugin.settings.voiceId);
+				// An id saved by an older build may name the same voice in an
+				// old format. Show that voice selected; it is persisted in the
+				// new form the next time reading starts.
+				const stored = this.plugin.settings.voiceId;
+				const remapped = voices.some((v) => v.id === stored)
+					? undefined
+					: engine.resolveVoiceId?.(stored, voices);
+				dropdown.setValue(remapped?.id ?? stored);
 			} catch (err) {
 				dropdown.selectEl.empty();
 				dropdown.addOption("", "Could not list voices");

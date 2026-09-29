@@ -28,6 +28,8 @@ const CAPABILITIES: EngineCapabilities = {
 	ownsPlayback: true,
 };
 
+const ID_PREFIX = "speechd:";
+
 /** ~180 wpm, used only to pace the sentence queue. */
 const CHARS_PER_SECOND = 14;
 
@@ -59,6 +61,11 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 	readonly capabilities = CAPABILITIES;
 
 	private voice: VoiceInfo | null = null;
+	/**
+	 * NAME column of the last `spd-say -L`. An unknown `-y` makes spd-say exit
+	 * 0 having said nothing, so the only way to catch it is to check first.
+	 */
+	private knownNames: Set<string> | null = null;
 	/** Set while a chunk is being spoken so stop() can interrupt the daemon. */
 	private speaking = false;
 
@@ -81,12 +88,18 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 		try {
 			const { code, stdout } = await this.runner.run("spd-say", ["-L"]);
 			if (code !== 0) return [];
-			return parseVoiceList(stdout.toString()).map((row) => ({
-				id: `speechd:${row.name}+${row.variant}`,
+			const rows = parseVoiceList(stdout.toString());
+			this.knownNames = new Set(rows.map((row) => row.name));
+			// NAME already includes the variant ("Afrikaans+Adam"), and it is
+			// exactly what `-y` accepts, so it is the whole id. Appending the
+			// variant again produced ids spd-say could not select.
+			return rows.map((row) => ({
+				id: `${ID_PREFIX}${row.name}`,
 				name: row.variant === "none" ? row.name : `${row.name} (${row.variant})`,
 				lang: row.lang,
 				gender: "neutral" as const,
 				engineId: "speechd" as const,
+				isVariant: row.variant !== "none",
 			}));
 		} catch {
 			return [];
@@ -97,17 +110,47 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 		this.voice = voice;
 	}
 
+	/**
+	 * Map an id stored by an older build onto the current one.
+	 *
+	 * Older ids were `speechd:<NAME>+<variant>`, where NAME already carried
+	 * the variant: `speechd:Afrikaans+Adam+Adam`, or `speechd:English
+	 * (America)+none`. Dropping the last `+segment` recovers NAME, and the
+	 * variant it names must agree with the row, so an unrelated voice that
+	 * happens to share the prefix is never picked.
+	 */
+	resolveVoiceId(storedId: string, voices: VoiceInfo[]): VoiceInfo | undefined {
+		const exact = voices.find((v) => v.id === storedId);
+		if (exact) return exact;
+		if (!storedId.startsWith(ID_PREFIX)) return undefined;
+
+		const plus = storedId.lastIndexOf("+");
+		if (plus <= ID_PREFIX.length) return undefined;
+		const base = storedId.slice(0, plus);
+		const variant = storedId.slice(plus + 1);
+		const match = voices.find((v) => v.id === base);
+		if (!match) return undefined;
+		const name = base.slice(ID_PREFIX.length);
+		const rowVariant = name.includes("+") ? name.slice(name.lastIndexOf("+") + 1) : "none";
+		return rowVariant === variant ? match : undefined;
+	}
+
 	async synthesize(req: SynthRequest, signal: AbortSignal): Promise<SynthResult> {
-		const args = ["-w"];
+		// -e reads the text from stdin, keeping note text off the command
+		// line. Without it spd-say sees no text, prints usage and exits 1.
+		const args = ["-w", "-e"];
 
 		if (this.voice) {
-			// Our id is `speechd:<name>+<variant>`; spd-say wants them apart.
-			const rest = this.voice.id.replace(/^speechd:/, "");
-			const plus = rest.indexOf("+");
-			const name = plus === -1 ? rest : rest.slice(0, plus);
-			const variant = plus === -1 ? undefined : rest.slice(plus + 1);
-			if (name) args.push("-y", name);
-			if (variant && variant !== "none") args.push("-t", variant);
+			const name = this.voice.id.startsWith(ID_PREFIX)
+				? this.voice.id.slice(ID_PREFIX.length)
+				: "";
+			if (!this.knownNames) await this.listVoices();
+			if (!name || !this.knownNames?.has(name)) {
+				throw new Error("Requested voice unavailable");
+			}
+			// Never -t: it takes an enum (male1, child_female, ...), not a
+			// variant name, and a variant is already selected by its NAME.
+			args.push("-y", name);
 		}
 
 		// spd-say rate and pitch are -100..100.
@@ -118,9 +161,12 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 
 		this.speaking = true;
 		try {
-			const { stderr, code } = await this.runner.run("spd-say", args, req.chunk.text, signal);
-			if (code !== 0 && stderr.trim()) {
-				throw new Error(`spd-say failed: ${stderr.trim()}`);
+			const text = defuseCommands(req.chunk.text);
+			const { stdout, code } = await this.runner.run("spd-say", args, text, signal);
+			// Fixed strings only. With -e, stdout is an echo of the note text,
+			// so neither it nor stderr may reach a message or a log.
+			if (code !== 0 || reportsFailure(stdout.toString(), text)) {
+				throw new Error("Speech synthesis failed");
 			}
 		} finally {
 			this.speaking = false;
@@ -146,6 +192,27 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 	async dispose(): Promise<void> {
 		await this.stop();
 	}
+}
+
+/**
+ * In -e mode spd-say treats a line starting "!-!" as a raw SSIP command for
+ * the daemon rather than text: the sentence is silently dropped and the note
+ * gets to drive speech-dispatcher, which a screen reader may share. A leading
+ * space is enough for spd-say to speak the line instead.
+ */
+function defuseCommands(text: string): string {
+	return text.replace(/^!-!/gm, " !-!");
+}
+
+/**
+ * spd-say reports some failures on stdout and still exits 0, e.g. "Invalid
+ * voice" for a bad -t. With -e it also echoes the text it read, byte for
+ * byte, after any such message. Strip that echo first, so a note that
+ * happens to say "Invalid voice" is not mistaken for an error.
+ */
+function reportsFailure(stdout: string, text: string): boolean {
+	const extra = stdout.endsWith(text) ? stdout.slice(0, stdout.length - text.length) : stdout;
+	return /^(Invalid voice|Usage:)/m.test(extra);
 }
 
 function clamp(min: number, max: number, value: number): number {

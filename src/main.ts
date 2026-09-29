@@ -1,9 +1,10 @@
-import { MarkdownView, Notice, Plugin } from "obsidian";
+import { MarkdownView, Notice, Plugin, getLanguage, moment } from "obsidian";
 import { EditorView } from "@codemirror/view";
 
 import { Player } from "./audio/player";
 import type { EngineId, SpeechEngine } from "./audio/types";
 import { extractChunks } from "./text/extract";
+import { resolveStoredVoice } from "./audio/voiceChoice";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
 import {
 	KokoroEngine,
@@ -252,20 +253,23 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
-	 * Apply the configured voice, or the first one the engine offers.
+	 * Apply the configured voice, or a substitute the user is told about.
 	 *
-	 * A voice id is scoped to its engine, so switching engines invalidates it;
-	 * falling back keeps the first run after a switch working.
+	 * A voice id is scoped to its engine, so switching engines invalidates it.
+	 * The substitute follows the app language rather than whatever sorts
+	 * first (on speech-dispatcher that is Afrikaans, out of thousands), and
+	 * the notice names both voices. It is persisted so the notice fires once.
 	 */
 	private async selectVoiceIfNeeded(engine: SpeechEngine): Promise<void> {
 		const voices = await engine.listVoices();
 		if (voices.length === 0) return;
-		const wanted = voices.find((v) => v.id === this.settings.voiceId);
-		await engine.selectVoice(wanted ?? voices[0]!);
-		if (!wanted) {
-			this.settings.voiceId = voices[0]!.id;
+		const resolved = resolveStoredVoice(engine, this.settings.voiceId, voices, appLocale());
+		await engine.selectVoice(resolved.voice);
+		if (resolved.id !== this.settings.voiceId) {
+			this.settings.voiceId = resolved.id;
 			await this.saveSettings();
 		}
+		if (resolved.notice) new Notice(`Local TTS Reader: ${resolved.notice}`, 8000);
 	}
 
 	stopReading(): void {
@@ -384,4 +388,25 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	getPlayer(): Player {
 		return this.player;
 	}
+}
+
+/**
+ * The language Obsidian's UI is in, which is what the user reads in.
+ *
+ * getLanguage() arrived in Obsidian 1.8.7 and the manifest allows 1.8.0, so
+ * it is feature-checked; before it, moment's locale follows the app setting.
+ * Not navigator.language, which is the OS locale.
+ */
+export function appLocale(): string {
+	try {
+		if (typeof getLanguage === "function") {
+			const lang = getLanguage();
+			if (lang) return lang;
+		}
+		const fromMoment = moment.locale();
+		if (fromMoment) return fromMoment;
+	} catch {
+		// fall through
+	}
+	return "en";
 }
