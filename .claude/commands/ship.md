@@ -83,7 +83,7 @@ npm test
 npm run typecheck
 ```
 
-`npm test` runs 5 suites: extract, engine, player, paths, kokoro. `tests/engine.test.ts` shells
+`npm test` runs 7 suites: extract, engine, player, paths, kokoro, settings, highlightColour. `tests/engine.test.ts` shells
 out to real `espeak-ng` and `spd-say` on this machine, so a failure there can mean a missing
 binary rather than a regression. Check which before you blame the diff:
 
@@ -285,7 +285,7 @@ Body template. Every section is filled or explicitly marked `none`:
 ## Testing
 
 ### Gates
-- `npm test` - 5 suites, <result>
+- `npm test` - 7 suites, <result>
 - `npm run typecheck` - <result>
 - `npm run build` - <result, or "not required, bundle untouched">
 
@@ -350,7 +350,7 @@ Commit: abc1234 fix(extract): keep wikilink text and drop the brackets
 PR: <url from gh>
 
 Gates:
-- npm test: 5 suites pass
+- npm test: 7 suites pass
 - npm run typecheck: clean
 - npm run build: <result or not required>
 

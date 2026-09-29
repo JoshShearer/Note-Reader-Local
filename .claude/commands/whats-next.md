@@ -79,7 +79,7 @@ produced, so the next session may quote it and cite where it was measured.
 
 | Capture | How it was obtained |
 |---|---|
-| Suite results | exact `npm test` output, which of the 5 suites ran, which stopped the chain |
+| Suite results | exact `npm test` output, which of the 7 suites ran, which stopped the chain |
 | Typecheck | `npm run typecheck` clean or the errors |
 | Build artefacts | if `npm run build` ran, real byte sizes: `ls -l main.js kokoro-worker.js` and `du -sh ort/` |
 | `main.js` require list | `grep -o 'require("[^"]*")' main.js \| sort -u` output verbatim (rule 7) |
@@ -170,7 +170,7 @@ Issue: NRL-{N} (<status>) | Branch: <branch> | Worktree: <path>
 ## Measurements taken
 | What | Value | How |
 |---|---|---|
-| npm test | 5/5 suites | full run, output below |
+| npm test | 7/7 suites | full run, output below |
 | main.js requires | obsidian, @codemirror/view, @codemirror/state | grep on the built bundle |
 | (none) | | say so rather than omitting |
 

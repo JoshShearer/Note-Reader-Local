@@ -20,7 +20,7 @@ There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The
 are local and nothing runs them for you.
 
 ```bash
-npm test          # 6 suites: extract, engine, player, paths, kokoro, settings
+npm test          # 7 suites: extract, engine, player, paths, kokoro, settings, highlightColour
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -111,7 +111,7 @@ The working tree passes its gates, and an audit against `srs.md` found 2 of 16 M
 requirements fully met. The gap is tracked in Linear. Notable reproduced defects, so you
 do not rediscover them:
 
-- `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` are stored in plugin data v1 but
+- `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` are stored in plugin data (now v2) but
   never read by `extract.ts`; they have no toggle by design (`docs/adr/0001`). Making
   those exclusions configurable is NRL-21.
 - Pause is a no-op on speechd and webspeech: it pauses an `<audio>` element they never use.

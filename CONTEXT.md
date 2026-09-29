@@ -65,7 +65,7 @@ src/
 ├── main.ts                     plugin entry: commands, wiring, notices, prewarm
 ├── diagnostics.ts              trace() / reportError() - metadata only, never text
 ├── settings/index.ts           Settings type, defaults, normaliseSettings()
-├── settings/data.ts            data.json container: version, v0 migration, save round trip
+├── settings/data.ts            data.json container: version (v2), v0 and v1 migrations, save round trip
 ├── text/extract.ts             markdown → SpeechChunk[] with source offsets
 ├── audio/
 │   ├── types.ts                SpeechEngine, EngineCapabilities, SpeechChunk, VoiceInfo
@@ -88,6 +88,7 @@ src/
     ├── settingsTab.ts          all settings rendering
     ├── controlBar.ts           transport controls
     ├── highlight.ts            CodeMirror StateField + decoration
+    ├── highlightColour.ts      highlight colour setting -> CSS variable, pure (ADR 0005)
     ├── modelStore.ts           downloads, vault file IO for model assets
     └── paths.ts                vault path resolution
 ```

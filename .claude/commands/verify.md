@@ -80,9 +80,9 @@ until you run `npm ci`. Check before trusting a pass.
 npm test
 ```
 
-Five suites run in sequence: `extract`, `engine`, `player`, `paths`, `kokoro`. The `test`
+Seven suites run in sequence: `extract`, `engine`, `player`, `paths`, `kokoro`, `settings`, `highlightColour`. The `test`
 script chains them with `&&`, so the first failure stops the rest. If `extract` fails you
-have learned nothing about `kokoro`. Say that rather than reporting four suites as passing.
+have learned nothing about the other six. Say that rather than reporting them as passing.
 
 `tests/engine.test.ts` shells out to real `espeak-ng` and `spd-say` on this machine. It is
 a Linux desktop test. A failure there can mean a missing or misconfigured binary rather than
@@ -194,7 +194,7 @@ Verification for NRL-12
 =======================
 
 Gates
-  npm test         5/5 suites (extract, engine, player, paths, kokoro)
+  npm test         7/7 suites (extract, engine, player, paths, kokoro, settings, highlightColour)
   npm run typecheck clean
   npm run build    ran / not needed
   main.js requires obsidian, @codemirror/view, @codemirror/state
