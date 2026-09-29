@@ -123,6 +123,19 @@ Linear. Notable reproduced defects, so you do not rediscover them:
   declaring `pause: false` and `resume: false` on both and gating the button and the
   palette command through `src/ui/affordances.ts`. The capability fields already exist, so
   NRL-23 wires the real calls and flips the two booleans rather than adding anything.
+- `cleanLine` is called once per source line, but since NRL-42 that is no longer the whole
+  story: an inline code span may cross a soft line break, so `Cleaned.openCode` carries the
+  length of a run left open and `codeSpanClosesLater` confirms a later line closes it. The
+  confirmation is load-bearing, not an optimisation. An unmatched backtick run is literal
+  text, so arming the carry without it stops the next line's `%%` being seen as a block
+  opener and reads hidden text aloud - which is exactly what happened to six fixtures
+  during NRL-42's review. Do not weaken that lookahead or the `interruptsParagraph` rule
+  that stops it at a comment-opening line.
+- NRL-42 fixed only the spoken half of ADR 0006 clause 4. With inline code *skipped* a
+  soft-wrapped span is still neither silenced nor kept literal, and four related shapes
+  (N1, N2, F4, F5 in that ticket) remain. All were observed against the pinned merge base
+  and are pre-existing rather than merge drift; `tests/extract.test.ts` pins the current
+  behaviour with `pin-skipped-code` so it can only change deliberately. NRL-44 tracks it.
 
 ## Style
 
