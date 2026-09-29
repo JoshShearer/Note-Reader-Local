@@ -584,8 +584,8 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		).highlightToggle;
 
 		const highlightSetting = new Setting(containerEl)
-			.setName("Highlight words")
-			.setDesc("Mark the word currently being spoken.")
+			.setName("Highlight enabled")
+			.setDesc("Enable highlighting during playback.")
 			.addToggle((toggle) => {
 				toggle.setValue(this.plugin.settings.highlight.enabled).onChange(async (value) => {
 					this.plugin.settings.highlight.enabled = value;
@@ -595,6 +595,32 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			});
 		if (!highlightToggle.enabled) {
 			highlightSetting.descEl.createDiv({ text: highlightToggle.reason });
+		}
+
+		new Setting(containerEl)
+			.setName("Highlight sentences")
+			.setDesc("Mark the sentence currently being spoken.")
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.highlight.sentence).onChange(async (value) => {
+					this.plugin.settings.highlight.sentence = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName("Highlight words")
+			.setDesc("Mark the word currently being spoken.")
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.highlight.word).onChange(async (value) => {
+					this.plugin.settings.highlight.word = value;
+					await this.plugin.saveSettings();
+				});
+				if (!highlightToggle.enabled) toggle.setDisabled(true);
+			});
+		if (!highlightToggle.enabled) {
+			new Setting(containerEl)
+				.setDesc("Your engine does not provide word timings.")
+				.descEl.createDiv({ text: highlightToggle.reason });
 		}
 
 		// A free-text field alone would accept "not a colour" and quietly

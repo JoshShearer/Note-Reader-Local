@@ -1,4 +1,15 @@
-/* Word highlight for Local TTS Reader. */
+/* Sentence highlight for Local TTS Reader. */
+
+.local-tts-reader-sentence {
+	background-color: var(--local-tts-reader-sentence-highlight, var(--text-highlight-bg));
+	color: var(--text-normal);
+	border-radius: 3px;
+	box-shadow: 0 0 0 1px var(--local-tts-reader-sentence-highlight, var(--text-highlight-bg));
+	padding: 1px 0;
+	transition: background-color 90ms linear;
+}
+
+/* Word highlight for Local TTS Reader (applied on top of sentence). */
 
 .local-tts-reader-word {
 	background-color: var(--local-tts-reader-word-highlight, var(--text-highlight-bg));
