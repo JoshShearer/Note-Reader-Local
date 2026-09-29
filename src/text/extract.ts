@@ -78,6 +78,64 @@ const INLINE_ELEMENTS = new Set([
 /** Elements that break the flow of text, so they separate the words either side. */
 const BREAKING_ELEMENTS = new Set(["br", "hr", "p", "div", "img", "center", "details", "summary"]);
 
+/**
+ * CommonMark autolinks. Obsidian renders `<https://x.com>` and
+ * `<me@example.com>` as a plain link with no brackets, so the brackets are
+ * markup and are never spoken; the content follows the bare-URL rule of
+ * docs/adr/0003. See docs/adr/0007 for why these are matched here rather
+ * than left to the HTML and bare-URL branches.
+ *
+ * Both patterns are anchored at the cursor and forbid whitespace, `<` and
+ * `>` inside, which is what leaves `a < b` and `x<y and z>w` alone, and both
+ * require a complete closing `>` on the same line.
+ *
+ * The URI scheme is 2 to 32 characters, as CommonMark requires. A
+ * one-character scheme would make `x<y://z>w` an autolink here while Obsidian
+ * renders it literally, so the text would be deleted from the speech and the
+ * join between `x` and `w` lost with it.
+ *
+ * The email form additionally requires a domain with at least one dot. That
+ * is positive evidence of a real address, so `<a@b>` stays text: the same
+ * trade the HTML element whitelist makes, where leaked markup costs less
+ * than a swallowed word. The local part excludes `/`, `?` and `#`, which
+ * would otherwise be read as the end of the authority when the host is
+ * reduced.
+ */
+const AUTOLINK_URI = /^<[A-Za-z][A-Za-z0-9+.-]{1,31}:\/\/[^\s<>]+>/;
+const AUTOLINK_EMAIL =
+	/^<(?:mailto:)?[A-Za-z0-9!$%&'*+=^_`{|}~.-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+>/i;
+
+/**
+ * Half-open offsets of the speakable host inside `url`, or an empty span when
+ * there is nothing to say. There is no full-address fallback at any call
+ * site: an empty span means silence.
+ *
+ * Userinfo (`user:secret@`) is credentials and must never be read aloud. The
+ * authority ends at the first "/", "?" or "#"; the host starts after the last
+ * "@" before that, since a password may itself contain "@". An "@" in a path
+ * or query is not userinfo and is left alone.
+ *
+ * The scheme prefix is generic rather than http-only so `<ftp://...>` reduces
+ * by the same rule. It is anchored and needs "://", so a bare `www.` host and
+ * a bare `addr@host` both leave it empty and start the authority at 0, which
+ * is why the email forms need no special case: the last "@" of the whole
+ * string already lands on the domain, for `mailto:` too.
+ */
+function hostSpan(url: string): { start: number; end: number } {
+	const scheme = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)?/.exec(url)![0].length;
+	const authEnd = url.slice(scheme).search(/[/?#]/);
+	const authority = url.slice(scheme, authEnd === -1 ? url.length : scheme + authEnd);
+	const at = authority.lastIndexOf("@");
+	const hostStart = at === -1 ? scheme : scheme + at + 1;
+	const start = hostStart + /^(?:www\.)?/i.exec(url.slice(hostStart))![0].length;
+	let end = start;
+	while (end < url.length && /[\p{L}\p{N}.-]/u.test(url[end]!)) end += 1;
+	// A sentence period glued to the URL ("see https://x.com.") would
+	// otherwise be read as part of the host.
+	while (end > start && /[.-]/.test(url[end - 1]!)) end -= 1;
+	return { start, end };
+}
+
 const FOOTNOTE_REF = /^\[\^[^\]\s]+\]/;
 
 /**
@@ -342,6 +400,35 @@ function cleanLine(
 			continue;
 		}
 
+		// Autolink `<https://x.com>` or `<me@example.com>`: the brackets are
+		// never spoken, and the address inside obeys speakUrls exactly as a
+		// bare URL does (docs/adr/0003, docs/adr/0007). Recognised before the
+		// HTML branch, and therefore long before the bare-URL branch, which
+		// otherwise leaves the opening "<" behind as a spoken word.
+		//
+		// Consumption stops at the closing ">", so unlike a bare URL a glued
+		// sentence period is prose and is still spoken: the bracket tells us
+		// where the address ends, so nothing has to be guessed from it.
+		if (ch === "<") {
+			const link = AUTOLINK_URI.exec(raw.slice(i)) ?? AUTOLINK_EMAIL.exec(raw.slice(i));
+			if (link) {
+				if (opts.speakUrls) {
+					// Offsets are into `inner`, which starts one char after
+					// the "<", so every emitted char keeps its true raw
+					// offset and index stays in lockstep with chars.
+					const inner = raw.slice(i + 1, i + link[0].length - 1);
+					const { start, end } = hostSpan(inner);
+					if (end > start) {
+						pushSpace(rawStart + i);
+						for (let k = start; k < end; k++) emit(inner[k]!, rawStart + i + 1 + k);
+					}
+				}
+				i += link[0].length;
+				pushSpace(rawStart + i);
+				continue;
+			}
+		}
+
 		// Inline HTML: the tag is dropped and the text between tags is kept,
 		// because the scanner simply carries on. Formatting tags drop with no
 		// space so "un<b>bold</b>ed" stays one word; breaking tags separate.
@@ -483,25 +570,10 @@ function cleanLine(
 			while (end < raw.length && !/\s/.test(raw[end]!)) end += 1;
 			if (opts.speakUrls) {
 				const url = raw.slice(i, end);
-				const scheme = /^(?:https?:\/\/)?/i.exec(url)![0].length;
-				// Userinfo (`user:secret@`) is credentials and must never be
-				// read aloud. The authority ends at the first "/", "?" or "#";
-				// the host starts after the last "@" before that, since a
-				// password may itself contain "@". An "@" in a path or query
-				// is not userinfo and is left alone.
-				const authEnd = url.slice(scheme).search(/[/?#]/);
-				const authority = url.slice(scheme, authEnd === -1 ? url.length : scheme + authEnd);
-				const at = authority.lastIndexOf("@");
-				const hostStart = at === -1 ? scheme : scheme + at + 1;
-				const prefix = hostStart + /^(?:www\.)?/i.exec(url.slice(hostStart))![0].length;
-				let hostEnd = prefix;
-				while (hostEnd < url.length && /[\p{L}\p{N}.-]/u.test(url[hostEnd]!)) hostEnd += 1;
-				// A sentence period glued to the URL ("see https://x.com.") would
-				// otherwise be read as part of the host.
-				while (hostEnd > prefix && /[.-]/.test(url[hostEnd - 1]!)) hostEnd -= 1;
-				if (hostEnd > prefix) {
+				const host = hostSpan(url);
+				if (host.end > host.start) {
 					pushSpace(rawStart + i);
-					for (let k = prefix; k < hostEnd; k++) emit(url[k]!, rawStart + i + k);
+					for (let k = host.start; k < host.end; k++) emit(url[k]!, rawStart + i + k);
 				}
 			}
 			i = end;

@@ -51,6 +51,12 @@ punctuation, so the same URL would sound different on each.
    brackets and scheme-less domains are not recognised as URLs; that is a
    separate question from how a recognised one is spoken.
 
+   *Superseded in part by ADR 0007 (NRL-39).* Angle-bracket autolinks,
+   `<scheme://...>` and `<addr@host>`, are now recognised and reduced by the
+   host rule above, with the brackets never spoken. Scheme-less domains are
+   still not recognised. The bare-URL detector itself is unchanged; the host
+   reduction is now the shared `hostSpan` helper.
+
 ## Consequences
 
 - Every spoken host character maps to its true raw offset, and the dropped
