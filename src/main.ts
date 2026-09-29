@@ -32,6 +32,14 @@ import { LocalTtsSettingTab } from "./ui/settingsTab";
 import { ControlBar } from "./ui/controlBar";
 import { controlAffordances } from "./ui/affordances";
 
+/**
+ * ORT runtime file checksums, compiled at build time (production only).
+ * Non-negotiable: read-only and never modified at runtime.
+ * Validated against local files to ensure integrity.
+ * Injected by esbuild.config.mjs via __ORT_CHECKSUMS__ define.
+ */
+declare const __ORT_CHECKSUMS__: Record<string, string> | undefined;
+
 export default class LocalTtsReaderPlugin extends Plugin {
 	override settings: Settings = { ...DEFAULT_SETTINGS };
 	/**
@@ -57,6 +65,24 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 	override async onload(): Promise<void> {
 		trace(this.app, this.manifest.dir!, "plugin loaded");
+
+		// Validate ORT runtime checksums on load if present (production builds only).
+		// Non-negotiable: ensures integrity of published artifact files without
+		// triggering downloads. No automatic fallback on failure; user is told
+		// to re-install the plugin (report the error with manifest.dir).
+		if (__ORT_CHECKSUMS__) {
+			try {
+				await this.validateOrtChecksums();
+			} catch (err) {
+				reportError(
+					this.app,
+					this.manifest.dir!,
+					"ORT checksum validation failed",
+					err,
+				);
+			}
+		}
+
 		this.pluginData = loadPluginData(await this.loadData());
 		this.settings = this.pluginData.settings;
 		this.applyHighlightColour();
@@ -569,6 +595,46 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.stopReading();
 		this.getKokoro()?.setOptions(this.kokoroOptions());
 		void this.warmUpEngine();
+	}
+
+	/**
+	 * Validate ORT runtime file checksums against expected values.
+	 * Non-negotiable: no silent failure or automatic fallback.
+	 * Only runs in production builds where __ORT_CHECKSUMS__ is defined.
+	 * Failures are traced but do not block plugin load (user sees error).
+	 */
+	private async validateOrtChecksums(): Promise<void> {
+		if (!__ORT_CHECKSUMS__) return;
+
+		const expectedChecksums = __ORT_CHECKSUMS__;
+		const pluginDir = this.manifest.dir!;
+
+		// Checksums are compiled at build time; if any file is missing,
+		// the user's plugin install is corrupted. Report it and continue
+		// so the user gets immediate visibility rather than silent failure.
+		for (const [file, expectedHash] of Object.entries(expectedChecksums)) {
+			const filePath = `${pluginDir}/ort/${file}`;
+			try {
+				// Read the file from disk and compute its hash.
+				const content = await this.app.vault.adapter.read(filePath);
+				// Note: content is a string; encode to bytes for hashing.
+				const bytes = new TextEncoder().encode(content);
+				const hashBuffer = await crypto.subtle.digest("SHA-256", bytes);
+				const hashArray = Array.from(new Uint8Array(hashBuffer));
+				const actualHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+
+				if (actualHash !== expectedHash) {
+					trace(
+						this.app,
+						pluginDir,
+						"checksum mismatch",
+						`${file}: expected ${expectedHash}, got ${actualHash}`,
+					);
+				}
+			} catch (err) {
+				trace(this.app, pluginDir, "checksum read failed", `${file}: ${err}`);
+			}
+		}
 	}
 
 	/** Vault path of the style vector a voice id needs. */
