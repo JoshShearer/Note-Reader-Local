@@ -125,6 +125,26 @@ The plugin SHOULD remain compatible with:
 
 Desktop-only dependencies MUST NOT be imported unconditionally into code executed on mobile.
 
+#### Release Infrastructure
+
+The plugin MUST ship with:
+
+1. **Standard files** (`README.md`, `LICENSE`, `manifest.json`, `versions.json`).
+2. **SLSA Level 3 provenance** - GitHub Actions builds the release artifact and generates cryptographic attestation of the source commit and build process (per [slsa-framework/slsa-github-generator](https://github.com/slsa-framework/slsa-github-generator)).
+3. **ORT runtime checksum validation** - SHA-256 checksums of all ONNX Runtime WASM files are compiled into `main.js` at build time and validated on plugin load.
+   - Non-negotiable: no model weights downloaded during build, only published ORT files.
+   - Non-negotiable: no automatic fallback on checksum failure; user is told to re-install the plugin.
+   - Non-negotiable: checksums are read-only in the bundle and never modified at runtime.
+
+Quality gates run before any release:
+- `npm run typecheck` (TypeScript must compile).
+- `npm test` (all 11 test suites must pass).
+- `npm run build` (production esbuild must succeed).
+
+These gates are enforced by the GitHub Actions release workflow (`.github/workflows/release.yml`). Only tagged commits that pass all gates are released to GitHub.
+
+See ADR 0011 (release-attestation.md) for rationale and implementation details.
+
 ---
 
 ### R-M02 — Linux Support
