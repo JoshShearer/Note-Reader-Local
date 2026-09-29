@@ -132,6 +132,37 @@ export class Player {
 	}
 
 	/**
+	 * The note this player is reading, or "" before the first play().
+	 *
+	 * Every chunk of one extraction carries the same path, so the first is
+	 * enough. This exists so a caller can ask the player which file it is on
+	 * instead of reaching into a private field, and, more to the point, so it
+	 * can ask the player rather than the workspace: a read that outlives the
+	 * note being in front would otherwise record its progress against whichever
+	 * note happens to be active now.
+	 *
+	 * Deliberately not cleared by stop(). The progress handler debounces its
+	 * position save by 1000 ms, so the last save of a reading always lands
+	 * after the user has stopped. An empty queue at that moment would silently
+	 * discard the final position, which is the one position the user most
+	 * wants kept.
+	 */
+	getFilePath(): string {
+		return this.chunks[0]?.filePath ?? "";
+	}
+
+	/**
+	 * One chunk of the queue by index, or undefined if there is none.
+	 *
+	 * A single chunk rather than the array, so `chunks` stays private the way
+	 * getIndex() already implies. Read-only by construction: a caller that
+	 * could hand back the array could also reorder it underneath run().
+	 */
+	getChunk(index: number): SpeechChunk | undefined {
+		return this.chunks[index];
+	}
+
+	/**
 	 * Begin reading `chunks`. Replaces any current playback.
 	 *
 	 * `startAt` is a source offset, so a caller can resume mid-document.

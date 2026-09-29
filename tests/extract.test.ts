@@ -2202,6 +2202,136 @@ console.log("NRL-28 the no-segmenter position and the offline fallbacks (R-M10)"
 	check("NRL-28 noSegmenters really has none", noSegmenters.sentence("en") === undefined && noSegmenters.grapheme() === undefined && noSegmenters.word("en") === undefined);
 }
 
+console.log("NRL-50 blockType is real, not a constant (R-M11)");
+{
+	/*
+	 * The block scan already computed which construct a line belongs to and threw
+	 * the answer away, keeping only a boolean. This pins the value it should have
+	 * kept, in order, across the block kinds the scan actually matches.
+	 *
+	 * Both segmenter positions, because blockType is seeded per chunk inside
+	 * splitSentences and a different segmentation produces a different number of
+	 * chunks per block. One position passing would not show the other regressing.
+	 *
+	 * The fixture deliberately spans the four classification routes rather than
+	 * just AT Heading and two list items: an ATX heading (the HEADING match), a
+	 * plain paragraph (the else), two bullets (LIST_BULLET), two quotes
+	 * (BLOCKQUOTE), a setext pair (the flushParagraph route, which is the only
+	 * way a buffered paragraph becomes a heading), a second paragraph, and a $$
+	 * display-math block (the "other" route). A fixture missing any of them
+	 * would let that one route rot without a single red line here.
+	 */
+	const src = [
+		"# Heading one",
+		"",
+		"a prose paragraph that runs on for a while so the segmenter has something to chew on here",
+		"",
+		"- a list item",
+		"- another list item",
+		"",
+		"> a quoted line",
+		"> a second quoted line",
+		"",
+		"Setext heading here",
+		"-----------------",
+		"",
+		"a paragraph after the setext heading",
+		"",
+		"$$",
+		"x = 1 + 1",
+		"$$",
+		"",
+	].join("\n");
+
+	const want = [
+		"heading",
+		"paragraph",
+		"list",
+		"list",
+		"quote",
+		"quote",
+		"heading",
+		"paragraph",
+		"other",
+	];
+
+	for (const [label, seg] of [
+		["no segmenter", noSegmenters],
+		["a segmenter", platformSegmenters],
+	] as const) {
+		const chunks = extractChunks(src, OPTS, seg, "Notes/blocks.md");
+		const got = chunks.map((c) => c.blockType);
+		check(
+			`NRL-50 blockType sequence with ${label}`,
+			got.length === want.length && got.every((b, i) => b === want[i]),
+			`got ${JSON.stringify(got)} want ${JSON.stringify(want)} over ${JSON.stringify(chunks.map((c) => c.text))}`,
+		);
+		// Guard, not the point: if the segmentation itself moves, the sequence
+		// above fails for the wrong reason and this says which part moved.
+		check(`NRL-50 the fixture still yields nine chunks with ${label}`, chunks.length === 9, String(chunks.length));
+		check(
+			`NRL-50 every chunk carries its file with ${label}`,
+			chunks.every((c) => c.filePath === "Notes/blocks.md"),
+		);
+	}
+
+	/*
+	 * The classification is per source construct, not per document: a document
+	 * that is mostly prose must still mark its structural chunks. Before this,
+	 * one line - the unconditional assignment in the identity post-pass -
+	 * overwrote whatever the block scan had worked out, and the cost was a
+	 * blockType that was "paragraph" for headings, quotes and lists too.
+	 */
+	const oneHeading = extractChunks("# Only a heading here\n", OPTS, noSegmenters, "Notes/one.md");
+	check("NRL-50 a document that is only a heading is not all-paragraph", oneHeading[0]?.blockType === "heading", String(oneHeading[0]?.blockType));
+
+	/*
+	 * A quoted list item matches both matchers, and the outer construct wins:
+	 * BLOCKQUOTE is peeled before LIST_BULLET looks, the same order the
+	 * existing `if (!q) inList = true` draws. Without the guard the two rules
+	 * would both fire and the last write would decide, which is the inner one.
+	 */
+	const quotedList = extractChunks("> - a quoted list item\n", OPTS, noSegmenters, "Notes/ql.md");
+	check("NRL-50 a quoted list item is a quote, not a list", quotedList[0]?.blockType === "quote", String(quotedList[0]?.blockType));
+
+	/*
+	 * A lazy continuation of a list or quote matches nothing on its own line, so
+	 * "paragraph" is the honest answer rather than a missed classification. It
+	 * is chunk 1, not 0: the item above it is a real list chunk. Pinned so that
+	 * if a later change starts tracking the container, the change is deliberate
+	 * instead of silent.
+	 */
+	const lazy = extractChunks("- first item\nlazy continuation\n", OPTS, noSegmenters, "Notes/lazy.md");
+	check("NRL-50 the item above is a list", lazy[0]?.blockType === "list", String(lazy[0]?.blockType));
+	check("NRL-50 a lazy list continuation is a paragraph", lazy[1]?.blockType === "paragraph", String(lazy[1]?.blockType));
+	const lazyQuote = extractChunks("> quoted first line\nlazy continuation of the quote\n", OPTS, noSegmenters, "Notes/lazyq.md");
+	check("NRL-50 the quoted line above is a quote", lazyQuote[0]?.blockType === "quote", String(lazyQuote[0]?.blockType));
+	check("NRL-50 a lazy quote continuation is a paragraph", lazyQuote[1]?.blockType === "paragraph", String(lazyQuote[1]?.blockType));
+
+	/*
+	 * The routes that deliberately do not reclassify. Verbatim code and
+	 * frontmatter enter the paragraph buffer through the default, and a table
+	 * row is stripped rather than spoken at this default. All three are
+	 * "paragraph" by choice, not by omission, so they are pinned too.
+	 */
+	const spoken = extractChunks("Intro line.\n\n```js\nconst x = 1;\n```\n\nOutro line.\n", { ...OPTS, skipCodeBlocks: false }, noSegmenters, "Notes/code.md");
+	check("NRL-50 a spoken fenced block is a paragraph", spoken.some((c) => c.text === "const x = 1;") && spoken.find((c) => c.text === "const x = 1;")?.blockType === "paragraph", spoken.map((c) => `${c.blockType}:${c.text}`).join("|"));
+	const fm = extractChunks("---\ntitle: A Note\n---\nBody prose here.\n", { ...OPTS, skipFrontmatter: false }, noSegmenters, "Notes/fm.md");
+	check("NRL-50 spoken frontmatter is a paragraph", fm.every((c) => c.blockType === "paragraph"), fm.map((c) => `${c.blockType}:${c.text}`).join("|"));
+
+	/*
+	 * Offset lockstep, restated on the fixture that now classifies its blocks.
+	 * blockType is derived from which matcher fired on the raw line and never
+	 * touches an index entry, so adding it must not move one.
+	 */
+	check(
+		"NRL-50 sourceIndex still locksteps on the block fixture",
+		extractChunks(src, OPTS, platformSegmenters, "Notes/blocks.md").every(
+			(c) => unitsMatch(c.text, c.sourceIndex, src, (text) => text === "equation"),
+		),
+	);
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);
