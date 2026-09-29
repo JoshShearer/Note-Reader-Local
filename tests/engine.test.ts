@@ -176,6 +176,177 @@ console.log("speechd: failures are not silent (fake runner)");
 	check("unknown voice never reaches spd-say", calls.length === 0, `${calls.length} calls`);
 }
 
+/**
+ * Fake runner for the abort path.
+ *
+ * The speaking call (-w) stays pending until its signal aborts, which is what
+ * spawn.ts does for real: it SIGKILLs the child, and the killed spd-say then
+ * resolves as a successful empty run. Control calls can be held pending on
+ * request, so the ordering between the cancel and the next utterance is
+ * observable rather than assumed.
+ */
+interface AbortCall {
+	args: string[];
+	stdin?: string;
+	done: boolean;
+	/** Speaking calls still unfinished when this call was made. */
+	speakersOpen: number;
+}
+function abortRunner(opts: { holdCancel?: boolean } = {}) {
+	const calls: AbortCall[] = [];
+	let releaseCancel: (() => void) | null = null;
+	const openSpeakers = (): number =>
+		calls.filter((c) => c.args.includes("-w") && !c.done).length;
+
+	const runner: ProcessRunner = {
+		async run(_cmd, args, stdin, signal): Promise<RunResult> {
+			if (args[0] === "-L") return { code: 0, stderr: "", stdout: Buffer.from(SPD_LIST) };
+			const call: AbortCall = { args, stdin, done: false, speakersOpen: openSpeakers() };
+			calls.push(call);
+			if (args.includes("-w")) {
+				await new Promise<void>((resolve) => {
+					if (signal?.aborted) resolve();
+					else signal?.addEventListener("abort", () => resolve(), { once: true });
+				});
+			} else if (opts.holdCancel) {
+				await new Promise<void>((resolve) => {
+					releaseCancel = resolve;
+				});
+			}
+			call.done = true;
+			return { code: 0, stderr: "", stdout: Buffer.from("") };
+		},
+		async spawn() {
+			throw new Error("not used");
+		},
+		async which() {
+			return "/usr/bin/spd-say";
+		},
+	};
+	return {
+		runner,
+		calls,
+		speaking: (): AbortCall[] => calls.filter((c) => c.args.includes("-w")),
+		cancels: (): AbortCall[] => calls.filter((c) => c.args.includes("-S")),
+		releaseCancel: (): void => releaseCancel?.(),
+	};
+}
+
+async function tick(): Promise<void> {
+	for (let i = 0; i < 12; i++) await Promise.resolve();
+	await new Promise((r) => setTimeout(r, 0));
+}
+
+console.log("speechd: aborting mid-utterance stops the daemon, not just the client");
+{
+	// SIGKILLing spd-say only kills the client. The daemon already has the text
+	// and keeps speaking it, so stop and replay were up to a sentence late
+	// (measured on this machine off the sink monitor: 7509 ms of audio still
+	// playing after Player.stop(), against 90 ms with this fix).
+	const h = abortRunner();
+	const spd2 = new SpeechDispatcherEngine(h.runner);
+	const ac = new AbortController();
+	const p = spd2
+		.synthesize({ chunk: CHUNK, rate: 1, pitch: 0 }, ac.signal)
+		.catch(() => undefined);
+	await tick();
+	check("utterance is in flight", h.speaking().length === 1, `${h.speaking().length}`);
+	check("no cancel before the abort", h.cancels().length === 0);
+
+	ac.abort();
+	const cancel = h.cancels()[0];
+	check("abort issues a cancel", cancel !== undefined, JSON.stringify(h.calls.map((c) => c.args)));
+	check("cancel is exactly -S", JSON.stringify(cancel?.args) === '["-S"]', JSON.stringify(cancel?.args));
+	// -C cancels every client's messages, including a screen reader's queue.
+	check("never -C", !h.calls.some((c) => c.args.includes("-C")), JSON.stringify(h.calls.map((c) => c.args)));
+	check("cancel carries no stdin", cancel?.stdin === undefined, JSON.stringify(cancel?.stdin));
+	check("cancel carries no note text in argv", !(cancel?.args ?? []).some((a) => a.includes(TEXT)));
+	check(
+		"cancel is issued while the utterance is still in flight",
+		cancel?.speakersOpen === 1,
+		`${cancel?.speakersOpen}`,
+	);
+	await p;
+}
+{
+	// -S is SSIP STOP ALL, not connection-scoped, so a stray one cuts off
+	// whatever a screen reader sharing the daemon is saying.
+	const { runner, calls } = fakeRunner({ code: 0, stdoutText: TEXT });
+	const spd2 = new SpeechDispatcherEngine(runner);
+	const ac = new AbortController();
+	await spd2.synthesize({ chunk: CHUNK, rate: 1, pitch: 0 }, ac.signal);
+	check("a successful utterance issues no -S", !calls.some((c) => c.args.includes("-S")), JSON.stringify(calls.map((c) => c.args)));
+	ac.abort();
+	await tick();
+	check(
+		"aborting a signal whose utterance already finished issues no -S",
+		!calls.some((c) => c.args.includes("-S")),
+		JSON.stringify(calls.map((c) => c.args)),
+	);
+}
+{
+	const h = abortRunner();
+	const spd2 = new SpeechDispatcherEngine(h.runner);
+	const ac = new AbortController();
+	ac.abort();
+	let err: Error | null = null;
+	try {
+		await spd2.synthesize({ chunk: CHUNK, rate: 1, pitch: 0 }, ac.signal);
+	} catch (e) {
+		err = e as Error;
+	}
+	check("a signal aborted on entry spawns no speaking process", h.speaking().length === 0, `${h.speaking().length}`);
+	check("a signal aborted on entry issues no -S", h.cancels().length === 0, JSON.stringify(h.calls.map((c) => c.args)));
+	check("a signal aborted on entry is not an error", err === null, `${err?.message}`);
+}
+{
+	// Sequencing. If the replacement's SPEAK reaches the daemon before the
+	// -S does, the STOP ALL stops the replacement and replay goes silent,
+	// which is worse than replay being late.
+	const h = abortRunner({ holdCancel: true });
+	const spd2 = new SpeechDispatcherEngine(h.runner);
+	const ac = new AbortController();
+	const first = spd2
+		.synthesize({ chunk: CHUNK, rate: 1, pitch: 0 }, ac.signal)
+		.catch(() => undefined);
+	await tick();
+	ac.abort();
+	await first;
+	check("cancel issued on abort", h.cancels().length === 1, `${h.cancels().length}`);
+
+	const ac2 = new AbortController();
+	const second = spd2
+		.synthesize({ chunk: CHUNK, rate: 1, pitch: 0 }, ac2.signal)
+		.catch(() => undefined);
+	await tick();
+	check("replacement waits for the cancel to land", h.speaking().length === 1, `${h.speaking().length}`);
+	h.releaseCancel();
+	await tick();
+	check("replacement speaks once the cancel has landed", h.speaking().length === 2, `${h.speaking().length}`);
+	ac2.abort();
+	await second;
+}
+{
+	const h = abortRunner();
+	const spd2 = new SpeechDispatcherEngine(h.runner);
+	await spd2.dispose();
+	check("dispose with nothing in flight issues no -S", h.calls.length === 0, JSON.stringify(h.calls.map((c) => c.args)));
+}
+{
+	const h = abortRunner();
+	const spd2 = new SpeechDispatcherEngine(h.runner);
+	const ac = new AbortController();
+	const p = spd2
+		.synthesize({ chunk: CHUNK, rate: 1, pitch: 0 }, ac.signal)
+		.catch(() => undefined);
+	await tick();
+	await spd2.dispose();
+	check("dispose with an utterance in flight issues -S", h.cancels().length === 1, JSON.stringify(h.calls.map((c) => c.args)));
+	check("dispose never issues -C", !h.calls.some((c) => c.args.includes("-C")), JSON.stringify(h.calls.map((c) => c.args)));
+	ac.abort();
+	await p;
+}
+
 console.log("voice ids resolve across the format change");
 {
 	const { runner } = fakeRunner({});
