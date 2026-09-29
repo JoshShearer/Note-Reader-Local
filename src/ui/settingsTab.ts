@@ -11,6 +11,10 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	private offRate: (() => void) | null = null;
 	/** Detaches the Pitch slider from the player's pitch event. */
 	private offPitch: (() => void) | null = null;
+	/** Detaches the Timer display from the player's timer event. */
+	private offTimer: (() => void) | null = null;
+	/** Detaches the Timer display from the player's state event. */
+	private offTimerState: (() => void) | null = null;
 
 	constructor(
 		app: App,
@@ -24,6 +28,10 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		this.offRate = null;
 		this.offPitch?.();
 		this.offPitch = null;
+		this.offTimer?.();
+		this.offTimer = null;
+		this.offTimerState?.();
+		this.offTimerState = null;
 		this.plugin.stopReading();
 		super.hide();
 	}
@@ -464,6 +472,53 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 						await this.plugin.setBufferAhead(value);
 					}),
 			);
+
+		// Sleep timer section
+		new Setting(containerEl)
+			.setName("Sleep timer")
+			.setDesc("Automatically stop reading after a set duration.")
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOption("off", "Off")
+					.addOption("5m", "5 minutes")
+					.addOption("10m", "10 minutes")
+					.addOption("15m", "15 minutes")
+					.addOption("30m", "30 minutes")
+					.addOption("60m", "60 minutes")
+					.setValue(this.plugin.settings.timerPreset)
+					.onChange(async (value) => {
+						await this.plugin.setTimerPreset(value);
+					});
+			});
+
+		// Timer countdown display
+		const timerDisplayEl = containerEl.createDiv({ cls: "local-tts-timer-display" });
+		timerDisplayEl.style.display = "none";
+		const timerLabel = timerDisplayEl.createSpan();
+
+		// Update timer display on timer event
+		const updateTimerDisplay = (remaining: number) => {
+			if (remaining <= 0) {
+				timerDisplayEl.style.display = "none";
+			} else {
+				timerDisplayEl.style.display = "block";
+				const minutes = Math.floor(remaining / 60000);
+				const seconds = Math.floor((remaining % 60000) / 1000);
+				timerLabel.setText(`Time remaining: ${minutes}:${seconds.toString().padStart(2, "0")}`);
+			}
+		};
+
+		// Listen to player timer event
+		this.offTimer = this.plugin.getPlayer().on("timer", (remaining) => {
+			updateTimerDisplay(remaining);
+		});
+
+		// Listen to player state to hide countdown when not playing
+		this.offTimerState = this.plugin.getPlayer().on("state", (state) => {
+			if (state === "idle" || state === "finished") {
+				timerDisplayEl.style.display = "none";
+			}
+		});
 	}
 
 	private renderHighlightSection(containerEl: HTMLElement): void {

@@ -17,6 +17,8 @@ export interface Settings {
 	rate: number;
 	/** Pitch offset, -50..50. */
 	pitch: number;
+	/** Sleep timer preset. */
+	timerPreset: "off" | "5m" | "10m" | "15m" | "30m" | "60m";
 
 	highlight: {
 		enabled: boolean;
@@ -98,6 +100,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	voiceId: "kokoro:af_heart",
 	rate: 1,
 	pitch: 0,
+	timerPreset: "off",
 	highlight: {
 		enabled: true,
 		// Follow the theme: one fixed hex cannot suit light and dark themes.
@@ -188,6 +191,15 @@ export function normaliseSettings(raw: unknown): Settings {
 		voiceId: typeof data.voiceId === "string" ? data.voiceId : DEFAULT_SETTINGS.voiceId,
 		rate: clampNumber(data.rate, RATE_MIN, RATE_MAX, DEFAULT_SETTINGS.rate),
 		pitch: clampNumber(data.pitch, -50, 50, DEFAULT_SETTINGS.pitch),
+		timerPreset:
+			data.timerPreset === "off" ||
+			data.timerPreset === "5m" ||
+			data.timerPreset === "10m" ||
+			data.timerPreset === "15m" ||
+			data.timerPreset === "30m" ||
+			data.timerPreset === "60m"
+				? data.timerPreset
+				: DEFAULT_SETTINGS.timerPreset,
 		highlight: {
 			...highlight,
 			enabled: bool(highlight.enabled, DEFAULT_SETTINGS.highlight.enabled),
