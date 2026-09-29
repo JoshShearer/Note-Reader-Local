@@ -73,13 +73,15 @@ export function pickLocaleVoice(voices: VoiceInfo[], locale: string): LocaleVoic
  * Resolve the stored voice id against what the engine offers now.
  *
  * Order: exact id, then the engine's own remap of an old id format (silent),
- * then a locale-based substitute with a notice naming both voices.
+ * then language-based matching (note language > app locale) with a notice
+ * naming both voices and which signal matched.
  */
 export function resolveStoredVoice(
 	engine: SpeechEngine,
 	storedId: string,
 	voices: VoiceInfo[],
-	locale: string,
+	noteLang: string | undefined,
+	appLocale: string,
 ): StoredVoiceResolution {
 	const exact = voices.find((v) => v.id === storedId);
 	if (exact) return { voice: exact, id: exact.id, notice: null };
@@ -87,14 +89,31 @@ export function resolveStoredVoice(
 	const remapped = storedId ? engine.resolveVoiceId?.(storedId, voices) : undefined;
 	if (remapped) return { voice: remapped, id: remapped.id, notice: null };
 
-	const choice = pickLocaleVoice(voices, locale);
+	// Try note language first if provided, then app locale
+	let choice: LocaleVoice | undefined;
+	let usedNoteLangMatch = false;
+
+	if (noteLang) {
+		choice = pickLocaleVoice(voices, noteLang);
+		if (choice) usedNoteLangMatch = choice.matched;
+	}
+
+	if (!choice?.matched) {
+		choice = pickLocaleVoice(voices, appLocale);
+	}
+
 	if (!choice) throw new Error("No voices to choose from");
 	const { voice, matched } = choice;
 
 	const missing = storedId ? `The voice "${storedId}" is not available in ${engine.label}.` : `No ${engine.label} voice was selected.`;
-	const why = matched
-		? `it matches the app language (${locale})`
-		: `no voice matches the app language (${locale})`;
+	let why: string;
+	if (usedNoteLangMatch && noteLang) {
+		why = `it matches the note language (${noteLang})`;
+	} else if (matched) {
+		why = `it matches the app language (${appLocale})`;
+	} else {
+		why = `no voice matches the note or app language (${noteLang || appLocale})`;
+	}
 	const notice = `${missing} Using "${voice.name}" (${voice.lang}) instead; ${why}. Pick another in settings.`;
 	return { voice, id: voice.id, notice };
 }
