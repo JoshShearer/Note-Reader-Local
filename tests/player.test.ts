@@ -221,7 +221,7 @@ console.log("player exposes the file it is reading and the chunks it holds (NRL-
 	check("NRL-50 no file before play()", player.getFilePath() === "");
 	check("NRL-50 no chunk before play()", player.getChunk(0) === undefined);
 
-	const playing = player.play(engine, chunks, 1);
+	const playing = player.play(engine, chunks, 1, 0);
 
 	check("NRL-50 the player reports the file it was given", player.getFilePath() === "Notes/a.md", player.getFilePath());
 	check("NRL-50 chunk 0 is the first chunk", player.getChunk(0)?.text === chunks[0]?.text);
@@ -267,7 +267,7 @@ console.log("player exposes the file it is reading and the chunks it holds (NRL-
 		platformSegmenters,
 		"Notes/b.md",
 	);
-	const playingB = player.play(engine, otherChunks, 1);
+	const playingB = player.play(engine, otherChunks, 1, 0);
 	check("NRL-50 a new read replaces the file", player.getFilePath() === "Notes/b.md", player.getFilePath());
 	for (let i = 0; i < otherChunks.length; i++) {
 		await tick();
