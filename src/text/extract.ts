@@ -26,6 +26,19 @@ interface Cleaned {
 	 * line, not a re-cleaned link label.
 	 */
 	openComment?: CommentCloser;
+	/**
+	 * Length of the code span still open at the end of the line: either a run
+	 * opened here that nothing on the line closes, or one carried in that this
+	 * line does not close either. A later line may close it (CommonMark lets a
+	 * code span cross a soft line break), in which case the text between is
+	 * literal code. Only
+	 * extractChunks may act on this, and only after confirming a closer
+	 * exists: an unmatched run is just literal text, and treating it as an
+	 * open span would stop a real `%%` block opener on the next line being
+	 * recognised, which would read hidden text aloud. Only meaningful for a
+	 * top-level line, not a re-cleaned link label.
+	 */
+	openCode?: number;
 }
 
 function isWordChar(ch: string): boolean {
@@ -102,18 +115,26 @@ function inlineMathClose(raw: string, open: number): number {
 	return close;
 }
 
+/** Offset of the first backtick run of exactly `len` at or after `from`, or -1. */
+function firstRunOfLength(raw: string, len: number, from: number): number {
+	let next = from;
+	while ((next = raw.indexOf("`", next)) !== -1) {
+		let end = next + 1;
+		while (raw[end] === "`") end += 1;
+		if (end - next === len) return next;
+		next = end;
+	}
+	return -1;
+}
+
 /** A code span closes on a run of the same length, not on an inner backtick. */
 function inlineCodeBounds(raw: string, open: number): { start: number; close: number; end: number } {
 	let start = open + 1;
 	while (raw[start] === "`") start += 1;
-	let next = start;
-	while ((next = raw.indexOf("`", next)) !== -1) {
-		let end = next + 1;
-		while (raw[end] === "`") end += 1;
-		if (end - next === start - open) return { start, close: next, end };
-		next = end;
-	}
-	return { start, close: -1, end: start };
+	const len = start - open;
+	const close = firstRunOfLength(raw, len, start);
+	if (close === -1) return { start, close: -1, end: start };
+	return { start, close, end: close + len };
 }
 
 /**
@@ -147,10 +168,35 @@ function inlineContainerClose(raw: string, from: number, delimiter: string): num
 	return -1;
 }
 
-/** Strip inline markdown from a single line, recording source offsets. */
-function cleanLine(raw: string, rawStart: number, opts: StripOptions, blockComments = false): Cleaned {
+/**
+ * Strip inline markdown from a single line, recording source offsets.
+ *
+ * `incomingCode` is the length of a backtick run opened on an earlier line
+ * that extractChunks has already confirmed a later line closes. Everything
+ * before that closing run on this line is code content, so a comment
+ * delimiter in it is literal text rather than a comment, exactly as it
+ * already is inside a single-line span.
+ */
+function cleanLine(
+	raw: string,
+	rawStart: number,
+	opts: StripOptions,
+	blockComments = false,
+	incomingCode?: number,
+): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
+
+	// Where the carried code span closes on this line, and how far the literal
+	// region reaches. -1 for closerRun means the span continues past this line,
+	// so the whole line is literal; literalCodeEnd of -1 means no carried span
+	// at all, and every `i >= literalCodeEnd` test below is then vacuously true.
+	// A carried span is honoured only when code is spoken: silencing a
+	// soft-wrapped span is a separate defect, so the skipInlineCode path stays
+	// byte for byte as it was.
+	const carrying = incomingCode !== undefined && !opts.skipInlineCode;
+	const closerRun = carrying ? firstRunOfLength(raw, incomingCode!, 0) : -1;
+	const literalCodeEnd = !carrying ? -1 : closerRun === -1 ? raw.length : closerRun;
 
 	const emit = (ch: string, srcOffset: number): void => {
 		chars.push(ch);
@@ -181,10 +227,25 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions, blockComme
 	};
 
 	let openComment: CommentCloser | undefined;
+	// A carried span that this line does not close stays open, so a span may
+	// cross several soft line breaks. It owns the carry ahead of any run opened
+	// on this line, being the outer and earlier opener.
+	let openCode: number | undefined = carrying && closerRun === -1 ? incomingCode : undefined;
 	let i = 0;
 
 	while (i < raw.length) {
 		const ch = raw[i]!;
+
+		// The closing run of a carried span. Consumed here rather than through
+		// inlineCodeBounds, which would pair it with a later run on this line
+		// and read the text between them as a fresh span. Byte for byte what
+		// the branch below already does for an unmatched run: drop the run and
+		// separate the words either side.
+		if (ch === "`" && i === closerRun) {
+			i += incomingCode!;
+			pushSpace(rawStart + i);
+			continue;
+		}
 
 		// Backslash escape: keep the escaped character, drop the slash.
 		if (ch === "\\" && i + 1 < raw.length) {
@@ -197,7 +258,8 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions, blockComme
 		// content is read verbatim. Code is not markdown, so it is not re-cleaned:
 		// `a_b` or `#x` inside backticks mean exactly what they say. A backtick
 		// run with no matching closer is dropped in both positions, so it never
-		// swallows the rest of the line.
+		// swallows the rest of the line; its length is reported as openCode so
+		// extractChunks can check whether a later line closes it.
 		if (ch === "`") {
 			const { start, close, end } = inlineCodeBounds(raw, i);
 			if (close !== -1 && !opts.skipInlineCode) {
@@ -206,6 +268,10 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions, blockComme
 					if (/\s/.test(raw[k]!)) pushSpace(rawStart + k);
 					else emit(raw[k]!, rawStart + k);
 				}
+			} else if (close === -1 && !opts.skipInlineCode) {
+				// CommonMark's first-unmatched-opener rule: a later run on the
+				// same line never takes the carry from an earlier one.
+				openCode ??= start - i;
 			}
 			i = end;
 			pushSpace(rawStart + i);
@@ -248,9 +314,12 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions, blockComme
 		// if the content looks like code or the other comment syntax. Obsidian
 		// treats an unmatched inline %% as text, but a block opener hides to EOF
 		// (ADR 0006). Recursive labels cannot open a document-level block.
+		// Inside a carried code span (i < literalCodeEnd) neither delimiter is a
+		// comment, so both fall through to the plain emit at the end of the loop
+		// with their true raw offsets.
 		const htmlComment = ch === "<" && raw.startsWith("<!--", i);
 		const obsidianComment = ch === "%" && raw.startsWith("%%", i);
-		if (htmlComment || obsidianComment) {
+		if ((htmlComment || obsidianComment) && i >= literalCodeEnd) {
 			const closer: CommentCloser = htmlComment ? "-->" : "%%";
 			const close = raw.indexOf(closer, i + (htmlComment ? 4 : 2));
 			if (close === -1 && obsidianComment && !(blockComments && raw.slice(0, i).trim() === "")) {
@@ -519,7 +588,7 @@ function cleanLine(raw: string, rawStart: number, opts: StripOptions, blockComme
 		i += 1;
 	}
 
-	return { text: chars.join(""), index, openComment };
+	return { text: chars.join(""), index, openComment, openCode };
 }
 
 interface StripOptions {
@@ -700,6 +769,72 @@ const TABLE_ROW = /^\s*\|/;
 const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 
 /**
+ * Does this line leave a comment open, so that the lines after it are hidden?
+ *
+ * Two shapes, matching the branch in cleanLine: an Obsidian block opener, which
+ * is `%%` with only whitespace before it and no `%%` closer later on the line;
+ * and an HTML `<!--` with no `-->` after it on the line. A `%%...%%` pair or a
+ * `<!--...-->` pair closes on its own line and hides nothing beyond it, so
+ * neither counts.
+ *
+ * This is a paragraph-ending condition, which is why it lives next to
+ * interruptsParagraph. Obsidian 1.13.7's Reading-view parser puts `comment` in
+ * `interruptParagraph` and already has `html` there, so an opening comment line
+ * terminates the paragraph before any inline tokenizing happens and a code span
+ * can never contain one. Read off the installed parser, not observed live.
+ */
+function opensHiddenComment(line: string): boolean {
+	const pct = line.indexOf("%%");
+	if (pct !== -1 && line.slice(0, pct).trim() === "" && line.indexOf("%%", pct + 2) === -1) return true;
+	const html = line.indexOf("<!--");
+	return html !== -1 && line.indexOf("-->", html + 4) === -1;
+}
+
+/**
+ * A line that starts its own block, so a paragraph, and with it any code span
+ * inside that paragraph, cannot continue across it. A blank line counts too,
+ * and so does a line that opens a comment: the text it hides is not code
+ * content, and treating it as such reads that text aloud.
+ */
+function interruptsParagraph(line: string): boolean {
+	return (
+		line.trim() === "" ||
+		FENCE.test(line) ||
+		HEADING.test(line) ||
+		HR.test(line) ||
+		SETEXT.test(line) ||
+		TABLE_ROW.test(line) ||
+		LIST_BULLET.test(line) ||
+		BLOCKQUOTE.test(line) ||
+		opensHiddenComment(line)
+	);
+}
+
+/**
+ * Does a backtick run of length `len`, left unmatched on line `from`, have a
+ * real closing run on a later line of the same paragraph?
+ *
+ * This confirmation is mandatory, not an optimisation. An unmatched backtick
+ * run is literal text in CommonMark, so assuming a span stays open would make
+ * the next line's `%%` literal instead of a block-comment opener, and the
+ * hidden text after it would be read aloud. Silence over disclosure (ADR
+ * 0006): with no closer found there is no carry and nothing changes.
+ *
+ * Both ends are checked against interruptsParagraph, the opening line as well
+ * as every line scanned, because a table row reaches the carry site as plain
+ * paragraph text when tables are spoken and a span cannot leave its own row.
+ */
+function codeSpanClosesLater(lines: string[], from: number, len: number): boolean {
+	if (interruptsParagraph(lines[from]!)) return false;
+	for (let n = from + 1; n < lines.length; n++) {
+		const line = lines[n]!;
+		if (interruptsParagraph(line)) return false;
+		if (firstRunOfLength(line, len, 0) !== -1) return true;
+	}
+	return false;
+}
+
+/**
  * A `key:` line. Keys may be quoted or contain any character but a colon, so
  * non-English property names (`título:`, `日付:`) and names like
  * `created (date):` count. The trailing space-or-end stops "http://x" counting
@@ -818,6 +953,10 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 
 	let inFence = false;
 	let inComment: CommentCloser | undefined;
+	// Length of a confirmed inline code span left open by the previous line.
+	// Armed only on the plain-paragraph path and only once codeSpanClosesLater
+	// has found the closing run, so every other path clears it.
+	let openCode: number | undefined;
 	let inIndentedCode = false;
 	// Inside a list item, an indented line is item content or a nested item,
 	// never code. Kept across blank lines, since loose lists have them.
@@ -857,6 +996,15 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 			paraText = cleaned.text;
 			paraIndex = cleaned.index;
 			paraStart = start;
+		} else if (paraText.endsWith(" ")) {
+			// The line already ended in a real mapped space, because whatever
+			// it ended with was dropped: a comment, an image, a tag, a URL, an
+			// emoji or a CR. A second synthetic one would put two spaces in the
+			// spoken text and a second index entry with it. cleanLine and
+			// verbatimLine can never emit a leading space, so only this side
+			// needs checking.
+			paraText += cleaned.text;
+			paraIndex = [...paraIndex, ...cleaned.index];
 		} else {
 			// Same join convention as mergeShort: the space between the two
 			// lines is synthetic, so it is attributed to the character right
@@ -880,6 +1028,13 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 	for (let lineNo = 0; lineNo < lines.length; lineNo++) {
 		const raw = lines[lineNo]!;
 		const lineStart = lineStarts[lineNo]!;
+		// Read and cleared up front, so every path that does not re-arm it
+		// below drops the carry: a blank line, a fence, indented code, a
+		// heading, a list, a quote, a table row, a rule, a setext underline, a
+		// comment-hidden line and appendRemainder all end the paragraph the
+		// span was in, and a span cannot outlive its paragraph.
+		const carriedCode = openCode;
+		openCode = undefined;
 
 		// This deliberately diverges from Obsidian, which only honours a `---`
 		// on line 1. A note that starts with blank lines and then a `key: value`
@@ -1044,7 +1199,7 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 			continue;
 		}
 
-		const cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true);
+		const cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode);
 		inComment = cleaned.openComment;
 		// Output exclusions do not exclude parsing: an HTML or Obsidian comment
 		// opened in a skipped heading/table must still hide its following lines.
@@ -1061,6 +1216,11 @@ export function extractChunks(source: string, opts: ExtractOptions): SpeechChunk
 		}
 
 		appendToParagraph(cleaned, lineStart + prefixChars);
+		// Only a plain paragraph line can carry a span forward, and only when a
+		// later line in the same paragraph really closes it.
+		if (cleaned.openCode !== undefined && codeSpanClosesLater(lines, lineNo, cleaned.openCode)) {
+			openCode = cleaned.openCode;
+		}
 		if (wasContainer) prevContainer = true;
 		else prevPara = true;
 	}
