@@ -20,7 +20,7 @@ There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The
 are local and nothing runs them for you.
 
 ```bash
-npm test          # 15 suites: extract, engine, player, paths, kokoro, settings, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice
+npm test          # 16 suites: extract, engine, player, paths, kokoro, settings, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
