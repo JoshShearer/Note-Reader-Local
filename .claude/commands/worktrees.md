@@ -274,7 +274,7 @@ cd "${PRIMARY}-nrl-<NUM>" && npm test && npm run typecheck
 ```
 Worktree created: ../note-reader-local-nrl-<NUM>/
 Branch: fix/nrl-<NUM>-<slug>
-npm ci: ok        npm test: 5 suites pass        typecheck: clean
+npm ci: ok        npm test: 7 suites pass        typecheck: clean
 
 Deploy slot: currently held by ../note-reader-local-nrl-12 (NRL-12).
   This worktree cannot claim an Obsidian test until it takes the slot:

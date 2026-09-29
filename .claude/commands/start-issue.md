@@ -171,7 +171,7 @@ you took the shared deploy slot.
 - ...
 
 ## Gates before you commit
-npm test           # 5 suites: extract, engine, player, paths, kokoro
+npm test           # 7 suites: extract, engine, player, paths, kokoro, settings, highlightColour
 npm run typecheck
 npm run build      # only if the bundle, worker or esbuild config moved
 
