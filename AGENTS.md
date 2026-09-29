@@ -127,6 +127,35 @@ F9). A third speaks a fragment of one, `![alt](dest(1).png)` saying `.png)`. All
 pre-existing, all are tracked, and none was opened by NRL-21. Do not record R-M09 as met
 until they close.
 
+R-M10 (speech segmentation) did not move the count either, and the reason is different
+from R-M09's. Its acceptance criteria are met on the automated evidence and the evidence
+is strong: NRL-28 shipped `src/text/segment.ts`, CJK splits at its full-width terminators,
+the hard cap never cuts a grapheme, English is byte-identical over 4,000 generated prose
+fixtures, and verification confirmed all of it against ICU and against the merge base over
+corpora in the hundreds of thousands, in both segmenter positions. What is missing is not a
+gap in the code, it is that **nothing was observed in Obsidian**. Two things follow, and
+either alone is enough to stop the count moving. Whether `Intl.Segmenter` exists on the
+Obsidian WebView at all is unknown, and the no-segmenter branch collapses CJK straight back
+to one chunk, so the requirement's central behaviour may not happen on the target runtime;
+calling a MUST met on bare-Node probes in that situation is exactly what rule 11 above
+forbids. And the audible consequence is unheard: a 360-unit Chinese paragraph now produces
+60 utterances where `main` produced 2, and a 1,200-unit one produces 200 where it produced
+6. That is correct by design and `mergeShort` deliberately will not fold it, but nobody has
+heard whether sixty six-character utterances sound like speech or like a stutter. So the
+headline count stays at 2 of 16. Move it when someone has read a CJK note aloud in a real
+Obsidian and confirmed the segmenter is there.
+
+Two things R-M10 does *not* cover, both recorded so they are not mistaken for it. Word
+granularity inside a run of Han: `findWords` has no separator there, so a whole CJK sentence
+is one word span and the highlight covers it for its full duration - measured at `c29e7af`
+as 1 span per Chinese sentence against 15 for a comparable English one. That is NRL-47, and
+`srs.md:352` names it under R-M10 as explicitly not met by that requirement. And the
+grapheme snap is on the hard split only: `splitOversized` snaps every cut back to a cluster
+boundary and `splitSentences` does not, so a non-ASCII terminator followed directly by a
+combining mark can still end a chunk inside a combining sequence. Degenerate text only, no
+natural prose reaches it, and it is already written down in three places - `srs.md:347`,
+ADR 0009's grapheme-safety consequence, and the comment on `splitSentences` itself.
+
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
 

@@ -49,14 +49,25 @@ export interface SentenceBoundary {
  * The sentence rule this module replaces, moved here unchanged.
  *
  * An ASCII terminator followed by whitespace. It is kept and still consulted
- * on the native path, because ICU does not merely add boundaries to English -
- * it removes far more than it adds. Measured on this V8 over 4,000 generated
- * English fixtures: ICU declines 15,523 boundaries this regex produces (it
- * will not break after "e.g.", after "..." or after "U.S.A.") and supplies
- * 1,803 this regex lacks. Replacing the regex would therefore have moved
- * English text, dominantly toward longer chunks. A union moves text with an
- * ASCII terminator not at all - but that is the guard below doing the work,
- * not ICU being conservative: of those 1,803, the guard admitted 0.
+ * on the native path, because on newline-free English ICU does not merely add
+ * boundaries - it removes far more than it adds. Measured on this V8 over
+ * 4,000 generated newline-free English fixtures: ICU declines 15,523
+ * boundaries this regex produces (it will not break after "e.g.", after "..."
+ * or after "U.S.A.") and supplies 1,803 this regex lacks. So on that text,
+ * replacing the regex would have moved English dominantly toward longer
+ * chunks.
+ *
+ * Do not restate that ratio as a general fact about ICU. It inverts the moment
+ * a hard line break is present, because ICU ends a sentence at a newline and
+ * this regex cannot: the same generator emitting markdown gives 24,000
+ * ICU-only boundaries against 0, and every one sits immediately after a
+ * newline. It stays irrelevant here for a structural reason rather than a
+ * statistical one - extractChunks splits the source on "\n" and joins
+ * paragraph lines with a space, so this function is never handed a newline.
+ *
+ * A union moves text with an ASCII terminator not at all - but that is the
+ * guard below doing the work, not ICU being conservative: of those 1,803, the
+ * guard admitted 0, and of the 24,000 it also admitted 0.
  */
 export function legacySentenceBoundaries(text: string): number[] {
 	const out: number[] = [];

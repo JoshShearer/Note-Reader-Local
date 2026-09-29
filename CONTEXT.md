@@ -169,10 +169,17 @@ These are design-level, not bugs, and they shape any new work:
   (NRL-28, ADR 0009). `src/text/segment.ts` owns it, pure and dependency-free, and the
   segmenters arrive through an injected `SegmenterSource` so the no-segmenter path is
   exercised without mutating a global. Four things about it are load-bearing and are
-  not simplifications waiting to happen. The **union**: ICU removes far more English
-  boundaries than it adds - measured over 4,000 generated English fixtures, it declines
-  15,523 the regex has (after `e.g.`, after an ellipsis, after `U.S.A.`) and supplies
-  1,803 the regex lacks - so replacing the regex would lengthen English chunks. It does
+  not simplifications waiting to happen. The **union**: on newline-free English prose
+  ICU removes far more boundaries than it adds - measured over 4,000 generated English
+  fixtures, it declines 15,523 the regex has (after `e.g.`, after an ellipsis, after
+  `U.S.A.`) and supplies 1,803 the regex lacks - so replacing the regex would lengthen
+  English chunks. Keep the "newline-free" clause: the ratio inverts on any corpus that
+  carries hard line breaks, because ICU ends a sentence at a newline and the regex
+  cannot, and a markdown corpus of the same size gives 24,000 ICU-only boundaries
+  against 0, every one of them sitting immediately after a newline (ADR 0009 clause 2).
+  What makes that harmless here is not the ratio: `splitSentences` is never handed a
+  newline at all, since `extractChunks` splits on `\n` and `appendToParagraph` joins
+  paragraph lines with a space. It does
   *not* add none; the guard below is what brings those 1,803 down to 0 admitted, and
   that is the argument, not ICU's restraint. The **ASCII guard**: an ICU-only
   boundary counts only when the *terminator* before it is at or above U+0080, because
