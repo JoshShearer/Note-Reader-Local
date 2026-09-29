@@ -617,6 +617,49 @@ console.log("replay on an engine that owns playback stops the utterance first");
 	check("stop aborts the utterance in flight", signals.at(-1)?.aborted === true && inFlight === 0, `${signals.map((s) => s.aborted).join(",")} inFlight ${inFlight}`);
 }
 
+console.log("both abort paths reach the signal an ownsPlayback engine was handed");
+{
+	// The channel speechd uses to cancel the daemon is the AbortSignal the
+	// player already passes to synthesize(), so there is no new interface
+	// member to call. That only works if BOTH abort paths abort that signal.
+	const { engine } = makeEngine();
+	let cancels = 0;
+	const owning: SpeechEngine = {
+		...engine,
+		capabilities: { ...engine.capabilities, ownsPlayback: true },
+		async synthesize(_req: SynthRequest, signal: AbortSignal): Promise<SynthResult> {
+			await new Promise<void>((resolve) => {
+				if (signal.aborted) {
+					resolve();
+					return;
+				}
+				const t = setTimeout(resolve, 5000);
+				signal.addEventListener(
+					"abort",
+					() => {
+						cancels += 1;
+						clearTimeout(t);
+						resolve();
+					},
+					{ once: true },
+				);
+			});
+			return { kind: "streamed", estimatedMs: 0, words: null };
+		},
+	};
+
+	const player = new Player({ bufferAhead: 2 });
+	const playing = player.play(owning, numbered(3), 1);
+	await tick();
+	void player.replayCurrent();
+	await tick();
+	check("replay aborts the utterance's own signal exactly once", cancels === 1, `${cancels}`);
+	player.stop();
+	await playing.catch(() => undefined);
+	await tick();
+	check("stop aborts the utterance's own signal too", cancels === 2, `${cancels}`);
+}
+
 console.log("stop after a replay still aborts prefetches");
 {
 	const { engine } = makeEngine();
