@@ -50,11 +50,13 @@ export interface SentenceBoundary {
  *
  * An ASCII terminator followed by whitespace. It is kept and still consulted
  * on the native path, because ICU does not merely add boundaries to English -
- * it also removes them. Measured on this V8: ICU declines to break after
- * "e.g.", after "..." and after "U.S.A.", all three of which this regex
- * breaks after. Replacing the regex would therefore have moved English text
- * in the direction of longer chunks; a union plus the guard below moves text
- * with an ASCII terminator not at all.
+ * it removes far more than it adds. Measured on this V8 over 4,000 generated
+ * English fixtures: ICU declines 15,523 boundaries this regex produces (it
+ * will not break after "e.g.", after "..." or after "U.S.A.") and supplies
+ * 1,803 this regex lacks. Replacing the regex would therefore have moved
+ * English text, dominantly toward longer chunks. A union moves text with an
+ * ASCII terminator not at all - but that is the guard below doing the work,
+ * not ICU being conservative: of those 1,803, the guard admitted 0.
  */
 export function legacySentenceBoundaries(text: string): number[] {
 	const out: number[] = [];
@@ -205,16 +207,25 @@ export const platformSegmenters: SegmenterSource = (() => {
  * be unreachable code. The one property this rule set needs that V8 does not
  * have is `Prepended_Concatenation_Mark`, which is spelled out below.
  *
- * Verified against `Intl.Segmenter` twice, by two independently written
- * sweeps: 632,070 strings during implementation and a further 321,975 at
- * review, both over awkward alphabets, ordered pairs and triples, every BMP
- * code point between two letters, astral samples and Devanagari conjuncts.
- * They agree on every well-formed input. The review sweep also fed in lone
- * surrogates, and there the two differ: this breaker reports a boundary
- * beside a lone surrogate where ICU reports none, in 25 shapes, always in the
- * direction of one extra boundary and never one fewer. A file decoded as
- * UTF-8 cannot contain a lone surrogate, and the direction cannot split a
- * well-formed pair, so it is recorded rather than chased.
+ * Verified against `Intl.Segmenter` three times, by three independently
+ * written sweeps. The first two - 632,070 strings at implementation and
+ * 321,975 at review - both reported agreement on every well-formed input, and
+ * both were wrong: neither corpus put a ZWJ *inside* an Indic conjunct run,
+ * which is where this breaker disagreed with ICU in 15 distinct shapes until
+ * `isIncbExtend` was added (NRL-28 B2). The third sweep, written for that
+ * repair, covers 611,870 strings: every ordered pair and triple over a
+ * 40-code-point awkward alphabet, the full 19 x 19 x 19 linker/consonant
+ * cross product with ten InCB-relevant fillers between them, every BMP code
+ * point in five contexts, and 150,000 seeded random strings. Zero well-formed
+ * disagreements.
+ *
+ * Lone surrogates do still disagree, and the number is not worth quoting: it
+ * is whatever the corpus contains (28,971 distinct shapes over one alphabet
+ * built to hold them). What is invariant is the direction - this breaker's
+ * boundaries are a superset of ICU's in every case measured, 0 exceptions -
+ * so it can only add a boundary and never remove one, and it cannot split a
+ * well-formed cluster. A file decoded as UTF-8 holds no lone surrogate
+ * anyway, so it is recorded rather than chased.
  * ------------------------------------------------------------------ */
 
 const OTHER = 0;
@@ -301,6 +312,25 @@ const INCB_CONSONANT = codePointSet([
 /** ZWNJ is Grapheme_Cluster_Break=Extend but not InCB=Extend: it ends a conjunct run. */
 const NOT_INCB_EXTEND = new Set([0x200c]);
 
+/**
+ * InCB=Extend: what may sit inside an Indic conjunct run without ending it.
+ *
+ * This is deliberately not the same question as `breakClass(cp) === EXTEND`,
+ * and the two differ in both directions. ZWNJ is Grapheme_Cluster_Break=Extend
+ * and InCB=None, so it ends the run. ZWJ is Grapheme_Cluster_Break=ZWJ - it
+ * has to be, because GB11 needs to see it - and InCB=Extend, so it does not.
+ *
+ * Reading the GB9c state update off the break class alone got the second of
+ * those backwards, and `C linker ZWJ C` gained a boundary ICU does not have,
+ * in every one of the 100 (linker, consonant) pairs the tables above hold
+ * (NRL-28 B2). ZWJ inside a conjunct is real Indic orthography, not a
+ * degenerate shape.
+ */
+function isIncbExtend(cls: number, cp: number): boolean {
+	if (NOT_INCB_EXTEND.has(cp)) return false;
+	return cls === EXTEND || cls === ZWJ;
+}
+
 function hangulClass(cp: number): number {
 	if (cp >= 0x1100 && cp <= 0x115f) return HANGUL_L;
 	if (cp >= 0xa960 && cp <= 0xa97c) return HANGUL_L;
@@ -318,6 +348,11 @@ function hangulClass(cp: number): number {
  * Order matters: Regional_Indicator, Prepend, Extend and SpacingMark are all
  * tested before Control, because several of them are `gc=Cf` and would
  * otherwise be classed as controls and break where they must attach.
+ *
+ * ZWJ is tested before Extend and must stay there, because GB11 has to be
+ * able to see a ZWJ as a ZWJ. That is a Grapheme_Cluster_Break answer, and it
+ * is the wrong answer to the InCB question GB9c asks - see `isIncbExtend`,
+ * which is where that distinction belongs rather than here.
  */
 function breakClass(cp: number): number {
 	if (cp === 0x0d) return CR;
@@ -402,7 +437,7 @@ export function uax29GraphemeBoundaries(text: string): number[] {
 		} else if (INCB_CONSONANT.has(cp)) {
 			inConsonant = true;
 			linkerSeen = false;
-		} else if (cls !== EXTEND || NOT_INCB_EXTEND.has(cp)) {
+		} else if (!isIncbExtend(cls, cp)) {
 			inConsonant = false;
 			linkerSeen = false;
 		}

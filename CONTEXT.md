@@ -168,21 +168,31 @@ These are design-level, not bugs, and they shape any new work:
 - **Segmentation is `Intl.Segmenter` unioned with the old regex, not either alone**
   (NRL-28, ADR 0009). `src/text/segment.ts` owns it, pure and dependency-free, and the
   segmenters arrive through an injected `SegmenterSource` so the no-segmenter path is
-  exercised without mutating a global. Three things about it are load-bearing and are
-  not simplifications waiting to happen. The **union**: ICU removes English boundaries
-  the regex produces (after `e.g.`, after an ellipsis, after `U.S.A.`) and adds none, so
-  replacing the regex would lengthen English chunks. The **ASCII guard**: an ICU-only
+  exercised without mutating a global. Four things about it are load-bearing and are
+  not simplifications waiting to happen. The **union**: ICU removes far more English
+  boundaries than it adds - measured over 4,000 generated English fixtures, it declines
+  15,523 the regex has (after `e.g.`, after an ellipsis, after `U.S.A.`) and supplies
+  1,803 the regex lacks - so replacing the regex would lengthen English chunks. It does
+  *not* add none; the guard below is what brings those 1,803 down to 0 admitted, and
+  that is the argument, not ICU's restraint. The **ASCII guard**: an ICU-only
   boundary counts only when the *terminator* before it is at or above U+0080, because
   ICU splits `[!note] Callout body` after the `!` and that is a real Obsidian callout
   marker. Reaching that terminator takes two walks back, over whitespace *and* over
   `\p{Pf}` / `\p{Pe}`, because the legacy regex already allows a run of closers
   (`["')\]]*`) and that class is ASCII-only: with the whitespace walk alone,
   smart-punctuated `“First.” “Second.” “Third.” Tail text here now.` spoke as four
-  runts where the straight-quoted form is one chunk. And **legacy-only merging**:
+  runts where the straight-quoted form is one chunk. **Legacy-only merging**:
   `mergeShort` may erase only a
   boundary the regex also found, because ICU's CJK sentences are 6 or 7 characters, all
   below the 40-character merge floor, so an unguarded merge folds them back into one
-  chunk and undoes the whole thing.
+  chunk and undoes the whole thing. And **one floor, one measurement**, in
+  `splitOversized`: the space branch and the word branch are floored at half the cap,
+  and they must also measure the same thing, because the space branch cuts *at* a space
+  while ICU puts a word boundary one unit *past* it. Until the NRL-28 repair a space at
+  exactly `cursor + 110` was rejected by one branch and re-accepted by the other, so a
+  word candidate is now walked back over any space run behind it before the floor is
+  applied. Exactly one offset in 220 fires that shape, which is why it survived three
+  probes that sampled near the halfway mark instead of sweeping it.
 - **A `"streamed"` `synthesize()` resolving does not mean the audio finished.** On speechd
   it resolves when `spd-say -w` returns, and `-w` is not an audio-end signal: for a message
   queued behind another it returns when the *preceding* message ends, and for one submitted

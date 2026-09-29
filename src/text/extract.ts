@@ -823,7 +823,19 @@ interface Piece {
 	legacyOpen: boolean;
 }
 
-/** Split cleaned text into sentence-ish pieces with offsets preserved. */
+/**
+ * Split cleaned text into sentence-ish pieces with offsets preserved.
+ *
+ * Known gap, recorded rather than fixed: a boundary is used where it is
+ * found. `splitOversized` snaps its cuts back to a grapheme cluster boundary
+ * and this does not, so a sentence boundary that ICU supplies immediately
+ * before a `SpacingMark` or a combining mark ends a piece inside a combining
+ * sequence. Found in NRL-28 verification; degenerate text only, since it
+ * needs a terminator followed directly by a combining mark, and no surrogate
+ * pair was split across 32,000 fuzz cases. Closing it means snapping here
+ * too, which moves where every boundary lands and wants its own fail-first
+ * change.
+ */
 function splitSentences(text: string, index: number[], rawStart: number, ctx: SegmentContext): SpeechChunk[] {
 	const pieces: Piece[] = [];
 	const bounds: Array<{ from: number; to: number; legacyOpen: boolean }> = [];
@@ -925,6 +937,14 @@ function sourceOffsetOfSpace(afterPrev: number, firstOfNext: number): number {
  * that helps a script with no spaces at all; then the raw cap. Whichever wins
  * is snapped back to a grapheme boundary, so no piece can end inside a
  * surrogate pair, an emoji sequence or a combining sequence.
+ *
+ * The first two preferences are floored against the same constant and, since
+ * NRL-28's verification, against the same *measurement*: the number of units
+ * the piece would actually carry, counting no trailing space. The space
+ * branch has always measured that, because it cuts at the space rather than
+ * after it and the loop below then skips the space entirely. The word branch
+ * did not, and that one-unit difference was the whole of finding B1; see the
+ * comment on the trim below.
  */
 function splitOversized(chunk: SpeechChunk, ctx: SegmentContext): SpeechChunk[] {
 	if (chunk.text.length <= MAX_CHUNK_CHARS) return [chunk];
@@ -955,10 +975,35 @@ function splitOversized(chunk: SpeechChunk, ctx: SegmentContext): SpeechChunk[] 
 				while (wordCursor < words.length && words[wordCursor]! <= cursor) wordCursor += 1;
 				let candidate = -1;
 				for (let w = wordCursor; w < words.length && words[w]! <= end; w++) candidate = words[w]!;
+				// A word starts immediately *after* a space, so a candidate
+				// sitting behind one is the same cut the space branch just
+				// looked at, one unit later. Moving it back onto the space run
+				// makes the two branches name the same offset for the same
+				// cut, and only then is the shared floor comparing like with
+				// like. Without this, a space at exactly cursor + 110 was
+				// rejected at 110 by the space branch and re-accepted at 111
+				// by this one, so `"a" * 110 + " " + "b" * 300` split as
+				// 111/220/80 where the merge base gave 220/191 (NRL-28 B1,
+				// measured against fb71812). Only " " is trimmed, because
+				// " " is the only thing the space branch looks for and the
+				// only thing the cursor loop below skips.
+				while (candidate > cursor && chunk.text[candidate - 1] === " ") candidate -= 1;
 				// The same halfway floor the space branch uses, and needed for
 				// the same reason. Without it `"hi "` followed by 300 unbroken
 				// characters breaks at the only word boundary in the window and
 				// emits a three-unit chunk, where the cap alone gave 220.
+				//
+				// No cursor can turn this into a runt. Both floors are
+				// measured from `cursor`, so the position of the piece in the
+				// chunk cannot enter into it, and the trim above only ever
+				// moves a candidate earlier - so the word branch can accept
+				// nothing the space branch rejected, and what it does accept
+				// is more than half the cap of real content with a non-space
+				// character at its end. The one thing that can still take a
+				// piece below the floor is the grapheme snap below walking
+				// back inside a single cluster, which is bounded by that
+				// cluster's length and is the deliberate exception this
+				// function exists to make.
 				if (candidate - cursor > MAX_CHUNK_CHARS * 0.5) end = candidate;
 			}
 			while (end > cursor && isGraphemeBoundary[end] !== 1) end -= 1;

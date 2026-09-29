@@ -1856,8 +1856,112 @@ console.log("NRL-28 Unicode sentence segmentation and grapheme-safe splitting (R
 		JSON.stringify(texts(`\u4ed6\u8bf4\u300c${zh1}\u300d${zh2}`)),
 	);
 
+	/*
+	 * (l) The word branch may not undercut the space branch by one unit.
+	 *
+	 * NRL-28 verification finding B1. `splitOversized` asks the space branch
+	 * first, and it rejects the last space in the window when that space sits
+	 * at or before `MAX_CHUNK_CHARS * 0.5`. ICU then reports a word boundary
+	 * one unit further on, because a word starts immediately after a space,
+	 * and the word branch accepted it: a break the space branch had just
+	 * judged too early at offset 110 came back at 111. The piece that came out
+	 * was the same 110 units of text plus the space that had been rejected
+	 * with it, so the two branches disagreed about a single cut they were both
+	 * looking at, and only in the position where `Intl.Segmenter` exists.
+	 *
+	 * Every expected string below is the merge base fb71812's own output,
+	 * measured by bundling its extractor. The branch produced `111,110`,
+	 * `111,220,80`, `111,128` and `219,111,128` instead.
+	 */
+	/** Prose of exactly n units, never ending in a space, so the only space near the cap is the planted one. */
+	const prose = (n: number): string => {
+		const body = "the quick brown fox jumps over the lazy dog and then runs on ".repeat(10);
+		const cut = body.slice(0, n);
+		return cut.endsWith(" ") ? `${cut.slice(0, n - 1)}x` : cut;
+	};
+	const hex128 = "0123456789abcdef".repeat(8);
+	check("NRL-28 the B1 lead really is 110 units and does not end in a space", prose(110).length === 110 && !prose(110).endsWith(" "));
+	check("NRL-28 the B1 token really is 128 units with no space in it", hex128.length === 128 && !hex128.includes(" "));
+	const b1Fixtures: Array<[string, string, string]> = [
+		["a space at exactly 110 with a short tail", `${"a".repeat(110)} ${"b".repeat(110)}`, "220,1"],
+		["a space at exactly 110 with a long tail", `${"a".repeat(110)} ${"b".repeat(300)}`, "220,191"],
+		["ordinary prose then one long unbroken token", `${prose(110)} ${hex128}`, "220,19"],
+		["the same shape at a non-zero cursor", `${"b".repeat(219)} ${prose(110)} ${hex128}`, "219,220,19"],
+	];
+	for (const [id, src, want] of b1Fixtures) {
+		check(`NRL-28 ${id} splits where the merge base split it`, extractChunks(src, OPTS).map((c) => c.text.length).join(",") === want, extractChunks(src, OPTS).map((c) => c.text.length).join(","));
+	}
+
+	/*
+	 * The same thing swept rather than sampled, which is the lesson B1 taught:
+	 * the earlier probes clustered around the halfway mark and still missed
+	 * the one offset that fires. With no segmenter the union collapses to the
+	 * legacy set and the word branch has no boundaries to offer, so the
+	 * no-segmenter position *is* the merge base's algorithm on ASCII input
+	 * (block (c) below pins that equivalence separately). Sweeping the planted
+	 * space across every offset in the window and demanding the two positions
+	 * agree therefore compares this branch against the old behaviour at every
+	 * offset, not near one.
+	 */
+	let b1Runs = 0;
+	let b1Bad = "";
+	for (const prefix of ["", `${"b".repeat(219)} `]) {
+		for (const tail of [110, 300]) {
+			for (let at = 0; at <= 219; at++) {
+				const src = `${prefix}${"a".repeat(at)} ${"b".repeat(tail)}`;
+				const withSeg = extractChunks(src, OPTS).map((c) => c.text.length).join(",");
+				const without = extractChunks(src, OPTS, noSegmenters).map((c) => c.text.length).join(",");
+				b1Runs += 1;
+				if (withSeg !== without && b1Bad === "") b1Bad = `prefix ${prefix.length}u tail ${tail}u space at ${at}: [${withSeg}] vs [${without}]`;
+			}
+		}
+	}
+	check(`NRL-28 every space offset in the window splits the same in both positions (${b1Runs} shapes)`, b1Bad === "", b1Bad);
+	check("NRL-28 the B1 sweep really ran every offset", b1Runs === 2 * 2 * 220, String(b1Runs));
+
+	/*
+	 * (m) What the word branch *does* change on ASCII, pinned so it cannot
+	 * drift either way.
+	 *
+	 * The B1 repair's differential found 58,835 differences from the merge
+	 * base over 661,262 comparisons, and every one of them is text in which
+	 * some 220-unit window holds no space past its halfway mark - a 400-unit
+	 * unbroken token, not prose. There the space branch has nothing to offer
+	 * and the word branch cuts at a real boundary instead of blindly at the
+	 * cap, which is what it exists for. The same corpus found zero
+	 * differences over 4,000 generated English prose and markdown fixtures.
+	 * ADR 0009's "ASCII text is byte-identical" was therefore wrong and now
+	 * says this instead; these two assertions are what stop the distinction
+	 * being lost again.
+	 */
+	const spaceless = `${"a".repeat(110)},${"b".repeat(300)}`;
+	check(
+		"NRL-28 an unbroken ASCII run is cut at its punctuation, not at the cap",
+		extractChunks(spaceless, OPTS).map((c) => c.text.length).join(",") === "111,220,80",
+		extractChunks(spaceless, OPTS).map((c) => c.text.length).join(","),
+	);
+	check(
+		"NRL-28 with no segmenter that same run is cut at the cap, as the merge base cuts it",
+		extractChunks(spaceless, OPTS, noSegmenters).map((c) => c.text.length).join(",") === "220,191",
+		extractChunks(spaceless, OPTS, noSegmenters).map((c) => c.text.length).join(","),
+	);
+	// And wherever it fires, the floor still holds: no non-final piece under
+	// 111 units over every punctuation mark at every offset in the window.
+	let floorRuns = 0;
+	let floorBad = "";
+	for (const mark of [",", ";", "-", "/", "(", ")", "[", "]", "\"", "@", "#", "$", "%", "&", "+", "=", "<", ">", "|", "~", "^"]) {
+		for (let at = 0; at <= 240; at++) {
+			const pieces = extractChunks(`${"a".repeat(at)}${mark}${"b".repeat(300)}`, OPTS);
+			floorRuns += 1;
+			for (let i = 0; i < pieces.length - 1; i++) {
+				if (pieces[i]!.text.length <= 110 && floorBad === "") floorBad = `${JSON.stringify(mark)} at ${at}: piece ${i} is ${pieces[i]!.text.length}u`;
+			}
+		}
+	}
+	check(`NRL-28 the halfway floor holds wherever the word branch fires (${floorRuns} shapes)`, floorBad === "", floorBad);
+
 	// The cap rule over every fixture in this section at once.
-	const corpus = [zh, ja, ar, emoji, comb, zalgo, cjkPara, cjkLong, runt, curly, straight];
+	const corpus = [zh, ja, ar, emoji, comb, zalgo, cjkPara, cjkLong, runt, curly, straight, ...b1Fixtures.map(([, src]) => src)];
 	check("NRL-28 cap holds over every fixture", corpus.every((s) => capBad(s) === ""), corpus.map((s) => capBad(s)).join("|"));
 	check("NRL-28 lockstep holds over every fixture", corpus.every((s) => lockstepBad(s) === ""), corpus.map((s) => lockstepBad(s)).join("|"));
 	check(
@@ -1915,6 +2019,23 @@ console.log("NRL-28 the no-segmenter position and the offline fallbacks (R-M10)"
 		["devanagari conjunct", "\u0915\u094d\u0937\u093f"],
 		["bengali conjunct", "\u0995\u09cd\u09b7"],
 		["ZWNJ blocks the conjunct", "\u0915\u200c\u094d\u0915"],
+		/*
+		 * NRL-28 verification finding B2. UAX 29 gives ZWJ InCB=Extend, so a
+		 * ZWJ sitting inside an Indic conjunct run must not end it; the
+		 * breaker classed it as Grapheme_Cluster_Break=ZWJ and the GB9c state
+		 * update then cleared the run, putting a boundary in front of the
+		 * second consonant where ICU has none. ZWJ inside a conjunct is a real
+		 * orthographic control in these scripts, not a degenerate shape.
+		 */
+		["devanagari conjunct with a ZWJ", "\u0915\u094d\u200d\u0915"],
+		["telugu conjunct with a ZWJ", "\u0c15\u0c4d\u200d\u0c15"],
+		["bengali conjunct with a ZWJ", "\u0995\u09cd\u200d\u0995"],
+		["khmer coeng with a ZWJ", "\u1780\u17d2\u200d\u1780"],
+		["malayalam conjunct with a ZWJ", "\u0d15\u0d4d\u200d\u0d15"],
+		["a ZWJ before the linker", "\u0915\u200d\u094d\u0915"],
+		["two ZWJ inside the conjunct", "\u0915\u094d\u200d\u200d\u0915"],
+		["a consonant joined by ZWJ with no linker", "\u0915\u200d\u0915"],
+		["ZWNJ after the linker still ends the run", "\u0915\u094d\u200c\u0915"],
 		["prepended concatenation mark", "\u0600\u0661"],
 		["thai sara am", "\u0e01\u0e33"],
 		["doubled ZWJ", "\u0e01\u2764\u200d\u200d\u{1f600}\u2764"],
@@ -1936,6 +2057,36 @@ console.log("NRL-28 the no-segmenter position and the offline fallbacks (R-M10)"
 		"NRL-28 the 301-unit sequence really is one cluster, so the cap cannot hold",
 		uax29GraphemeBoundaries(`a${"\u0301".repeat(300)}`).length === 0,
 	);
+
+	/*
+	 * B2 swept rather than sampled, over the whole cross product of the
+	 * breaker's own linker and consonant tables. ICU is the oracle: a
+	 * hardcoded expectation here would only pin what this module currently
+	 * does, and what is claimed is agreement with the platform.
+	 */
+	{
+		const linkers = [0x094d, 0x09cd, 0x0acd, 0x0b4d, 0x0c4d, 0x0d4d, 0x1039, 0x17d2, 0x1a60, 0x1b44];
+		const consonants = [0x0915, 0x0995, 0x0a95, 0x0b15, 0x0c15, 0x0d15, 0x1000, 0x1780, 0x1a20, 0x1b13];
+		let conjunctRuns = 0;
+		let conjunctBad = "";
+		for (const linker of linkers) {
+			for (const first of consonants) {
+				for (const second of consonants) {
+					for (const inner of ["\u200d", "\u200d\u200d", "\u0300\u200d", "\u200d\u0300", "", "\u200c"]) {
+						const s = String.fromCodePoint(first) + String.fromCodePoint(linker) + inner + String.fromCodePoint(second);
+						conjunctRuns += 1;
+						const offline = uax29GraphemeBoundaries(s).join(",");
+						const native = nativeGraphemes(s).join(",");
+						if (offline !== native && conjunctBad === "") {
+							conjunctBad = `${[...s].map((c) => c.codePointAt(0)!.toString(16)).join(" ")}: offline [${offline}] icu [${native}]`;
+						}
+					}
+				}
+			}
+		}
+		check(`NRL-28 the offline breaker agrees with ICU on every conjunct shape (${conjunctRuns})`, conjunctBad === "", conjunctBad);
+		check("NRL-28 the conjunct sweep really ran the whole cross product", conjunctRuns === 10 * 10 * 10 * 6, String(conjunctRuns));
+	}
 
 	/*
 	 * (c) Whole-extractor equivalence on ASCII. This is the acceptance
@@ -1961,6 +2112,13 @@ console.log("NRL-28 the no-segmenter position and the offline fallbacks (R-M10)"
 		["ellipsis", "Wait... then what happened next in this rather long story of ours?"],
 		["long-hard-split", `One two three. Four five six. ${"word ".repeat(120).trim()}.`],
 		["math", "Before $$\nx = 1\n$$ after."],
+		// NRL-28 B1: a space at exactly cursor + MAX_CHUNK_CHARS * 0.5. The
+		// word branch used to accept the ICU boundary one unit past it, so
+		// these three split differently in the two positions where every other
+		// ASCII fixture splits identically.
+		["b1-space-at-110-short-tail", `${"a".repeat(110)} ${"b".repeat(110)}`],
+		["b1-space-at-110-long-tail", `${"a".repeat(110)} ${"b".repeat(300)}`],
+		["b1-space-at-110-non-zero-cursor", `${"b".repeat(219)} ${"a".repeat(110)} ${"b".repeat(300)}`],
 	];
 	const sameChunks = (src: string): string => {
 		const a = extractChunks(src, OPTS);
@@ -1982,7 +2140,7 @@ console.log("NRL-28 the no-segmenter position and the offline fallbacks (R-M10)"
 		check(`NRL-28 ${id} is byte-identical with and without a segmenter`, sameChunks(src) === "", sameChunks(src));
 		asciiChecked += 1;
 	}
-	check("NRL-28 the ASCII equivalence corpus really ran", asciiChecked === asciiCorpus.length && asciiChecked === 16, String(asciiChecked));
+	check("NRL-28 the ASCII equivalence corpus really ran", asciiChecked === asciiCorpus.length && asciiChecked === 19, String(asciiChecked));
 
 	/*
 	 * (d) The honest consequence of having no segmenter: CJK collapses back to

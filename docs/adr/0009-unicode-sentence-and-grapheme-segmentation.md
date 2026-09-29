@@ -28,10 +28,21 @@ Four facts shaped the design, each measured rather than assumed:
    units. All three are below `MIN_CHUNK_CHARS` (40), so `mergeShort` folds
    them straight back into one chunk. **Swapping the regex for a segmenter
    therefore changes nothing at all.**
-2. On English, ICU never adds a boundary the regex lacks, but it does remove
-   several: it declines to break after `e.g.`, after `...` and after `U.S.A.`,
-   all three of which the regex breaks after. A straight replacement would have
-   moved English text in the direction of longer chunks.
+2. On English, ICU both adds boundaries the regex lacks and removes ones it
+   has, and the two are nowhere near symmetric. Measured over 4,000 generated
+   English prose fixtures: raw ICU supplies **1,803 boundaries the regex does
+   not have**, spread over 1,229 of the 4,000, and declines to supply
+   **15,523** that the regex does - it will not break after `e.g.`, after
+   `...` or after `U.S.A.`. So a straight replacement would have moved English
+   in both directions at once, dominantly toward longer chunks. What makes the
+   net effect on English nil is not ICU's behaviour but clause 4's guard: over
+   those same 4,000 fixtures it admitted **0** of the 1,803 into the union.
+
+   An earlier version of this line said ICU adds nothing to English. That was
+   false, and clause 4 - four clauses down, about the `!` in `[!note]` -
+   contradicts it outright. The honest argument is stronger than the one it
+   replaces: the union is safe because of the guard, not because ICU is
+   conservative.
 3. An astral emoji survives `cleanLine`, because the `EMOJI` drop test reads a
    single UTF-16 unit and a lone surrogate is in none of its ranges. So astral
    characters really do reach the splitter.
@@ -98,6 +109,20 @@ Four facts shaped the design, each measured rather than assumed:
    module against the merge base over generated shapes, not by any fixture in
    the suite, and it is now pinned by one.
 
+   A shared floor is not enough on its own: the two branches must also floor
+   the same **measurement**. The space branch cuts *at* the space rather than
+   after it, so the piece it emits carries no trailing space, while ICU puts a
+   word boundary one unit past that space. A space at exactly `cursor + 110`
+   was therefore rejected at 110 by the space branch and re-accepted at 111 by
+   the word branch, and `"a" x 110 + " " + "b" x 300` split as 111/220/80
+   where the merge base gives 220/191. A candidate is now walked back over any
+   space run it sits behind before the floor is applied, so both branches name
+   the same offset for the same cut and the word branch can accept nothing the
+   space branch rejected. Found in verification (finding B1) by sweeping the
+   planted space across **every** offset in the window: exactly one offset in
+   220 fires, which is why three earlier probes that clustered *near* the
+   halfway mark all missed it. Sampling a boundary is not testing it.
+
 7. **One indivisible-grapheme exception, with guaranteed forward progress.**
    If snapping lands at or before the cursor, the piece opens with a cluster
    longer than the cap, and that whole cluster is emitted as the piece. It
@@ -153,22 +178,48 @@ Four facts shaped the design, each measured rather than assumed:
   the ICU-only `؟` boundary survives, and the ASCII `.` boundary is still
   erased by `mergeShort` exactly as before. Both halves are the design.
 - **No chunk can end inside a surrogate pair, an emoji sequence or a combining
-  sequence**, in either segmenter position, because clause 8 places those cuts
-  when ICU is absent.
-- **ASCII text is byte-identical.** Proved rather than asserted, by three
-  probes against the merge base comparing `text`, `sourceStart`, `sourceEnd`
-  and `sourceIndex`, all run in **both** segmenter positions. 1,320 ASCII-only
-  string literals scraped out of `tests/extract.test.ts` under all 512
-  combinations of the nine content toggles: **1,351,680 comparisons, zero
-  differences**. Then 717 generated ASCII shapes clustered around the 220-unit
-  cap and the halfway mark, a region the scraped corpus barely touches:
-  **20,076 comparisons, zero differences**. The second probe is the one that
-  found the clause 6 runt, so it earned its place rather than confirming the
-  first. Then at review, a third corpus generated from scratch rather than
-  scraped - 290 ASCII fixtures over the same 512 masks and both positions -
-  **296,960 comparisons, zero differences**. Clause 4's guard is what makes
-  the sentence half structural rather than lucky: where the terminator is
-  ASCII, no ICU-only boundary can be admitted at all.
+  sequence** - in `splitOversized`, which snaps every cut back to a cluster
+  boundary in either segmenter position, because clause 8 places those cuts
+  when ICU is absent. **It is not true of `splitSentences`, which does not
+  snap.** An ICU sentence boundary landing immediately before a `SpacingMark`
+  or a combining mark ends a chunk inside a combining sequence, because
+  nothing walks a sentence boundary back to a cluster boundary the way clause
+  6 walks a hard cut back. Found in verification, non-blocking: it needs a
+  sentence terminator followed directly by a combining mark, which is
+  degenerate text, and no surrogate pair was split across 32,000 fuzz cases.
+  Recorded rather than fixed in this pass, because closing it means giving
+  `splitSentences` the same snap and that moves where every boundary lands -
+  its own fail-first change, not a line in a repair.
+- **ASCII prose is byte-identical. ASCII with no space in a 220-unit window is
+  not, and that is clause 6 working rather than a regression.** The
+  unqualified claim that stood here was wrong, and both halves of why were
+  found by generated corpora rather than by the suite. What is measured:
+  - Over **4,000 generated English prose and markdown fixtures** - the shapes
+    a person actually writes, with punctuation, headings, blockquotes and
+    multiple paragraphs - output matches the merge base in `text`,
+    `sourceStart`, `sourceEnd` and `sourceIndex`: **zero differences**.
+  - Over a corpus built to break it - 15,751 fixtures sweeping a planted space
+    across every offset in the window at four cursor positions, multi-space
+    runs, all 29 ASCII punctuation marks at every offset in the second half of
+    the window, digit/letter transitions, ten markdown wrappers and 3,000
+    seeded random ASCII strings, in **both** segmenter positions, plus 615 of
+    those fixtures under all 512 content-toggle combinations: **661,262
+    comparisons, 58,835 differences**. Every single one is in text where some
+    220-unit window holds no space past its halfway mark.
+  That condition is exactly when the space branch has nothing to offer and
+  clause 6's word branch is consulted, which is what it exists for: a
+  400-character unbroken token with a comma in it is cut after the comma
+  instead of blindly at 220. English prose never reaches it, which is what the
+  4,000-fixture figure measures. The smallest non-final piece any differing
+  fixture produced is **111 units**, so none of it undercuts clause 6's floor.
+  Clause 4's guard is what makes the *sentence* half structural rather than
+  lucky: where the terminator is ASCII, no ICU-only boundary can be admitted
+  at all.
+  The claim this replaces - "1,351,680 then 20,076 then 296,960 comparisons,
+  zero differences" - was an artefact of three corpora that all lacked long
+  spaceless ASCII runs and all sampled near the halfway mark instead of
+  sweeping it. B1 lived in exactly that gap. The counts were real; what they
+  covered was narrower than the sentence they were used to support.
 - **Non-ASCII punctuation in otherwise-English prose is a separate question,
   and it is where the review found the clause 4 defect.** Scoping it: of the
   BMP characters that, placed between an ASCII terminator and the following
@@ -180,19 +231,38 @@ Four facts shaped the design, each measured rather than assumed:
   katakana marks. Only the `\p{Po}` group occurs in real prose; the rest
   require a terminator immediately followed by a combining mark or an opening
   bracket, which no natural text produces.
-- **The offline breaker agrees with ICU on every well-formed input.** Verified
-  twice by two independently written sweeps: 632,070 strings during
-  implementation and 321,975 more at review, both over awkward alphabets,
-  ordered pairs and triples, every BMP code point between two letters, astral
-  samples and Devanagari conjuncts. The GB9c tables were derived from
-  `Intl.Segmenter` itself rather than transcribed, so the two agree by
-  construction. The review sweep additionally fed in **lone surrogates**, and
-  there the two differ: the breaker reports a boundary beside a lone surrogate
-  where ICU reports none, in 25 shapes, always one extra boundary and never
-  one fewer. A file decoded as UTF-8 cannot contain a lone surrogate, and the
-  direction of the difference cannot split a well-formed pair, so this is
-  recorded rather than chased. The earlier "zero disagreements" claim was true
-  of its own corpus, which did not include lone surrogates.
+- **The offline breaker agrees with ICU on every well-formed input - since the
+  GB9c repair, and not before it.** This claim had already been narrowed once
+  at review and was still false. Verification (finding B2) found 15 distinct
+  disagreeing well-formed shapes, all of the form
+  `consonant + linker + ZWJ + consonant`. UAX 29 gives ZWJ `InCB=Extend`, so
+  it may sit inside an Indic conjunct run without ending it; `breakClass`
+  classes it as `Grapheme_Cluster_Break=ZWJ`, which it must, because GB11
+  needs to see it; and the GB9c state update read the break class, so a ZWJ
+  cleared the run and the second consonant started a new cluster.
+  `U+0915 U+094D U+200D U+0915` reported a boundary at 3 where ICU reports
+  none, and all 100 (linker, consonant) pairs in the module's own tables did
+  the same. The tables *were* derived by probing `Intl.Segmenter`, so "they
+  agree by construction" was true of the tables and not of the state machine
+  reading them - which is the general lesson, not a detail about ZWJ. Fixed
+  with an explicit `isIncbExtend` predicate that asks the InCB question
+  instead of the GCB one; ZWNJ, which is `GCB=Extend` and `InCB=None`, still
+  ends the run.
+  Re-measured after the fix, by a sweep written for this pass and reusing no
+  earlier harness: **611,870 strings** - every ordered pair and triple over a
+  40-code-point awkward alphabet, the full 19 x 19 x 19 linker/consonant cross
+  product with ten InCB-relevant fillers between them, every BMP code point in
+  five contexts, and 150,000 seeded random strings - **zero well-formed
+  disagreements**.
+- **Lone surrogates still disagree, and the "25 shapes" this line used to give
+  was a property of one corpus, not a fact about the breaker.** A sweep over
+  an alphabet that deliberately contains lone surrogates finds 28,971 distinct
+  disagreeing shapes in 300,000 strings. What is invariant, and what actually
+  makes it harmless, is the direction: across those same strings the breaker's
+  boundary set is a **superset of ICU's in every case, 0 exceptions**, so it
+  can only ever add a boundary and never remove one, and it therefore cannot
+  split a well-formed cluster. A file decoded as UTF-8 cannot hold a lone
+  surrogate in the first place. Recorded rather than chased.
 - **With no segmenter at all, CJK collapses back to one chunk.** That is the
   honest consequence, and R-M10's "segmentation MAY fall back to paragraphs or
   safe-sized chunks" is what licenses it. Pinned by test so the fallback does
