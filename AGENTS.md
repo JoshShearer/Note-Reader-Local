@@ -114,7 +114,6 @@ do not rediscover them:
 - `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` are stored in plugin data v1 but
   never read by `extract.ts`; they have no toggle by design (`docs/adr/0001`). Making
   those exclusions configurable is NRL-21.
-- `replayCurrent` truncates the chunk array and resets the index, corrupting `n / total`.
 - Pause is a no-op on speechd and webspeech: it pauses an `<audio>` element they never use.
 
 ## Style
