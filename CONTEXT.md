@@ -77,11 +77,13 @@ src/
 ├── audio/
 │   ├── types.ts                SpeechEngine, EngineCapabilities, SpeechChunk, VoiceInfo
 │   ├── player.ts               the single playback controller
+│   ├── fallback.ts             playWithFallback(): tries the next engine on a load/first-chunk failure (ADR 0010)
 │   ├── words.ts                word spans and timing apportionment
 │   ├── wav.ts                  WAV parsing / duration
 │   └── emitter.ts              tiny typed event emitter, isolates listener throws
 ├── engines/
 │   ├── registry.ts             createEngines(), probeEngines(), findEngine()
+│   ├── selection.ts            rankEngines()/selectEngine()/resolveSelection(): automatic quality-ranked pick (ADR 0010)
 │   ├── webspeech.ts            browser speechSynthesis
 │   ├── system/
 │   │   ├── spawn.ts            ProcessRunner; the only child_process touch point
@@ -194,8 +196,6 @@ These are design-level, not bugs, and they shape any new work:
   reports each engine's limitations. `pitch` still gates nothing (there is no pitch control
   in the UI at all), and no engine declares `sentenceBoundary`, so the sentence-level
   features the spec imagines have nothing to switch on yet.
-- **There is no engine fallback chain.** Selection is a stored id; if it fails, the user
-  gets a notice telling them to change a dropdown.
 - **Segmentation is `Intl.Segmenter` unioned with the old regex, not either alone**
   (NRL-28, ADR 0009). `src/text/segment.ts` owns it, pure and dependency-free, and the
   segmenters arrive through an injected `SegmenterSource` so the no-segmenter path is
