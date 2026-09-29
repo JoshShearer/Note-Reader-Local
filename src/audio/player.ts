@@ -199,6 +199,12 @@ export class Player {
 
 	/** Kick off synthesis for the next few chunks. */
 	private primeBuffer(from: number): void {
+		// On an engine that owns playback, synthesize() is the act of speaking
+		// (spd-say, speechSynthesis). A prefetch there starts a second voice
+		// talking over the first, or on speechd queues extra clients in
+		// whatever order they reach the daemon. run() awaits one chunk at a
+		// time, which is the only pacing these engines need.
+		if (this.engine?.capabilities.ownsPlayback) return;
 		for (let i = from; i < Math.min(from + this.bufferAhead + 1, this.chunks.length); i++) {
 			if (this.pending.has(i)) continue;
 			void this.synthesize(i, this.controller?.signal ?? new AbortController().signal).catch(

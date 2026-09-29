@@ -352,6 +352,21 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 					}),
 			);
 
+		// The player never prefetches for an engine that speaks as it
+		// synthesises, so the slider would do nothing there. The stored value is
+		// left alone so switching back to a buffer engine restores it.
+		const engine = this.plugin
+			.getEngines()
+			.find((e) => e.id === this.plugin.settings.engine);
+		if (engine?.capabilities.ownsPlayback) {
+			new Setting(containerEl)
+				.setName("Look ahead")
+				.setDesc(
+					`Not used by ${engine.label}: it speaks each passage as it is produced, so there is nothing to prepare ahead.`,
+				);
+			return;
+		}
+
 		new Setting(containerEl)
 			.setName("Look ahead")
 			.setDesc("Passages synthesised ahead of the one playing. Higher is smoother but uses more work.")

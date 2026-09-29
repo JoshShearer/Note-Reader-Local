@@ -348,6 +348,62 @@ console.log("prefetch synthesises ahead of the current chunk");
 	await playing.catch(() => undefined);
 }
 
+console.log("buffer engine prefetches exactly bufferAhead + 1 chunks");
+{
+	// Pins the look-ahead that the ownsPlayback gate must leave alone.
+	const { engine, calls } = makeEngine();
+	const chunks = chunksOf(SRC);
+	check("fixture has enough chunks", chunks.length >= 5, `got ${chunks.length}`);
+	const player = new Player({ bufferAhead: 2 });
+	const playing = player.play(engine, chunks, 1);
+	await tick();
+	check("current chunk plus two ahead", calls.length === 3, `got ${calls.length}`);
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("an engine that owns playback is never prefetched");
+{
+	// On speechd and webspeech synthesize() is the act of speaking, so a
+	// prefetch is a second voice talking over the first (or, on speechd, a
+	// client queued in race order). One in flight at a time, in order.
+	const { engine } = makeEngine();
+	let inFlight = 0;
+	let peak = 0;
+	const order: number[] = [];
+	const chunks: SpeechChunk[] = Array.from({ length: 10 }, (_, i) => {
+		const text = `Sentence ${i}.`;
+		return {
+			text,
+			sourceIndex: Array.from(text, (_, k) => i * 100 + k),
+			sourceStart: i * 100,
+			sourceEnd: i * 100 + text.length,
+		};
+	});
+	const owning: SpeechEngine = {
+		...engine,
+		capabilities: { ...engine.capabilities, ownsPlayback: true },
+		async synthesize(req: SynthRequest): Promise<SynthResult> {
+			order.push(req.chunk.sourceStart / 100);
+			inFlight += 1;
+			peak = Math.max(peak, inFlight);
+			await new Promise((r) => setTimeout(r, 20));
+			inFlight -= 1;
+			return { kind: "streamed", estimatedMs: 0, words: null };
+		},
+	};
+
+	const player = new Player({ bufferAhead: 2 });
+	let finished = false;
+	player.on("finished", () => (finished = true));
+	await player.play(owning, chunks, 1);
+
+	check("finished the queue", finished);
+	check("at most one synthesize in flight", peak === 1, `peak ${peak}`);
+	check("every chunk spoken exactly once", order.length === 10, `got ${order.length}`);
+	check("spoken in chunk order", order.every((n, i) => n === i), order.join(","));
+}
+
 async function tick(): Promise<void> {
 	for (let i = 0; i < 12; i++) await Promise.resolve();
 	await new Promise((r) => setTimeout(r, 0));
