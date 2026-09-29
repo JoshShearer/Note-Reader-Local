@@ -33,8 +33,11 @@ npm run deploy         # build + copy into ~/Documents/Notes/.obsidian/plugins/
 npm run test:obsidian  # CDP smoke test; needs Obsidian on --remote-debugging-port=9222
 ```
 
-`tests/engine.test.ts` shells out to real `espeak-ng` and `spd-say` binaries on this
-machine. It is a Linux desktop test and will fail elsewhere.
+`tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running
+speech-dispatcher daemon (here with the `speech-dispatcher-espeak-ng` output module). It
+does not call the `espeak-ng` binary, which is not installed on this machine, so the
+`espeak.ts` engine has no real-binary coverage. It is a Linux desktop test and will fail
+elsewhere.
 
 ---
 
@@ -111,8 +114,6 @@ do not rediscover them:
 - `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` are stored in plugin data v1 but
   never read by `extract.ts`; they have no toggle by design (`docs/adr/0001`). Making
   those exclusions configurable is NRL-21.
-- `speechd` builds malformed `-y`/`-t` voice arguments; `spd-say` reports `Invalid voice`
-  on **stdout with exit 0**, and the error guard checks stderr, so it fails silently.
 - `replayCurrent` truncates the chunk array and resets the index, corrupting `n / total`.
 - `primeBuffer` prefetches against engines where `synthesize()` *is* speaking, producing
   overlapping speech on speechd and webspeech.
