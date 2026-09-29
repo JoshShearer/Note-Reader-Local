@@ -2,16 +2,26 @@ import { MarkdownView, Notice, Plugin, getLanguage, moment } from "obsidian";
 import { EditorView } from "@codemirror/view";
 
 import { Player } from "./audio/player";
-import type { EngineId, SpeechEngine } from "./audio/types";
+import type { SpeechEngine, VoiceInfo } from "./audio/types";
+import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
 import { resolveStoredVoice } from "./audio/voiceChoice";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
 import {
 	KokoroEngine,
+	KOKORO_WEIGHTS,
 	voiceFilePath,
 	type KokoroOptions,
 	type WeightsPreference,
 } from "./engines/onnx/kokoro";
+import { WebSpeechEngine } from "./engines/webspeech";
+import {
+	rankEngines,
+	resolveSelection,
+	type EngineProbe,
+	type EngineSelection,
+	type RankedCandidate,
+} from "./engines/selection";
 import { DEFAULT_SETTINGS, type Settings } from "./settings";
 import { loadPluginData, serialisePluginData, type PluginData } from "./settings/data";
 import { applyHighlight, registerHighlighting } from "./ui/highlight";
@@ -36,6 +46,14 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	private modelStore!: VaultModelStore;
 	private activeEditor: EditorView | null = null;
 	private controlBar!: ControlBar;
+	/**
+	 * The last automatic resolution computed, so `activeEngine()` has a sync
+	 * answer for UI call sites that cannot await (checkCallback, the control
+	 * bar). Only meaningful when `settings.engine === "auto"`; refreshed by
+	 * `resolveAutomaticChoice()`, which is the async, authoritative source of
+	 * truth (docs/adr/0010).
+	 */
+	private autoResolution: RankedCandidate | null = null;
 
 	override async onload(): Promise<void> {
 		trace(this.app, this.manifest.dir!, "plugin loaded");
@@ -88,6 +106,11 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		this.controlBar = new ControlBar(this);
 		this.refreshEngineAffordances();
+		// Kicked off now, not deferred to onLayoutReady: cheap (no model load,
+		// no download - just store.exists() and a GPU probe), and it feeds
+		// activeEngine()'s sync cache, which the control bar and the palette's
+		// checkCallback read before anything else has a chance to await it.
+		if (this.settings.engine === "auto") void this.resolveAutomaticChoice();
 
 		this.addRibbonIcon("audio-lines", "Read this note aloud", () => {
 			void this.readActiveNote().catch((err: unknown) => {
@@ -217,15 +240,6 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		}
 		t("editor found", `${current.source.length} chars`);
 
-		const engineId = this.settings.engine;
-		const engine = findEngine(this.engines, engineId);
-		if (!engine) {
-			t("no engine matched", `engineId=${engineId} available=${this.engines.map((e) => e.id).join(",")}`);
-			new Notice(`Local TTS Reader: no engine named "${engineId}".`, 6000);
-			return;
-		}
-		t("engine matched", engineId);
-
 		this.activeEditor = current.editor;
 		registerHighlighting(current.editor);
 
@@ -250,40 +264,104 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			return;
 		}
 
-		t("checking isAvailable", engineId);
-		const available = await engine.isAvailable();
-		t("isAvailable returned", `${engineId}=${available}`);
-		if (!available) {
-			new Notice(
-				`Local TTS Reader: ${engine.label} is not available. Pick another engine in settings.`,
-				8000,
-			);
+		// Captured once, as its own local: `this.settings.engine` is a mutable
+		// property, so re-reading it inside the `else` branch below would not
+		// narrow from EngineSelection to EngineId the way this local does.
+		const selection = this.settings.engine;
+		const isAutomatic = selection === "auto";
+		let candidates: FallbackCandidate[];
+		if (isAutomatic) {
+			t("resolving automatic candidates", "auto");
+			candidates = await this.rankedCandidates();
+			t("automatic candidates resolved", candidates.map((c) => c.id).join(","));
+			if (candidates.length === 0) {
+				new Notice("Local TTS Reader: no speech engine is available; check settings.", 8000);
+				return;
+			}
+		} else {
+			const engineId = selection;
+			const engine = findEngine(this.engines, engineId);
+			if (!engine) {
+				t(
+					"no engine matched",
+					`engineId=${engineId} available=${this.engines.map((e) => e.id).join(",")}`,
+				);
+				new Notice(`Local TTS Reader: no engine named "${engineId}".`, 6000);
+				return;
+			}
+			t("engine matched", engineId);
+
+			t("checking isAvailable", engineId);
+			const available = await engine.isAvailable();
+			t("isAvailable returned", `${engineId}=${available}`);
+			if (!available) {
+				new Notice(
+					`Local TTS Reader: ${engine.label} is not available. Pick another engine in settings.`,
+					8000,
+				);
+				return;
+			}
+			candidates = [{ engine, id: engineId, reason: "Manually selected." }];
+		}
+
+		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, {
+			beforeAttempt: async (candidate) => {
+				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
+				await this.selectVoiceIfNeeded(candidate.engine, voices);
+
+				// Loading can take seconds. Say so, rather than announcing
+				// playback that will not start yet and leaving the silence to
+				// speak for itself.
+				if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
+					const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
+					try {
+						t("loading engine", candidate.id);
+						const started = Date.now();
+						await candidate.engine.prepare();
+						t("engine loaded", `${candidate.id} in ${Date.now() - started}ms`);
+					} finally {
+						loading.hide();
+					}
+				}
+			},
+			onFallback: (from, to, err) => {
+				t("fallback", `${from.id} -> ${to.id}: ${errText(err)}`);
+				new Notice(
+					`Local TTS Reader: ${from.engine.label} failed (${errText(err)}); trying ${to.engine.label}.`,
+					6000,
+				);
+			},
+		});
+
+		if (!result) {
+			t("no candidate succeeded", candidates.map((c) => c.id).join(","));
+			new Notice("Local TTS Reader: no speech engine is available; check settings.", 8000);
 			return;
 		}
 
-		await this.selectVoiceIfNeeded(engine);
+		if (isAutomatic) this.autoResolution = { id: result.id, reason: result.reason };
 
-		// Loading can take seconds. Say so, rather than announcing playback
-		// that will not start yet and leaving the silence to speak for itself.
-		if (engine.prepare && engine.isPrepared?.() === false) {
-			const loading = new Notice(`Loading ${engine.label}...`, 0);
-			try {
-				t("loading engine", engineId);
-				const started = Date.now();
-				await engine.prepare();
-				t("engine loaded", `${engineId} in ${Date.now() - started}ms`);
-			} finally {
-				loading.hide();
-			}
-		}
-
-		const runtime = engine.runtimeInfo?.();
+		const runtime = result.engine.runtimeInfo?.();
 		new Notice(
-			`Reading ${chunks.length} passages with ${engine.label}${runtime ? ` on ${runtime}` : ""}.`,
+			`Reading ${chunks.length} passages with ${result.engine.label}${runtime ? ` on ${runtime}` : ""}.`,
 		);
-		t("playback started", engineId);
-		// Player emits failures via its error event rather than rejecting play().
-		await this.player.play(engine, chunks, this.settings.rate);
+		t("playback started", result.id);
+	}
+
+	/**
+	 * Voices `selectVoiceIfNeeded` is allowed to substitute from.
+	 *
+	 * In automatic mode, Web Speech is only ever offered voices
+	 * `hasLocalVoice()` already gated as local (see `buildProbes()`) - and
+	 * that gate has to reach the actual voice choice too, or a webspeech
+	 * candidate that was ranked because SOME voice is local could still have
+	 * a network voice substituted in as the one actually spoken, quietly
+	 * reopening the non-negotiable-4 gap this ticket closes. A manual pin to
+	 * Web Speech is unaffected: it always sees every voice, unchanged.
+	 */
+	private async voicesForSelection(engine: SpeechEngine, isAutomatic: boolean): Promise<VoiceInfo[]> {
+		if (isAutomatic && engine instanceof WebSpeechEngine) return await engine.listLocalVoices();
+		return await engine.listVoices();
 	}
 
 	/**
@@ -294,8 +372,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * first (on speech-dispatcher that is Afrikaans, out of thousands), and
 	 * the notice names both voices. It is persisted so the notice fires once.
 	 */
-	private async selectVoiceIfNeeded(engine: SpeechEngine): Promise<void> {
-		const voices = await engine.listVoices();
+	private async selectVoiceIfNeeded(engine: SpeechEngine, voices: VoiceInfo[]): Promise<void> {
 		if (voices.length === 0) return;
 		const resolved = resolveStoredVoice(engine, this.settings.voiceId, voices, appLocale());
 		await engine.selectVoice(resolved.voice);
@@ -329,9 +406,78 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		return this.modelStore;
 	}
 
-	/** The engine `settings.engine` names, or null if the registry has no such id. */
+	/**
+	 * The engine `settings.engine` currently means, or null.
+	 *
+	 * Synchronous and cached, for UI call sites that cannot await
+	 * (checkCallback, the control bar's capability gate). A manual pin
+	 * resolves immediately, exactly as before. "auto" reads the last
+	 * `resolveAutomaticChoice()` result - null until the first one completes,
+	 * which every UI caller already handles by treating a null engine as "no
+	 * capabilities to gate on yet" (main.ts, affordances.ts).
+	 */
 	activeEngine(): SpeechEngine | null {
-		return findEngine(this.engines, this.settings.engine) ?? null;
+		if (this.settings.engine !== "auto") return findEngine(this.engines, this.settings.engine) ?? null;
+		if (!this.autoResolution) return null;
+		return findEngine(this.engines, this.autoResolution.id) ?? null;
+	}
+
+	/**
+	 * Probe every engine's real, current availability - no model load, no
+	 * download (non-negotiable 6). Kokoro's probe additionally answers
+	 * whether its GPU/fp32 path is confirmed live right now
+	 * (`plannedBackend()`: a real `navigator.gpu.requestAdapter()` call plus
+	 * a vault stat, never a fetch); webspeech's probe folds in
+	 * `hasLocalVoice()`, so `selection.ts` never has to know what "local"
+	 * means for a browser voice (docs/adr/0010).
+	 */
+	private async buildProbes(): Promise<EngineProbe[]> {
+		return await Promise.all(
+			this.engines.map(async (engine): Promise<EngineProbe> => {
+				if (engine instanceof KokoroEngine) {
+					const available = await engine.isAvailable();
+					const plan = await engine.plannedBackend();
+					return {
+						id: "kokoro",
+						available,
+						kokoroGpuFp32Live: plan?.device === "webgpu" && plan.path === KOKORO_WEIGHTS.gpu.path,
+					};
+				}
+				if (engine instanceof WebSpeechEngine) {
+					return { id: "webspeech", available: await engine.hasLocalVoice() };
+				}
+				return { id: engine.id, available: await engine.isAvailable() };
+			}),
+		);
+	}
+
+	/**
+	 * The full ranked fallback chain for automatic selection, engines
+	 * attached - what `readActiveNote()` hands to `playWithFallback()`.
+	 * Re-probes every call: this is the async, authoritative source of
+	 * truth, as opposed to `activeEngine()`'s sync cache.
+	 */
+	async rankedCandidates(): Promise<FallbackCandidate[]> {
+		const probes = await this.buildProbes();
+		const out: FallbackCandidate[] = [];
+		for (const r of rankEngines(probes)) {
+			const engine = findEngine(this.engines, r.id);
+			if (engine) out.push({ engine, id: r.id, reason: r.reason });
+		}
+		return out;
+	}
+
+	/**
+	 * What automatic selection would pick right now, and why - the settings
+	 * tab's "chosen and why" line, and the source of `activeEngine()`'s cache
+	 * for as long as `settings.engine === "auto"`.
+	 */
+	async resolveAutomaticChoice(): Promise<RankedCandidate> {
+		const probes = await this.buildProbes();
+		const resolved = resolveSelection("auto", probes);
+		this.autoResolution = resolved;
+		this.refreshEngineAffordances();
+		return resolved;
 	}
 
 	/**
@@ -366,9 +512,10 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * Anything that depends on which engine is active is refreshed from here, so
 	 * changing engine takes effect without reloading the plugin.
 	 */
-	async setEngine(id: EngineId): Promise<void> {
+	async setEngine(id: EngineSelection): Promise<void> {
 		this.settings.engine = id;
 		await this.saveSettings();
+		if (id === "auto") await this.resolveAutomaticChoice();
 		this.refreshEngineAffordances();
 		void this.warmUpEngine();
 	}
@@ -484,6 +631,10 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	getPlayer(): Player {
 		return this.player;
 	}
+}
+
+function errText(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
 }
 
 /**

@@ -50,6 +50,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			.setName("Speech engine")
 			.setDesc("All engines run on this device. None of them send your notes anywhere.")
 			.addDropdown((dropdown) => {
+				dropdown.addOption("auto", "Automatic");
 				for (const engine of this.plugin.getEngines()) {
 					dropdown.addOption(engine.id, engine.label);
 				}
@@ -59,6 +60,15 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 					this.display();
 				});
 			});
+
+		if (this.plugin.settings.engine === "auto") {
+			const chosen = new Setting(containerEl).setName("Automatic picked").setDesc("Checking...");
+			void this.plugin.resolveAutomaticChoice().then((resolved) => {
+				if (!containerEl.isConnected) return;
+				const engine = this.plugin.getEngines().find((e) => e.id === resolved.id);
+				chosen.setDesc(`${engine?.label ?? resolved.id} - ${resolved.reason}`);
+			});
+		}
 
 		void this.plugin.getEngineStatuses().then((statuses) => {
 			if (!containerEl.isConnected) return;
@@ -85,7 +95,11 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			}
 		});
 
-		if (this.plugin.settings.engine === "kokoro") this.renderKokoroRuntime(containerEl);
+		// The resolved engine, not the literal stored id: with "Automatic"
+		// selected, `settings.engine` is the string "auto", which matches no
+		// engine.id and would hide this section even when automatic selection
+		// actually picked Kokoro.
+		if (this.plugin.activeEngine()?.id === "kokoro") this.renderKokoroRuntime(containerEl);
 		this.renderKokoroInstall(containerEl);
 	}
 
@@ -267,9 +281,11 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	private renderVoiceSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName("Voice").setHeading();
 
-		const engine = this.plugin
-			.getEngines()
-			.find((e) => e.id === this.plugin.settings.engine);
+		// The resolved engine: with "Automatic" selected this must be the
+		// engine automatic selection actually picked, or this section would
+		// vanish entirely (settings.engine is the literal string "auto",
+		// which matches no engine.id).
+		const engine = this.plugin.activeEngine();
 		if (!engine) return;
 
 		const setting = new Setting(containerEl)
@@ -376,10 +392,9 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 
 		// The player never prefetches for an engine that speaks as it
 		// synthesises, so the slider would do nothing there. The stored value is
-		// left alone so switching back to a buffer engine restores it.
-		const engine = this.plugin
-			.getEngines()
-			.find((e) => e.id === this.plugin.settings.engine);
+		// left alone so switching back to a buffer engine restores it. Resolved
+		// engine, same reason as renderVoiceSection above.
+		const engine = this.plugin.activeEngine();
 		if (engine?.capabilities.ownsPlayback) {
 			new Setting(containerEl)
 				.setName("Look ahead")

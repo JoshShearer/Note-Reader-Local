@@ -124,6 +124,27 @@ export class WebSpeechEngine implements SpeechEngine {
 		return this.voices;
 	}
 
+	/**
+	 * Whether at least one voice is confirmed local, for automatic selection.
+	 *
+	 * Fails closed: `SpeechSynthesisVoice.localService` is `boolean |
+	 * undefined`, and `undefined` counts as NOT local, the same as an
+	 * explicit `false`. `CAPABILITIES.offlineStatus` stays `false` - this is
+	 * a narrower, automatic-selection-only signal, not a general "which
+	 * voices need the network" answer (AGENTS.md non-negotiable 4). A manual
+	 * pin to this engine never calls this method and is unaffected.
+	 */
+	async hasLocalVoice(): Promise<boolean> {
+		const raw = await waitForVoices();
+		return raw.some((v) => v.localService === true);
+	}
+
+	/** Only the voices `hasLocalVoice()` would count as local, mapped like `listVoices()`. */
+	async listLocalVoices(): Promise<VoiceInfo[]> {
+		const raw = await waitForVoices();
+		return raw.filter((v) => v.localService === true).map(toVoiceInfo);
+	}
+
 	async selectVoice(voice: VoiceInfo): Promise<void> {
 		this.voice = voice;
 	}
