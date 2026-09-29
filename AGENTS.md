@@ -112,8 +112,23 @@ The working tree passes its gates. The audit against `srs.md` that opened this r
 tickets have closed gaps against it, so treat it as a floor rather than as current state.
 One confirmed move: R-M14 (backend capability detection) is met as of NRL-22, because
 every capability that differs across the four engines now gates the control it affects,
-and the ones that gate nothing have no control to gate. The remaining gap is tracked in
-Linear. Notable reproduced defects, so you do not rediscover them:
+and the ones that gate nothing have no control to gate.
+
+R-M09 (configurable content exclusions) did **not** move, and the reason matters because
+NRL-21's title invites the opposite conclusion. Its *configurability* half is met: all six
+exclusions the requirement names have a live toggle at the spec's default, each toggle
+demonstrably moves extraction in both positions, and inline code is separable from fenced
+code. (Measured at `ad1027d` by bundling the real `extract.ts` and sweeping all 512
+combinations of the nine content keys.) Its *reduction* half is not. `srs.md:307` promises
+that an image's "destination and any quoted title are never spoken", and two shapes still
+speak one, in **both** positions of `speakImageAlt`: a label holding another bracket
+construct (`![a [[N|l]] b](dest.png)`) and an alt text crossing a soft line break (NRL-44
+F9). A third speaks a fragment of one, `![alt](dest(1).png)` saying `.png)`. All three are
+pre-existing, all are tracked, and none was opened by NRL-21. Do not record R-M09 as met
+until they close.
+
+The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
+rediscover them:
 
 - `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` became live `ExtractOptions` fields in
   NRL-21 (`docs/adr/0008`), and all nine content keys now have one toggle each in the

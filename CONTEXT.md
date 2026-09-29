@@ -129,6 +129,17 @@ of the vault and re-wraps them as same-origin blobs.
 update does not discard hundreds of megabytes, and out of the file tree so they do not
 clutter the vault.
 
+**One setting key, one option field, no negation.** Each row in the settings tab's
+"Content" group writes exactly one `Settings` key, `main.ts` hands that key to the
+identically named and identically polarised field on `ExtractOptions`, and every one of
+those fields is **required** rather than optional. The shape is deliberate, because the
+dead-toggle defect has landed twice in two different disguises: a stored key that
+extraction never read at all (`speakImageAlt`, `speakEmbeds` and `skipFrontmatter` until
+NRL-21) and one row quietly writing two keys (the old shared "Code" switch). An optional
+field with a default is how the first kind hides; a required one makes the compiler name
+every call site. Adding a tenth exclusion means a key, a field and a row, not a clever
+shared control.
+
 **One player, many engines.** `Player` holds the queue, the index and the state. It is
 the only thing that decides what is spoken next. Engines do not know about each other,
 about documents, or about the editor.
