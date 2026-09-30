@@ -1413,6 +1413,17 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		// F9, NRL-63: an image whose alt text crosses a soft line break is not
 		// recognised as an image at all, so its destination is spoken as prose.
 		["pin-nrl63-softwrapped-image", "A ![alt\nwords](zdestz.png) B", "A [alt words](zdestz.png) B", { skipInlineCode: false }],
+		// NRL-68, closed as not-a-defect. A trailing mid-line %% is NOT a block
+		// opener in Obsidian: its %% tokenizer is a block tokenizer, skips leading
+		// spaces only, and then requires %% at the block start (read out of the
+		// installed obsidian.asar, ADR 0006 clause 2). So HIDEME is displayed there
+		// and speaking it is right. This is a GUARD, not a regression test - it
+		// passes before and after NRL-68 because no code changed, and it exists so
+		// the correct behaviour cannot be "fixed" back on the original bug report.
+		["pin-nrl68-midline-opener-is-literal", "Plain prose %%\nHIDEME\n%%", "Plain prose %% HIDEME"],
+		// The control for it: at the start of a line the same %% does open a block,
+		// and the hidden text stays silent.
+		["pin-nrl68-line-start-opener-hides", "%%\nHIDEME\n%%", ""],
 		// The paragraph join added a second space after any line whose last
 		// mapped character was already one.
 		["join-inline-comment", "Before %%hidden%%\nafter.", "Before after."],
