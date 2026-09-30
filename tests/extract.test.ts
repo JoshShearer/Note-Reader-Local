@@ -1515,6 +1515,39 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		 */
 		["no-extension-dockerfile", "Before ![[Dockerfile]] after.", "Before after.", "Before Dockerfile after."],
 		["no-extension-licence", "Before ![[LICENSE]] after.", "Before after.", "Before LICENSE after."],
+		/*
+		 * NRL-46 / ADR 0014: the label is the target's FINAL path segment, on
+		 * either separator, so the folder segments above it are never read
+		 * aloud. Every row below spoke its whole path before the change; the
+		 * sentinel rows exist so a regression fails by name rather than by
+		 * string diff.
+		 */
+		["folder-nested", "Before ![[private/folder/Secret Note]] after.", "Before after.", "Before Secret Note after."],
+		["folder-leading-slash", "Before ![[/Leading Slash]] after.", "Before after.", "Before Leading Slash after."],
+		["folder-windows", "Before ![[C:\\Users\\me\\Secret Note]] after.", "Before after.", "Before Secret Note after."],
+		["folder-mixed-sep", "Before ![[a/b\\c/Secret Note]] after.", "Before after.", "Before Secret Note after."],
+		["folder-trailing-sep", "Before ![[folder/]] after.", "Before after.", "Before folder after."],
+		["folder-trailing-sep-nested", "Before ![[folder/subfolder/]] after.", "Before after.", "Before subfolder after."],
+		["folder-sep-only", "Before ![[/]] after.", "Before after.", "Before after."],
+		["folder-sentinel", "Before ![[FOLDERSENTINEL/deep/Leaf Note]] after.", "Before after.", "Before Leaf Note after."],
+		["folder-sentinel-windows", "Before ![[DRIVESENTINEL:\\FOLDERSENTINEL\\Leaf Note]] after.", "Before after.", "Before Leaf Note after."],
+		/*
+		 * The one row that moves isFileTarget in the DISCLOSING direction, so
+		 * it is pinned deliberately. Splitting the final segment on `\` too
+		 * means the only dot here lives in a FOLDER, not in the leaf, so this
+		 * target is reclassified from file (silent before) to note. It is only
+		 * safe because the label is simultaneously reduced to `Note`: before
+		 * the change this row read "Before after." in both positions.
+		 */
+		["folder-windows-dotted-folder", "Before ![[C:\\v1.2\\Note]] after.", "Before after.", "Before Note after."],
+		/*
+		 * A URL target reduces to its host by the R-M09 URL rule (hostSpan),
+		 * which is also what strips the userinfo. The dotted-leaf row stays
+		 * silent because the isFileTarget guard runs first, on purpose.
+		 */
+		["folder-url", "Before ![[https://example.com/a/b]] after.", "Before after.", "Before example.com after."],
+		["folder-url-cred", "Before ![[https://CREDSENTINEL:CREDSENTINEL@example.com/FOLDERSENTINEL/x]] after.", "Before after.", "Before example.com after."],
+		["folder-url-dotted-leaf", "Before ![[https://x.com/a.png]] after.", "Before after.", "Before after."],
 	];
 	for (const [id, src, dropped, read] of embedCases) {
 		const off = say(src, { speakEmbeds: false });
@@ -1525,6 +1558,13 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 			check(`NRL-21 embed ${id} (${label}) never speaks a bracket`, !got.includes("[") && !got.includes("]"), `got: ${JSON.stringify(got)}`);
 			check(`NRL-21 embed ${id} (${label}) never discloses a comment`, !got.includes("SECRET"), `got: ${JSON.stringify(got)}`);
 			check(`NRL-21 embed ${id} (${label}) never speaks an image destination`, !got.includes("pic.png") && !got.includes("report.pdf"), `got: ${JSON.stringify(got)}`);
+			// NRL-46: a folder segment, a drive letter and a URL's userinfo are
+			// all destination-shaped, so none of them may ever be spoken.
+			check(
+				`NRL-46 embed ${id} (${label}) never speaks a folder, drive or credential sentinel`,
+				!got.includes("FOLDERSENTINEL") && !got.includes("DRIVESENTINEL") && !got.includes("CREDSENTINEL"),
+				`got: ${JSON.stringify(got)}`,
+			);
 		}
 	}
 
@@ -1541,6 +1581,133 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 			const got = say(src, { speakEmbeds });
 			check(`NRL-21 embed extension of ${len} char(s) is silent (speakEmbeds ${speakEmbeds})`, got === "Before after.", `got: ${JSON.stringify(got)}`);
 			check(`NRL-21 embed extension of ${len} char(s) speaks no stem (speakEmbeds ${speakEmbeds})`, !got.includes("SENTINELSTEM"), `got: ${JSON.stringify(got)}`);
+		}
+	}
+
+	/*
+	 * NRL-46 / ADR 0014: a link label is the target's FINAL path segment.
+	 *
+	 * The table drives BOTH constructs from one target so the parity srs.md
+	 * promises is asserted rather than assumed: emitWikiLabel is shared, and a
+	 * row that diverged would fail here before it failed the embed table above.
+	 * Every row also runs in both `speakUrls` positions, because a wikilink
+	 * label is spoken regardless of that setting - including a URL target,
+	 * whose host reduction is therefore unconditional.
+	 *
+	 * `embedSilent` marks the rows where the embed branch's isFileTarget guard
+	 * fires first and silences the target; parity does not apply there, by
+	 * design (ADR 0008 clause 5 errs towards silence).
+	 */
+	const linkTargets: Array<[string, string, string, boolean]> = [
+		// id, target text between the brackets, spoken label, embed silent?
+		["nested-folders", "private/folder/Secret Note", "Secret Note", false],
+		["leading-slash", "/Leading Slash", "Leading Slash", false],
+		// No-regression anchors: these two spoke the right thing before the
+		// change and must keep doing so. The alias is the existing workaround
+		// for the disambiguation the final-segment rule gives up.
+		["single-segment", "Some Note", "Some Note", false],
+		["alias-overrides", "private/folder/Secret Note|the alias", "the alias", false],
+		["windows-path", "C:\\Users\\me\\Secret Note", "Secret Note", false],
+		["mixed-separators", "a/b\\c/Secret Note", "Secret Note", false],
+		// The disclosing-direction reclassification: silent as an embed before.
+		["windows-dotted-folder", "C:\\v1.2\\Note", "Note", false],
+		["trailing-separator", "folder/", "folder", false],
+		["trailing-separator-nested", "folder/subfolder/", "subfolder", false],
+		// Nothing left after the reduction, so nothing is spoken.
+		["separator-only", "/", "", false],
+		["heading-anchor", "Some Note#Section Two", "Some Note Section Two", false],
+		["folder-and-heading", "private/folder/Secret Note#Section Two", "Secret Note Section Two", false],
+		["folder-and-block-id", "private/folder/Secret Note#^abc123", "Secret Note", false],
+		["url-userinfo", "https://CREDSENTINEL:CREDSENTINEL@example.com/a/b", "example.com", false],
+		["url-www", "www.example.com/FOLDERSENTINEL/b", "example.com", false],
+		["url-fragment", "https://example.com/a#frag", "example.com", false],
+		["sentinel-folder", "FOLDERSENTINEL/deep/Leaf Note", "Leaf Note", false],
+		["sentinel-drive", "DRIVESENTINEL:\\FOLDERSENTINEL\\Leaf Note", "Leaf Note", false],
+		// isFileTarget runs before the URL rule, so a dotted final segment
+		// silences the embed even though the wikilink reduces to the host.
+		["url-dotted-leaf", "https://x.com/a.png", "x.com", true],
+		["dotted-note-title", "Version 1.2 notes", "Version 1.2 notes", true],
+	];
+	for (const [id, target, label, embedSilent] of linkTargets) {
+		const want = label === "" ? "Before after." : `Before ${label} after.`;
+		for (const speakUrls of [false, true]) {
+			const wiki = say(`Before [[${target}]] after.`, { speakUrls });
+			check(`NRL-46 wikilink ${id} (speakUrls ${speakUrls})`, wiki === want, `got: ${JSON.stringify(wiki)}`);
+			const on = say(`Before ![[${target}]] after.`, { speakUrls, speakEmbeds: true });
+			check(
+				`NRL-46 embed ${id} (speakUrls ${speakUrls}) ${embedSilent ? "is silenced by isFileTarget" : "matches the wikilink label"}`,
+				on === (embedSilent ? "Before after." : want),
+				`got: ${JSON.stringify(on)}`,
+			);
+			const off = say(`Before ![[${target}]] after.`, { speakUrls, speakEmbeds: false });
+			check(`NRL-46 embed ${id} silent with speakEmbeds off (speakUrls ${speakUrls})`, off === "Before after.", `got: ${JSON.stringify(off)}`);
+			for (const [pos, got] of [["wiki", wiki], ["embed on", on], ["embed off", off]] as const) {
+				check(
+					`NRL-46 ${id} (${pos}, speakUrls ${speakUrls}) discloses no folder, drive or credential`,
+					!got.includes("FOLDERSENTINEL") && !got.includes("DRIVESENTINEL") && !got.includes("CREDSENTINEL"),
+					`got: ${JSON.stringify(got)}`,
+				);
+			}
+		}
+	}
+
+	/*
+	 * NRL-46 pin, a PRE-EXISTING defect this ticket did NOT fix.
+	 *
+	 * A target ending in a backslash immediately before the closer means the
+	 * line holds `\]]`. inlineContainerClose never finds a `]]`, so the whole
+	 * `[[` is treated as unterminated, the brackets are dropped, and the target
+	 * is then read as ordinary prose - through the escape branch, which eats the
+	 * backslashes and speaks the folder segment and one literal `]`. The
+	 * final-segment reduction never runs, because the wikilink branch never
+	 * fires. Measured byte-identical on the merge base 789d3c2 and on this
+	 * working tree by bundling both extractors, so it is not merge drift and it
+	 * is out of this ticket's scope; pinned so it can only change deliberately.
+	 */
+	for (const src of ["Before [[pinfolder\\Leaf Note\\]] after.", "Before ![[pinfolder\\Leaf Note\\]] after."]) {
+		for (const speakEmbeds of [false, true]) {
+			const got = say(src, { speakEmbeds });
+			check(
+				`NRL-46 pin-unterminated-by-escape ${JSON.stringify(src)} (speakEmbeds ${speakEmbeds})`,
+				got === "Before pinfolderLeaf Note]] after.",
+				`got: ${JSON.stringify(got)}`,
+			);
+		}
+	}
+
+	/*
+	 * NRL-46 pin, a SECOND pre-existing defect this ticket did not fix, found by
+	 * the Ship critique rather than by the ticket.
+	 *
+	 * A link target is emitted raw rather than re-cleaned - deliberately, so the
+	 * tag branch cannot eat `#Section` when stripTags is on - so a comment span
+	 * written INSIDE the brackets is spoken, markers and all. That contradicts
+	 * srs.md's promise that `%%` and `<!-- -->` content is never spoken, but only
+	 * within `[[ ]]`, and it is not this change's doing: measured byte-identical
+	 * in kind on the merge base 789d3c2, which spoke the same comment with the
+	 * folder path in front of it. The final-segment reduction strictly shrinks
+	 * what is disclosed here; it does not introduce it. No content key moves it
+	 * except speakEmbeds, which decides whether the embed speaks at all.
+	 * Fixing it means re-cleaning the target, which is a different decision and
+	 * needs its own ADR, so it is pinned rather than patched.
+	 */
+	for (const [src, want] of [
+		["Before [[pincomment/Leaf%%SECRET%%]] after.", "Before Leaf%%SECRET%% after."],
+		["Before [[pincomment/<!--SECRET-->Leaf]] after.", "Before <!--SECRET-->Leaf after."],
+	] as const) {
+		for (const speakEmbeds of [false, true]) {
+			const got = say(src, { speakEmbeds });
+			check(
+				`NRL-46 pin-comment-inside-target ${JSON.stringify(src)} (speakEmbeds ${speakEmbeds})`,
+				got === want,
+				`got: ${JSON.stringify(got)}`,
+			);
+			// The half this change IS responsible for: the folder is gone.
+			check(
+				`NRL-46 pin-comment-inside-target ${JSON.stringify(src)} still drops the folder (speakEmbeds ${speakEmbeds})`,
+				!got.includes("pincomment"),
+				`got: ${JSON.stringify(got)}`,
+			);
 		}
 	}
 
@@ -1595,6 +1762,10 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		["comments", "Before %%hidden%% after.\n\n<!--\nblock hidden\n-->\nTail prose here."],
 		["soft-code-span", "Before `first\n%%literal%%\nlast` after."],
 		["mixed", "---\nkey: value\n---\n# H One\n\nText `c` and ![a](i.png) and ![[E]] and #t and https://x.com/y here.\n\n| p | q |"],
+		// NRL-46: a reduced label emits from part-way into the target, so its
+		// offsets are the shape most likely to drift out of lockstep.
+		["link-folder-targets", "Go to [[private/folder/Secret Note]] and ![[a/b/Deep Note]] and [[/Leading Slash]] and [[folder/]] now."],
+		["link-odd-targets", "See [[https://user:pw@example.com/a/b]] and [[C:\\Users\\me\\Secret Note]] and ![[C:\\v1.2\\Note]] now."],
 	];
 	let sweepRuns = 0;
 	let sweepBad = "";
@@ -1623,7 +1794,11 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		}
 	}
 	check(`NRL-21 sourceIndex lockstep over ${sweepRuns} option combinations`, sweepBad === "", sweepBad);
-	check("NRL-21 sweep really ran every combination", sweepRuns === corpus.length * (1 << keys.length) && sweepRuns === 16 * 512, String(sweepRuns));
+	// The product is spelled out deliberately: it is the did-the-sweep-really-run
+	// pin, so a corpus row added or lost must edit this literal rather than
+	// silently change what "every combination" means. 16 rows at NRL-21, plus
+	// the two NRL-46 link-target rows.
+	check("NRL-21 sweep really ran every combination", sweepRuns === corpus.length * (1 << keys.length) && sweepRuns === 18 * 512, String(sweepRuns));
 }
 
 console.log("NRL-28 Unicode sentence segmentation and grapheme-safe splitting (R-M10)");

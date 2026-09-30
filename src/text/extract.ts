@@ -183,13 +183,68 @@ const EMBED_SIZING_ALIAS = /^\d+(?:[xX]\d+)?$/;
  *
  * Classification trims, emission does not, so a stray space inside the
  * brackets cannot turn `![[Some Note.md ]]` into a file.
+ *
+ * The final segment ends at the last separator of EITHER kind, `/` or `\`, so a
+ * Windows-style target is split the same way a vault-relative one is (ADR 0014).
+ * That moves one shape in the DISCLOSING direction, which is the direction ADR
+ * 0008 clause 5 says this must not fail in, so it is recorded here rather than
+ * left to be discovered: `![[C:\v1.2\Note]]` used to have `C:\v1.2\Note` as its
+ * whole "final segment", the last dot put `2\Note` after it, and the target was
+ * classified a file and silenced. Splitting on `\` makes the leaf `Note`, which
+ * has no dot, so the target is now a note and IS spoken. It is only acceptable
+ * because emitWikiLabel reduces the label to that same final segment in the same
+ * change: what becomes newly spoken is `Note`, never the drive or the folder.
+ * The two must land together, and a probe over the whole target matrix in all
+ * 512 option combinations confirmed the reclassification set is exactly the
+ * targets whose only dot lives in a backslash-separated non-final segment.
+ *
+ * It classifies whatever finalSegment() will SPEAK, never a different slice of
+ * the target. The first cut of this change split here and in emitWikiLabel
+ * separately, and the probe caught them disagreeing: for `![[f\pic.png\#Head]]`
+ * this saw the empty segment after the trailing `\`, called it a note, and the
+ * label's own trailing-separator fallback then said `pic.png` - a filename newly
+ * spoken where the base was silent. One shared helper makes that class of
+ * disagreement unrepresentable rather than merely fixed.
  */
 function isFileTarget(target: string): boolean {
 	const path = target.split("#")[0]!;
-	const name = path.slice(path.lastIndexOf("/") + 1).trim();
+	const name = finalSegment(path).text.trim();
 	const dot = name.lastIndexOf(".");
 	return dot !== -1 && !/^(?:md|markdown)$/i.test(name.slice(dot + 1));
 }
+
+/**
+ * The part of a path that is a name rather than folder structure: everything
+ * after the last separator, where both `/` and `\` count (see isFileTarget).
+ *
+ * A trailing separator leaves that empty, so it falls back to the last non-empty
+ * segment - `folder/sub/` is a reference to `sub`, not to nothing. A path that is
+ * nothing but separators has no name at all and yields the empty string.
+ *
+ * `start` is the offset of `text` within `path`, which is what lets the caller
+ * emit each character at its true raw offset (AGENTS.md rule 8).
+ */
+function finalSegment(path: string): { start: number; text: string } {
+	let text = path;
+	let start = 0;
+	for (;;) {
+		const cut = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
+		if (cut === -1) return { start, text };
+		if (cut === text.length - 1) {
+			// A trailing separator: drop it and look again for a real name.
+			text = text.slice(0, cut);
+			continue;
+		}
+		return { start: start + cut + 1, text: text.slice(cut + 1) };
+	}
+}
+
+/**
+ * Start of a bare URL. One definition, shared by the bare-URL branch in prose
+ * and by the URL rule for a link target, so the two cannot drift apart into
+ * disagreeing about what a URL is.
+ */
+const BARE_URL_START = /^(https?:\/\/|www\.)/i;
 
 /**
  * Math is spoken as the single word "equation" (docs/adr/0004).
@@ -363,11 +418,49 @@ function cleanLine(
 		}
 		const targetEnd = hasPipe ? pipe : close;
 		if (isEmbed && isFileTarget(raw.slice(innerStart, targetEnd))) return;
+		// Only the part before `#` is a path, so only that part is reduced -
+		// the same split isFileTarget makes. What follows is a heading or a
+		// block id and its handling below is unchanged.
+		const hash = raw.indexOf("#", innerStart);
+		const pathEnd = hash !== -1 && hash < targetEnd ? hash : targetEnd;
+		const path = raw.slice(innerStart, pathEnd);
+
+		// A URL target has no meaningful final segment, so it reduces by the one
+		// destination rule this repo already wrote down: hostSpan, exactly as a
+		// bare URL in prose does (docs/adr/0003). Unconditional, NOT gated on
+		// opts.speakUrls, because a wikilink label is spoken regardless of that
+		// setting - the reduction is what keeps the path and the userinfo out of
+		// the speech, and gating it would put them back. Any `#fragment` is
+		// suppressed rather than read as a pause: a fragment is destination-
+		// shaped for the same reason the path is (ADR 0014).
+		const lead = path.length - path.trimStart().length;
+		const trimmedPath = path.trim();
+		if (BARE_URL_START.test(trimmedPath)) {
+			const host = hostSpan(trimmedPath);
+			for (let k = host.start; k < host.end; k++) {
+				emit(trimmedPath[k]!, rawStart + innerStart + lead + k);
+			}
+			return;
+		}
+
+		// Otherwise the label is the final path segment only: the segments above
+		// it are vault folder structure, which is a destination and must never be
+		// read aloud (R-M09, ADR 0014). The same finalSegment() the embed guard
+		// classified with, so the two can never disagree about which part of the
+		// target is a name. The dropped prefix needs no space of its own - both
+		// call sites pushSpace before the label, so the words either side are
+		// already separated.
+		const seg = finalSegment(path);
+		const segStart = innerStart + seg.start;
+		const segEnd = segStart + seg.text.length;
+
 		// The target is a path, not prose, so it is emitted directly rather
 		// than re-cleaned: the tag branch would otherwise eat `#Section`
 		// when stripTags is on. A `#` separates note from heading and is
 		// read as a pause. `#^id` is a block id, opaque and unspeakable.
-		for (let k = innerStart; k < targetEnd; k++) {
+		for (let k = segStart; k < targetEnd; k++) {
+			// The trailing separator run finalSegment() stepped back over.
+			if (k >= segEnd && k < pathEnd) continue;
 			const c = raw[k]!;
 			if (c === "#" && raw[k + 1] === "^") break;
 			if (c === "#" || /\s/.test(c)) pushSpace(rawStart + k);
@@ -664,10 +757,7 @@ function cleanLine(
 		// or query read aloud is noise, and the host is the part a listener can
 		// recognise; see docs/adr/0003. Markdown links and wikilinks never reach
 		// here, their branches above consume them first.
-		if (
-			(ch === "h" || ch === "w") &&
-			/^(https?:\/\/|www\.)/i.test(raw.slice(i, i + 8))
-		) {
+		if ((ch === "h" || ch === "w") && BARE_URL_START.test(raw.slice(i, i + 8))) {
 			let end = i;
 			while (end < raw.length && !/\s/.test(raw[end]!)) end += 1;
 			if (opts.speakUrls) {
