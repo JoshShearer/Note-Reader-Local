@@ -111,7 +111,8 @@ Three questions, answered against the diff:
 
 1. **Most likely failure mode.** What breaks first on a real note in a real Obsidian? Name the
    input.
-2. **The untested path.** Which branch has no coverage in the 7 suites?
+2. **The untested path.** Which branch has no coverage in the suites `npm test` runs?
+   (`AGENTS.md`'s quality-gates block is the one place that names them.)
 3. **The implicit assumption.** What does this assume without validating? Check it against the
    four structural gaps in `CONTEXT.md`: `Player` has no file identity, capabilities are
    advertised and not consumed, there is no engine fallback chain, segmentation is one regex.
