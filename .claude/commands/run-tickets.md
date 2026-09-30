@@ -492,13 +492,13 @@ Confirm that (`git fetch origin && git rev-parse HEAD origin/main` agree) and br
 `start-issue.md`'s worktree step (step 5, which offers to create a worktree) does not apply: you are
 already in one. Do not create another, and do not deploy.
 
-Fetch the issue and write `title`, `requirement`, `type`,
-`descriptionSnapshot` and `branch` into this ticket's state entry. Set the Linear status to In
-Progress: call `list_issue_statuses` first and use the id whose name is exactly `In Progress`, then
-read the status back rather than trusting the write. Set `phase: \"plan\"`,
-`status: \"in_progress\"`, append history. If a branch collision or anything else needs a decision
-`start-issue.md` cannot make, set `status: \"blocked\"` with `blockedReason` and stop. Do not
-guess."
+Fetch the issue and write `title`, `requirement`, `type`, `descriptionSnapshot` and `branch` into
+this ticket's state entry. Set the Linear status to In Progress with `save_issue`, passing `id` and
+`state: \"In Progress\"`: the parameter is `state`, never `status`, and unknown fields are rejected,
+so no id lookup is needed. Read the status back afterwards rather than trusting the write. Set
+`phase: \"plan\"`, `status: \"in_progress\"`, append history. If a branch collision or anything else
+needs a decision `start-issue.md` cannot make, set `status: \"blocked\"` with `blockedReason` and
+stop. Do not guess."
 
 **2. Plan** - "You are in `<run-worktree>`. Read `<ID>`'s `descriptionSnapshot`, `clarification` and
 `reproduction` from `<state-file>`. Line numbers in the ticket may be stale if earlier tickets in this
@@ -633,19 +633,19 @@ delete the checkout the next ticket needs.
 git checkout <run-branch> && git fetch origin && git reset --hard origin/main
 ```
 
-Verify the merge by content, not just by branch state: this repo squashes, so
-`git branch -d` can claim 'not merged' for work that is fully in `main`. Grep the resynced lane for a
-distinctive symbol the PR added before deleting, and use `-D` only once content is confirmed. Set
-the Linear status to Done by reading `list_issue_statuses` rather than a remembered id, and read
-the status back. Then check whether this ticket removed one of the defects listed in the
-`AGENTS.md` Known state section, or moved a requirement's status in `srs.md`. If so, make the doc
-edit on a `docs/<id>-finish` branch, open a PR, and squash-merge it yourself; never commit to
-`main` directly. Only move a requirement to fully met with evidence, and name that evidence.
-Finally, take `<deploy-lock>` atomically with `mkdir` and run `npm run deploy` from the resynced lane
-so the owner's vault carries the latest merged build, then write `.deployed-from` with this lane's
-path and commit, and release the lock. If the lock cannot be taken, skip the deploy and name the
-holder; do not wait. Leave the lane on `<run-branch>`, clean and at `origin/main`. Set
-`phase: \"finish\"`, `status: \"done\"`."
+Verify the merge by content, not just by branch state: this repo squashes, so `git branch -d` can
+claim 'not merged' for work that is fully in `main`. Grep the resynced lane for a distinctive symbol
+the PR added before deleting, and use `-D` only once content is confirmed. Set the Linear status to
+Done with `save_issue`, passing `id` and `state: \"Done\"`: the parameter is `state`, never
+`status`, and unknown fields are rejected, so no id lookup is needed. Read the status back. Then
+check whether this ticket removed one of the defects listed in the `AGENTS.md` Known state section,
+or moved a requirement's status in `srs.md`. If so, make the doc edit on a `docs/<id>-finish`
+branch, open a PR, and squash-merge it yourself; never commit to `main` directly. Only move a
+requirement to fully met with evidence, and name that evidence. Finally, take `<deploy-lock>`
+atomically with `mkdir` and run `npm run deploy` from the resynced lane so the owner's vault carries
+the latest merged build, then write `.deployed-from` with this lane's path and commit, and release
+the lock. If the lock cannot be taken, skip the deploy and name the holder; do not wait. Leave the
+lane on `<run-branch>`, clean and at `origin/main`. Set `phase: \"finish\"`, `status: \"done\"`."
 
 ## Step 8: Clean up the lane, once, at the end of the run
 
@@ -814,7 +814,7 @@ next run leaves a second sibling beside it.
 |---|---|
 | No Linear tool in the available list | Continue git-only. Print the status transitions and comments that would have been sent, and record them in the state file. Never block a commit on a missing tracker. **Say it in the end-of-run report**; a degraded run must not read as a clean one. |
 | A named Linear operation is not in the tool list, but others are | The server is fine and the operation was renamed. Find the equivalent (`save_comment`, not `create_comment`) and use it. Do not fall through to the git-only path: that row is for an absent tracker, and taking it here hides a fixable typo behind a success report. |
-| A Linear status write appears to succeed but reads back wrong | Re-fetch `list_issue_statuses` and retry once with the fresh id. If it still reads back wrong, block the ticket and continue. Do not trust a remembered status id. |
+| A Linear status write appears to succeed but reads back wrong | The write is `save_issue` with `id` and `state`, and `state` takes a state name; there is no `status` parameter and unknown fields are rejected, so a call naming `status` fails input validation rather than writing. Confirm the name exists on this team with `list_issue_statuses`, retry once, and if it still reads back wrong, block the ticket and continue. |
 | A permission prompt appears mid-run | The run was launched wrong; see "How to launch it, per runtime". Stop and report which command was gated. Never edit `opencode.json` or the Claude Code settings from inside a run to get past it. |
 | `npm test` fails at an early suite | Remember the `&&` chain hides later suites. Re-run the remaining ones individually before concluding anything about scope. |
 | `tests/engine.test.ts` fails | It shells out to real `espeak-ng` and `spd-say`. Check the binaries before assuming the code broke. |
