@@ -207,7 +207,12 @@ content-key combinations = **15,360 cells: 13,312 leaking on base, 0 on the
 fix**. A wider direction sweep that inserts a backslash at **every** position of
 8 sentinel-bearing targets (242 targets x 2 constructs x 512 = **247,808
 cells**) found **0** cells where a sentinel is audible on the fix and silent on
-the base, and **7,168** where the fix silences one. `sourceIndex` checked
+the base, and **7,168** where the fix silences one. That **0** is scoped to this
+corpus and must be read with the first cost below: none of those 242 targets
+contains a literal `]]`, which is the one shape that does newly speak. A sweep
+whose corpus includes it finds the 3,072 base-parity cells recorded there, so the
+two numbers are consistent rather than contradictory - but the 0 is not a
+universal claim and must not be quoted as one. `sourceIndex` checked
 numerically by UTF-16 code-unit index for length, monotonicity, bounds and
 character identity: **0 failures over 571,904 units**. Twelve assertions were red
 against the unfixed extractor and green after.
