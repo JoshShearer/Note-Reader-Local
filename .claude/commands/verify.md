@@ -2,8 +2,12 @@
 description: Run the local gates, deploy into real Obsidian, walk a manual test plan, and post what was actually observed to the Linear issue.
 ---
 
-Verify a change. There is no CI in this repo, so nothing has already run the gates. This
-command runs them, then does the part the gates cannot do.
+Verify a change. `.github/workflows/ci.yml` runs the gates on `push` and `pull_request` and
+`.github/workflows/release.yml` runs on tags, but there is still no lint script and no git
+hook, and the check is a backstop rather than the source of truth. This command runs the
+gates itself, then does the part the gates cannot do. You **may** read a check conclusion
+once and report it; you **must not** wait on it. Branch protection is deliberately out of
+scope, so a red check does not block a merge.
 
 Conventions: `.claude/linear.md`.
 

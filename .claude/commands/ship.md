@@ -5,9 +5,11 @@ description: Run the gates, take an adversarial pass over the diff, commit, push
 Conventions: `.claude/linear.md`. Rules and gates: `AGENTS.md`. Architecture: `CONTEXT.md`.
 Spec: `srs.md`.
 
-There is no CI in this repo. No `.github/`, no workflow, no lint script. The gates below are
-the only automated checks that will ever run against this change, and nothing runs them for
-you.
+`.github/workflows/ci.yml` runs the gates on `push` and `pull_request`, and
+`.github/workflows/release.yml` runs on tags. There is still no lint script and no git hook,
+so nothing runs the gates for you at the moment you commit. Run the gates below yourself. You
+**may** read a check conclusion once and report it; you **must not** wait on it. Branch
+protection is deliberately out of scope, so a red check does not block a merge.
 
 ## Linear tool names
 
@@ -40,7 +42,7 @@ git status --short
 git config branch."$(git branch --show-current)".base-branch 2>/dev/null || echo "base=main"
 ```
 
-**STOP if on `main`.** This repo has no release workflow and no branch protection yet, which
+**STOP if on `main`.** This repo has no branch protection, which
 makes a direct push to `main` easy and wrong. Ask for a `feature/nrl-N-*` or `fix/nrl-N-*`
 branch, or offer to move the work onto one.
 
@@ -366,7 +368,8 @@ Adversarial pass: <verdict, concerns listed in the PR>
 
 Linear NRL-12: In Review {or: In Progress, no In Review status on this team, PR is the signal}
 
-No CI exists in this repo. The gates above are all that ran.
+CI: `.github/workflows/ci.yml` will run the same gates on this push and on the PR. Its
+conclusion may be read once, never waited on, and it does not block a merge.
 
 Next:
 1. Review the PR
