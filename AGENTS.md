@@ -221,27 +221,121 @@ numerically by UTF-16 code-unit index for length, monotonicity, bounds and chara
 **Nothing was observed in Obsidian.** CDP port 9222 was unreachable during that ticket, so what
 Obsidian itself displays for a folder-qualified wikilink is still unknown.
 
-Two residual leaks on that same path half, recorded so the paragraph above is not read as
-finishing it. `[[folder/Note\]]` still speaks its folder: the trailing backslash is consumed as
-an escape, so the construct is never recognised as a wikilink at all, no reduction runs, and the
-raw text falls through to prose. 10 cells, byte-identical on both sides of NRL-46, pre-existing,
-tracked as **NRL-66**. And `[[a/b%%SECRET%%]]` speaks `b%%SECRET%%`: a wikilink label is emitted
-raw so `sourceIndex` can map every character to its exact offset, which is also why `cleanLine`'s
-comment branch never runs on it. Strictly better than the base, which spoke the folder as well,
-but it discloses hidden text and is filed High as **NRL-67**. Both are pinned in
-`tests/extract.test.ts` (`pin-unterminated-by-escape`, `pin-comment-inside-target`) so they can
-only change deliberately.
+Two residual leaks on that same path half, **both closed in the 2026-09-30 batch**. They are
+recorded rather than deleted because the shapes are worth knowing and the fixes are worth not
+undoing.
 
-The **image** half has not moved. `srs.md:365` promises that an image's "destination and any
-quoted title are never spoken", and two shapes still speak one, in **both** positions of
-`speakImageAlt`: a label holding another bracket construct (`![a [[N|l]] b](dest.png)`) and an
-alt text crossing a soft line break (NRL-44 F9, which **survived NRL-44** and is now tracked
-on its own as **NRL-63**, because the fix made the confirmed region verbatim and did not make
-the scanner recognise a construct across a break at all). A third speaks a fragment of one,
-`![alt](dest(1).png)` saying `.png)`.
-All three are pre-existing, all are tracked, and none was opened by NRL-21. **Do not record
-R-M09 as met until they close**, and the headline count stays at 2 of 16: NRL-46 and NRL-44
-each closed a leftover, not the requirement.
+`[[folder/Note\]]` used to speak its folder: the trailing backslash was consumed as a
+CommonMark escape, so the construct was never recognised as a wikilink at all, no reduction
+ran, and the raw text fell through to prose. **NRL-66** (`fee0aa1`, `docs/adr/0017` clause 8
+plus an amendment section) added `wikiTargetClose`, a wikilink- and embed-local closing scan
+that skips code spans and complete comment spans exactly as the shared `inlineContainerClose`
+does but does **not** honour `\` as an escape, and pointed the embed and wikilink branches at
+it. `inlineContainerClose` itself and its image, link and highlight call sites are
+**untouched**, which is what kept NRL-66 independent of NRL-63; do not merge the two scans.
+No reduction logic was needed and that was traced rather than assumed: `finalSegment`'s
+trailing-separator branch already returns `Note` for the target `folder/Note\`, the emission
+loop's existing skip already drops the trailing backslash, and `isFileTarget` already split on
+`\`. Measured by bundling the real extractor against base `a8f45db`: **13,312 leaking cells of
+15,360 fell to 0**, and `sourceIndex` was clean over 571,904 UTF-16 code units. Three
+deviations are accepted rather than fixed, all measured: a target holding a literal `]]` after
+a backslash now closes at that `]]` so its tail becomes prose, silent-to-audible in 3,072
+cells, **every one of which already speaks the same sentinel on base in its backslash-free
+form** (base parity, not a new leak class); a dangling backslash after a `#fragment` or an
+`|alias` is spoken as itself (`[[a/b#Head\]]` says `b Head\`), because the trailing-separator
+skip covers the path part only; and a URL target with a trailing backslash now speaks its host
+where the base said nothing, credentials and path still silent.
+
+And `[[a/b%%SECRET%%]]` used to speak `b%%SECRET%%`: a wikilink label is emitted raw so
+`sourceIndex` can map every character to its exact offset, which is why `cleanLine`'s comment
+branch never ran on it. **NRL-67** (`a8f45db`, `docs/adr/0021`) fixed it without giving up the
+raw path. `commentSpans()` scans `[innerStart, targetEnd)` once, pairing `%%` with the next
+`%%` and `<!--` with the next `-->`, and `emitWikiLabel` skips a span by **advancing `k` inside
+the existing emission loop**, so every surviving character is still emitted by the same
+`emit(c, rawStart + k)` and the offset mapping is preserved by construction rather than by a
+second check. Four parts are load-bearing. The target is **not** routed through `cleanLine`,
+whose tag branch would eat `#Section` under `stripTags`. The scan window starts at `innerStart`
+and not `segStart`, because `[[a%%/%%b]]` opens the emission window on a *closing* `%%`, and
+ends at `targetEnd` and not `pathEnd`, because the `#` fragment leaked too. An unmatched opener
+is **target-local**: the scan is a local array and never assigns `openComment`, so ADR 0006
+clause 5 holds by construction. And `isFileTarget` and `finalSegment` still classify the **raw**
+target (decision Q4), never a comment-stripped view, which is what keeps the exclusion able
+only to remove spoken characters: on a stripped view `![[a/b%%x.y%%]]` would lose its only dot,
+become a note and **start speaking**, the silent-to-spoken direction ADR 0008 clause 5 forbids.
+`[[a/b%%SECRET%%]]` now speaks `b`. Measured against base `51a20c8`: **19,456 leaking cells fell
+to 0** over 43,008 hidden-class cells; the deliberately-literal class (a `%%` pair inside a
+*spoken* inline code span, ADR 0019's designed behaviour) was unchanged at 1,024 on both sides,
+kept as its own class for the reason NRL-44 measured; and the "only removes spoken characters"
+property held over **108,992 cells with 0 additions**. One known leftover, in the removal
+direction: the scan does not honour a backslash escape, so `[[a/b\%%x%%]]` now silences the
+whole label where it spoke `%%x%%`, recorded in ADR 0021 because the emission loop does not
+honour escapes either.
+
+Both fixtures were **replaced in place** rather than deleted, keeping their paired
+folder-is-dropped assertions - NRL-66 replaced `pin-unterminated-by-escape` and
+`pin-comment-inside-target` kept its name - so the new behaviour can only change deliberately.
+**Nothing in either fix was observed in Obsidian.** CDP port 9222 was unreachable throughout
+that batch, so what Obsidian renders for `[[folder/Note\]]` or `[[a/b%%SECRET%%]]` is still
+unknown; both decisions rest on never speaking a path (ADR 0017, ADR 0021) rather than on
+renderer fidelity, and rule 11 applies in full to every number above.
+
+The **image** half moved **partway** with NRL-63 (`0e44050`, `docs/adr/0023`), and "partway"
+is the whole of it. `srs.md:313` and `:366` promise that an image's "destination and any
+quoted title are never spoken", and an alt text crossing a soft line break did not honour that
+(NRL-44 F9, which **survived NRL-44** because that fix made the confirmed region verbatim and
+did not make the scanner recognise a construct across a break at all). A soft-wrapped image or
+link label is now carried across the break by `bracketClosesLater`, which mirrors
+`codeSpanClosesLater` exactly - including its `interruptsParagraph` stopping rules at both ends
+- and adds one requirement of its own: the closing line's first `]` must be followed by `(` or
+`[`, so a shortcut label with no destination is never confirmed and no visible prose is
+silenced to close a leak that is not there. The **plain-paragraph** image and link cases are
+fixed: **512/512 leaking cells fell to 0/512** for each, and the wrapped form is now
+byte-identical to the single-line form, so `speakImageAlt` governs the alt text across the
+break exactly as it does on one line.
+
+**11,520 of 19,456 cells still leak a destination**, tracked as **NRL-88**. Record them as
+**five distinct roots and not one**, because earlier drafts of ADR 0023 and `srs.md:366` said
+"one mechanism" and a reader who assumes it is just containers will fix two of the five and
+believe they are done:
+
+1. `interruptsParagraph` matching on the **opener** line - 2,048 of 2,048 cells.
+2. `interruptsParagraph` matching on a line **between** opener and closer - 1,792 of 2,048.
+3. `opensMathBlock`, clause 7a's separate stop - 512 of 512.
+4. **`bracketClosesLater` returns at the first later line bearing any `]`**, so a line that
+   does *not* end the paragraph but carries a non-closing bracket aborts the confirmation.
+   Measured on seven such lines - `[bracket]` in prose, `[^1]`, `[[wk]]`, `[x]`, a link
+   reference definition, `![[embed]]` and a bare `]` - each leaking 512 of 512 where the same
+   shape without the stray bracket leaks 0 of 512. **3,584 cells.** **This one is not a
+   container problem at all**, and it is why "just handle blockquotes and lists" would not
+   finish the ticket.
+5. Clause 6 and 7 precedence - a line opening both a label and a soft-wrapped code span arms
+   the code carry only, and a code span opening on a later line inside a live label is not
+   recognised - 1,024 of 1,024.
+
+All five are **destination-only, fail-closed and prose-safe**: an aborted confirmation leaves
+the line exactly as the pre-NRL-63 tree had it, so none of them can lose prose. Part of the
+11,520 is also not a defect and must not be "fixed": an ATX heading is a single line and cannot
+soft-wrap, and a setext heading is in fact already carried.
+
+One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
+widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
+commit: a `$$` display-math block between a label's opener and closer silenced the alt text
+**and** still spoke the destination, because `extractChunks` consumes such a block with a
+`continue` that never reaches the carry site. `opensMathBlock` fixed it, called from
+`bracketClosesLater` at both ends and mirroring `extractChunks`' own test including its
+later-closer search; `interruptsParagraph` was deliberately **not** widened, because it is
+shared with `codeSpanClosesLater` and widening it would move NRL-64. Verify then enumerated
+**all 20 skip-paths** between the carry read and the carry arm and found the rest fail-closed:
+31,744 cells, 0 prose loss. **Re-run that enumeration** before touching the lookahead.
+
+Two pre-existing image shapes are **not** NRL-88 and remain open against the same requirement,
+in **both** positions of `speakImageAlt`: a label holding another bracket construct
+(`![a [[N|l]] b](dest.png)`), and `![alt](dest(1).png)`, which speaks a fragment of the
+destination, `.png)`. Neither was opened by NRL-21. **Do not record R-M09 as met until NRL-88
+and those two close**, and the headline count stays at 2 of 16: NRL-46, NRL-44, NRL-66, NRL-67
+and NRL-63 each closed a leftover, not the requirement. **Nothing in any of it was observed in
+Obsidian** - CDP port 9222 was unreachable at every attempt, so rule 11 applies to every number
+in this section.
 
 R-M10 (speech segmentation) did not move the count either, and the reason is different
 from R-M09's. Its acceptance criteria are met on the automated evidence and the evidence
@@ -323,10 +417,14 @@ deliberate - it keeps that half honest at the cost of leaked markup, which ADR 0
 prefers to a swallowed sentence. And a multi-line definition,
 with the destination on the following line, is out of scope (decision Q7) - it has the same
 per-line-scanner root as NRL-44's whole family. **Do not record R-M08 as fully met.** NRL-44
-closed the literal-region family (see the NRL-42/NRL-44 bullet below) and NRL-64 closed its
-opening-line leftover, but NRL-63 keeps `srs.md`'s "known gap" clause alive against the same
-requirement, and nothing in that family has been observed in Obsidian. The headline count
-stays at 2 of 16.
+closed the literal-region family (see the NRL-42/NRL-44 bullet below), NRL-64 closed its
+opening-line leftover and NRL-63 closed the plain-paragraph half of F9, but NRL-63's remainder
+- five roots, tracked as **NRL-88** and enumerated in the R-M09 section above - keeps
+`srs.md`'s "known gap" clause alive against the same requirement; NRL-45's own
+`[a]: x.png "%%"` leftover in the paragraph above is untouched; and the 2026-09-30 batch filed
+two **new** defects against R-M08 that go the opposite way, hiding text Obsidian displays:
+**NRL-73** (High) and **NRL-74** (Medium), both in the last bullet of this section. Nothing in
+that family has been observed in Obsidian. The headline count stays at 2 of 16.
 
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
@@ -716,8 +814,13 @@ rediscover them:
   cells leaking on one side and not the other**; the designed-literal class **0 -> 2,304**
   spoken, all at `skipInlineCode: false`; **0 prose lost**; `sourceIndex` clean by numeric
   UTF-16 index over those cells plus a 4,000-note fuzz; 13 fixtures red pre-fix.
-  **Nothing was observed in Obsidian.** Still open: **NRL-63** (F9 - a soft-wrapped image is
-  not recognised across the break at all). Two things NRL-44 did **not** weaken, and must not be: `codeSpanClosesLater`'s
+  **Nothing was observed in Obsidian.** The other shape NRL-44 left open, **NRL-63** (F9 - a
+  soft-wrapped image was not recognised across the break at all), closed **partially** with
+  `0e44050` / `docs/adr/0023`: `bracketClosesLater` now carries a label across the break, the
+  plain-paragraph image and link cases went 512/512 leaking to 0/512, and **11,520 of 19,456
+  cells still leak a destination through five distinct roots**, tracked as **NRL-88** and
+  enumerated in the R-M09 section above. Nothing in that fix was observed in Obsidian either.
+  Two things NRL-44 did **not** weaken, and must not be: `codeSpanClosesLater`'s
   confirmation, which now prevents silencing visible prose as well as disclosing hidden
   text, and `interruptsParagraph`, which NRL-45 also depends on.
 - NRL-39's autolink shape (F7) closed with NRL-44, and it closed the way NRL-39 said it had
@@ -748,11 +851,15 @@ rediscover them:
   the code: `src/text/extract.ts` did not change, `srs.md:324` and ADR 0006 clause 2 now carry
   the tokenizer evidence, and `pin-nrl68-midline-opener-is-literal` in `tests/extract.test.ts`
   pins the correct behaviour so it cannot be "fixed" back. Read off the installed parser, **NOT
-  VERIFIED IN OBSIDIAN**. Two distinct `%%` gaps remain open, with different roots, which is
-  why they are tracked apart rather than merged: **NRL-67** is a `%%` inside a wikilink target,
-  spoken because the label takes a raw-emission path that never runs comment stripping; and
-  **NRL-45's leftover** is `[a]: x.png "%%"` followed by a secret line, where the `%%` in a
-  quoted title is an unmatched inline opener (ADR 0006).
+  VERIFIED IN OBSIDIAN**. Of the three `%%` **disclosure** gaps that were open when this
+  paragraph was first written, **one remains**: **NRL-45's leftover**, `[a]: x.png "%%"`
+  followed by a secret line, where the `%%` in a quoted title is an unmatched inline opener
+  (ADR 0006). NRL-68 itself closed as not-a-defect, above, and **NRL-67** - a `%%` inside a
+  wikilink target, spoken because the label took a raw-emission path that never ran comment
+  stripping - was **fixed** by `a8f45db` / `docs/adr/0021`; see the R-M09 path-half section
+  above. Keep this disclosure-direction list separate from the prose-loss pair in the next
+  bullet. They are opposite failures with opposite fixes, and a merged list would hold entries
+  that cannot share a remedy.
 - Two new defects came out of reading that tokenizer, and both go the **opposite** way to the
   family above: they hide text Obsidian displays, which is prose loss rather than disclosure.
   **NRL-73** (High): `if (37 === a) return` means any lone `%` before the newline disqualifies
