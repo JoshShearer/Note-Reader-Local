@@ -62,7 +62,8 @@ Player ──────────────► orchestrates: synthesise ah
       │
       ├─► words.ts ────────────► WordTiming[]  offsets + ms, apportioned by syllables
       │
-      └─► emits "word" ────────► main.ts ──► highlight.ts ──► CodeMirror decoration
+      ├─► emits "chunk" ───────► main.ts ──► highlight.ts ──► sentence decoration
+      └─► emits "word" ────────► main.ts ──► highlight.ts ──► word decoration, over it
 ```
 
 ---
@@ -101,7 +102,7 @@ src/
     ├── settingsTab.ts          all settings rendering
     ├── controlBar.ts           transport controls
     ├── affordances.ts          capabilities -> which controls to offer, and why not, pure
-    ├── highlight.ts            CodeMirror StateField + decoration
+    ├── highlight.ts            two CodeMirror StateFields (sentence, word) + highlightPlan (ADR 0020)
     ├── highlightColour.ts      highlight colour setting -> CSS variable, pure (ADR 0005)
     ├── modelStore.ts           downloads, vault file IO for model assets
     └── paths.ts                vault path resolution

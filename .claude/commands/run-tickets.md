@@ -26,15 +26,63 @@ table before the first run.
 `gh pr merge` in this repo, and no required review, so merge automation works. Never self-approve a
 PR to get around a review requirement if one is ever added; block the ticket instead.
 
+## How to launch it, per runtime
+
+"Fully autonomous" is a property of **how the run is launched**, not of this file. Three commands
+the pipeline must run are permission-gated by default, and a gated command is a prompt, which is
+the human wait the whole design exists to avoid. Launch it wrong and it stalls at the first Ship.
+
+| Gated command | Where the pipeline runs it |
+|---|---|
+| `git push -u origin <branch>` | `ship.md:243`, every Ship phase |
+| `git branch -D <branch>` | Phase 7 and `finish.md`, every Finish phase |
+| `rm -rf "$LOCK"` | end-of-run lock release, and the `deploy.lock` release |
+
+`git branch -d` is not gated, but it is not the path taken: this repo squash-merges, so `-d`
+reports "not merged" for work that is fully in `main` (Phase 7 says so itself), and `-D` after a
+content check is the normal case rather than the exception. Every ticket reaches it.
+
+- **opencode.** `opencode.json` sets `git push *`, `git branch -D *` and `rm -rf *` to `ask`.
+  Those rules fire in the TUI regardless of anything written here, so an interactive
+  `/run-tickets` **will** stop and wait. Run it headless instead, which auto-approves everything
+  not explicitly denied (`npm publish*` stays denied):
+
+  ```bash
+  opencode run --auto --command run-tickets "NRL-19,NRL-20,NRL-21"
+  ```
+
+  `--command` takes the command name and passes the message through as `$ARGUMENTS`. Verified
+  on opencode 1.18.32, including that it resolves the `.opencode/command/` symlink.
+
+- **Claude Code.** There is no project `.claude/settings.json`, and the global one allows only
+  `Bash(npm install:*)`, so an ordinary session prompts on the same three commands. The owner's
+  global settings carry `skipDangerousModePermissionPrompt: true`, i.e. bypass mode is the
+  intended way to run this. `/run-tickets NRL-19,NRL-20,NRL-21` inside a bypass-mode session.
+
+**Do not "fix" a stall by loosening `opencode.json`.** Those three rules are the guardrails for
+every other session in this repo, and two of them (`git push`, `rm -rf`) guard exactly the
+destruction the 2026-09-29 incident in the fact table caused. The launch flag is scoped to one
+run; the config change is not. If you find yourself prompted mid-run, the run was launched
+wrong: stop, report it, and relaunch with the flag rather than editing the config from inside.
+
 ## Tracker: Linear
 
 Workspace `note-reader-local`, MCP server `linear-nrl`. Operations used: `get_issue`,
-`list_issues`, `save_issue`, `create_comment`, `list_issue_statuses`.
+`list_issues`, `save_issue`, `save_comment`, `list_issue_statuses`.
 
 **Resolve the real tool names from your own available-tool list.** The prefix differs between
 Claude Code and opencode and must never be hardcoded. If no Linear tool is present, the run still
 works: every phase does its git work and prints what it would have sent, and the state file
 carries it. A missing tracker never blocks a commit.
+
+**The operation name can be stale too, not just the prefix**, and that failure mode is worse here
+than anywhere else. Linear folded its create/update pairs into `save_*`: posting a comment is
+`save_comment` and `create_comment` does not exist. Because a missing tracker never blocks a
+commit, an unresolvable operation looks exactly like an unauthenticated server, so the run
+carries on and reports success with nothing posted - which is what happened to every comment this
+pipeline tried to write before 2026-09-30. If a Linear operation does not resolve, check the name
+against your tool list before concluding the server is down, and say in the end-of-run report
+that the comments were not posted.
 
 The team key is `NRL`, verified on 2026-09-28. If an issue lookup fails with an unknown
 identifier, re-run the discovery block in `.claude/linear.md`: someone renamed the team.
@@ -55,7 +103,10 @@ Spawn with the `Task` tool. **The subagent type name differs by runtime:** use
 `general-purpose` in Claude Code and `general` in opencode. Pick whichever your runtime exposes.
 
 Every prompt must carry the literal absolute repo root (subagents do not inherit your shell), the
-ticket id, and an instruction to read `.claude/pipeline-state.json` for context.
+ticket id, and **the resolved `$STATE_FILE` path as a literal string**, not the rule for deriving
+it. Step 0 already computed it; a subagent that re-derives it can get a different answer, and in a
+worktree lane the wrong answer is a file that does not exist. Where a phase prompt below writes
+`<state-file>`, substitute the path.
 
 ## Input
 
@@ -69,8 +120,8 @@ Argument: `$ARGUMENTS`
 - `--no-merge` - stop each ticket after automated Verify with its PR open, instead of merging.
   Later tickets then branch from a `main` that lacks earlier fixes, so use it for a single ticket
   or for unrelated tickets only.
-- `--resume` - re-validate `.claude/pipeline-state.json` against Linear and git before continuing.
-  Auto-invoked if the state file has in-progress tickets and no flag was given.
+- `--resume` - re-validate `$STATE_FILE` (Step 0 resolves which one) against Linear and git before
+  continuing. Auto-invoked if the state file has in-progress tickets and no flag was given.
 - `--force-unlock` - replace a `.claude/pipeline.lock` held by another run. For a human who knows
   the other run is dead. It still prints the holder and archives that run's state file first, and an
   agent must never pass it to itself to get past Step 0a.
@@ -222,7 +273,7 @@ Progress.
 
 3. Create the state file now, every in-scope ticket `pending` at phase `start`. For each question
    with a recommendation, write it into that ticket's `clarification` with `decidedBy: "pipeline"`,
-   and post it to the Linear issue with `create_comment` as "Decided by /run-tickets (owner may
+   and post it to the Linear issue with `save_comment` as "Decided by /run-tickets (owner may
    override): <question> -> <answer>, because <reason>." For each `unresolvable` ticket, set
    `status: "blocked"` with the question as `blockedReason`. It is excluded from the run and holds
    nothing up.
@@ -254,9 +305,13 @@ Special cases Phase 0 must handle:
 one's phase 1. Branches come off `main`, and `main` only carries ticket N's fix once ticket N's
 Finish has pulled it. A blocked ticket stops where it is; the next ticket starts from `main`.
 
-## State file: `.claude/pipeline-state.json`
+## State file: `$STATE_FILE`
 
-Machine-local, gitignored, never committed.
+Machine-local, gitignored, never committed. Step 0 resolves the path once:
+`.claude/pipeline-state.json` in the primary repo, `.claude/pipeline-state-local.json` in a
+`note-reader-local-nrl-*` worktree. Every phase must be handed that resolved path. Naming the
+main-repo file directly is a live defect in a worktree lane, because Phase 1 writes the
+`-local` one and a later phase then reads a file that is not there.
 
 ```json
 {
@@ -300,10 +355,13 @@ they are not already there (the latter is used by worktree instances). Timestamp
 
 ## Phase subagent prompts
 
+In every prompt below, `<state-file>` is the path Step 0 resolved into `$STATE_FILE`. Substitute
+the literal path when you spawn the subagent. Do not paste the derivation rule and do not write
+`.claude/pipeline-state.json` as a constant: in a worktree lane that is the wrong file, and the
+phase will read an entry Phase 1 never wrote.
+
 **1. Start** - "Read `.claude/commands/start-issue.md` and follow it for `<ID>` in `<repo-root>`,
-non-interactively; the ticket is already chosen. Worktree context: if REPO_ROOT ends with
-`note-reader-local-nrl-*`, use state file `.claude/pipeline-state-local.json`; otherwise use
-`.claude/pipeline-state.json`.
+non-interactively; the ticket is already chosen. The state file is `<state-file>`.
 
 `git checkout main && git pull --ff-only` first (if in main repo; skip if in worktree feature branch).
 Branch from `main`. Fetch the issue and write `title`, `requirement`, `type`,
@@ -315,7 +373,7 @@ read the status back rather than trusting the write. Set `phase: \"plan\"`,
 guess."
 
 **2. Plan** - "Read `<ID>`'s `descriptionSnapshot`, `clarification` and `reproduction` from
-`.claude/pipeline-state.json`. Line numbers in the ticket may be stale if earlier tickets in this
+`<state-file>`. Line numbers in the ticket may be stale if earlier tickets in this
 run touched the same files: read the current code on `main`. Write a concise ordered `planNote`
 naming real functions, incorporating every recorded decision. If a genuinely new ambiguity appears
 that Phase 0 missed, decide it the way Phase 0 would (recommendation plus one line of reasoning),
@@ -326,7 +384,8 @@ this ticket amends `srs.md`, the plan must include an ADR under `docs/adr/` in t
 `NNNN-kebab-title.md` format. Set `phase: \"implement\"`."
 
 **3. Implement** - "You are on `<branch>` in `<repo-root>`. Read `<ID>`'s `descriptionSnapshot`,
-`planNote` and `reproduction`. Do not deploy and do not touch `~/Documents/Notes`.
+`planNote` and `reproduction` from `<state-file>`. Do not deploy and do not touch
+`~/Documents/Notes`.
 
 **If `type` is `bug`, reproduce it before changing anything.** `AGENTS.md` rule 12 requires this,
 and most defects in this codebase were invisible to the test suite and obvious the moment the real
@@ -374,7 +433,8 @@ using the app. Record `prNumber`, `prUrl`, `commitSha`, set `phase: \"verify\"`.
 **5. Verify** - automated, in a fresh subagent. It must not be the subagent that wrote the fix.
 
 "You are verifying PR `<prNumber>` for `<ID>` in `<repo-root>`, on branch `<branch>`. Read the
-ticket's `descriptionSnapshot`, `planNote`, `implementationSummary` and `reproduction`. You did not
+ticket's `descriptionSnapshot`, `planNote`, `implementationSummary` and `reproduction` from
+`<state-file>`. You did not
 write this code; your job is to find out whether it does what the acceptance criteria say. Do not
 edit tracked files.
 
@@ -398,7 +458,7 @@ Set `verifyVerdict: \"pass\"` only if the gates pass and every probe matches. Ot
 expected output in `blockedReason`. Do not attempt a fix. Write a short `verifyNotes`, append
 history, and on pass set `phase: \"merge\"`."
 
-On pass, the orchestrator posts a Linear comment with `create_comment` stating, as separate
+On pass, the orchestrator posts a Linear comment with `save_comment` stating, as separate
 points: the suites and gates passed; the automated probes run and their results; whether the CDP
 smoke ran; and the literal line **"Not verified in Obsidian by a human."**
 
@@ -467,6 +527,10 @@ When every ticket is `done` or `blocked`, print one message:
   `.claude/deploy.lock`, say that it skipped the deploy and name the lane that holds it.
 - Confirmation that `.claude/pipeline.lock` was released, and the path of anything archived under
   `.claude/scratch/` during the run.
+- **Whether every Linear write actually landed.** Name any comment or status change that was
+  printed instead of posted, and why (no tracker, or an operation that would not resolve). A run
+  whose comments all silently failed must not close with a report that looks identical to one
+  where they all succeeded - that is precisely how the `create_comment` breakage survived.
 
 ## Example usage
 
@@ -494,14 +558,16 @@ One ticket, left as an open PR for the owner to read before merging.
 ```
 /run-tickets --resume
 ```
-Continues the run recorded in `.claude/pipeline-state.json`.
+Continues the run recorded in whichever state file Step 0 resolves for this working tree.
 
 ## Error handling
 
 | Scenario | Action |
 |---|---|
-| No Linear tool in the available list | Continue git-only. Print the status transitions and comments that would have been sent, and record them in the state file. Never block a commit on a missing tracker. |
+| No Linear tool in the available list | Continue git-only. Print the status transitions and comments that would have been sent, and record them in the state file. Never block a commit on a missing tracker. **Say it in the end-of-run report**; a degraded run must not read as a clean one. |
+| A named Linear operation is not in the tool list, but others are | The server is fine and the operation was renamed. Find the equivalent (`save_comment`, not `create_comment`) and use it. Do not fall through to the git-only path: that row is for an absent tracker, and taking it here hides a fixable typo behind a success report. |
 | A Linear status write appears to succeed but reads back wrong | Re-fetch `list_issue_statuses` and retry once with the fresh id. If it still reads back wrong, block the ticket and continue. Do not trust a remembered status id. |
+| A permission prompt appears mid-run | The run was launched wrong; see "How to launch it, per runtime". Stop and report which command was gated. Never edit `opencode.json` or the Claude Code settings from inside a run to get past it. |
 | `npm test` fails at an early suite | Remember the `&&` chain hides later suites. Re-run the remaining ones individually before concluding anything about scope. |
 | `tests/engine.test.ts` fails | It shells out to real `espeak-ng` and `spd-say`. Check the binaries before assuming the code broke. |
 | `main` fails its gates at the start of a ticket | Something already merged is broken. Stop the run and report it; branching further tickets off a broken `main` compounds it. |
@@ -523,4 +589,5 @@ Continues the run recorded in `.claude/pipeline-state.json`.
 | **Gates** | `npm test` · `npm run typecheck` · `npm run build` when the bundle moved |
 | **CI** | `.github/workflows/ci.yml` on `push` and `pull_request`. May be read once, never waited on. No branch protection, so a red check does not block a merge. |
 | **Push gate** | None. No husky, no active git hooks. |
+| **Permission gate** | Three commands the pipeline needs are `ask` in `opencode.json`. Launch headless (`opencode run --auto --command run-tickets "<ids>"`) or in a Claude Code bypass session. See "How to launch it, per runtime". |
 | **Human gate** | None. The owner tests by using the app and files new tickets for what they find. |

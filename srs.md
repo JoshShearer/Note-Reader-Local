@@ -474,7 +474,7 @@ interface TTSSettings {
   rate: number;
   pitch: number;
 
-  highlight: { enabled: boolean; color: string };
+  highlight: { enabled: boolean; sentence: boolean; word: boolean; color: string };
 
   skipFrontmatter: boolean;
   skipCodeBlocks: boolean;
@@ -514,8 +514,19 @@ because the normalised object is what gets saved.
 `highlight.color` is a hex colour (`#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`) or
 the empty string. The empty string is the default and means "follow the theme"
 (Obsidian's `--text-highlight-bg`). The word highlight reads the CSS custom
-property `--local-tts-reader-word-highlight`; a sentence highlight, when added,
-uses `--local-tts-reader-sentence-highlight` (see `docs/adr/0005`).
+property `--local-tts-reader-word-highlight` and the sentence highlight reads
+`--local-tts-reader-sentence-highlight` (see `docs/adr/0005`). Both properties
+are written from that one `highlight.color`, so they always hold the same value;
+the two layers are therefore distinguished by treatment rather than by hue - the
+sentence is an underline and the word is a filled mark (`docs/adr/0020`).
+
+`highlight.sentence` and `highlight.word` are the two layers, both defaulting to
+`true`, and `highlight.enabled` is a master switch over both (NRL-54,
+`docs/adr/0020`). An engine capability MUST NOT gate anything but the layer it
+describes: `EngineCapabilities.timing` reports word timings, so it may disable
+the word layer and MUST NOT disable the master switch or the sentence layer. A
+backend that reports `timing: "none"` can still show the sentence highlight, and
+is the only backend for which it is the sole layer available.
 
 Settings SHALL use Obsidian's plugin-data persistence facilities.
 
