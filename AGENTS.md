@@ -57,6 +57,30 @@ exit with no `FAIL` line of its own is a CRASH and the summary carries its last 
 One thing this does not catch, unchanged from the chain: a `test` script that never
 invokes the runner at all cannot be detected from inside a suite the runner is what runs.
 
+Two more things about it, both of which a tidy-up would plausibly undo.
+
+**`run-tests.mjs` must never call `process.exit`.** All three failure exits are
+`process.exitCode = 1` plus a `return`, and that is not a style preference.
+`process.exit` tears the process down without flushing writes still queued in userspace,
+and stdout to a **pipe** is asynchronous - which is every CI log viewer, every `| tee`,
+every `| head`. Measured on the real 24-suite run with one failure injected: a file
+redirect delivered 5,097 lines while `node run-tests.mjs 2>&1 | { sleep 25; cat; }`
+delivered **915 and lost the `FAILING SUITES:` line** - the one line the runner exists to
+put at the end of a failing log. `tests/suiteRegistry.test.ts` section 13 pins both
+directions, with the no-failure path as a positive control so a harness that simply
+cannot carry a large payload cannot make the failure checks pass for the wrong reason.
+
+**The registry-to-execution link is two layers, and both are load-bearing.** Layer 1 is
+`suiteRegistry` importing `suitePathsFromPretest` and asserting order, set and count,
+which catches a suite dropped in *derivation*. Layer 2 is the runner's own
+planned-vs-produced reconciliation, which catches one dropped in the *execution loop* -
+and layer 1 is **blind** to that, because it runs inside that loop. Measured: a layer-2
+mutation leaves `suiteRegistry` green while the runner still exits 1. Neither is
+redundant with the other.
+
+Windows portability of the runner is **reasoned, not measured**. Nothing here has been
+run on Windows, and section 13's own harness shells out to `/bin/sh`.
+
 ```bash
 npm run deploy         # build + copy into ~/Documents/Notes/.obsidian/plugins/
 npm run test:obsidian  # CDP smoke test; needs Obsidian on --remote-debugging-port=9222
