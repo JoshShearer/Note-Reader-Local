@@ -45,11 +45,35 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		this.offPitch?.();
 		this.offPitch = null;
 
-		this.renderEngineSection(containerEl);
+		// Reader controls first: Voice, Speed, Pitch, Content, Highlighting, Sleep Timer
 		this.renderVoiceSection(containerEl);
-		this.renderPlaybackSection(containerEl);
-		this.renderHighlightSection(containerEl);
+		this.renderSpeedSection(containerEl);
+		this.renderPitchSection(containerEl);
 		this.renderContentSection(containerEl);
+		this.renderHighlightSection(containerEl);
+		this.renderSleepTimerSection(containerEl);
+
+		// Advanced section (collapsed)
+		this.renderAdvancedSection(containerEl);
+	}
+
+	private renderAdvancedSection(containerEl: HTMLElement): void {
+		const detailsEl = containerEl.createEl("details", { cls: "local-tts-advanced-section" });
+		detailsEl.open = false;
+
+		const summaryEl = detailsEl.createEl("summary");
+		summaryEl.createEl("strong", { text: "Advanced" });
+
+		const contentEl = detailsEl.createDiv();
+
+		this.renderEngineSection(contentEl);
+		if (this.plugin.activeEngine()?.id === "kokoro") {
+			this.renderKokoroRuntime(contentEl);
+			this.renderKokoroInstall(contentEl);
+		}
+		if (!this.plugin.activeEngine()?.capabilities.ownsPlayback) {
+			this.renderLookAheadSection(contentEl);
+		}
 	}
 
 	private renderEngineSection(containerEl: HTMLElement): void {
@@ -109,13 +133,6 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				}
 			}
 		});
-
-		// The resolved engine, not the literal stored id: with "Automatic"
-		// selected, `settings.engine` is the string "auto", which matches no
-		// engine.id and would hide this section even when automatic selection
-		// actually picked Kokoro.
-		if (this.plugin.activeEngine()?.id === "kokoro") this.renderKokoroRuntime(containerEl);
-		this.renderKokoroInstall(containerEl);
 	}
 
 	/**
@@ -444,8 +461,8 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private renderPlaybackSection(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName("Playback").setHeading();
+	private renderSpeedSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Speed").setHeading();
 
 		new Setting(containerEl)
 			.setName("Speed")
@@ -465,45 +482,35 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 					if (slider.getValue() !== rate) slider.setValue(rate);
 				});
 			});
+	}
 
+	private renderPitchSection(containerEl: HTMLElement): void {
 		// Add pitch slider if the engine supports it
 		const engine = this.plugin.activeEngine();
-		if (engine?.capabilities.pitch) {
-			new Setting(containerEl)
-				.setName("Pitch")
-				.setDesc("Change how high or low the voice sounds. Applies to future synthesis only.")
-				.addSlider((slider) => {
-					slider
-						.setLimits(-50, 50, 1)
-						.setDynamicTooltip()
-						.setValue(this.plugin.getPlayer().getPitch())
-						.onChange(async (value) => {
-							await this.plugin.setPitch(value);
-						});
-					// Follow the player, so changes update both places
-					this.offPitch = this.plugin.getPlayer().on("pitch", (pitch) => {
-						if (slider.getValue() !== pitch) slider.setValue(pitch);
-					});
-				});
-		} else if (engine) {
-			// Engine doesn't support pitch, show disabled message
-			new Setting(containerEl)
-				.setName("Pitch")
-				.setDesc(`Not available: ${engine.label} does not support pitch control.`);
-		}
+		if (!engine?.capabilities.pitch) return;
 
-		// The player never prefetches for an engine that speaks as it
-		// synthesises, so the slider would do nothing there. The stored value is
-		// left alone so switching back to a buffer engine restores it. Resolved
-		// engine, same reason as renderVoiceSection above.
-		if (engine?.capabilities.ownsPlayback) {
-			new Setting(containerEl)
-				.setName("Look ahead")
-				.setDesc(
-					`Not used by ${engine.label}: it speaks each passage as it is produced, so there is nothing to prepare ahead.`,
-				);
-			return;
-		}
+		new Setting(containerEl).setName("Pitch").setHeading();
+
+		new Setting(containerEl)
+			.setName("Pitch")
+			.setDesc("Change how high or low the voice sounds. Applies to future synthesis only.")
+			.addSlider((slider) => {
+				slider
+					.setLimits(-50, 50, 1)
+					.setDynamicTooltip()
+					.setValue(this.plugin.getPlayer().getPitch())
+					.onChange(async (value) => {
+						await this.plugin.setPitch(value);
+					});
+				// Follow the player, so changes update both places
+				this.offPitch = this.plugin.getPlayer().on("pitch", (pitch) => {
+					if (slider.getValue() !== pitch) slider.setValue(pitch);
+				});
+			});
+	}
+
+	private renderLookAheadSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Look ahead").setHeading();
 
 		new Setting(containerEl)
 			.setName("Look ahead")
@@ -522,8 +529,11 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 						await this.plugin.setBufferAhead(value);
 					}),
 			);
+	}
 
-		// Sleep timer section
+	private renderSleepTimerSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Sleep timer").setHeading();
+
 		new Setting(containerEl)
 			.setName("Sleep timer")
 			.setDesc("Automatically stop reading after a set duration.")
