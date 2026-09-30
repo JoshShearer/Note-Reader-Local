@@ -161,9 +161,13 @@ whatever `pause()` recorded rather than deciding again:
 
 | route | chosen when | engines | what a resume does |
 |---|---|---|---|
-| `engine` | engine implements **both** `pause()` and `resume()` | webspeech | `speechSynthesis.resume()`: continues mid-utterance, roughly at the word |
-| `element` | `!ownsPlayback`, and the default when no engine is set | kokoro, espeak | `<audio>.play()`: continues at the exact sample |
+| `element` | no engine set at all, then `!ownsPlayback` whatever the engine declares | kokoro, espeak | `<audio>.play()`: continues at the exact sample |
+| `engine` | `ownsPlayback` **and** both `pause()` and `resume()` declared | webspeech | `speechSynthesis.resume()`: continues mid-utterance, roughly at the word |
 | `restart` | neither of the above | speechd | re-speaks the **current sentence from its start** |
+
+The row order is the check order, and `element` is first for the reason bullet 5 below
+gives: testing `!ownsPlayback` before the pair is what makes the `engine` route's premise
+an invariant rather than a coincidence.
 
 The differences are deliberate and are `srs.md:250` verbatim: where a backend cannot pause
 an active utterance, the controller may pause by stopping synthesis while retaining the
@@ -189,21 +193,29 @@ Five consequences worth knowing before touching any of it:
   can abort; the failure half would report a notice about a reading the user had abandoned
   and then `stop()` the playback that replaced it. A superseded rejection is therefore
   swallowed on purpose: nothing awaits it, and whoever started the replacement owns its own
-  failures. Only this route needs the guard, and only this route primes - `restart` implies
-  `ownsPlayback`, which `primeBuffer` refuses and whose `restartCurrent` re-enters `run()`'s
-  own priming, and `engine` is webspeech alone, which also owns playback.
-- That last clause is a **premise, not an invariant**, and the routing order is why.
-  `pauseRoute` tests the `pause()`/`resume()` pair at `player.ts:439` and only reaches
-  `ownsPlayback` at `player.ts:455`, so a buffer engine that merely *declares* the pair takes
-  the `engine` route. Two things then break: `pause()` calls `engine.pause()` instead of
-  `this.audio.pause()`, so the element keeps playing while the player reports `paused`; and
-  `resume()`'s `engine` branch returns before the element route's `primeBuffer`, so a Look
-  ahead raise stored while paused is never spent. That contradicts `src/audio/types.ts:197`,
-  which promises the player "will never call these" on a buffer engine. It is unreachable
-  today for one reason only: `webspeech.ts:242,246` are the sole `pause()`/`resume()` methods
-  in `src/engines/` and webspeech owns playback. Inherited rather than introduced by the
-  resume guard above, identical on `b04d8fa` and `4a9ecd0`, and tracked as NRL-49. Check
-  `ownsPlayback` before adding either method to an engine that does not own its playback.
+  failures. Only this route needs the guard, and only this route primes - the other two both
+  imply `ownsPlayback`, which `primeBuffer` refuses outright, and `restart`'s `restartCurrent`
+  re-enters `run()`'s own priming.
+- **That "both imply `ownsPlayback`" is an invariant, and the check order is what makes it
+  one** (NRL-49). `pauseRoute` runs its three tests in this order: no engine at all is
+  `element`; then `!ownsPlayback` is `element`, *whatever the engine declares*; only then is a
+  declared `pause()`/`resume()` pair the `engine` route, a half-declared pair the reported
+  fallback, and everything remaining `restart`. A buffer engine that declares either method is
+  reported **once per pause press, and one error rather than two**, through the same `"error"`
+  channel as the half-pair notice, and still
+  paused by its element. One error and not two, because on a buffer engine neither method can
+  ever be called, so which half is missing is not the actionable fact - and the half-pair
+  message ends "Pausing by stopping the sentence instead", which is only true of `restart`.
+  Before NRL-49 the pair was tested first, so such an engine took the `engine` route: the
+  element was never paused (the player reported `paused` over sound that kept playing) and
+  `resume()`'s engine branch returned before the element route's `primeBuffer`, so a Look
+  ahead raise stored while paused was never spent. That was latent, not reachable - webspeech
+  provides the only `pause()`/`resume()` in `src/engines/` and it owns playback - and it was
+  inherited rather than introduced by the resume guard above, identical on `b04d8fa` and
+  `4a9ecd0`. The trailing `return "restart"` is now a literal rather than a ternary so the
+  invariant is visible where it is relied on; an early return inserted between the
+  `!ownsPlayback` guard and it would silently send a buffer engine down the chunk-tearing
+  `restart` route.
 
 `EngineCapabilities.pause` therefore answers "can the player stop this engine's sound and
 come back to it", not "does the engine have a pause API". All four engines now say yes, so
