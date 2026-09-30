@@ -20,7 +20,21 @@
  * already claimed by an unmerged branch. It fires at rebase or PR time, when
  * renumbering is still cheap, rather than at the moment of allocation. No
  * allocator script was written (NRL-70 decision 1); a helper nothing forces
- * anyone to run is no guarantee.
+ * anyone to run is no guarantee. It also does not descend into a subdirectory
+ * of docs/adr/, so a duplicate parked in docs/adr/drafts/ is not compared
+ * against the flat ones; whether to recurse is a separate open question, and
+ * until it is answered a subdirectory is reported as unclassifiable rather than
+ * skipped, so the choice cannot be made silently by creating one.
+ *
+ * Discovery is deliberately case-insensitive on the extension and deliberately
+ * exhaustive over the directory. `0017-rival.MD` is a real duplicate of ADR
+ * 0017's number on every filesystem this repo is cloned on, and an earlier
+ * version of this file matched `.md` case-sensitively, so that file was not an
+ * ADR candidate, not an unexpected file, and not counted: the suite printed
+ * "all ADR numbering tests passed" and exited 0 with the duplicate sitting in
+ * the tree. Every entry now lands in exactly one of three classes - ADR,
+ * allowlisted, or a named FAIL - so there is no fourth class that passes
+ * quietly.
  *
  * Two deliberate non-assertions:
  *   - Contiguity is NOT asserted. `main` legitimately held 0001-0014 and
@@ -46,11 +60,17 @@ const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "../..");
 const ADR_DIR = path.join(ROOT, "docs/adr");
 
-const ADR_FILENAME = /^\d{4}-.+\.md$/;
+/**
+ * The extension is matched case-insensitively; the rest is not relaxed. A name
+ * that is not `NNNN-something` is not parsed as an ADR at all - it becomes a
+ * named failure instead, which is the loud outcome a genuinely non-ADR file
+ * should get.
+ */
+const ADR_FILENAME = /^\d{4}-.+\.md$/i;
 const ADR_HEADING = /^#\s*0*(\d{4})\b/;
 /**
- * Non-ADR `.md` files that are allowed to live in docs/adr/. Empty today,
- * measured: every `.md` there is an ADR. It exists so that adding a
+ * Entries that are allowed to live in docs/adr/ without being ADRs. Empty
+ * today, measured: every file there is an ADR. It exists so that adding a
  * docs/adr/README.md is a one-line change rather than a mystery failure.
  */
 const NON_ADR_FILES = new Set<string>([]);
@@ -64,14 +84,34 @@ function check(name: string, cond: boolean, detail = ""): void {
 	}
 }
 
-const markdown = fs
+// Every entry, not only the ones ending in a lowercase ".md". Filtering here is
+// what made an uppercase extension invisible, so the classification happens
+// below where an entry that fits no class produces a failure.
+const entries = fs
 	.readdirSync(ADR_DIR, { withFileTypes: true })
-	.filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-	.map((entry) => entry.name)
-	.sort();
+	.sort((a, b) => a.name.localeCompare(b.name));
 
-const adrs = markdown.filter((name) => ADR_FILENAME.test(name));
-const others = markdown.filter((name) => !ADR_FILENAME.test(name));
+const adrs: string[] = [];
+/** One line per entry that is neither an ADR nor allowlisted, naming the file. */
+const unclassified: string[] = [];
+
+for (const entry of entries) {
+	const name = entry.name;
+	if (entry.isFile() && ADR_FILENAME.test(name)) {
+		adrs.push(name);
+		continue;
+	}
+	if (entry.isFile() && NON_ADR_FILES.has(name)) continue;
+	if (entry.isDirectory()) {
+		unclassified.push(
+			`${name}/ is a directory; this test does not recurse, so any ADR inside it is unchecked`,
+		);
+		continue;
+	}
+	unclassified.push(
+		`${name} does not match NNNN-title.md (extension case-insensitive); if it is not an ADR, add it to NON_ADR_FILES`,
+	);
+}
 
 console.log("ADR inventory");
 
@@ -84,18 +124,19 @@ check(
 	`0 files matched /^\\d{4}-.+\\.md$/ under ${ADR_DIR}; the checks below would pass vacuously`,
 );
 
-// --- 2. Every .md is an ADR or allowlisted --------------------------------
-const unexpected = others.filter((name) => !NON_ADR_FILES.has(name));
-check(
-	"every .md in docs/adr/ is an ADR or allowlisted",
-	unexpected.length === 0,
-	unexpected
-		.map(
-			(name) =>
-				`${name} does not match NNNN-title.md; if it is not an ADR, add it to NON_ADR_FILES`,
-		)
-		.join("; "),
-);
+// --- 2. Every entry is an ADR or allowlisted ------------------------------
+// Not "every .md": an entry this test cannot classify is a failure, because the
+// alternative is passing over it, and passing over it is how a duplicate hides.
+if (unclassified.length === 0) {
+	check(
+		`every entry in docs/adr/ is an ADR or allowlisted (${entries.length} entries)`,
+		true,
+	);
+} else {
+	for (const detail of unclassified) {
+		check("docs/adr/ holds an entry this test cannot classify", false, detail);
+	}
+}
 
 // --- 3. Uniqueness, the ticket's first criterion --------------------------
 console.log("ADR number uniqueness");
