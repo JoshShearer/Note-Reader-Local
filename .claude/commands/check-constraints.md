@@ -249,9 +249,12 @@ which espeak-ng spd-say
 node -e "console.log(Object.keys(require('./package.json').scripts).join(' '))"
 ```
 
-BLOCK on a dependency on something absent here. Note `tests/engine.test.ts` shells out to real
-`espeak-ng` and `spd-say`, so a red engine suite can mean a missing binary rather than a
-regression; check which before blaming the diff.
+BLOCK on a dependency on something absent here - and note that `espeak-ng` is one of those
+absent things: the `which` above returns nothing for it. `tests/engine.test.ts` shells out to
+the real `spd-say` binary and needs a running speech-dispatcher daemon, not `espeak-ng`, so a
+red engine suite can mean a missing binary or a dead daemon rather than a regression; check
+`spd-say --version` and `spd-say -O` before blaming the diff. `AGENTS.md`'s quality-gates
+block is the one place that detail lives.
 
 ## Output
 

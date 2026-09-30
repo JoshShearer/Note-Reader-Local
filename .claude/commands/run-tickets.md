@@ -298,8 +298,8 @@ This is not fast - `onnxruntime-web` is large, and `ort/` does not exist until a
 
 **A gate failing here stops the whole run.** It is `origin/main` that is broken, not any ticket, and
 branching further tickets off it compounds the problem. That is the existing "main fails its gates"
-error-handling row, just detected earlier than it used to be. Check `which espeak-ng spd-say` before
-blaming the code: `tests/engine.test.ts` shells out to the real daemon.
+error-handling row, just detected earlier than it used to be. Check `spd-say --version` and the
+daemon with `spd-say -O` before blaming the code, not `espeak-ng`: the suite never spawns it.
 
 Record `worktree`, `runBranch` and `primary` at the top level of the state file. Every phase prompt
 from here on gets `$RUN_WT` as its repo root, never `$PRIMARY`.
@@ -817,8 +817,8 @@ next run leaves a second sibling beside it.
 | A Linear status write appears to succeed but reads back wrong | The write is `save_issue` with `id` and `state`, and `state` takes a state name; there is no `status` parameter and unknown fields are rejected, so a call naming `status` fails input validation rather than writing. Confirm the name exists on this team with `list_issue_statuses`, retry once, and if it still reads back wrong, block the ticket and continue. |
 | A permission prompt appears mid-run | The run was launched wrong; see "How to launch it, per runtime". Stop and report which command was gated. Never edit `opencode.json` or the Claude Code settings from inside a run to get past it. |
 | `npm test` reports a failure | Nothing is hidden: the runner runs every registered suite and names each failure. Read its per-suite table, its aggregate counts and its `FAILING SUITES:` line, as `AGENTS.md`'s quality-gates block describes, rather than re-running suites individually. |
-| `tests/engine.test.ts` fails | It shells out to real `espeak-ng` and `spd-say`. Check the binaries before assuming the code broke. |
-| `origin/main` fails its gates in the fresh lane at Step 0c | Something already merged is broken. Stop the run and report it; branching tickets off a broken base compounds it. Check `which espeak-ng spd-say` first: `tests/engine.test.ts` needs the real daemon. |
+| `tests/engine.test.ts` fails | It shells out to the real `spd-say` binary and needs a running speech-dispatcher daemon, not `espeak-ng`. Check `spd-say --version` and `spd-say -O` before assuming the code broke. |
+| `origin/main` fails its gates in the fresh lane at Step 0c | Something already merged is broken. Stop the run and report it; branching tickets off a broken base compounds it. Check `spd-say --version` and `spd-say -O` first: `tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running speech-dispatcher daemon. |
 | `gh` auth expires mid-run | Stop the run and report which step failed. Every later ticket would fail the same way. |
 | A phase needs a decision not covered above | Decide it with a recorded default if one is defensible, otherwise block the ticket. Never wait. |
 | Another run's `pipeline-state.*.json` is present and in progress | Expected: runs are parallel. Name it in the first message and carry on. Read it once to compare ticket sets, and block only the tickets both runs hold. Never write it. |

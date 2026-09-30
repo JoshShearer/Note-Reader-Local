@@ -93,13 +93,16 @@ the `FAILING SUITES:` line it prints last. Report what that table says rather th
 your own. `AGENTS.md`'s quality-gates block is the one place the suite list lives; do not copy
 it here.
 
-`tests/engine.test.ts` shells out to real `espeak-ng` and `spd-say` on this machine. It is
-a Linux desktop test. A failure there can mean a missing or misconfigured binary rather than
-a code defect. If it fails, check the binary directly before blaming the diff:
+`tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running
+speech-dispatcher daemon. It is a Linux desktop test. A failure there can mean a missing binary
+or a dead daemon rather than a code defect. It does **not** spawn `espeak-ng`, and `espeak-ng`
+is not installed on this machine, so do not run it and never let its absence exonerate a red
+suite. `AGENTS.md`'s quality-gates block is the one place that detail lives. If the suite
+fails, check the real dependency before blaming the diff:
 
 ```bash
-espeak-ng --version
 spd-say --version
+spd-say -O
 ```
 
 ```bash
@@ -256,7 +259,7 @@ Next: <merge | fix and re-run /verify | run the untested engine>
 |---|---|
 | No issue id and no branch match | Verify locally, report, skip the Linear post |
 | `npm test` red | Print failing output, stop before deploy |
-| `engine.test.ts` red | Check `espeak-ng` and `spd-say` directly before attributing it to the diff |
+| `engine.test.ts` red | Check `spd-say --version` and `spd-say -O` (the daemon) before attributing it to the diff; it never spawns `espeak-ng` |
 | `node_modules` absent | `npm ci` first; a gate cannot pass or fail without it |
 | Obsidian not running or not reloadable | Verdict is `GATES GREEN, NOT VERIFIED`, never `VERIFIED` |
 | CDP port not listening | Report the smoke test as NOT RUN, not as skipped-because-passing |

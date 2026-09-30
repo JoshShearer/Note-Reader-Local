@@ -92,12 +92,15 @@ the runner's per-suite table and, on a failure, the `FAILING SUITES:` line it pr
 rather than assuming the first failure was the only one. Do not repeat the count or the suite
 names here or in your report - `AGENTS.md`'s quality-gates block is the one place they live.
 
-`tests/engine.test.ts` shells out to real `espeak-ng` and `spd-say` on this machine, so a
-failure there can mean a missing binary rather than a regression. Check which before you blame
-the diff:
+`tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running
+speech-dispatcher daemon, so a failure there can mean a missing binary or a dead daemon rather
+than a regression. It does not spawn `espeak-ng`. `AGENTS.md`'s quality-gates block is the one
+place that detail lives; do not restate it here or in your report. Check before you blame the
+diff:
 
 ```bash
-which espeak-ng spd-say
+spd-say --version
+spd-say -O
 ```
 
 If the diff touched the bundle, the worker, or the esbuild config:
@@ -391,7 +394,7 @@ Next:
 | `npm test` fails | Stop. Fix the code. Never soften the test. |
 | `npm run typecheck` fails | Stop. |
 | `npm run build` fails | Stop. A broken bundle means the plugin does not load at all. |
-| `engine.test.ts` fails on a missing `espeak-ng` or `spd-say` | Report it as an environment failure, name the missing binary, and do not present the suite as green. |
+| `engine.test.ts` fails on a missing `spd-say` or a dead speech-dispatcher daemon | Report it as an environment failure, name what was missing, and do not present the suite as green. |
 | Non-negotiable violation | Stop. No override exists. |
 | `npm run deploy` fails on a missing vault | Report it, mark the change NOT VERIFIED, and let the user decide whether to ship unproven. |
 | `test:obsidian` cannot reach port 9222 | Report "did not run". Never report it as passing. |
