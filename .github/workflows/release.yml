@@ -2,8 +2,45 @@ name: Release
 
 on:
   push:
+    # NRL-75. This was `- "*"`, which cut a real, public GitHub Release
+    # (the `Create GitHub Release` step below) on ANY tag whose name holds no
+    # `/`: `nightly`, `wip`, `pre-rebase`, `v0.1.0`, `0.1.0-rc1`. A
+    # `backup/`-shaped tag was inert only because of the slash.
+    #
+    # THESE ARE GITHUB FILTER PATTERNS, NOT REGEXES, and the two look alike
+    # while behaving differently. `*` is a wildcard - "zero or more characters,
+    # but does not match the `/` character" - and NOT a quantifier over what
+    # precedes it, so `[0-9]*.[0-9]*.[0-9]*` would read as "one digit then any
+    # non-slash run" and would fire on `0.1.0-rc1`. `+` IS the quantifier:
+    # "matches one or more of the preceding character". GitHub's own published
+    # table applies it to a preceding BRACKET CLASS - the row
+    # `v[12].[0-9]+.[0-9]+` is documented as matching `v1.10.1` and `v2.0.0`,
+    # and that two-digit minor is what proves `[0-9]+` means one-or-more digits
+    # rather than one. Read verbatim during NRL-75 from github/docs@main,
+    # content/actions/reference/workflows-and-actions/workflow-syntax.md.
+    #
+    # The double quotes are required, not style: the same docs say a pattern
+    # starting with `[` must be quoted or YAML fails to parse the workflow.
+    #
+    # Prereleases are excluded deliberately. `prerelease: false` is hardcoded in
+    # the `Create GitHub Release` step below and versions.json holds no
+    # prerelease key, so a matching `0.1.0-rc1` would cut a Release that claims
+    # to be stable.
+    #
+    # No `v` prefix, because nothing here uses one: manifest.json's version is
+    # `0.1.0` and versions.json's sole key is `"0.1.0"` (both measured during
+    # NRL-75), so a `v*.*.*` pattern would simply never fire.
+    #
+    # `tags-ignore` is not an option beside this - the docs say you cannot use
+    # both `tags` and `tags-ignore` for the same event - and a `!` negation
+    # entry was rejected as redundant next to an all-digits-and-dots positive
+    # pattern, and as making the file read safer than the pattern really is.
+    #
+    # DESK-VERIFIED FROM THE DOCS ONLY. No tag has ever been pushed to this
+    # repo, so it is not observed that `0.1.0` fires this workflow or that
+    # `nightly` no longer does. NRL-79 owns that empirical half.
     tags:
-      - "*"
+      - "[0-9]+.[0-9]+.[0-9]+"
 
 jobs:
   build:
