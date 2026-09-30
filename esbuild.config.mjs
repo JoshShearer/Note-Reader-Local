@@ -155,9 +155,25 @@ async function inlineWorkerIntoMain() {
 
 	// Inject the inlined worker code at the start of the main.js file,
 	// just after the banner comment and before any other code.
+	//
+	// This must assign to globalThis, not declare a bare `var`. esbuild's
+	// "cjs" output format wraps the whole bundle in a module function so
+	// Obsidian's loader can hand it its own module/exports/require, and a
+	// top-level `var` is scoped to that wrapper, not to the real global
+	// object - identical to how a `var` at the top of any Node CommonJS file
+	// never becomes a property of `global`. kokoro.ts's getWorkerBlobUrl()
+	// reads `globalThis.KOKORO_WORKER_CODE`, so a bare `var` here left that
+	// permanently undefined in every production build, on every platform,
+	// which silently fell through to the file-based fallback path reading
+	// `kokoro-worker.js` - the exact file this function deletes three lines
+	// down. Kokoro could not load in any built (non-dev-watch) install until
+	// this was a real global assignment. Confirmed live on a real Android
+	// device (NRL-60): before this fix, `typeof globalThis.KOKORO_WORKER_CODE`
+	// was "undefined" in a running plugin instance and Kokoro failed with
+	// "File does not exist"; after, the worker loads.
 	const injection = `
 // Inlined Kokoro worker code (base64-encoded)
-var KOKORO_WORKER_CODE = "${workerBase64}";
+globalThis.KOKORO_WORKER_CODE = "${workerBase64}";
 `;
 
 	const injected = mainCode.replace(

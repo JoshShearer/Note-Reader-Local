@@ -1203,11 +1203,20 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		for (const [file, expectedHash] of Object.entries(expectedChecksums)) {
 			const filePath = `${pluginDir}/ort/${file}`;
 			try {
-				// Read the file from disk and compute its hash.
-				const content = await this.app.vault.adapter.read(filePath);
-				// Note: content is a string; encode to bytes for hashing.
-				const bytes = new TextEncoder().encode(content);
-				const hashBuffer = await crypto.subtle.digest("SHA-256", bytes);
+				// These are binary .wasm/.mjs files: readBinary(), not read().
+				// adapter.read() decodes as UTF-8 text, and these bytes are not
+				// valid UTF-8, so that round-trip is lossy (invalid sequences
+				// collapse to U+FFFD) and re-encoding the mangled string never
+				// reproduces the original bytes. That made this check hash its
+				// own corrupted copy rather than the file, so it reported a
+				// mismatch unconditionally, on every platform, regardless of
+				// whether the file on disk was actually correct - confirmed by
+				// pushing a known-good file to a device, verifying its SHA-256
+				// on-device against the real bytes (matched), and watching this
+				// check report a mismatch anyway with the exact same wrong hash
+				// (NRL-60).
+				const buffer = await this.app.vault.adapter.readBinary(filePath);
+				const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
 				const hashArray = Array.from(new Uint8Array(hashBuffer));
 				const actualHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 
