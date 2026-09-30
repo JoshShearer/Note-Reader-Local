@@ -62,7 +62,7 @@ Player ──────────────► orchestrates: synthesise ah
       │
       ├─► words.ts ────────────► WordTiming[]  offsets + ms, apportioned by syllables
       │
-      ├─► emits "chunk" ───────► main.ts ──► highlight.ts ──► sentence decoration
+      ├─► emits "chunk" ───────► main.ts ──► highlight.ts ──► sentence decoration + viewport scroll
       └─► emits "word" ────────► main.ts ──► highlight.ts ──► word decoration, over it
 ```
 
@@ -105,7 +105,7 @@ src/
     ├── settingsTab.ts          all settings rendering
     ├── controlBar.ts           transport controls
     ├── affordances.ts          capabilities -> which controls to offer, and why not, pure
-    ├── highlight.ts            two CodeMirror StateFields (sentence, word) + highlightPlan (ADR 0020)
+    ├── highlight.ts            two CodeMirror StateFields (sentence, word) + highlightPlan (ADR 0020) + viewport scroll on the chunk event (ADR 0022)
     ├── highlightColour.ts      highlight colour setting -> CSS variable, pure (ADR 0005)
     ├── loadingNotice.ts        dismissal policy for the "Loading X..." Notice, obsidian-free (NRL-65)
     ├── modelStore.ts           downloads, vault file IO for model assets
@@ -297,6 +297,23 @@ These are design-level, not bugs, and they shape any new work:
   reports each engine's limitations. `pitch` still gates nothing (there is no pitch control
   in the UI at all), and no engine declares `sentenceBoundary`, so the sentence-level
   features the spec imagines have nothing to switch on yet.
+- **The viewport follows the sentence, and `highlight.ts` is no longer decoration-only**
+  (NRL-72, ADR 0022). `applyHighlightLayers` takes a third optional `scrollTo` offset and
+  pushes `EditorView.scrollIntoView` onto the effects array it already dispatches, so the
+  scroll rides in the **same transaction** as the two decoration effects. A second dispatch
+  would reintroduce exactly the one-frame disagreement ADR 0020 exists to prevent. The
+  scroll is per **sentence**, not per word: `main.ts`'s `chunk` handler passes
+  `chunk.sourceStart` and the word handler passes nothing, so a manual mid-read scroll is
+  overridden at most once a sentence. Neither the three clears nor `applySentenceHighlight`
+  takes an offset, so ending a reading and flipping a settings toggle both leave the
+  viewport alone. "No jump when already visible" is CodeMirror's `y: "nearest"` default and
+  not arithmetic of ours; a `coordsAtPos` visibility test must not be added, because it
+  needs a DOM the bare-Node suite cannot build and duplicates what `nearest` does. What
+  survives of the old decoration-only guarantee is the cursor, the text selection, the
+  focused element and the undo history. What does not is the user's scroll position, by
+  design. **Nothing was observed in Obsidian:** whether Obsidian's own editor extensions
+  intercept the scroll effect, and whether Live Preview's folds put `sourceStart` at the
+  screen position a plain-text offset implies, are both unknown.
 - **Segmentation is `Intl.Segmenter` unioned with the old regex, not either alone**
   (NRL-28, ADR 0009). `src/text/segment.ts` owns it, pure and dependency-free, and the
   segmenters arrive through an injected `SegmenterSource` so the no-segmenter path is

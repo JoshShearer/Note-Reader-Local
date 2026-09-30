@@ -366,6 +366,63 @@ rediscover them:
   wikilink NRL-46 works to avoid saying - which is inherent to a span-based mark and has
   no privacy consequence, since nothing is logged or spoken and the text is already on
   screen, but the mark does assert "I am reading this" over a skipped span.
+- The editor viewport follows the spoken sentence as of NRL-72 (`docs/adr/0022`,
+  `srs.md` R-S03). `applyHighlightLayers` gained a third optional `scrollTo` offset and
+  pushes `EditorView.scrollIntoView` onto the effects array it already had, so the scroll
+  is a **third effect in the same dispatch**. That is load-bearing rather than tidy: a
+  second transaction would give CodeMirror a legal intermediate state between the two
+  layer updates, which is exactly the one-frame disagreement NRL-54 and ADR 0020 exist to
+  prevent. The scroll fires on the **chunk event only, never per word**, deliberately - per
+  word it would override a manual mid-read scroll several times a second instead of once a
+  sentence, and the word is on screen anyway inside a chunk capped at 220 characters.
+  `applyWordHighlight`, all three clears and `applySentenceHighlight` are unchanged and
+  take no offset, so ending a reading and flipping a settings toggle mid-read both leave
+  the viewport where it is. **The scroll is gated on a layer being drawn** (ADR 0022
+  decision 7, `scrollTargetForChunk`), which the first implementation was not: with
+  `highlight.enabled` false the chunk dispatch drew zero decoration ranges and still
+  carried one scroll effect. The condition is the **disjunction** of the two layers and
+  each half of it is load-bearing. `layers.word` is in it because "word drawn, sentence
+  not" is reachable - three independent toggles - and the word mark lands inside that
+  chunk on the next word event, which is also why the *plan* is consulted rather than the
+  ranges in this transaction: at chunk time `main.ts` always passes `word: null`.
+  `layers.sentence` must be able to carry the decision alone, with no reference to word
+  timing, or speech-dispatcher loses the scroll along with the word row it can never have.
+  And 0 is returned as an offset rather than filtered, so the first chunk of a note still
+  scrolls to the top. **`y: "nearest"` is load-bearing**: no options object is passed,
+  so "no jump when the highlight is already visible" is the library's behaviour, not ours.
+  Measured in bare Node against the vendored `@codemirror/view`: `scrollIntoView(5)` gives
+  one effect carrying `range.head 5`, `y "nearest"`, `x "nearest"`, `yMargin 5`, and in
+  `dist/index.js` `moveY` is assigned only when the rect falls outside the bounding box,
+  with the scroll gated on `if (moveX || moveY)`. **Do not add a `coordsAtPos` visibility
+  test**: it needs a DOM the bare-Node suite cannot build and duplicates what `nearest`
+  already does. `highlight.ts` is therefore **no longer decoration-only**, and its header
+  comment was rewritten rather than left lying; the guarantee that survives is the cursor,
+  the text selection, the focused element and the undo history, measured as a
+  byte-identical `state.selection` with `docChanged === false`. The user's scroll position
+  is deliberately no longer promised.
+  Evidence, **bare-Node only**: `tests/highlight.test.ts` blocks 14-16, **4 red before the
+  change and 0 after** (14a effect count, 14b the target offset, 14c the `nearest`
+  defaults, 14f the document-length clamp). Block 17 covers the gate and is a **defect
+  reproduction** rather than new capability, since the ungated scroll shipped in this same
+  branch: **2 red** against the old unconditional expression staged in the block (17a
+  highlighting off, 17f both rows off), 0 after, with 17b green on both sides establishing
+  that zero ranges were drawn in the offending case. 17g is red there too but only because
+  the function did not exist, so it is labelled new capability and not counted. This is a FEATURE, so those four are **new
+  capability, not a defect reproduction** - there was no bug to reproduce. The plan
+  predicted five; 14e ("one transaction") was measured **green on both sides**, because the
+  old code also dispatched exactly one transaction and simply put no scroll in it, so it is
+  relabelled a guard rather than conjoined with 14a to manufacture a red. Blocks 15 and 16
+  and checks 14d/14e/14g are all guards, green both sides, and are not counted.
+  **NOTHING WAS OBSERVED IN OBSIDIAN.** No deploy happened and no CDP session was
+  attempted. A bare-Node assertion that a `StateEffect` with `range.head === 18` rode on
+  the transaction is **not** evidence that a user sees the view move: it says nothing about
+  `scrollDOM.scrollTop`, nothing about whether Obsidian's own editor extensions intercept
+  or override a scroll effect, nothing about whether the movement reads as smooth or as a
+  jolt, and nothing about whether Live Preview's folds and widgets put `chunk.sourceStart`
+  at the screen position a plain-text offset implies - which would scroll to the wrong
+  place with a fully green suite. **Not solved, and an explicit follow-up:** nothing
+  detects a manual mid-read scroll, so one is overridden at the next sentence boundary.
+  R-S03 is a SHOULD, so the `2 of 16` MUST headline count does not move.
 - A selection-scoped read clips its queue by **scanning** `sourceIndex` as of NRL-57
   (`src/audio/clip.ts`, `srs.md` R-M11). This defect was not recorded here before, and it
   shipped inside NRL-52. The deleted expression was `textStart = from - chunk.sourceStart`

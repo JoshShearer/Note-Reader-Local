@@ -38,6 +38,7 @@ import {
 	clearWordHighlight,
 	highlightPlan,
 	registerHighlighting,
+	scrollTargetForChunk,
 	type HighlightLayers,
 } from "./ui/highlight";
 import {
@@ -227,13 +228,36 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			// sentence has to arrive in the same update that retires the previous
 			// sentence's word mark, or a word stays lit inside the wrong sentence
 			// until the next word event - which on a slow first synthesis, or on
-			// an engine that emits no word events at all, is a long time.
-			applyHighlightLayers(this.activeEditor, {
-				sentence: this.highlightLayers().sentence
-					? { from: chunk.sourceStart, to: chunk.sourceEnd }
-					: null,
-				word: null,
-			});
+			// an engine that emits no word events at all, is a long time. The
+			// viewport scroll rides in that same transaction for the same
+			// reason (NRL-72, docs/adr/0022).
+			//
+			// The scroll target is `chunk.sourceStart` and NOT the sentence
+			// range's `from`: that range is null when the sentence layer is off,
+			// and the viewport should still follow playback then, because the
+			// word layer may be the only one visible. Which offset to use is
+			// decided here; highlight.ts only knows how to build the effect.
+			//
+			// `scrollTargetForChunk` is the gate, and it returns null when
+			// neither layer is drawn. It lives in highlight.ts rather than
+			// inline here because main.ts has no runtime in the suite, which is
+			// exactly how this shipped ungated in the first place: the offset
+			// was passed unconditionally, so with highlighting switched off the
+			// dispatch below drew zero ranges and still moved the viewport.
+			//
+			// One `highlightLayers()` call, not two, so the sentence range and
+			// the scroll decision cannot be computed from different plans.
+			const layers = this.highlightLayers();
+			applyHighlightLayers(
+				this.activeEditor,
+				{
+					sentence: layers.sentence
+						? { from: chunk.sourceStart, to: chunk.sourceEnd }
+						: null,
+					word: null,
+				},
+				scrollTargetForChunk(layers, chunk.sourceStart),
+			);
 		});
 
 		// Word-level highlighting, drawn over the sentence rather than replacing
