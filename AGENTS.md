@@ -251,8 +251,9 @@ deliberate - it keeps that half honest at the cost of leaked markup, which ADR 0
 prefers to a swallowed sentence. And a multi-line definition,
 with the destination on the following line, is out of scope (decision Q7) - it has the same
 per-line-scanner root as NRL-44's whole family. **Do not record R-M08 as fully met.** NRL-44
-is still open against it and NRL-64 keeps `srs.md`'s "known gap tracked separately" clause
-alive. The headline count stays at 2 of 16.
+closed the literal-region family (see the NRL-42/NRL-44 bullet below), but NRL-64 and NRL-63
+keep `srs.md`'s "known gap" clause alive against the same requirement, and nothing in that
+family has been observed in Obsidian. The headline count stays at 2 of 16.
 
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
@@ -368,21 +369,41 @@ rediscover them:
   opener and reads hidden text aloud - which is exactly what happened to six fixtures
   during NRL-42's review. Do not weaken that lookahead or the `interruptsParagraph` rule
   that stops it at a comment-opening line.
-- NRL-42 fixed only the spoken half of ADR 0006 clause 4. With inline code *skipped* a
-  soft-wrapped span is still neither silenced nor kept literal, and four related shapes
-  (N1, N2, F4, F5 in that ticket) remain. All were observed against the pinned merge base
-  and are pre-existing rather than merge drift; `tests/extract.test.ts` pins the current
-  behaviour with `pin-skipped-code` so it can only change deliberately. NRL-44 tracks it.
-- NRL-39 handed NRL-44 a second shape, on the *spoken* side this time. An autolink inside a
-  confirmed soft-wrapped code span is dropped rather than kept literal: a paragraph whose
-  backtick span opens on line 1, carries `<https://x.com>` on line 2 and closes on line 3
-  speaks `Before first X last after.` with inline code spoken, where the pre-NRL-39 base
-  spoke `Before first X < last after.` (measured on merged main at d4de134 and on base
-  1b1afe1 by bundling both extractors). So the merge removed the stray `<` without making
-  the span literal, and `srs.md` only ever promised literalness for `%%` and `<!--`, never
-  for URLs. Do **not** "fix" it by guarding the autolink branch alone: the bare-URL branch
-  would then fire on the same text and put the spoken `<` back. Literalness needs the
-  bare-URL branch guarded by `literalCodeEnd` too, which the autolink branch is not.
+- NRL-42 fixed only the spoken half of ADR 0006 clause 4, and it fixed it only for the
+  comment branch. NRL-44 (`docs/adr/0019`) finished both halves at once, and the reason the
+  fix is one change rather than five is a measurement: an enumeration probe against the
+  single-line-span oracle found **18 of 21** inline constructs re-interpreted as markdown
+  inside a confirmed soft-wrapped span, not the three the tickets named. Only `%%`, `<!--`
+  and `:emoji:` were correct. So the region `[0, literalCodeEnd)` is now emitted **once,
+  before the branch loop**, verbatim when code is spoken and silenced whole when it is
+  skipped. Do not "simplify" that back into per-branch `i >= literalCodeEnd` guards: the
+  three branches that were already correct were correct by accident of which ticket touched
+  them, and the set of branches is not closed. Post-fix the same probe reports 0 of 21.
+  N2, F4 and F7 closed with it; F5 closed as an invariant test instead of a code change
+  (`HEADING`, `BLOCKQUOTE`, `LIST_BULLET`, `TABLE_ROW` must each stop a carry, mutation-
+  checked). Two shapes stay open and are pinned so they change deliberately: **NRL-64**
+  (N1 - on the span's *opening* line the tail after the unmatched run is still spoken as
+  prose, because `cleanLine` runs there before `codeSpanClosesLater` has confirmed the span,
+  and silencing it without the confirmation would delete visible prose) and **NRL-63** (F9 -
+  a soft-wrapped image is not recognised across the break at all). `pin-skipped-code` now
+  pins the *new* behaviour, `"Before first after."`, with `first` audible for NRL-64's
+  reason. Two things NRL-44 did **not** weaken, and must not be: `codeSpanClosesLater`'s
+  confirmation, which now prevents silencing visible prose as well as disclosing hidden
+  text, and `interruptsParagraph`, which NRL-45 also depends on.
+- NRL-39's autolink shape (F7) closed with NRL-44, and it closed the way NRL-39 said it had
+  to: not by guarding the autolink branch, which would have put the spoken `<` back via the
+  bare-URL branch, but by neither branch running inside the region at all. A span carrying
+  `<https://x.com>` on a continuation line now speaks it literally in **both** `speakUrls`
+  positions, and so does a bare URL. `srs.md` R-M08 was amended to promise literalness in
+  general rather than for `%%` and `<!--` only.
+- One consequence of that generality, written down because it looks like a privacy
+  regression and is not: a destination inside the region is spoken. `![alt](dest.png)` on a
+  continuation line reads as itself, delimiters and destination included, because inside a
+  code span the raw text is what the renderer shows. A **single-line** span has done exactly
+  this since long before NRL-44, in both `speakImageAlt` positions (measured at `8d7fdce`:
+  `` `![alt](d.png)` `` speaks `![alt](d.png)` with `speakImageAlt: false`). The disclosure
+  probe separates it as its own class for this reason: hiding sentinels stayed at 0 across
+  73,728 extractions, the destination class moved 0 to 4,608, all at `skipInlineCode: false`.
 
 ## Style
 
