@@ -454,6 +454,34 @@ function wikiTargetClose(raw: string, from: number): number {
 }
 
 /**
+ * Is the `%%` at `at` really an Obsidian block-comment opener?
+ *
+ * Two conditions, and the second is the one we used to miss (NRL-73). Obsidian's
+ * `%%` tokenizer is a *block* tokenizer: it skips leading spaces, requires `%%`
+ * at the block start, and then scans forward aborting on `if (37 === a) return`
+ * where 37 is `%`. So a single further percent anywhere before the newline means
+ * Obsidian never treats the line as a comment at all and renders it visibly.
+ * Testing only the line-start half made `%% 50% off` silence every remaining
+ * line of the note, which is prose loss rather than leaked markup - the failure
+ * direction ADR 0007 clause 6 says to prefer the other way round, and a discount,
+ * a battery level or a coverage figure is ordinary content rather than a corner
+ * case.
+ *
+ * The forward scan deliberately has no escape awareness, because the tokenizer
+ * it mirrors compares bytes to 37 and has none either: `%% 50\% off` is
+ * displayed by Obsidian, so it must be spoken here (ADR 0006 clause 2, read out
+ * of the installed obsidian.asar rather than observed live).
+ *
+ * One predicate rather than two call-site expressions because `cleanLine` and
+ * `opensHiddenComment` are the same question asked from two places, and asking
+ * it twice is exactly how the two drifted: `opensHiddenComment` matched
+ * `cleanLine` on the line-start half and nothing has ever kept them in step.
+ */
+function opensObsidianBlock(view: string, at: number): boolean {
+	return view.slice(0, at).trim() === "" && view.indexOf("%", at + 2) === -1;
+}
+
+/**
  * Strip inline markdown from a single line, recording source offsets.
  *
  * `incomingCode` is the length of a backtick run opened on an earlier line
@@ -900,7 +928,7 @@ function cleanLine(
 		if ((htmlComment || obsidianComment) && i >= literalCodeEnd) {
 			const closer: CommentCloser = htmlComment ? "-->" : "%%";
 			const close = raw.indexOf(closer, i + (htmlComment ? 4 : 2));
-			if (close === -1 && obsidianComment && !(blockComments && raw.slice(0, i).trim() === "")) {
+			if (close === -1 && obsidianComment && !(blockComments && opensObsidianBlock(raw, i))) {
 				emit("%", rawStart + i);
 				emit("%", rawStart + i + 1);
 				i += 2;
@@ -1642,10 +1670,16 @@ const LINK_REF_DEF =
  * Does this line leave a comment open, so that the lines after it are hidden?
  *
  * Two shapes, matching the branch in cleanLine: an Obsidian block opener, which
- * is `%%` with only whitespace before it and no `%%` closer later on the line;
- * and an HTML `<!--` with no `-->` after it on the line. A `%%...%%` pair or a
- * `<!--...-->` pair closes on its own line and hides nothing beyond it, so
- * neither counts.
+ * is `opensObsidianBlock`'s question and is asked through that shared predicate
+ * rather than restated here (NRL-73), because a line this says opens a hidden
+ * block is by definition a line cleanLine will hide from; and an HTML `<!--`
+ * with no `-->` after it on the line. A `%%...%%` pair or a `<!--...-->` pair
+ * closes on its own line and hides nothing beyond it, so neither counts.
+ *
+ * The `<!--` half is deliberately NOT routed through the shared predicate: the
+ * lone-`%` disqualifier is a rule of Obsidian's `%%` tokenizer specifically and
+ * has no HTML-comment equivalent. The remaining `<!--` asymmetry against
+ * cleanLine is NRL-74's, not this function's.
  *
  * This is a paragraph-ending condition, which is why it lives next to
  * interruptsParagraph. Obsidian 1.13.7's Reading-view parser puts `comment` in
@@ -1655,7 +1689,7 @@ const LINK_REF_DEF =
  */
 function opensHiddenComment(line: string): boolean {
 	const pct = line.indexOf("%%");
-	if (pct !== -1 && line.slice(0, pct).trim() === "" && line.indexOf("%%", pct + 2) === -1) return true;
+	if (pct !== -1 && opensObsidianBlock(line, pct)) return true;
 	const html = line.indexOf("<!--");
 	return html !== -1 && line.indexOf("-->", html + 4) === -1;
 }
