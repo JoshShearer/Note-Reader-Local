@@ -440,10 +440,16 @@ opening-line leftover and NRL-63 closed the plain-paragraph half of F9, but NRL-
 two **new** defects against R-M08 that go the opposite way, hiding text Obsidian displays.
 **NRL-73** (High) and **NRL-74** (Medium) are **both closed**; both are in the last
 bullet of this section. Nothing in that family has been observed in Obsidian. The headline count
-stays at 2 of 16, and neither closing moves it: NRL-88's five roots, NRL-45's
-`[a]: x.png "%%"` leftover and NRL-74's own known gap (a mid-line `<!--` whose only `-->` sits in
-a LATER paragraph, which we still hide and Obsidian displays) all remain open against R-M08, and
-nothing in either ticket was exercised in a real Obsidian (rule 11).
+stays at 2 of 16, and neither closing moves it. **Four** things remain open against R-M08, and
+this list is the one to check before anyone proposes closing the requirement: NRL-88's five
+roots; NRL-45's `[a]: x.png "%%"` leftover in the paragraph above; **NRL-93**, the tab-led `%%`
+that our `.trim()` accepts and the renderer's spaces-only skip loop does not, which silences a
+paragraph's remaining lines and a container whole (NRL-74 left it untouched by construction, not
+by measurement: `opensHtmlBlock` is a second predicate beside `opensObsidianBlock` rather than a
+widened one, and `.trim()` is correct for `<!--` where it is wrong for `%%`); and **NRL-95**,
+NRL-74's own known gap, a mid-line `<!--` whose only `-->` sits in a LATER paragraph, which we
+still hide and Obsidian displays. Nothing in any of the four was exercised in a real Obsidian
+(rule 11).
 
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
