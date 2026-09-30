@@ -138,7 +138,7 @@ The plugin MUST ship with:
 
 Quality gates run before any release:
 - `npm run typecheck` (TypeScript must compile).
-- `npm test` (all 19 test suites must pass).
+- `npm test` (all 20 test suites must pass).
 - `npm run build` (production esbuild must succeed).
 
 `.github/workflows/release.yml` enforces these gates on tagged commits, and `.github/workflows/ci.yml` enforces them on every push and pull request. Only tagged commits that pass all gates are released to GitHub.
