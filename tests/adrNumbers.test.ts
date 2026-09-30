@@ -50,6 +50,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -67,7 +68,16 @@ const ADR_DIR = path.join(ROOT, "docs/adr");
  * should get.
  */
 const ADR_FILENAME = /^\d{4}-.+\.md$/i;
-const ADR_HEADING = /^#\s*0*(\d{4})\b/;
+/**
+ * NRL-81 fix: the old `/^#\s*0*(\d{4})\b/` stripped leading zeros before
+ * capturing, so a typo'd 5-digit heading like "# 00022." backtracked `0*` to
+ * consume one zero and captured "0022" - a false PASS on a genuinely wrong
+ * heading number. The negative lookahead requires the digit run to be exactly
+ * 4 long (no 5th trailing digit) with no zero-stripping, and still matches
+ * 0015's hyphenated form (`# 0015 - ...`, no period) because the lookahead
+ * only rejects a trailing digit, not a trailing hyphen.
+ */
+const ADR_HEADING = /^#\s*(\d{4})(?!\d)/;
 /**
  * Entries that are allowed to live in docs/adr/ without being ADRs. Empty
  * today, measured: every file there is an ADR. It exists so that adding a
@@ -84,6 +94,83 @@ function check(name: string, cond: boolean, detail = ""): void {
 	}
 }
 
+/** Wraps the (now-fixed) ADR_HEADING regex, extracted so both the real scan
+ * and the NRL-81 edge-case checks below run the exact same code path rather
+ * than a duplicated reimplementation that could drift from it. */
+function extractHeadingNumber(line: string): string | undefined {
+	return ADR_HEADING.exec(line)?.[1];
+}
+
+/**
+ * NRL-81 fix: the old `lines.find((line) => /^#\s/.test(line))` had no fence
+ * awareness, so a number-bearing heading-like line lexically inside a ```
+ * code block could be picked as "the" H1 - masking a genuinely mismatched
+ * real heading behind it, or fabricating a mismatch against a real heading
+ * that was actually fine. This toggles fence state and only considers lines
+ * outside a fence.
+ */
+function findFirstHeading(lines: string[]): string | undefined {
+	let inFence = false;
+	for (const line of lines) {
+		if (/^```/.test(line)) {
+			inFence = !inFence;
+			continue;
+		}
+		if (inFence) continue;
+		if (/^#\s/.test(line)) return line;
+	}
+	return undefined;
+}
+
+/**
+ * Duck-typed on the three Dirent methods actually used, so a plain object
+ * literal can stand in for a real Dirent in a unit-style check without
+ * touching the filesystem - except for Finding 3, whose whole point is that
+ * isSymbolicLink() is an OS/filesystem fact a fake cannot itself verify.
+ */
+interface ClassifiableEntry {
+	name: string;
+	isFile(): boolean;
+	isDirectory(): boolean;
+	isSymbolicLink(): boolean;
+}
+
+/**
+ * NRL-81 fix: a symlink named NNNN-title.md correctly fails both isFile()
+ * and isDirectory() (readdirSync withFileTypes does not follow links), but
+ * used to fall through to the generic "does not match NNNN-title.md"
+ * message - true of the string, false of the reason. isSymbolicLink() names
+ * the real cause instead, ahead of the catch-all.
+ */
+function classifyEntry(entry: ClassifiableEntry): {
+	adr: boolean;
+	unclassifiedDetail?: string;
+} {
+	const name = entry.name;
+	if (entry.isFile() && ADR_FILENAME.test(name)) {
+		return { adr: true };
+	}
+	if (entry.isFile() && NON_ADR_FILES.has(name)) {
+		return { adr: false };
+	}
+	if (entry.isDirectory()) {
+		return {
+			adr: false,
+			unclassifiedDetail: `${name}/ is a directory; this test does not recurse, so any ADR inside it is unchecked`,
+		};
+	}
+	if (entry.isSymbolicLink()) {
+		return {
+			adr: false,
+			unclassifiedDetail: `${name} is a symlink, not a regular file; ADRs must be plain files (readdirSync does not follow links)`,
+		};
+	}
+	return {
+		adr: false,
+		unclassifiedDetail: `${name} does not match NNNN-title.md (extension case-insensitive); if it is not an ADR, add it to NON_ADR_FILES`,
+	};
+}
+
 // Every entry, not only the ones ending in a lowercase ".md". Filtering here is
 // what made an uppercase extension invisible, so the classification happens
 // below where an entry that fits no class produces a failure.
@@ -96,21 +183,12 @@ const adrs: string[] = [];
 const unclassified: string[] = [];
 
 for (const entry of entries) {
-	const name = entry.name;
-	if (entry.isFile() && ADR_FILENAME.test(name)) {
-		adrs.push(name);
-		continue;
+	const result = classifyEntry(entry);
+	if (result.adr) {
+		adrs.push(entry.name);
+	} else if (result.unclassifiedDetail !== undefined) {
+		unclassified.push(result.unclassifiedDetail);
 	}
-	if (entry.isFile() && NON_ADR_FILES.has(name)) continue;
-	if (entry.isDirectory()) {
-		unclassified.push(
-			`${name}/ is a directory; this test does not recurse, so any ADR inside it is unchecked`,
-		);
-		continue;
-	}
-	unclassified.push(
-		`${name} does not match NNNN-title.md (extension case-insensitive); if it is not an ADR, add it to NON_ADR_FILES`,
-	);
 }
 
 console.log("ADR inventory");
@@ -177,7 +255,7 @@ console.log("ADR heading agreement");
 for (const name of adrs) {
 	const expected = name.slice(0, 4);
 	const lines = fs.readFileSync(path.join(ADR_DIR, name), "utf8").split("\n");
-	const h1 = lines.find((line) => /^#\s/.test(line));
+	const h1 = findFirstHeading(lines);
 	const label = `${name} heading number matches its filename`;
 
 	if (h1 === undefined) {
@@ -185,14 +263,179 @@ for (const name of adrs) {
 		continue;
 	}
 
-	const match = ADR_HEADING.exec(h1);
-	const found = match?.[1];
+	const found = extractHeadingNumber(h1);
 	if (found === undefined) {
 		check(label, false, `H1 "${h1.trim()}" has no NNNN number; expected ${expected}`);
 		continue;
 	}
 
 	check(label, found === expected, `filename says ${expected}, heading says ${found}`);
+}
+
+// --- 5. Heading parser edge cases (NRL-70 leftovers, NRL-81) ---------------
+// Three independent edge cases in the parser above, each with a defect
+// reproduction against the OLD logic (transcribed inline, never touching the
+// real docs/adr/ directory) followed by the NEW logic's correct behaviour.
+console.log("ADR heading parser edge cases (NRL-81)");
+
+// Finding 1: a 5-digit H1 used to pass as its 4-digit prefix.
+{
+	const OLD_ADR_HEADING = /^#\s*0*(\d{4})\b/;
+	const fiveDigit = "# 00022. Five digit heading";
+	check(
+		"OLD regex wrongly captured a 5-digit heading as a 4-digit number (defect reproduction)",
+		OLD_ADR_HEADING.exec(fiveDigit)?.[1] === "0022",
+		`OLD.exec(${JSON.stringify(fiveDigit)}) -> ${JSON.stringify(OLD_ADR_HEADING.exec(fiveDigit)?.[1])}`,
+	);
+	check(
+		"NEW regex rejects a 5-digit heading (no match, falls into the no-number branch)",
+		extractHeadingNumber(fiveDigit) === undefined,
+		`NEW.exec -> ${JSON.stringify(extractHeadingNumber(fiveDigit))}`,
+	);
+}
+check(
+	"NEW regex still matches 0015's hyphenated heading (guard: must not regress the one real hyphenated ADR)",
+	extractHeadingNumber("# 0015 - speech-dispatcher voice attribution via a verified ...") === "0015",
+);
+check(
+	"NEW regex still matches an ordinary 'NNNN.' heading (guard)",
+	extractHeadingNumber("# 0022. Normal heading") === "0022",
+);
+
+// Finding 2: the H1 finder had no fence awareness, so a heading-like line
+// inside a ``` block could mask a real mismatch, or fabricate one.
+{
+	function OLD_findFirstHeadingFenceUnaware(lines: string[]): string | undefined {
+		return lines.find((line) => /^#\s/.test(line));
+	}
+
+	// Direction A: fence masks a genuine mismatch. File named 0022-fence.md,
+	// but the real (non-fenced) H1 four lines down says 0099.
+	const fenceMasksMismatch = [
+		"```",
+		"# 0022 example number inside a fence, must be skipped",
+		"```",
+		"",
+		"# 0099. This is the real, wrong heading number",
+		"Body.",
+	];
+	const oldFoundA = OLD_findFirstHeadingFenceUnaware(fenceMasksMismatch);
+	check(
+		"OLD finder picked the fenced line, hiding a genuine mismatch (defect reproduction, file would be 0022-fence.md)",
+		oldFoundA !== undefined && extractHeadingNumber(oldFoundA) === "0022",
+		`OLD found ${JSON.stringify(oldFoundA)}`,
+	);
+	const newFoundA = findFirstHeading(fenceMasksMismatch);
+	check(
+		"NEW finder skips the fence and surfaces the real, mismatched heading",
+		newFoundA !== undefined && extractHeadingNumber(newFoundA) === "0099",
+		`NEW found ${JSON.stringify(newFoundA)}`,
+	);
+
+	// Direction B (complementary, per this repo's two-direction measurement
+	// convention): a fence holding a WRONG number must not produce a false
+	// mismatch against a real heading that is actually correct.
+	const fenceHoldsWrongNumberOnly = [
+		"```",
+		"# 0099 wrong number, inside a fence, must be skipped",
+		"```",
+		"",
+		"# 0022. Correct real heading",
+		"Body.",
+	];
+	const oldFoundB = OLD_findFirstHeadingFenceUnaware(fenceHoldsWrongNumberOnly);
+	check(
+		"OLD finder wrongly reported a mismatch sourced from a fenced line (defect reproduction, file would be 0022-*.md)",
+		oldFoundB !== undefined && extractHeadingNumber(oldFoundB) === "0099",
+		`OLD found ${JSON.stringify(oldFoundB)}`,
+	);
+	const newFoundB = findFirstHeading(fenceHoldsWrongNumberOnly);
+	check(
+		"NEW finder skips the fence and correctly matches the real heading (no false mismatch)",
+		newFoundB !== undefined && extractHeadingNumber(newFoundB) === "0022",
+		`NEW found ${JSON.stringify(newFoundB)}`,
+	);
+}
+
+// Finding 3: a symlinked NNNN-title.md wrongly reported a filename PATTERN
+// mismatch instead of naming the real cause. isSymbolicLink() is an OS fact,
+// so this fixture needs a real filesystem entry rather than a fake - built in
+// a scratch mkdtemp directory (mirroring tests/suiteRegistry.test.ts's
+// makeSandbox), self-cleaned via try/finally, never touching docs/adr/.
+{
+	const symlinkScratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "nrl81-symlink-"));
+	try {
+		fs.writeFileSync(path.join(symlinkScratchDir, "target.md"), "# 0022. Real target\n");
+		fs.symlinkSync(
+			path.join(symlinkScratchDir, "target.md"),
+			path.join(symlinkScratchDir, "0022-link.md"),
+		);
+		const scratchEntries = fs.readdirSync(symlinkScratchDir, { withFileTypes: true });
+		const linkEntry = scratchEntries.find((e) => e.name === "0022-link.md");
+
+		check(
+			"a symlinked NNNN-title.md is a real Dirent: not isFile(), not isDirectory(), is isSymbolicLink()",
+			linkEntry !== undefined &&
+				linkEntry.isFile() === false &&
+				linkEntry.isDirectory() === false &&
+				linkEntry.isSymbolicLink() === true,
+			linkEntry === undefined
+				? "symlink entry not found in scratch dir"
+				: `isFile=${linkEntry.isFile()} isDirectory=${linkEntry.isDirectory()} isSymbolicLink=${linkEntry.isSymbolicLink()}`,
+		);
+
+		if (linkEntry !== undefined) {
+			// Transcribed OLD classification body (no isSymbolicLink branch),
+			// run against this SAME real Dirent - not a fake standing in for one.
+			function OLD_classify(entry: fs.Dirent): string {
+				const name = entry.name;
+				if (entry.isFile() && ADR_FILENAME.test(name)) return "adr";
+				if (entry.isFile() && NON_ADR_FILES.has(name)) return "allowlisted";
+				if (entry.isDirectory()) {
+					return `${name}/ is a directory; this test does not recurse, so any ADR inside it is unchecked`;
+				}
+				return `${name} does not match NNNN-title.md (extension case-insensitive); if it is not an ADR, add it to NON_ADR_FILES`;
+			}
+			const oldMessage = OLD_classify(linkEntry);
+			check(
+				"OLD classification wrongly claimed a filename pattern mismatch for a symlink (defect reproduction)",
+				oldMessage.includes("does not match NNNN-title.md"),
+				`OLD message: ${oldMessage}`,
+			);
+
+			const result = classifyEntry(linkEntry);
+			check(
+				"NEW classification names the real cause: a symlink, not a regular file",
+				result.adr === false &&
+					result.unclassifiedDetail?.includes("symlink") === true &&
+					result.unclassifiedDetail?.includes("not a regular file") === true,
+				`NEW message: ${result.unclassifiedDetail}`,
+			);
+		}
+	} finally {
+		fs.rmSync(symlinkScratchDir, { recursive: true, force: true });
+	}
+}
+
+// Re-run the fixed heading parser against every real ADR heading, read-only,
+// pinned at test-run time against the live tree rather than only against a
+// one-off session transcript. `adrs` and the findFirstHeading/
+// extractHeadingNumber calls above already exercise this per file; this is
+// the aggregate zero-regressions assertion the fix claims.
+{
+	let corpusFails = 0;
+	for (const name of adrs) {
+		const expected = name.slice(0, 4);
+		const lines = fs.readFileSync(path.join(ADR_DIR, name), "utf8").split("\n");
+		const h1 = findFirstHeading(lines);
+		const found = h1 !== undefined ? extractHeadingNumber(h1) : undefined;
+		if (found !== expected) corpusFails += 1;
+	}
+	check(
+		`the fixed heading parser agrees with every real ADR filename, zero regressions (${adrs.length} files)`,
+		corpusFails === 0,
+		`${corpusFails} of ${adrs.length} disagreed`,
+	);
 }
 
 if (failures > 0) {
