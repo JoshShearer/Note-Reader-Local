@@ -86,7 +86,7 @@ export function hasCjkScript(text: string): boolean {
  * over/. where this regex gives well-known/U.S.A./e.g./dont’t/over. - it splits
  * hyphenated compounds and drops the trailing period the regex keeps. ICU's
  * word-like set is neither a superset nor a subset of the regex's, so any
- * mapping between them would move English spans. See ADR 0013.
+ * mapping between them would move English spans. See ADR 0014.
  *
  * A cut that would open a sub-span holding no letter or digit is dropped, so
  * the piece stays attached to the syllable before it. Measured: ICU puts a word
@@ -173,7 +173,7 @@ export function allocateWordTimings(
 	rate = 1,
 ): WordTiming[] {
 	// `wordSpans` is the segmenter-subdivided list when extractChunks computed
-	// one; absent means the regex alone is right for this chunk (ADR 0013).
+	// one; absent means the regex alone is right for this chunk (ADR 0014).
 	const spans = chunk.wordSpans ?? findWords(chunk.text);
 	if (spans.length === 0) return [];
 
