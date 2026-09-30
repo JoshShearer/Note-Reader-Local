@@ -158,16 +158,38 @@ heard whether sixty six-character utterances sound like speech or like a stutter
 headline count stays at 2 of 16. Move it when someone has read a CJK note aloud in a real
 Obsidian and confirmed the segmenter is there.
 
-Two things R-M10 does *not* cover, both recorded so they are not mistaken for it. Word
-granularity inside a run of Han: `findWords` has no separator there, so a whole CJK sentence
-is one word span and the highlight covers it for its full duration - measured at `c29e7af`
-as 1 span per Chinese sentence against 15 for a comparable English one. That is NRL-47, and
-`srs.md:352` names it under R-M10 as explicitly not met by that requirement. And the
-grapheme snap is on the hard split only: `splitOversized` snaps every cut back to a cluster
-boundary and `splitSentences` does not, so a non-ASCII terminator followed directly by a
-combining mark can still end a chunk inside a combining sequence. Degenerate text only, no
-natural prose reaches it, and it is already written down in three places - `srs.md:347`,
-ADR 0009's grapheme-safety consequence, and the comment on `splitSentences` itself.
+One thing R-M10 does *not* cover, recorded so it is not mistaken for it. The grapheme snap
+is on the hard split only: `splitOversized` snaps every cut back to a cluster boundary and
+`splitSentences` does not, so a non-ASCII terminator followed directly by a combining mark
+can still end a chunk inside a combining sequence. Degenerate text only, no natural prose
+reaches it, and it is already written down in three places - `srs.md:376`, ADR 0009's
+grapheme-safety consequence, and the comment on `splitSentences` itself.
+
+Word granularity inside a run of Han used to sit beside that one. It no longer does. NRL-47
+(`docs/adr/0013-cjk-word-granularity.md`, `srs.md:689` under R-S03) made `findWords`
+subdivide a regex span containing Han, Kana or Hangul instead of leaving a whole CJK sentence
+as one span, so the word highlight advances inside a CJK sentence. The evidence is bare-Node
+measurement at `02cd72f` against base `d7e64df`, bundling the real modules: Chinese went from
+3 chunks of 1 span to 3 of 4, Japanese from 1 span to 6, unspaced Korean from 1 to 12, English
+unchanged at 15, Latin/Cyrillic/Greek/Arabic byte-identical across 15,000 comparisons, and
+`sourceIndex` lockstep held with 0 failures over 65 hand-built chunks plus 4,000 fuzz strings.
+R-S03 is a SHOULD, so the headline count above does not move, and that count is not what this
+paragraph is about.
+
+**Nothing was observed in Obsidian**, so do not read the numbers above as a claim that a
+reader sees the fix. CDP port 9222 was refused, so no deploy-and-smoke happened, and rule 11
+applies exactly as it does to R-M10. Two things specifically remain unheard or unseen. Whether
+the Obsidian WebView has a word segmenter at all is the same open question R-M10 carries, and
+it matters more here: the no-segmenter fallback deliberately keeps the old one-span-per-sentence
+behaviour, so on a runtime without `Intl.Segmenter` the fix does not happen. And nobody has
+watched a 4-span Chinese sentence or a 12-span Korean one highlight in a real editor, so
+whether that granularity reads as speech or as flicker is unknown.
+
+Two leftovers from NRL-47 itself, from the PR rather than rediscovered later. `hasCjkScript`
+covers Han, Kana and Hangul only, so Thai, Lao, Khmer, Myanmar and Tibetan still get one span
+per run - they write no spaces either, and they were out of scope, not overlooked. And Korean
+extraction measured 1.82x slower, 10.2 ms to 18.7 ms over 9,200 units, which is the per-syllable
+grapheme cut doing its work.
 
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
