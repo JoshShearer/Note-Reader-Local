@@ -1,0 +1,85 @@
+name: CI
+
+# NRL-69. Before this file the only workflow was release.yml, triggered on
+# `push: tags`, so nothing ran the gates on a branch push or a pull request.
+#
+# `branches: ["**"]` matches every branch, deliberately: a throwaway branch
+# pushed without a PR must still produce a run, otherwise a failing-check
+# demonstration has nothing to poll. A `branches:` filter on `push` also means
+# tag pushes do not match, which keeps this workflow from double-running
+# alongside release.yml on a release tag.
+#
+# A branch that has a PR open therefore runs twice, once for `push` and once for
+# `pull_request`. That is GitHub's standard duplication and it is accepted, not
+# worked around: this repo is public so Actions minutes are free, and no branch
+# protection exists, so a duplicate run cannot block anything.
+#
+# There is deliberately no `concurrency:` block. `cancel-in-progress` could
+# cancel the very run someone is recording as evidence that a check went red.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Matches release.yml; do not let the two diverge.
+          node-version: "22"
+          cache: "npm"
+
+      # package-lock.json is tracked, so `npm ci` is the reproducible install.
+      - name: Install dependencies
+        run: npm ci
+
+      # Build strictly before test. tests/release.test.ts asserts main.js and
+      # ort/ exist, so several of its checks fail on a fresh checkout unless the
+      # build has run. release.yml used to have these the other way round.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      # Mobile safety, AGENTS.md rule 7: manifest.json declares
+      # isDesktopOnly: false, so main.js must not require a node builtin. This
+      # sits before the test step because `npm test` is a long `&&` chain and an
+      # unrelated early suite failing would otherwise hide this result.
+      #
+      # A quoted heredoc into $RUNNER_TEMP rather than `node -e`: the script
+      # contains single quotes and a regex with backslashes, and nesting those
+      # inside a YAML `run:` string is the classic way to ship a workflow that
+      # parses and then fails at runtime. No tracked file is created.
+      - name: Assert main.js require() list (mobile safety, AGENTS.md rule 7)
+        run: |
+          cat > "$RUNNER_TEMP/require-check.cjs" <<'EOF'
+          const fs = require("node:fs");
+          const main = fs.readFileSync("main.js", "utf8");
+          const allowed = ["@codemirror/state", "@codemirror/view", "obsidian"];
+          const found = [...new Set([...main.matchAll(/require\("([^"]+)"\)/g)].map((m) => m[1]))].sort();
+          console.log("require(): " + found.join(", "));
+          const extra = found.filter((m) => !allowed.includes(m));
+          const missing = allowed.filter((m) => !found.includes(m));
+          if (extra.length) console.error("FAIL unexpected require(): " + extra.join(", "));
+          if (missing.length) console.error("FAIL missing require(): " + missing.join(", "));
+          process.exit(extra.length || missing.length ? 1 : 0);
+          EOF
+          node "$RUNNER_TEMP/require-check.cjs"
+
+      # tests/engine.test.ts has two regions that need a running
+      # speech-dispatcher daemon and an audio sink; a stock runner has neither.
+      # The variable bypasses only those regions, printing one SKIP line per
+      # bypassed check. Everything else in that suite, including NRL-55's whole
+      # attribution matrix, still runs.
+      - name: Test
+        run: npm test
+        env:
+          NRL_SKIP_REAL_SPEECHD: "1"

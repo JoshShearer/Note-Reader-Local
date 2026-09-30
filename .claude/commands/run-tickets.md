@@ -12,7 +12,7 @@ table before the first run.
 | Fact | Consequence |
 |---|---|
 | **The run is fully autonomous.** The owner tests features by using the app and files new tickets for what they find. | No phase waits for a reply. Verify is automated, merge is automatic. Anything that would have needed a human blocks **that ticket only**, and the run moves on to the next one. Everything blocked or decided on the owner's behalf is listed in the end-of-run report. |
-| **There is no CI.** No `.github/`, no workflow, no hook. `.git/hooks` holds only samples. | The Verify phase has nothing to poll. It runs the gates and the probes itself. Do not write a `gh pr checks` loop; it will wait forever on a PR that no runner ever touches. |
+| **CI runs the gates on `push` and `pull_request`** (`.github/workflows/ci.yml`), but there is still no hook: `.git/hooks` holds only samples. | Verify still runs the gates and the probes itself; the check is a backstop, not the source of truth. Verify **may** read the conclusion (`gh pr checks <n>` once, or `gh run list`) and report it, and **must not wait on it**. Never write a polling loop. Branch protection is out of scope, so a red check does not block a merge. |
 | **A green suite is not a working feature** (`AGENTS.md` rule 11). The suites run in bare Node against fakes. | Automated Verify also runs the real bundled module against the ticket's acceptance inputs, and drives real Obsidian over CDP when it is reachable. Nothing a human did not observe is ever described as "verified in Obsidian". PRs carry `NOT VERIFIED IN OBSIDIAN`, and Linear comments say so plainly. |
 | **Bugs must be reproduced before they are fixed** (`AGENTS.md` rule 12). | Implement begins by reproducing, not by editing. If the repro fails, the ticket blocks rather than proceeding on a guess. |
 | **One deploy slot.** `npm run deploy` writes to one fixed folder in `~/Documents/Notes`. | Multiple worktrees can run phases concurrently (each with its own state file), but only one lane at a time may call `npm run deploy`. Take `.claude/deploy.lock` the same atomic way as the run lock, deploy, write `.deployed-from` with the `runId` and commit, then release. A lane that cannot take it skips the deploy and says so in its report rather than waiting: the vault carries merged `main` either way, and whoever deploys last wins. |
@@ -356,8 +356,10 @@ every known miss, set `phase: \"ship\"`. Do not commit, push, or open a PR."
 body's approach section. `<--build if the run passed it, otherwise: build only if the diff touches
 the bundle>`.
 
-There is no pre-push hook and no CI in this repo, so the push is instant and the PR will sit with
-no checks. That is expected; do not wait for any.
+There is no pre-push hook, so the push is instant. `.github/workflows/ci.yml` runs on `push` and
+on `pull_request`, so the PR will pick up a check. You **may** read its conclusion once for the
+report; you **must not** wait on it, and never write a polling loop. Branch protection is out of
+scope, so a red check does not block a merge.
 
 Run `/check-constraints`. A BLOCK is not overridable: set `status: \"blocked\"` with the findings
 and stop without committing. Same for a `/critique` BLOCK verdict. With no human reviewing the
@@ -519,6 +521,6 @@ Continues the run recorded in `.claude/pipeline-state.json`.
 | **Remote** | `git@github.com:JoshShearer/Note-Reader-Local.git` |
 | **Tracker** | Linear workspace `note-reader-local`, MCP server `linear-nrl`, team key `NRL` |
 | **Gates** | `npm test` · `npm run typecheck` · `npm run build` when the bundle moved |
-| **CI** | None. Nothing to poll. |
+| **CI** | `.github/workflows/ci.yml` on `push` and `pull_request`. May be read once, never waited on. No branch protection, so a red check does not block a merge. |
 | **Push gate** | None. No husky, no active git hooks. |
 | **Human gate** | None. The owner tests by using the app and files new tickets for what they find. |

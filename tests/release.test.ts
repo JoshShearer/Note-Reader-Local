@@ -335,7 +335,9 @@ test("ADR 0011 mentions ORT checksums", () => {
 });
 
 // Summary
-console.log(`\nall release tests passed\n`);
+// Conditional (NRL-69): printed unconditionally this line claimed a pass on a red
+// run, and a reader scanning the log sees it before the count below.
+if (passedTests === totalTests) console.log(`\nall release tests passed\n`);
 console.log(`${passedTests} of ${totalTests} passed`);
 if (passedTests === totalTests) {
 	process.exit(0);

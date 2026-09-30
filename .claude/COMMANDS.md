@@ -57,7 +57,7 @@ as a `/COMMANDS` command.
 
 | Difference | Why |
 |---|---|
-| `/verify` runs the gates itself | There is no CI here. No `.github/`, no workflow, no git hook. Nothing to poll. |
+| `/verify` runs the gates itself | `.github/workflows/ci.yml` runs them on `push` and `pull_request`, but there is no git hook and no branch protection, so the check is a backstop. `/verify` may read its conclusion once; it must not wait on it. |
 | Every shipping command demands an Obsidian check | `AGENTS.md` rule 11. The suites run in bare Node against fakes, so green says nothing about whether speech works. |
 | `/run-tickets` never waits for a human | The owner tests by using the app and files new tickets for what they find. Verify is automated (gates, bundled probes of every acceptance input, CDP smoke when reachable) and merge is automatic. Nothing is ever described as verified in Obsidian unless a human saw it; interactive `/verify` still exists for that. |
 | `/spec-check` is new | This project has a written spec with MoSCoW IDs. Compliance drift is the main risk, and no other repo in the portfolio has that shape. |

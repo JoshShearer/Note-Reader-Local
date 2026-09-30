@@ -16,8 +16,11 @@ Code and opencode read the same rules.
 
 ## Quality gates
 
-There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The gates
-are local and nothing runs them for you.
+`.github/workflows/ci.yml` runs `npm ci`, then `npm run typecheck`, then `npm run build`,
+then `npm test` on every push and every pull request, and
+`.github/workflows/release.yml` gates tagged commits as well. There is still no lint
+script and no git hook, so nothing runs the gates at the moment you commit: CI is a
+backstop, not a substitute. Run them locally first.
 
 ```bash
 npm test          # 18 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection
@@ -38,7 +41,12 @@ speech-dispatcher daemon (here with the `speech-dispatcher-espeak-ng` output mod
 is a Linux desktop test and will fail elsewhere. `tests/espeak.test.ts` covers `espeak.ts`
 with a fake `ProcessRunner` only: the `espeak-ng` binary itself is not installed on this
 machine (confirmed via `which espeak-ng`), so there is still no real-binary coverage for
-that engine, only for speech-dispatcher.
+that engine, only for speech-dispatcher. The two regions of `tests/engine.test.ts` that
+need the daemon - the preamble checks and the real-binary block that speaks aloud and
+asserts wall-clock duration - are bypassed when `NRL_SKIP_REAL_SPEECHD` is exactly `"1"`,
+which is what both workflows set. A skip prints one `SKIP <name>` line per bypassed check
+and is counted separately from `ok`, so a partial run can never read as a full one. With
+the variable unset, a missing binary or a dead daemon still fails the suite.
 
 ---
 
