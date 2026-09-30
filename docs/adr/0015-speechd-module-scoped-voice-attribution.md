@@ -54,6 +54,10 @@ whenever the proof does not land:
 6. Any probe run whose child was **terminated by a signal** gives up, whatever
    its exit code says. `RunResult.signal` carries the second argument of node's
    `close` event for exactly this.
+7. `spd-say -O` again as the last step, under the same controller and the same
+   three checks as step 6, and the **parsed, order-independent** module set must
+   equal the one step 1 read. Anything else gives up. Added by NRL-71; see
+   Residual risk for what it does and does not cover.
 
 Everything else stays `"unknown"`. The engine can never emit `local: false`.
 
@@ -170,12 +174,58 @@ observes it serving, and those names can then be attributed to an allowlisted
 module alone. It requires the daemon to be reconfigured inside the probe's own
 window, measured at 778 ms on this machine, and no `spd-say` call reads the
 module list and the per-module listings as one atomic operation, so the sequence
-cannot be made a single observation. A cheap partial mitigation was deliberately
-not taken: re-running `-O` at the end of the probe and requiring the module set
-to be unchanged. It would narrow the window rather than close it, since a module
-could still be added and removed inside it and the per-module listings are still
-read at N different instants, and it costs one more daemon round trip on every
-`listVoices()` that misses the memo. NRL-71 tracks it.
+cannot be made a single observation. The 778 ms is NRL-55's measurement of
+NRL-55's probe, taken before the step below existed.
+
+The cheap partial mitigation this section originally declined **was taken, in
+NRL-71**: step 7 above. `-O` runs again as the probe's last step, under the same
+`AbortController` and therefore inside the same 5 s deadline, and subject to the
+same three checks as every other run here (our own abort flag, `RunResult.signal`
+for a kill we did not issue, and a non-zero exit). The comparison is on the
+**parsed, order-independent** module set, never on the stdout bytes: the daemon is
+not promised to list its modules in a stable order, and a reordered listing would
+otherwise cost every voice its attribution for nothing. Case M2 in
+`tests/engine.test.ts` pins that; M1 pins the divergence give-up, and M3 and M4
+pin the signal and exit-code checks on the new run specifically.
+
+It **narrows the window rather than closing it**, and the uncovered shapes are
+named rather than argued away. A module added and removed entirely between the
+two `-O` calls is invisible to the comparison. The N per-module listings are
+still read at N different instants, so a module added before one listing and
+removed before the closing `-O` is invisible too. No `spd-say` call reads the
+module list and the per-module listings as one observation, so closing the window
+needs a different interface to the daemon - a direct SSIP client, which NRL-43
+built and measured for an unrelated purpose - rather than a better sequence of
+`spd-say` calls. That is deliberately out of scope.
+
+The give-up is memoised exactly like every other probe failure, and no retry was
+added. So a daemon reconfigured inside the probe's window leaves **every** voice
+`"unknown"` until the plugin reloads. That is the intended direction: `"unknown"`
+is the honest answer and re-probing would re-pay a full per-module listing on
+every settings-tab render.
+
+Measured cost, NRL-71's own numbers on this machine (spd-say 0.12.0-rc2, two
+output modules, bare-Node, 10 fresh engine instances on the probe-miss path and
+10 memoised calls per side, three base/change pairs run back to back): miss-path
+median 769.8, 762.0 and 782.2 ms without the closing `-O` against 768.4, 763.4
+and 787.2 ms with it, so the three median differences are -1.4, +1.4 and +5.0 ms.
+The extra round trip is not separable from run-to-run noise at this sample size,
+which is consistent with `-O` being the cheap call in the probe. Memo-path
+medians were 379.3, 363.3 and 378.7 ms without against 369.1, 367.7 and 382.1 ms
+with, as expected since the memoised path runs no probe at all. Two further pairs
+were run on the same protocol before the change was committed, one of them with
+the change side first to control for warming: +18.1 ms and +3.7 ms of median
+difference. Do not read -1.4 to +5.0 as a bound; five pairs span -1.4 to
++18.1 ms and the per-pair series overlap each other throughout, which is the
+actual reason the round trip is not separable here rather than the deltas being
+small. Attribution itself did not move on any pair: 13,231 rows, all
+`local: true`, 0 `"unknown"`, 0 `false`, identical on both sides and agreed by
+all 10 fresh instances on each side. **Nothing was observed in Obsidian**; CDP
+port 9222 was not exercised for this change.
+
+R-S01 is **still not claimed**. "Why `srs.md` is unchanged" below stands
+unaltered: this only narrows an already-honest `"unknown"` further, it can still
+never emit `local: false`, and `srs.md` is not edited by NRL-71.
 
 ## Consequences
 

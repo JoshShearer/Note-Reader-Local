@@ -539,7 +539,12 @@ rediscover them:
   measurements: a short read that exits `code 0` with no signal, which no observable can
   detect, and the probe's non-atomicity across `-O` then N x `-o -L`, where removal fails
   closed but addition inside the measured 778 ms window could produce a wrong `local: true`.
-  NRL-71 tracks the partial mitigation for the second.
+  NRL-71 took the partial mitigation for the second: a closing `spd-say -O` under the same
+  controller and the same three checks, giving up unless the parsed, order-independent module
+  set is unchanged. It narrows the window rather than closing it (a module can still be added
+  and removed between the two `-O` calls, and the N per-module listings are still read at N
+  different instants), and the give-up is memoised with no retry, so a daemon reconfigured
+  inside the window leaves every voice `"unknown"` until the plugin reloads.
 - Stop now aborts a read that is still in its load phase, as of NRL-48 (`docs/adr/0013`).
   Before it, `main.ts` held no `AbortController` at all and `Player`'s own one is created
   inside `play()`, so during `beforeAttempt`'s `await engine.prepare()` a Stop was
