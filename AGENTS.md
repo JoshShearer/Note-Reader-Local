@@ -241,6 +241,31 @@ rediscover them:
   reasoning lives on `stopDaemon()`. What remains is the one chunk already queued behind the
   spoken one, about 830 ms, which `-S` cannot reach; NRL-43 tracks it, and `CONTEXT.md`
   explains why the Player runs a chunk ahead on this engine.
+- Stop now aborts a read that is still in its load phase, as of NRL-48 (`docs/adr/0013`).
+  Before it, `main.ts` held no `AbortController` at all and `Player`'s own one is created
+  inside `play()`, so during `beforeAttempt`'s `await engine.prepare()` a Stop was
+  unobservable by any route and the note started speaking once the model finished loading.
+  `main.ts` now owns a per-read `readScope` controller, superseded at the top of all three
+  read paths and aborted in `stopReading()` and `onunload()`, and `playWithFallback()` takes
+  an 8th optional positional `signal` which it checks at the top of each iteration and again
+  between a finished load and `play()`. Two halves are deliberate and must not be
+  "simplified". An abort resolves `null` and never fires `onFallback`, because a user Stop is
+  not a candidate failure - the callers disambiguate the two `null`s with
+  `scope.signal.aborted` before the "no speech engine is available" Notice and before arming
+  the sleep timer. And `raceAbort()` converts the load's rejection into a *value* at
+  race-setup time rather than catching it later, which is what stops a post-abort rejection
+  becoming either an unhandled rejection or a fallback trigger; the abort arm resolves rather
+  than rejects, so no rejecting arm exists. The load is abandoned, not cancelled: bytes keep
+  downloading and a finished model is kept for the next read, so Stop does not free work in
+  flight. Evidence is **bare-Node only** - `tests/fallback.test.ts` T1-T4 plus an independent
+  probe bundling the real `fallback.ts` against the real `Player`, both showing 8 FAILURE(S)
+  at the pre-fix base `d7e64df` and green at the fix. **Nothing was observed in Obsidian**,
+  and one known leftover is on-screen rather than audible: the `Loading X...` Notice is built
+  with duration 0 and hidden only in the abandoned `prepare()`'s `finally`, so after a Stop
+  during a cold Kokoro load it lingers until the load finishes on its own (measured in a
+  transcribed harness as HIDE at +352 ms for a Stop at +51 ms of a 350 ms load). NRL-65
+  tracks that. So R-M07 is **not** recorded as fully met, and the `2 of 16` MUST headline
+  count above does not move.
 - `cleanLine` is called once per source line, but since NRL-42 that is no longer the whole
   story: an inline code span may cross a soft line break, so `Cleaned.openCode` carries the
   length of a run left open and `codeSpanClosesLater` confirms a later line closes it. The
