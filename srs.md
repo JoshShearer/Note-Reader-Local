@@ -278,6 +278,16 @@ Where a backend cannot pause an active utterance, the controller MAY implement p
 
 Stop MUST also cancel a read that has not begun speaking, including while an engine's model is still loading; the load itself MAY be abandoned rather than cancelled, and any already-loaded result is kept (ADR 0013).
 
+Stop silences playback as far as the backend allows, which on `speechd` is not
+completely: about 800 ms of speech continues after it, and that is accepted rather
+than outstanding (ADR 0016). Measured off the sink monitor with `parec` at 810 ms
+and 800 ms, identical whether the daemon is told to stop over `spd-say -S` or over
+a connection-scoped SSIP `CANCEL self` that the daemon acknowledges for both the
+speaking and the queued message. The speech has already been committed to the
+daemon's output module by then, so no protocol verb reclaims it. The other three
+engines are unaffected: Kokoro and espeak play through the `<audio>` element, and
+webspeech uses `speechSynthesis.cancel`.
+
 ---
 
 ### R-M08 — Markdown Processing

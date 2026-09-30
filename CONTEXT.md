@@ -293,7 +293,13 @@ These are design-level, not bugs, and they shape any new work:
   just after a stop it returned in 39-62 ms while its own audio ran for seconds. (Measured
   in NRL-41 off the sink monitor with `parec`, precisely because `-w` could not be trusted;
   every number in that ticket comes from the capture, not from `-w`.) So `Player.run()`'s
-  await does not pace this engine's queue: the Player runs one chunk ahead of the audio, and
-  a Stop leaves that already-queued chunk to play out - about 830 ms, unchanged either side
-  of NRL-41 and tracked as NRL-43. Anyone measuring speechd must capture audio rather than
-  time `-w`.
+  await does not pace this engine's queue: after a stop the Player runs one chunk ahead of the
+  audio, and a Stop leaves about 800 ms of speech to play out. NRL-43 accepted that rather than
+  fixing it (`docs/adr/0016`), having built and measured the fix the model implied: an SSIP
+  socket client whose `CANCEL self` flushes our own queue leaves the tail exactly where `-S`
+  does, 810/800 ms either way, because the speech is already inside the daemon's output module.
+  Anyone measuring speechd must capture audio rather than time `-w`, and must be more careful
+  than that as well - `701 BEGIN` fires 3-10 ms after queueing rather than at audio start, a
+  single-stop read does not overlap chunks at all so it cannot reproduce the tail, and `parec`
+  on a cold sink starts ~2 s late and then bursts earlier audio, which will manufacture a
+  reproduction that is not there. ADR 0016 records all four traps.
