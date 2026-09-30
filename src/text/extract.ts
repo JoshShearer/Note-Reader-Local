@@ -49,7 +49,30 @@ interface Cleaned {
 	 * top-level line, not a re-cleaned link label.
 	 */
 	openCode?: number;
+	/**
+	 * A CONFIRMED markdown image or link label, carried in from an earlier line
+	 * and still open at the end of this one. extractChunks hands it straight to
+	 * the next line; the confirmation was made where the label opened and is
+	 * monotone, so it is not re-asked (NRL-63).
+	 */
+	openBracket?: BracketKind;
+	/**
+	 * The FIRST `![` or `[` on this line whose `]` is missing. Unconfirmed, and
+	 * therefore not yet acted on: exactly like `openCode`, only extractChunks may
+	 * act on it and only after `bracketClosesLater` has found the closing `](` or
+	 * `][`. An unmatched `[` is ordinary text, and treating it as a label would
+	 * silence visible prose. Only meaningful for a top-level line, not a
+	 * re-cleaned label.
+	 */
+	unclosedBracket?: BracketKind;
 }
+
+/**
+ * Which construct a soft-wrapped label belongs to. The two differ in exactly one
+ * way - an image's label is governed by `speakImageAlt` and a link's is always
+ * spoken - and in nothing else, which is why one carry covers both (NRL-63).
+ */
+type BracketKind = "image" | "link";
 
 function isWordChar(ch: string): boolean {
 	return /[\p{L}\p{N}'’-]/u.test(ch);
@@ -447,6 +470,22 @@ function wikiTargetClose(raw: string, from: number): number {
  * the run length, asks codeSpanClosesLater, and only then re-cleans with the
  * answer. cleanLine therefore stays line-local - it is handed one scalar, not a
  * lookahead into the document.
+ *
+ * `incomingBracket` and `outgoingBracket` are the second confirmed-carry kind,
+ * and they attach at exactly the site NRL-64 built for one (NRL-63). They are
+ * the same two halves seen from either end: `incomingBracket` says this line
+ * starts inside a markdown image or link label opened earlier, and
+ * `outgoingBracket` says the `![`/`[` this line leaves unmatched really is a
+ * label that a later line closes. Both are confirmed by extractChunks before
+ * cleanLine is told, for the same reason the code carry is - an unmatched `[`
+ * is ordinary text, and acting on it unconfirmed would silence visible prose.
+ *
+ * The two carries are mutually exclusive for the NEXT line, and the rule is
+ * "whichever opened first keeps the carry". A code span binds tighter than a
+ * label in CommonMark, so when both open on one line the code carry wins and no
+ * label carry is armed; while a label carry is live, it holds and no code carry
+ * is armed inside it. Consequence, measured and recorded in ADR 0022: an image
+ * whose label contains a soft-wrapped code span still speaks its destination.
  */
 function cleanLine(
 	raw: string,
@@ -455,6 +494,8 @@ function cleanLine(
 	blockComments = false,
 	incomingCode?: number,
 	outgoingCode?: number,
+	incomingBracket?: BracketKind,
+	outgoingBracket?: BracketKind,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -639,11 +680,46 @@ function cleanLine(
 		}
 	};
 
+	/**
+	 * A confirmed image or link label's content, `[from, to)`.
+	 *
+	 * The mirror of emitLiteralRegion, and deliberately the same shape: one
+	 * emitter, called from the label's opening line and from every continuation
+	 * line, so the two halves of a soft-wrapped label are provably the same rule
+	 * rather than merely similar (NRL-63).
+	 *
+	 * Label content is re-cleaned rather than emitted raw, exactly as the
+	 * single-line image and link branches already re-clean theirs, so nested
+	 * markup, escapes and complete comment spans inside a soft-wrapped label go
+	 * through the existing recursion rather than a second implementation. The
+	 * recursion is line-local: it is handed a slice with its true rawStart and
+	 * its openComment/openCode are discarded, which is what stops a label opening
+	 * a document-level comment.
+	 *
+	 * The silenced branch emits no space of its own. Every call site already
+	 * pushSpace's either side of the label, and a space mapped at `to` would be
+	 * `raw.length` at end of line, which is not an offset in this line.
+	 */
+	const emitLabelRegion = (from: number, to: number, kind: BracketKind): void => {
+		if (kind === "image" && !opts.speakImageAlt) return;
+		pushSpace(rawStart + from);
+		const inner = cleanLine(raw.slice(from, to), rawStart + from, opts);
+		for (let k = 0; k < inner.text.length; k++) {
+			emit(inner.text[k]!, inner.index[k] ?? rawStart + from);
+		}
+	};
+
 	let openComment: CommentCloser | undefined;
 	// A carried span that this line does not close stays open, so a span may
 	// cross several soft line breaks. It owns the carry ahead of any run opened
 	// on this line, being the outer and earlier opener.
 	let openCode: number | undefined = carrying && closerRun === -1 ? incomingCode : undefined;
+	// The label carry's two halves. `openBracket` is only ever set from a
+	// CONFIRMED label - one carried in, or one this line opens and outgoingBracket
+	// has already confirmed - so extractChunks can hand it on without re-asking.
+	// `unclosedBracket` is the unconfirmed discovery pass 1 exists to make.
+	let openBracket: BracketKind | undefined;
+	let unclosedBracket: BracketKind | undefined;
 	let i = 0;
 
 	/*
@@ -671,6 +747,49 @@ function cleanLine(
 	if (carrying && literalCodeEnd > 0) {
 		emitLiteralRegion(0, literalCodeEnd);
 		i = literalCodeEnd;
+	}
+
+	/*
+	 * A confirmed label carried in from an earlier line (NRL-63).
+	 *
+	 * This line starts inside the label, so the text up to its `]` is label
+	 * content and nothing in it is a fresh construct at this level - the same
+	 * reading a carried code span gets, for the same reason. What follows the
+	 * `]` is the destination or the reference tail, consumed and never spoken by
+	 * the identical two-shape test the single-line branches use, and the rest of
+	 * the line is ordinary prose scanned by the loop below.
+	 *
+	 * It can never be reached with a code carry live: extractChunks arms at most
+	 * one carry for a line (see cleanLine's header), so `incomingCode` and
+	 * `incomingBracket` are mutually exclusive. The block is placed after the
+	 * code region anyway, so the ordering is stated rather than implied.
+	 */
+	if (incomingBracket !== undefined) {
+		const close = inlineContainerClose(raw, 0, "]");
+		if (close === -1) {
+			// The label has not closed yet, so the whole line is label content and
+			// the carry continues. Confirmation was made where the label opened and
+			// is monotone - the closing line is still ahead and no interrupting line
+			// can have appeared between - so it is not re-asked here.
+			emitLabelRegion(0, raw.length, incomingBracket);
+			openBracket = incomingBracket;
+			i = raw.length;
+		} else {
+			emitLabelRegion(0, close, incomingBracket);
+			let after = close + 1;
+			if (raw[after] === "(") {
+				const paren = raw.indexOf(")", after);
+				after = paren === -1 ? after + 1 : paren + 1;
+			} else if (raw[after] === "[") {
+				const refClose = raw.indexOf("]", after);
+				after = refClose === -1 ? after : refClose + 1;
+			}
+			i = after;
+			// Clamped, because a destination may be the last thing on the last line
+			// of the note and `rawStart + raw.length` is then one past the end of
+			// the source. Every sourceIndex entry must be a real offset in it.
+			pushSpace(rawStart + Math.min(i, raw.length - 1));
+		}
 	}
 
 	while (i < raw.length) {
@@ -917,6 +1036,19 @@ function cleanLine(
 		if (ch === "!" && raw[i + 1] === "[") {
 			const close = inlineContainerClose(raw, i + 2, "]");
 			if (close === -1) {
+				// No `]` on this line. If extractChunks has confirmed that a later
+				// line closes this label, the rest of the line is label content and
+				// the carry goes out (NRL-63); only the FIRST unmatched opener can
+				// take it, which is what `unclosedBracket === undefined` says.
+				// Otherwise this is the pre-NRL-63 behaviour unchanged: drop the `!`
+				// and let the `[` below emit itself as the text it is.
+				if (unclosedBracket === undefined && outgoingBracket === "image") {
+					emitLabelRegion(i + 2, raw.length, "image");
+					openBracket = "image";
+					i = raw.length;
+					continue;
+				}
+				unclosedBracket ??= "image";
 				i += 1;
 				continue;
 			}
@@ -947,6 +1079,16 @@ function cleanLine(
 		if (ch === "[") {
 			const close = inlineContainerClose(raw, i + 1, "]");
 			if (close === -1) {
+				// The same soft-wrap carry the image branch above takes, by the same
+				// scanner, because a link label crosses a break the same way (NRL-63).
+				// Unconfirmed, the `[` is still emitted as the text it is.
+				if (unclosedBracket === undefined && outgoingBracket === "link") {
+					emitLabelRegion(i + 1, raw.length, "link");
+					openBracket = "link";
+					i = raw.length;
+					continue;
+				}
+				unclosedBracket ??= "link";
 				emit(ch, rawStart + i);
 				i += 1;
 				continue;
@@ -1069,7 +1211,7 @@ function cleanLine(
 		i += 1;
 	}
 
-	return { text: chars.join(""), index, openComment, openCode };
+	return { text: chars.join(""), index, openComment, openCode, openBracket, unclosedBracket };
 }
 
 interface StripOptions {
@@ -1563,6 +1705,74 @@ function codeSpanClosesLater(lines: string[], from: number, len: number): boolea
 }
 
 /**
+ * Does line `n` open a display-math block that a later line closes?
+ *
+ * The same test extractChunks makes at its `$$` branch, deliberately duplicated
+ * rather than shared, because what matters here is not that the line looks like
+ * math but that extractChunks will *consume the whole block with a `continue`*
+ * that never reaches the carry site. A label carry armed on the line before such
+ * a block is therefore read into `carriedBracket` and then dropped, which
+ * silences the label's words and still leaves the destination spoken - strictly
+ * worse than either recognising the label or not recognising it. So the
+ * lookahead refuses to confirm across one and the label is left exactly as it
+ * was before NRL-63, which is the same fail-closed direction clause 3 of ADR
+ * 0022 takes everywhere else.
+ *
+ * The closer search is part of the test and not an optimisation: with no `$$`
+ * anywhere later the line is not a block, extractChunks does not consume it, and
+ * the carry works, so stopping there would give up a destination for nothing.
+ *
+ * `interruptsParagraph` is deliberately NOT widened to cover this. It is shared
+ * with codeSpanClosesLater, and widening it would move NRL-64's just-landed
+ * carry as well. The identical gap exists for that carry and is pre-existing;
+ * it is not opened or closed here.
+ */
+function opensMathBlock(lines: string[], n: number): boolean {
+	const raw = lines[n]!;
+	const open = raw.indexOf("$$");
+	if (!raw.trimStart().startsWith("$$") || raw.indexOf("$$", open + 2) !== -1) return false;
+	for (let k = n + 1; k < lines.length; k++) if (lines[k]!.includes("$$")) return true;
+	return false;
+}
+
+/**
+ * Does an `![` or `[` left unmatched on line `from` have its `]` on a later line
+ * of the same paragraph, followed by a destination or a reference tail?
+ *
+ * Deliberately the same stopping rules as codeSpanClosesLater, run through the
+ * identical interruptsParagraph predicate at both ends, so the two carries can
+ * never disagree about where a paragraph ends. A label cannot leave its own
+ * block any more than a code span can.
+ *
+ * The `](` / `][` requirement is the difference from codeSpanClosesLater, and it
+ * is what keeps this fix on the prose-loss side of the line. The defect is that
+ * a destination is spoken, and only the inline and reference forms carry one. A
+ * shortcut `[text\nmore]` with no such tail renders literally when no reference
+ * defines it, so confirming it would silence visible prose to fix a leak that is
+ * not there - the trade ADR 0007 clause 6 refuses. With no confirmation there is
+ * no carry and nothing changes, which is also what a label that never closes
+ * gets: it cannot swallow the rest of the note because it is never recognised.
+ *
+ * Only the FIRST `]` on the first line that has one is tested, because that is
+ * where the label would close; a later `]` on the same line is inside the
+ * destination or past it. inlineContainerClose is the same helper the
+ * single-line branches close their labels with, so a `]` hidden in a code span
+ * or a complete comment span cannot close this one either.
+ */
+function bracketClosesLater(lines: string[], from: number): boolean {
+	if (interruptsParagraph(lines[from]!) || opensMathBlock(lines, from)) return false;
+	for (let n = from + 1; n < lines.length; n++) {
+		const line = lines[n]!;
+		if (interruptsParagraph(line) || opensMathBlock(lines, n)) return false;
+		const close = inlineContainerClose(line, 0, "]");
+		if (close === -1) continue;
+		const next = line[close + 1];
+		return next === "(" || next === "[";
+	}
+	return false;
+}
+
+/**
  * A `key:` line. Keys may be quoted or contain any character but a colon, so
  * non-English property names (`título:`, `日付:`) and names like
  * `created (date):` count. The trailing space-or-end stops "http://x" counting
@@ -1711,6 +1921,10 @@ export function extractChunks(
 	// Armed only on the plain-paragraph path and only once codeSpanClosesLater
 	// has found the closing run, so every other path clears it.
 	let openCode: number | undefined;
+	// The image or link label left open by the previous line, on the same terms
+	// and cleared by the same paths as openCode (NRL-63). Only one of the two is
+	// ever armed for a given line; see cleanLine's header for which wins.
+	let openBracket: BracketKind | undefined;
 	let inIndentedCode = false;
 	// Inside a list item, an indented line is item content or a nested item,
 	// never code. Kept across blank lines, since loose lists have them.
@@ -1813,6 +2027,10 @@ export function extractChunks(
 		// span was in, and a span cannot outlive its paragraph.
 		const carriedCode = openCode;
 		openCode = undefined;
+		// Read and cleared on exactly the same terms as carriedCode above, and for
+		// the same reason: a label cannot outlive its paragraph either.
+		const carriedBracket = openBracket;
+		openBracket = undefined;
 
 		// This deliberately diverges from Obsidian, which only honours a `---`
 		// on line 1. A note that starts with blank lines and then a `key: value`
@@ -2049,7 +2267,7 @@ export function extractChunks(
 		 * confirmed unmatched run, which is rare, and provably a no-op on a line
 		 * wholly inside an already-carried span.
 		 */
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode);
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
@@ -2057,7 +2275,40 @@ export function extractChunks(
 			codeSpanClosesLater(lines, lineNo, cleaned.openCode)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket);
+		}
+		/*
+		 * The second confirmed-carry kind, attached at the site NRL-64 built and
+		 * consumed through the same emit-a-region shape (NRL-63). One more pass, on
+		 * the same terms: pass 1 discovers an `![`/`[` this line leaves unmatched,
+		 * bracketClosesLater answers whether a later line really closes it with a
+		 * destination, and only then is the line cleaned again knowing its tail is
+		 * label content rather than prose.
+		 *
+		 * `confirmed === undefined` is the precedence rule, not an optimisation. A
+		 * code span binds tighter than a label in CommonMark, so when a line opens
+		 * both the code carry takes it and the label is not recognised - which
+		 * leaves NRL-64's path untouched and leaves the mixed shape exactly as it
+		 * was rather than half-changed. ADR 0022 records the residual.
+		 */
+		let confirmedBracket: BracketKind | undefined;
+		if (
+			blockType === "paragraph" &&
+			confirmed === undefined &&
+			cleaned.unclosedBracket !== undefined &&
+			bracketClosesLater(lines, lineNo)
+		) {
+			confirmedBracket = cleaned.unclosedBracket;
+			cleaned = cleanLine(
+				body,
+				lineStart + prefixChars,
+				stripOpts,
+				true,
+				carriedCode,
+				undefined,
+				carriedBracket,
+				confirmedBracket,
+			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the
 		// confirmed tail is code content, so it opens nothing - which is the same
@@ -2105,7 +2356,12 @@ export function extractChunks(
 		// that path reachable: under skipInlineCode a line lying wholly inside a
 		// span is silenced whole and cleans to the empty string, and dropping the
 		// carry there would leave the span's closing line read as fresh prose.
-		if (confirmed !== undefined) openCode = confirmed;
+		// The label carry is armed here too, for every one of those reasons, and
+		// the order between the two is the other half of the precedence rule: a
+		// label already live holds the carry, because it opened first and the run
+		// inside it is part of its content. Only one of the two is ever set.
+		openBracket = cleaned.openBracket;
+		if (confirmed !== undefined && openBracket === undefined) openCode = confirmed;
 
 		if (cleaned.text.trim() === "") {
 			continue;

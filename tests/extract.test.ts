@@ -1462,9 +1462,64 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		["guard-nrl64-linkrefdef-with-run", "[a]: `x.png\nlast ` here.", "last here.", { skipInlineCode: false }],
 		// The region still ends at the carried closer, not at end of line.
 		["guard-nrl64-tail-after-closer", "Before `a %%b%% c\nmid` **bold** after.", "Before a %%b%% c mid bold after.", { skipInlineCode: false }],
-		// F9, NRL-63: an image whose alt text crosses a soft line break is not
-		// recognised as an image at all, so its destination is spoken as prose.
-		["pin-nrl63-softwrapped-image", "A ![alt\nwords](zdestz.png) B", "A [alt words](zdestz.png) B", { skipInlineCode: false }],
+		// F9, NRL-63, now fixed: an image whose alt text crosses a soft line break
+		// is recognised across it, so its destination is silent and speakImageAlt
+		// governs the alt. The pin's VALUE moved; the row did not. Each of the
+		// three below has a single-line control beside it, and the two must agree
+		// character for character - that equality is the fix, not the value.
+		["pin-nrl63-softwrapped-image", "A ![alt\nwords](zdestz.png) B", "A alt words B", { skipInlineCode: false }],
+		["control-nrl63-single-line-image", "A ![alt words](zdestz.png) B", "A alt words B", { skipInlineCode: false }],
+		["nrl63-softwrapped-image-silenced", "A ![alt\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["control-nrl63-single-line-image-silenced", "A ![alt words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		// The same scanner covers a soft-wrapped LINK, and a markdown link's
+		// destination is dropped in both speakUrls positions (that setting governs
+		// bare URLs and autolinks, ADR 0003), so both rows read the label only.
+		["nrl63-softwrapped-link", "A [lab\nwords](zdestz.png) B", "A lab words B"],
+		["nrl63-softwrapped-link-urls-on", "A [lab\nwords](zdestz.png) B", "A lab words B", { speakUrls: true }],
+		["control-nrl63-single-line-link", "A [lab words](zdestz.png) B", "A lab words B"],
+		// The `[ref]` tail of the reference form goes too, exactly as it does on
+		// one line (srs.md R-M09).
+		["nrl63-reference-form", "A ![alt\nwords][zrefz] B", "A B", { speakImageAlt: false }],
+		// A label may cross several breaks; the carry holds until the `]`.
+		["nrl63-three-lines-silenced", "A ![alt\nmid\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["nrl63-three-lines-spoken", "A ![alt\nmid\nwords](zdestz.png) B", "A alt mid words B", { speakImageAlt: true }],
+		// Label content is re-cleaned, not emitted raw, so nested markup and a
+		// complete comment span inside a soft-wrapped label behave as on one line.
+		["nrl63-nested-markup-in-label", "A ![**alt**\n#tag words](zdestz.png) B", "A alt words B"],
+		["nrl63-comment-in-label", "A ![alt %%SENTINEL%%\nwords](zdestz.png) B", "A alt words B"],
+		// Prose-loss direction. A label that never closes, or whose closer is past
+		// a paragraph boundary, is never recognised, so nothing is swallowed and
+		// every one of these is byte-identical to the pre-NRL-63 tree.
+		["guard-nrl63-never-closed", "A ![alt\nwords B\n\nlast here.", "A [alt words B last here."],
+		["guard-nrl63-blank-breaks-label", "A ![alt\n\nwords](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		["guard-nrl63-heading-breaks-label", "A ![alt\n# H\nwords](zdestz.png) B", "A [alt H words](zdestz.png) B"],
+		["guard-nrl63-comment-opener-breaks-label", "A ![alt\n%%\nSENTINEL\n%%\nwords](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		// The math-block stop is precise rather than blanket: a stray `$$` with no
+		// closer anywhere is not a block, extractChunks does not consume it, and
+		// the carry still works, so the destination is still silenced. (The
+		// closed-block case cannot live in this table - see the block below.)
+		["guard-nrl63-stray-math-still-carries", "PA ![alt W1 W2\n$$ stray\nW3](zdestz.png) PC", "PA PC", { speakImageAlt: false }],
+		["guard-nrl63-opening-line-is-heading", "# A ![alt\nwords](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		["guard-nrl63-opening-line-is-list", "- A ![alt\n  words](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		// A shortcut `![alt\nwords]` carries no destination and renders literally
+		// when nothing defines the reference, so the carry deliberately requires
+		// `](` or `][` on the closing line and this stays spoken (ADR 0022).
+		["guard-nrl63-shortcut-no-tail", "A ![alt\nwords] B", "A [alt words] B", { speakImageAlt: false }],
+		// Both carries live on one line, in both directions. First: a code span
+		// carried in closes, then an image opens and carries out.
+		["nrl63-code-carry-then-image", "A `x\ny` z ![alt\nwords](zdestz.png) B", "A x y z alt words B", { skipInlineCode: false }],
+		// Second: both open on the same line, where the code carry wins because a
+		// code span binds tighter than a label. Both rows are byte-identical to
+		// the pre-NRL-63 tree and pin the residual ADR 0022 records - the
+		// destination is still spoken here.
+		["guard-nrl63-code-wins-inside-label", "A ![alt `x\ny` words](zdestz.png) B", "A [alt x y words](zdestz.png) B", { skipInlineCode: false }],
+		["guard-nrl63-code-wins-inside-label-skipped", "A ![alt `x\ny` words](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		// Nested bracket constructs in a label are the open R-M09 family this does
+		// not close. The carry takes the FIRST unmatched opener, as the code carry
+		// takes the first unmatched run, so the outer `[` claims the inner image's
+		// `](`. Measured, and strictly fewer destination characters than the
+		// pre-fix tree, which spoke both of them.
+		["guard-nrl63-nested-label", "A [![alt\nwords](zdestz.png)](zouterz.png) B", "A [alt words ](zouterz.png) B", { speakImageAlt: false }],
 		// NRL-68, closed as not-a-defect. A trailing mid-line %% is NOT a block
 		// opener in Obsidian: its %% tokenizer is a block tokenizer, skips leading
 		// spaces only, and then requires %% at the block start (read out of the
@@ -1518,6 +1573,46 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 	// A confirmed span does not fold the paragraph break away.
 	const paced = extractChunks("Before `x\n%%\nSENTINEL\n%%\ntail.\n\nNext `first\n%%literal%%\nlast` end.", { ...OPTS, skipInlineCode: false });
 	check("NRL-42 paragraph boundaries retained", paced.length === 2);
+
+	/*
+	 * NRL-63: a display-math block between a label's opener and its closer.
+	 *
+	 * extractChunks consumes such a block with a `continue` that never reaches the
+	 * carry site, so a carry armed on the line before it is read into
+	 * carriedBracket and then dropped. Left unguarded that silences the label's
+	 * words AND still speaks the destination - strictly worse than either
+	 * recognising the label or not recognising it, and the one direction ADR 0022
+	 * clause 3 exists to foreclose. bracketClosesLater therefore refuses to
+	 * confirm across one, so this is byte-identical to the pre-NRL-63 tree in
+	 * BOTH speakImageAlt positions.
+	 *
+	 * This cannot live in the table above. That harness asserts
+	 * `src[sourceIndex[i]] === text[i]` for every non-space character, and the
+	 * synthetic "equation" chunk deliberately maps all seven letters to the `$`
+	 * offsets (docs/adr/0004), so it fails that clause on ANY math fixture -
+	 * measured on base d1fff6e too, and with no label anywhere in the note. The
+	 * length, bounds and monotonicity invariants below are the ones that do apply.
+	 */
+	{
+		const src = "PA ![alt W1 W2\n$$\nq\n$$\nW3](zdestz.png) PC";
+		for (const alt of [false, true]) {
+			const chunks = extractChunks(src, { ...OPTS, speakImageAlt: alt });
+			const spoken = chunks.map(c => c.text).join(" ");
+			check(`NRL-63 math block breaks the label (speakImageAlt ${alt}): visible output`,
+				spoken === "PA [alt W1 W2 equation W3](zdestz.png) PC");
+			check(`NRL-63 math block breaks the label (speakImageAlt ${alt}): no prose lost`,
+				["PA", "alt", "W1", "W2", "W3", "PC"].every(w => spoken.includes(w)));
+			check(`NRL-63 math block breaks the label (speakImageAlt ${alt}): offsets sane`,
+				chunks.every(c => {
+					if (c.sourceIndex.length !== c.text.length) return false;
+					for (let i = 0; i < c.text.length; i++) {
+						const at = c.sourceIndex[i]!;
+						if (at < 0 || at >= src.length || (i > 0 && at < c.sourceIndex[i - 1]!)) return false;
+					}
+					return true;
+				}));
+		}
+	}
 
 	/*
 	 * NRL-44 F5, as an enforced invariant rather than a code change.
