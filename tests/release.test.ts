@@ -385,6 +385,488 @@ test("Provenance job references SLSA generator", () => {
 	);
 });
 
+// --- Tag Trigger Is Version-Only (NRL-75)
+//
+// `.github/workflows/release.yml` used to trigger on `tags: ["*"]`. A GitHub
+// filter-pattern `*` matches every tag name that holds no `/`, so `nightly`,
+// `wip`, `pre-rebase`, `v0.1.0` or `0.1.0-rc1` would each have cut a real,
+// public GitHub Release through `actions/create-release`. Narrowed to bare
+// semver.
+//
+// THE MATCHER BELOW IS THE RISK, NOT THE PATTERN. These are GitHub FILTER
+// PATTERNS, not regexes, and a wrong translation would make the three NRL-75
+// checks pass while the workflow behaved differently in production - worse
+// than the bug. So `matchesFilterPattern` is validated against GitHub's own
+// published example table (the check named "...reproduces GitHub's documented
+// example table"), never against itself, and malformed or unsupported syntax
+// reports rather than being handed to the RegExp engine. That last clause is
+// narrower than it once read: it used to say "every construct it does not
+// understand throws", which was false and is why the guard named
+// "filter-pattern literals stay literal and malformed syntax reports" now
+// pins where the real line sits. See `filterPatternToRegExp`.
+//
+// Source, read verbatim during this ticket, github/docs@main
+// content/actions/reference/workflows-and-actions/workflow-syntax.md:
+// https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#filter-pattern-cheat-sheet
+
+/** The whole tag-trigger list this repo intends to ship (NRL-75). */
+const EXPECTED_TAG_PATTERNS: readonly string[] = ["[0-9]+.[0-9]+.[0-9]+"];
+
+/**
+ * Extract `on: push: tags:` from the workflow TEXT.
+ *
+ * There is no yaml dependency in package.json, so this is a regex over the
+ * file. That is only safe if a failed parse is LOUD: a silently-empty list
+ * would make every check below vacuously green, which is the exact shape of
+ * defect this repo keeps finding. Both failure modes therefore throw, and
+ * `test()` turns a throw into a named FAIL line.
+ *
+ * Pure - takes the text, touches no filesystem - so the guard below can drive
+ * it over synthetic strings and prove it cannot return `[]`.
+ */
+function parseOnPushTags(content: string): string[] {
+	const block =
+		/^on:[ \t]*\r?\n(?:[ \t]*(?:#.*)?\r?\n)*[ \t]+push:[ \t]*\r?\n(?:[ \t]*(?:#.*)?\r?\n)*[ \t]+tags:[ \t]*\r?\n((?:[ \t]*(?:#.*)?\r?\n|[ \t]+-[ \t]+\S.*\r?\n)+)/m.exec(
+			content,
+		);
+	if (block === null) {
+		throw new Error(
+			"could not locate an `on:` / `push:` / `tags:` block in the workflow text; " +
+				"refusing to return an empty pattern list, which would make every NRL-75 check vacuously green",
+		);
+	}
+	const entries: string[] = [];
+	for (const line of (block[1] ?? "").split("\n")) {
+		const item = /^[ \t]+-[ \t]+(.*)$/.exec(line);
+		if (item === null) continue; // blank or comment line inside the block
+		let value = (item[1] ?? "").trim();
+		if (
+			(value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
+			(value.startsWith("'") && value.endsWith("'") && value.length >= 2)
+		) {
+			value = value.slice(1, -1);
+		}
+		if (value === "") {
+			throw new Error("`on: push: tags:` holds an empty entry; refusing to treat it as a pattern");
+		}
+		entries.push(value);
+	}
+	if (entries.length === 0) {
+		throw new Error(
+			"`on: push: tags:` block was found but holds no `- <pattern>` entries; " +
+				"refusing to return an empty pattern list",
+		);
+	}
+	return entries;
+}
+
+/**
+ * One GitHub filter pattern -> an anchored RegExp.
+ *
+ * Documented set only (cheat sheet, cited above): `*` = zero or more characters
+ * but not `/`; `**` = zero or more of any character; `?` = zero or one of the
+ * preceding character; `+` = one or more of the preceding character; `[]` = one
+ * alphanumeric character listed or in an `a-z` / `A-Z` / `0-9` range; `!` at the
+ * start negates earlier positive patterns.
+ *
+ * "The preceding character" is the preceding EMITTED TOKEN, which is the whole
+ * bracket class when one precedes - that is exactly what GitHub's own
+ * `v[12].[0-9]+.[0-9]+` row requires, and the table check below is what pins it.
+ * Anchored, because a filter pattern matches the whole ref name.
+ *
+ * `\` escapes the next character, which the docs require: "If a name contains
+ * any of these characters and you want a literal match, you need to escape each
+ * of these special characters with `\`" (workflow-syntax.md:87, and the same
+ * sentence in the tags reusable). A trailing lone `\` has nothing to escape and
+ * no documented meaning, so it throws rather than degrading to a literal
+ * backslash. `\` before a character with no special meaning yields that
+ * character, which is glob convention rather than a documented rule - the docs
+ * define the escape only for their own special set.
+ *
+ * WHAT THROWS AND WHAT DOES NOT, stated precisely because an earlier draft of
+ * this comment claimed "anything undocumented throws" and that was FALSE.
+ * Malformed or unsupported SYNTAX throws: a bracket class outside the
+ * alphanumeric / `a-z`,`A-Z`,`0-9`-range set (`[^0-9]`, `[\d]`, `[]`), an
+ * unclosed `[`, a `]` with no opener, a quantifier with nothing before it
+ * (`+abc`, `?abc`, `[0-9]++`, `[0-9]+?`), a leading `!` (list-level, see
+ * `refMatchesPatterns`), an empty pattern, and a trailing `\`. A CHARACTER with
+ * no special meaning in a filter pattern does NOT throw: `(`, `)`, `|`, `{`,
+ * `}`, `^`, `$` and `.` are ordinary characters in a ref name, so they are
+ * regex-escaped and matched literally. That is GitHub's semantics rather than a
+ * gap - throwing on them would make this oracle stricter than the thing it is
+ * an oracle for. The escaping is what stops JavaScript's meaning (`[\w]`,
+ * `[^a]`, a bare `.` as any-character) leaking in.
+ */
+function filterPatternToRegExp(pattern: string): RegExp {
+	if (pattern.length === 0) throw new Error("filter pattern is empty");
+	if (pattern.startsWith("!")) {
+		throw new Error(
+			`filter pattern "${pattern}" starts with '!'; negation is list-level, use refMatchesPatterns`,
+		);
+	}
+	let out = "";
+	// The last emitted token, so `+` and `?` can re-wrap it. Null means "no token
+	// a quantifier may attach to", which is a loud failure rather than a no-op.
+	let last: string | null = null;
+	let i = 0;
+	while (i < pattern.length) {
+		const ch = pattern[i] ?? "";
+		if (ch === "*") {
+			const token = pattern[i + 1] === "*" ? ".*" : "[^/]*";
+			out += token;
+			last = token;
+			i += token === ".*" ? 2 : 1;
+			continue;
+		}
+		if (ch === "+" || ch === "?") {
+			if (last === null) {
+				throw new Error(
+					`filter pattern "${pattern}": '${ch}' at index ${i} has no preceding character to quantify`,
+				);
+			}
+			const suffix = ch === "+" ? "+" : "{0,1}";
+			out = out.slice(0, out.length - last.length) + "(?:" + last + ")" + suffix;
+			// A second quantifier on the same token is undocumented, so make it loud.
+			last = null;
+			i += 1;
+			continue;
+		}
+		if (ch === "[") {
+			const close = pattern.indexOf("]", i + 1);
+			if (close === -1) {
+				throw new Error(`filter pattern "${pattern}": unclosed '[' at index ${i}`);
+			}
+			const body = pattern.slice(i + 1, close);
+			// Ranges can only include a-z, A-Z and 0-9 (docs). Refuse anything else
+			// rather than forwarding it: `[^0-9]` and `[\d]` are regex, not GitHub.
+			if (!/^(?:[A-Za-z0-9]|[a-z]-[a-z]|[A-Z]-[A-Z]|[0-9]-[0-9])+$/.test(body)) {
+				throw new Error(
+					`filter pattern "${pattern}": '[${body}]' is outside the documented alphanumeric / a-z,A-Z,0-9-range set`,
+				);
+			}
+			const token = "[" + body + "]";
+			out += token;
+			last = token;
+			i = close + 1;
+			continue;
+		}
+		if (ch === "]") {
+			throw new Error(`filter pattern "${pattern}": ']' at index ${i} with no opening '['`);
+		}
+		if (ch === "\\") {
+			// Documented escape (workflow-syntax.md:87). The escaped character becomes a
+			// LITERAL and the escape consumes both, so the pattern `v1\*` matches the tag
+			// `v1*` and nothing else. Emitting the backslash as a literal and leaving the
+			// next character live - which this used to do - is the one way to be silently
+			// wrong here: `v1\*` became the regex /^v1\\[^\/]*$/, false for the tag `v1*`
+			// and true for `v1\anything`.
+			const next = pattern[i + 1];
+			if (next === undefined) {
+				throw new Error(
+					`filter pattern "${pattern}": trailing '\\' at index ${i} with nothing to escape`,
+				);
+			}
+			const escaped = next.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+			out += escaped;
+			last = escaped;
+			i += 2;
+			continue;
+		}
+		// Everything else is a literal. Escaped, so a regex metacharacter in a tag
+		// name - the `.` in `0.1.0` - cannot silently widen the pattern.
+		const literal = ch.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+		out += literal;
+		last = literal;
+		i += 1;
+	}
+	return new RegExp("^" + out + "$");
+}
+
+/** Does `ref` match this single filter pattern? */
+function matchesFilterPattern(pattern: string, ref: string): boolean {
+	return filterPatternToRegExp(pattern).test(ref);
+}
+
+/** Does `ref` match the configured list, honouring `!` negation in order? */
+function refMatchesPatterns(patterns: readonly string[], ref: string): boolean {
+	let included = false;
+	for (const pattern of patterns) {
+		if (pattern.startsWith("!")) {
+			if (matchesFilterPattern(pattern.slice(1), ref)) included = false;
+		} else if (matchesFilterPattern(pattern, ref)) {
+			included = true;
+		}
+	}
+	return included;
+}
+
+// GUARD (green on both sides of NRL-75). THIS IS THE ORACLE for the three
+// counted checks below: every row of GitHub's published "Patterns to match
+// branches and tags" table, transcribed verbatim from
+// https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#patterns-to-match-branches-and-tags
+// If `matchesFilterPattern` is wrong, this goes red, so the NRL-75 checks
+// cannot pass on a broken matcher.
+test("filter-pattern matcher reproduces GitHub's documented example table", () => {
+	const rows: Array<{ pattern: string; matches: string[]; notMatches: string[] }> = [
+		{ pattern: "feature/*", matches: ["feature/my-branch", "feature/your-branch"], notMatches: [] },
+		{
+			pattern: "feature/**",
+			matches: ["feature/beta-a/my-branch", "feature/your-branch", "feature/mona/the/octocat"],
+			notMatches: [],
+		},
+		{ pattern: "main", matches: ["main"], notMatches: ["mainline", "release/main"] },
+		{
+			pattern: "releases/mona-the-octocat",
+			matches: ["releases/mona-the-octocat"],
+			notMatches: ["releases/mona"],
+		},
+		// The `'*'` row's description is the whole reason NRL-75's reproduction
+		// uses slash-free names: "Matches all branch and tag names that don't
+		// contain a slash (/)".
+		{ pattern: "*", matches: ["main", "releases"], notMatches: ["all/the/branches"] },
+		{ pattern: "**", matches: ["all/the/branches", "every/tag"], notMatches: [] },
+		{ pattern: "*feature", matches: ["mona-feature", "feature", "ver-10-feature"], notMatches: [] },
+		{ pattern: "v2*", matches: ["v2", "v2.0", "v2.9"], notMatches: [] },
+		// The decisive row: `+` applied to a preceding BRACKET CLASS, and the
+		// two-digit minor in `v1.10.1` proving `[0-9]+` is one-or-more digits.
+		{ pattern: "v[12].[0-9]+.[0-9]+", matches: ["v1.10.1", "v2.0.0"], notMatches: [] },
+	];
+	const wrong: string[] = [];
+	for (const row of rows) {
+		for (const ref of row.matches) {
+			if (!matchesFilterPattern(row.pattern, ref)) wrong.push(`"${row.pattern}" should match "${ref}"`);
+		}
+		for (const ref of row.notMatches) {
+			if (matchesFilterPattern(row.pattern, ref)) wrong.push(`"${row.pattern}" should NOT match "${ref}"`);
+		}
+	}
+	assert(wrong.length === 0, `matcher disagrees with GitHub's documented table: ${wrong.join("; ")}`);
+});
+
+// GUARD (green on both sides). The cheat sheet's own inline examples, same
+// source, covering `?` and the two bracket examples the table does not reach.
+test("filter-pattern matcher reproduces GitHub's cheat-sheet examples", () => {
+	assert(matchesFilterPattern("Octo*", "Octocat"), '`Octo*` should match `Octocat`');
+	assert(matchesFilterPattern("[CB]at", "Cat"), "`[CB]at` should match `Cat`");
+	assert(matchesFilterPattern("[CB]at", "Bat"), "`[CB]at` should match `Bat`");
+	assert(!matchesFilterPattern("[CB]at", "Hat"), "`[CB]at` should not match `Hat`");
+	assert(matchesFilterPattern("[1-2]00", "100"), "`[1-2]00` should match `100`");
+	assert(matchesFilterPattern("[1-2]00", "200"), "`[1-2]00` should match `200`");
+	assert(!matchesFilterPattern("[1-2]00", "300"), "`[1-2]00` should not match `300`");
+	assert(matchesFilterPattern("*.jsx?", "page.js"), "`*.jsx?` should match `page.js`");
+	assert(matchesFilterPattern("*.jsx?", "page.jsx"), "`*.jsx?` should match `page.jsx`");
+	assert(!matchesFilterPattern("*.jsx?", "page.jsxx"), "`*.jsx?` should not match `page.jsxx`");
+});
+
+// NRL-75 VERIFY FINDING 2 (defect reproduction). `\` is a DOCUMENTED filter-pattern
+// construct - workflow-syntax.md:87, "If a name contains any of these characters and
+// you want a literal match, you need to escape each of these special characters with
+// `\`" - and the matcher used to get it silently wrong: `v1\*` translated to
+// `^v1\\[^/]*$`, a literal backslash followed by a live wildcard, so it returned false
+// for the tag `v1*` it is supposed to match and true for `v1\anything`. Blast radius
+// was zero (the shipped pattern list is backslash-free), but this helper's entire
+// justification is fidelity to documented semantics, so a wrong answer here is worse
+// than no helper.
+test("filter-pattern matcher honours the documented `\\` escape (NRL-75)", () => {
+	const wrong: string[] = [];
+	const shouldMatch: Array<[string, string]> = [
+		["v1\\*", "v1*"],
+		["v1\\?", "v1?"],
+		["v1\\+", "v1+"],
+		["v1\\[", "v1["],
+		["v1\\]", "v1]"],
+		["\\!v1", "!v1"],
+		["v1\\\\", "v1\\"],
+		// `.` is not in the documented special set, so escaping it is redundant - but a
+		// redundant escape must still name its own character, not a backslash plus a
+		// live construct. This is the shape a future `[0-9]+\.[0-9]+\.[0-9]+` would take.
+		["v1\\.0", "v1.0"],
+		// `\` before a character with no special meaning yields that character. The docs
+		// define the escape only for their special set, so this half is glob convention
+		// (fnmatch, minimatch) rather than a documented rule; it is pinned so the choice
+		// is deliberate rather than incidental.
+		["\\d", "d"],
+		// A quantifier attaches to an escaped literal as it does to any other token.
+		["v1\\*+", "v1*"],
+		["v1\\*+", "v1**"],
+	];
+	for (const [pattern, ref] of shouldMatch) {
+		let got: string;
+		try {
+			got = String(matchesFilterPattern(pattern, ref));
+		} catch (err: unknown) {
+			got = `THREW: ${err instanceof Error ? err.message : String(err)}`;
+		}
+		if (got !== "true") wrong.push(`"${pattern}" should match "${ref}" (got ${got})`);
+	}
+	const shouldNotMatch: Array<[string, string]> = [
+		// The whole defect: the escaped `*` must not stay a wildcard.
+		["v1\\*", "v1zzz"],
+		["v1\\*", "v1"],
+		// And the backslash itself must not survive into the ref.
+		["v1\\*", "v1\\*"],
+		["\\d", "\\d"],
+		["v1\\+", "v1++"],
+	];
+	for (const [pattern, ref] of shouldNotMatch) {
+		let got: string;
+		try {
+			got = String(matchesFilterPattern(pattern, ref));
+		} catch (err: unknown) {
+			got = `THREW: ${err instanceof Error ? err.message : String(err)}`;
+		}
+		if (got !== "false") wrong.push(`"${pattern}" should NOT match "${ref}" (got ${got})`);
+	}
+	// A trailing lone `\` has nothing to escape and no documented meaning, so it
+	// reports rather than degrading to a literal backslash. Stated choice, not an
+	// accident: the alternative silently makes a truncated pattern look valid.
+	let trailing = "";
+	try {
+		matchesFilterPattern("v1\\", "v1\\");
+		trailing = "(did not throw)";
+	} catch (err: unknown) {
+		trailing = err instanceof Error ? err.message : String(err);
+	}
+	if (!/trailing '\\'/.test(trailing)) {
+		wrong.push(`a trailing lone backslash should report; got ${JSON.stringify(trailing)}`);
+	}
+	assert(wrong.length === 0, `\\ escape mistranslated: ${wrong.join("; ")}`);
+});
+
+// GUARD (green on both sides of the NRL-75 verify fix), and it exists because an
+// earlier draft of `filterPatternToRegExp`'s doc comment claimed "anything
+// undocumented throws", which was FALSE. A character with no special meaning in a
+// filter pattern is regex-escaped and treated as a literal, and that is GitHub's
+// semantics, not a gap: `(`, `|`, `)`, `{`, `}`, `^` and `$` are ordinary characters
+// in a ref name. The escaping is what stops JavaScript's meaning leaking in. What
+// DOES throw is malformed or unsupported syntax, listed below. Pinning both halves
+// stops the comment drifting away from the code again in either direction.
+test("guard: filter-pattern literals stay literal and malformed syntax reports", () => {
+	const wrong: string[] = [];
+	// Each of these is matched by itself and by nothing its regex meaning would match.
+	const literals: Array<[string, string[]]> = [
+		["(a|b)", ["a", "b", "ab"]],
+		["a{2,3}", ["aa", "aaa"]],
+		["^main$", ["main"]],
+		["v1.0", ["v1x0"]],
+	];
+	for (const [pattern, notRefs] of literals) {
+		if (!matchesFilterPattern(pattern, pattern)) wrong.push(`"${pattern}" should match itself`);
+		for (const ref of notRefs) {
+			if (matchesFilterPattern(pattern, ref)) wrong.push(`"${pattern}" should NOT match "${ref}"`);
+		}
+	}
+	// Malformed or outside the documented set. These are the loud half.
+	const reporters = ["[^0-9]", "[\\d]", "[]", "[0-9", "]abc", "+abc", "?abc", "[0-9]++", "[0-9]+?", "!v*", ""];
+	for (const pattern of reporters) {
+		let threw = false;
+		try {
+			filterPatternToRegExp(pattern);
+		} catch {
+			threw = true;
+		}
+		if (!threw) wrong.push(`"${pattern}" should report instead of translating`);
+	}
+	assert(wrong.length === 0, `matcher literal/report split moved: ${wrong.join("; ")}`);
+});
+
+// GUARD (green on both sides). The parser must FAIL LOUDLY, never return `[]`.
+// Without this, a future edit to the workflow's shape would silently disarm
+// every check below it while the suite stayed green.
+test("workflow tag parser reports a shape it cannot read instead of returning []", () => {
+	const unreadable = "name: Release\n\non: [push]\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n";
+	let threw = "";
+	try {
+		const got = parseOnPushTags(unreadable);
+		throw new Error(`parser returned ${JSON.stringify(got)} for an unparseable workflow instead of reporting`);
+	} catch (err: unknown) {
+		threw = err instanceof Error ? err.message : String(err);
+	}
+	assertMatch(threw, /could not locate an `on:`/, `unexpected parser message: ${threw}`);
+
+	const emptyBlock = "on:\n  push:\n    tags:\n      # every entry commented out\n\njobs:\n";
+	let threwEmpty = "";
+	try {
+		const got = parseOnPushTags(emptyBlock);
+		throw new Error(`parser returned ${JSON.stringify(got)} for an entry-less block instead of reporting`);
+	} catch (err: unknown) {
+		threwEmpty = err instanceof Error ? err.message : String(err);
+	}
+	assertMatch(threwEmpty, /holds no `- <pattern>` entries/, `unexpected parser message: ${threwEmpty}`);
+
+	// And it does read the real file, so the checks below are not green by
+	// accident of a parser that reports on everything.
+	const live = parseOnPushTags(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	assert(live.length > 0, "parser read the real workflow but produced no patterns");
+});
+
+test("release.yml's tag trigger is not a catch-all (NRL-75)", () => {
+	const patterns = parseOnPushTags(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	const catchAll = patterns.filter((p) => p === "*" || p === "**");
+	assert(
+		catchAll.length === 0,
+		`release.yml on.push.tags contains ${JSON.stringify(catchAll)}: every slash-free tag ` +
+			"(nightly, wip, 0.1.0-rc1, v0.1.0) would cut a real public GitHub Release. " +
+			"Expected a version-only pattern (NRL-75).",
+	);
+});
+
+test("release.yml's tag trigger is the bare-semver pattern (NRL-75)", () => {
+	const patterns = parseOnPushTags(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	assertEquals(
+		JSON.stringify(patterns),
+		JSON.stringify(EXPECTED_TAG_PATTERNS),
+		`release.yml on.push.tags is ${JSON.stringify(patterns)}; expected ${JSON.stringify(EXPECTED_TAG_PATTERNS)} (NRL-75)`,
+	);
+});
+
+test("no operational tag shape matches release.yml's tag trigger (NRL-75)", () => {
+	const patterns = parseOnPushTags(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	// Slash-free on purpose. Per the `'*'` docs row a `backup/`-shaped name is
+	// already inert under `"*"`; these are the shapes that really fire.
+	const operational = [
+		"nightly",
+		"wip",
+		"pre-rebase",
+		"backup-nrl-54-pre-split-20260930T053352Z",
+		"v0.1.0",
+		"0.1.0-rc1",
+		"0.1.0-beta.1",
+		"0.1",
+		"0.1.0.1",
+		"release",
+	];
+	const fired = operational.filter((tag) => refMatchesPatterns(patterns, tag));
+	assert(
+		fired.length === 0,
+		`these tag names still match release.yml's ${JSON.stringify(patterns)} and would cut a real ` +
+			`public GitHub Release: ${JSON.stringify(fired)} (NRL-75)`,
+	);
+});
+
+// GUARD, NOT A REPRODUCTION, and deliberately labelled one: this is the tag name
+// the ticket cites, and it is GREEN ON BOTH SIDES. GitHub's `'*'` row says the
+// pattern matches only names that contain no slash, so this tag was already
+// inert before the fix. It is kept because the name is the one on disk; calling
+// it a reproduction would be theatre.
+test("guard: the backup/-shaped tag matches neither the old nor the new trigger", () => {
+	const real = "backup/nrl-54-pre-split-20260930T053352Z";
+	assert(!refMatchesPatterns(["*"], real), `"*" unexpectedly matched ${real}`);
+	assert(!refMatchesPatterns(EXPECTED_TAG_PATTERNS, real), `new pattern unexpectedly matched ${real}`);
+});
+
+// GUARD on the pattern's MEANING rather than on the file: narrowing must not
+// stop the release this plugin would actually cut. `0.1.0` is manifest.json's
+// current version and versions.json's only key.
+test("guard: the bare-semver pattern still fires on real version tags", () => {
+	for (const tag of ["0.1.0", "1.10.1", "10.0.0", "0.0.0"]) {
+		assert(
+			refMatchesPatterns(EXPECTED_TAG_PATTERNS, tag),
+			`${JSON.stringify(EXPECTED_TAG_PATTERNS)} should match the version tag ${tag}`,
+		);
+	}
+});
+
 // --- Release Files Exist
 
 test("README.md exists", () => {

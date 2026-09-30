@@ -237,10 +237,30 @@ origin` is empty and `gh release list` is empty - so `actions/create-release`, t
 upload and the SLSA provenance job have never executed once, and `srs.md`'s "SLSA Level 3
 provenance" MUST still rests on a workflow that has never produced an attestation. Treat
 R-M01 as met on its shipped files and **unexercised on its release path**. Tracked as
-NRL-79, and two defects are already known to sit on that unexercised path: NRL-75
-(`tags: ["*"]` matches any tag, so pushing a backup tag would cut a real GitHub Release)
-and NRL-76 (the checksum step `cd dist || true` into a directory that does not exist, whose
-output feeds the provenance job's subjects). `actionlint` 1.7.7 is not a substitute for
+NRL-79. Of the two defects known to sit on that unexercised path, **NRL-75 is fixed** and
+NRL-76 is not. NRL-75's own parenthesis needs correcting as well as closing: `tags: ["*"]`
+does **not** match any tag, it matches any tag whose name holds no `/`, because GitHub's
+published table row for `'*'` reads "Matches all branch and tag names that don't contain a
+slash (`/`)" (github/docs@main `workflow-syntax.md`, read verbatim during NRL-75). So the
+`backup/nrl-54-pre-split-...` tag the ticket cited was **documented-inert**, and the live
+hazard was the slash-free shapes - `nightly`, `wip`, `pre-rebase`, `v0.1.0`, `0.1.0-rc1`,
+`backup-nrl-54-...` - each of which would have cut a real public GitHub Release. The trigger
+is now `tags: ["[0-9]+.[0-9]+.[0-9]+"]`: bare semver, no `v` prefix (manifest.json's version
+is `0.1.0` and versions.json's sole key is `"0.1.0"`, so a `v*.*.*` pattern would never
+fire), prereleases excluded (`prerelease: false` is hardcoded in the `Create GitHub Release`
+step). These are **filter patterns, not regexes** - `*` is a wildcard and not a quantifier,
+which is why `[0-9]*.[0-9]*.[0-9]*` was rejected as matching `0.1.0-rc1` - and the authority
+for applying `+` to a bracket class is GitHub's own row `v[12].[0-9]+.[0-9]+`, documented as
+matching `v1.10.1`. `tests/release.test.ts` pins it with three checks, and the matcher they
+depend on is validated against **every row of that published table** rather than against
+itself, because a wrong hand-rolled matcher would make the three checks green while the
+workflow behaved differently in production. Measured: the three went red against the
+unmodified file (`["*"]`, all ten operational shapes firing) and green after; the five
+guards, including the `backup/`-shaped name, were green on both sides. **DESK-VERIFIED ONLY
+AND UNEXERCISED**: no tag has ever been pushed, so it is not observed that `0.1.0` fires the
+workflow or that `nightly` no longer does, and NRL-79 still owns that empirical half.
+NRL-76 is untouched (the checksum step `cd dist || true` into a directory that does not
+exist, whose output feeds the provenance job's subjects). `actionlint` 1.7.7 is not a substitute for
 running it: measured during NRL-69, it was silent on **both** halves of the compile defect
 that had broken every run in this repo's history, so its silence on this file is weak
 evidence. The `2 of 16` headline count does not move in either direction. Note also that
