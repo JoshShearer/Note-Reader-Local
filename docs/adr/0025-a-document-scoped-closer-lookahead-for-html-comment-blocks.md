@@ -2,8 +2,13 @@
 
 - Status: accepted
 - Date: 2026-09-30
-- Ticket: NRL-74 (R-M08). Amends ADR 0006 clauses 2, 3 and 4; corrects two
-  sentences in ADR 0018; adds a one-line amendment to ADR 0019 and ADR 0023.
+- Ticket: NRL-74 (R-M08), then NRL-95 (R-M08), which bounded term 2 of the rule
+  to the opener's paragraph and rewrote decisions 3 and 4, the "Known gap"
+  section and the residual list below. Amends ADR 0006 clauses 2, 3 and 4;
+  corrects two sentences in ADR 0018; adds a one-line amendment to ADR 0019 and
+  ADR 0023.
+- NOTE ON THE TITLE: "document-scoped" describes term 1 only as of NRL-95. The
+  file name is kept so existing references still resolve.
 
 ## Context
 
@@ -17,12 +22,15 @@ direction ADR 0007 clause 6 and ADR 0018 both refuse.
 The ticket proposed hoisting `cleanLine`'s line-start guard out from under its
 `obsidianComment` gate, so that the guard applied to `<!--` too. That was built
 and A/B'd against the suite before any of this was written, and it **breaks five
-pins**, including `obsidian-inside-html-block` (`tests/extract.test.ts:1187`),
-the very pin the ticket's own acceptance criteria say must keep passing. The
-ticket mischaracterises that pin as line-start-and-unclosed. It is a **mid-line**
-`<!--` whose `-->` sits four lines later, past a fence and past a `$$` line, and
-it requires the text between them to be hidden. A pure line-start rule cannot
-express it.
+pins**, including `obsidian-inside-html-block` (cited here as
+`tests/extract.test.ts:1187`; it is in fact at `:1201`, and NRL-95 corrected the
+reference), the very pin the ticket's own acceptance criteria say must keep
+passing. The ticket mischaracterises that pin as line-start-and-unclosed. It is a
+**mid-line** `<!--` whose `-->` sits four lines later, past a fence and past a
+`$$` line, and it required the text between them to be hidden. A pure line-start
+rule cannot express it. **That pin's expectation was itself wrong and NRL-95
+replaced it** - see decision 3 - so read this paragraph as NRL-74's reasoning at
+the time rather than as current state.
 
 ## Decision
 
@@ -31,7 +39,8 @@ express it.
    line **and either**
 
    - only whitespace precedes it on the line (term 1, line-local), **or**
-   - some **later** line in the note carries `-->` (term 2, document-scoped).
+   - some **later** line carries `-->` (term 2; document-scoped as NRL-74
+     shipped it, bounded by the opener's paragraph as of NRL-95 - decision 3).
 
    Anything else - a mid-line `<!--` with no closer anywhere - is literal text
    that CommonMark renders and Obsidian displays, so it is spoken, delimiters
@@ -88,7 +97,8 @@ express it.
    does cross a soft line break. With no `-->` the `<` falls through to the text
    tokenizer and the delimiters are displayed - which is the defect direction,
    confirmed from the renderer rather than reasoned. But that path is
-   **paragraph-scoped**, where ours is document-scoped. See "Known gap" below.
+   **paragraph-scoped**, where NRL-74's was document-scoped. NRL-95 bounded it;
+   see decision 3 and "CLOSED by NRL-95" below.
 
 2. **Two predicates, not one.** `opensHtmlBlock(view, at, closesLater)` sits
    beside `opensObsidianBlock(view, at)` and is deliberately separate:
@@ -106,19 +116,24 @@ express it.
    "do not merge two scans that answer different questions" note describes, where
    NRL-73's merge of two askings of the *same* question was the opposite case.
 
-3. **The lookahead runs to EOF, not to the end of the paragraph - correct for
-   term 1, and a KNOWN DIVERGENCE for term 2.** Record it as two things and not
-   one. The two terms answer to two different renderer paths, and the single
-   shared EOF scan is right for one of them and wider than the other:
+3. **The two terms have DIFFERENT scopes, and that is the renderer's own
+   asymmetry rather than an inconsistency.** Term 1 scans to EOF; term 2 is
+   bounded by the end of the opener's paragraph. Record it as two things and not
+   one, because the two terms answer to two different renderer paths:
 
-   | term | renderer path | our EOF scan |
+   | term | renderer path | our scope |
    |---|---|---|
-   | 1, line-start | HTML **block** tokenizer, module 8776 | **correct** - that tokenizer really does walk to end of input |
-   | 2, `closesLater` | **inline** raw-HTML tokenizer, module 4839 `.T` | **wider than the renderer**, which cannot cross a paragraph break |
+   | 1, line-start | HTML **block** tokenizer, module 8776 | **EOF - correct**, that tokenizer really does walk to end of input once it has opened |
+   | 2, `closesLater` | **inline** raw-HTML tokenizer, module 4839 `.T` | **the opener's paragraph** (NRL-95), matching a regex applied to one paragraph's inline text |
 
-   This is also a deliberate divergence from `codeSpanClosesLater` and
-   `bracketClosesLater`, both of which stop at `interruptsParagraph`. The
-   evidence offered for term 2's EOF scope is pin `:1187`:
+   NRL-74 shipped a single shared EOF scan for both, and recorded term 2's half
+   as a divergence carried knowingly. **NRL-95 closed it.** What follows is the
+   resolution, replacing NRL-74's "the evidence is weak and was not
+   re-litigated" paragraphs.
+
+   The only justification NRL-74 offered for term 2's EOF scope was one pin,
+   cited there as `:1187` and in fact at `tests/extract.test.ts:1201`, whose
+   fixture NRL-74's own text mis-quoted:
 
    ```
    Before <!--
@@ -129,50 +144,98 @@ express it.
    Visible.
    ```
 
-   Its `-->` is reachable only across a `%%` line, a fence and a `$$` line, and
-   the pin requires the text between to be hidden. Stopping at any of those
-   would fail it, and the ticket's acceptance criteria protect it explicitly.
+   It expected `"Before after. Visible."`, and its `-->` is reachable only
+   across a `%%` line, a fence and a `$$` line, so any paragraph bound fails it.
+   NRL-74 already conceded that this was weak evidence. **NRL-95 showed the pin
+   was wrong, and wrong in a worse way than prose loss: its old expectation
+   encoded a DISCLOSURE.** Three independent lines converge on `"Before <!--"`:
 
-   **That evidence is weak, and this clause must not be read as saying term 2's
-   scope is right.** The asar read in decision 1 shows the renderer's mid-line
-   path is the inline one and therefore paragraph-scoped, so pin `:1187`'s own
-   expectation is not renderer-faithful in either half: its `<!--` is mid-line,
-   so Obsidian displays `Before <!--` literally, and its `%%` line is a
-   line-start `%%` with no lone `%`, so Obsidian's `%%` block tokenizer opens a
-   comment there that never closes. The only stated justification for term 2's
-   EOF scope is therefore a pin whose own expectation the same read undermines.
+   - **the asar read.** Module 8776 returns early unless `<` is the first
+     non-tab/space character, so this mid-line `<!--` never reaches the HTML
+     block tokenizer at all. It reaches module 7648's inline path, module 4839's
+     `.T`, applied to the one-line paragraph `Before <!--`, which holds no
+     `-->`. So Obsidian displays `Before <!--` literally. Line 2's `%%` is
+     line-start with no lone `%`, so the `%%` block tokenizer opens a comment
+     there that never closes and hides lines 2-6.
+   - **the paragraph-bounded arm**, built from `4dcb753` and run in NRL-95's
+     Implement session, independently produces exactly `"Before <!--"`.
+   - **NRL-74's own self-tested oracle**, re-run unmodified in that session with
+     all 21 hand-traced cases still passing, says `Before` is DISPLAYED while
+     `after.` and `Visible` are HIDDEN. So the old expectation spoke two
+     sentinels Obsidian hides.
 
-   It was **not** re-litigated here - it is a pre-existing pin, it is green on
-   both sides of this diff, and changing it is a different ticket. **That ticket
-   now exists: NRL-95**, and it owns both halves (re-examine the pin, then decide
-   term 2's scope). What this ADR records is a divergence carried knowingly, not
-   a choice shown correct.
+   The pin was **replaced in place** per the NRL-66/NRL-67 convention: same
+   name, same fixture, expectation `"Before <!--"`. It is now the evidence
+   AGAINST term 2's EOF scope, not for it.
+
+   Term 1 keeps its EOF scan, and that is not a compromise: module 8776 is the
+   rule it mirrors.
 
 4. **The scope is delivered as an explicit parameter, never ambient state and
-   never a callback into `cleanLine`.** `extractChunks` computes ONE scalar,
-   once, right after `source.split("\n")`:
+   never a callback into `cleanLine`.** `extractChunks` computes ONE per-line
+   boolean array, once, right after `source.split("\n")`:
 
    ```ts
-   let lastHtmlCloser = -1;
-   for (let k = lines.length - 1; k >= 0; k--)
-       if (lines[k]!.includes("-->")) { lastHtmlCloser = k; break; }
+   const htmlCloserAhead: boolean[] = new Array<boolean>(lines.length).fill(false);
+   let ahead = false;
+   for (let k = lines.length - 1; k >= 0; k--) {
+       const line = lines[k]!;
+       htmlCloserAhead[k] = ahead;
+       if (endsTerm2Scan(line)) { ahead = false; continue; }
+       if (line.includes("-->")) ahead = true;
+   }
    ```
 
-   `lastHtmlCloser > n` is then exactly "some line after `n` carries a closer".
-   A helper that rescanned `lines` per test would be an O(L) scan inside
-   `codeSpanClosesLater`'s O(L) loop inside `extractChunks`' O(L) loop - O(L^3)
-   on a long note. This is O(L) once and O(1) per test. Strict `>` is
-   deliberate: a `-->` earlier on the same line cannot close an opener later on
-   it, and the caller has already ruled out one after the opener on that line.
+   `htmlCloserAhead[n]` is exactly "some line AFTER `n`, and before the first
+   line that ends `n`'s paragraph, carries a closer". NRL-74 shipped a scalar,
+   `lastHtmlCloser`, and `lastHtmlCloser > n`; NRL-95 replaced it, because the
+   bound is per-line and a scalar cannot carry one. **The O(L^3) reasoning
+   survives verbatim as the reason a per-call rescan is still refused:** a helper
+   that rescanned `lines` per test would be an O(L) scan inside
+   `codeSpanClosesLater`'s O(L) loop inside `extractChunks`' O(L) loop. The array
+   is O(L) time once, O(1) per test, and O(L) booleans of extra memory.
+   Rejected: a `paragraphEnd: number[]` array plus the old scalar (strictly more
+   work and more state for the same answer), and lazy memoised computation (extra
+   mutable state for no gain).
 
-   It is a ninth `cleanLine` parameter, **appended** because six of the ten call
-   sites bind positionally. It mirrors `outgoingCode` (NRL-64) and
-   `outgoingBracket` (NRL-63) in SHAPE - one scalar handed in, so `cleanLine`
-   stays line-local - but not in TIMING: it asks nothing about this line, so it
-   is known before the first pass and **adds no pass**. There are still three.
+   Three details of that loop are load-bearing. The assignment **precedes**
+   folding line `k` in, which is the old scalar's strict `>` - a `-->` on line
+   `n` cannot close an opener later on `n`, and the caller has already ruled out
+   one after the opener on that line. `ahead` is **reset at a stop line**,
+   because a paragraph cannot see past its own end. And a `-->` sitting **ON** a
+   stop line is deliberately unreachable from earlier lines, while the stop line
+   itself still gets the following run's answer - which is what keeps
+   `table-tracking` and `heading-html-tracking` green.
+
+   **THE MUTUAL-RECURSION TRAP.** The bound predicate is a separate, comment-blind
+   helper, `endsTerm2Scan`, and it MUST NOT be `interruptsParagraph`:
+
+   ```
+   interruptsParagraph -> opensHiddenComment -> opensHtmlBlock -> consumes this answer
+   ```
+
+   so reusing `interruptsParagraph` here is mutually recursive - unbounded, or
+   needing a sentinel argument threaded through four functions to break the
+   cycle. `endsTerm2Scan` is comment-blind by construction rather than by a flag
+   for exactly that reason. Do not "simplify" it into a call to
+   `interruptsParagraph`.
+
+   **Its stop set is `interruptsParagraph`'s terms with `BLOCKQUOTE` and
+   `TABLE_ROW` dropped and `LIST_BULLET` REPLACED by `TERM2_LIST`**, and the
+   three departures are three different reasons rather than one. The list half
+   was corrected at NRL-95's ship review; the earlier draft of this ADR dropped
+   `LIST_BULLET` whole on a justification that measurement falsified. See the
+   residual list below.
+
+   The value still reaches `cleanLine` as a **scalar** ninth parameter,
+   `htmlCloserAhead[lineNo]!`, **appended** because six of the ten call sites
+   bind positionally. So `cleanLine` stays line-local, it mirrors `outgoingCode`
+   (NRL-64) and `outgoingBracket` (NRL-63) in SHAPE, and it still asks nothing
+   about this line, so it **adds no pass**. There are still three.
 
    A module-level flag was built first and was the fifth pin failure: it leaked
-   into the recursive label `cleanLine` call and broke `local-html-state`.
+   into the recursive label `cleanLine` call and broke `local-html-state`. That
+   warning still applies.
 
 5. **The new literal escape gates `blockComments` POSITIVELY, where the `%%`
    escape negates it.** This reads like a typo and is not:
@@ -435,10 +498,25 @@ the NRL-66/NRL-67 convention. Decision Q9 itself keeps its pin: `:960`, the same
 shape with a `-->` four lines down, still expects `["ZAFTERZ here."]` and is green
 on both sides. Do not collapse the pair.
 
-### Known gap: our lookahead is wider than the renderer's
+**NRL-95 moved the SECOND of that pair, and added a third.** With term 2 bounded
+by the opener's paragraph, `[a]: x.png "<!--"` / blank / `ZSECRETZ ...` / blank /
+`-->` / blank / `ZAFTERZ here.` no longer opens a comment at all: the `-->` is two
+paragraphs away and the renderer's inline path cannot cross a blank line. It went
+`["ZAFTERZ here."]` -> `["ZSECRETZ sentence here.", "-->", "ZAFTERZ here."]`, and
+the lone `-->` line is spoken too, which is also renderer-faithful - `-->` matches
+no HTML block opener and is not a tag, so it is ordinary paragraph text. It was
+**replaced in place** again, and a THIRD fixture was added rather than the second
+merely edited, so decision Q9's own ordering property keeps a test: the same shape
+with the `-->` inside the opener's OWN paragraph still expects `["ZAFTERZ here."]`
+and is green on both sides. **This fixture was not predicted by NRL-95's plan** -
+its fixture sweep covered the suite's fixture ARRAYS and this one is an `expect()`
+call, so it was found by running the suite. It is the only pre-existing suite
+expectation NRL-95 moves other than the `:1201` pin decision 3 discusses.
 
-Term 2 scans to EOF; the renderer's mid-line path is the **inline** tokenizer,
-which cannot cross a paragraph break. So
+### CLOSED by NRL-95: our term-2 lookahead was wider than the renderer's
+
+NRL-74 shipped term 2 scanning to EOF while the renderer's mid-line path is the
+**inline** tokenizer, which cannot cross a paragraph break. So
 
 ```
 Plain prose <!--
@@ -449,26 +527,143 @@ New para.
 --> tail.
 ```
 
-is hidden by us and displayed by Obsidian. Measured **1,024 cells, identical on
-base and on the fix** - this diff neither opened nor widened it - and re-measured
-independently at ship review on the shape above, `HIDDENP` spoken in **0 of 512
-on base and 0 of 512 on the fix**. Fixing it means making term 2
-paragraph-scoped, which fails pin `:1187` as decision 3 explains, so it needs
-that pin re-examined first.
+was hidden by us and displayed by Obsidian. NRL-74 measured it at **1,024 cells,
+identical on base and on the fix**, and re-measured the shape above at ship review
+with `HIDDENP` spoken in **0 of 512 on base and 0 of 512 on the fix**. NRL-95
+bounded term 2 and it now speaks: measured in NRL-95's Implement session by
+bundling the real `src/text/extract.ts` from `4dcb753` and from the fix side by
+side with the repo's own esbuild, the ticket's own repro went
+`"Before x. Prose Tail."` -> `"Before x. Prose <!-- HIDDENP New paragraph -->
+Tail."`, and across the oracle-keyed two-class probe (28 shapes x 512 content-key
+combinations, 21,504 Class-B cells per arm) the text the renderer DISPLAYS but we
+silenced fell from **8,448 lost to 1,792 lost, with 0 cells newly leaking and 0
+newly lost**. The residual 1,792 is fully accounted for: every one of them is a
+content-key exclusion the oracle cannot see, 256 cells each at one constant toggle
+(`skipInlineCode` x3 rows, `skipCodeBlocks` x2, `speakImageAlt`, `skipFrontmatter`).
 
-**Tracked as NRL-95** (Bug, Medium, R-M08), filed at ship review with the module
-numbers, the regexes, both measurements and the doubt about pin `:1187`. Note the
-direction reversal it will have to handle: widening `opensHiddenComment` back out
-**narrows** `codeSpanClosesLater` and `bracketClosesLater`, the opposite of this
-diff, so decision 6's three destination pins and decision 7's
-`guard-nrl74-variant-C-disclosure` must both be re-measured there.
+Two evidence notes on that number, because they matter more than the number. The
+probe was run against **oracle.mjs unmodified** first and reported **1,024 cells
+newly leaking in two shapes**, both of them a setext underline or a thematic break
+between opener and closer. That is an **oracle limit, not a leak**: `oracle.mjs`'s
+`endsParagraph` models blank / fence / ATX heading / html-opener / `%%`-opener
+only, and Obsidian's own parser prototype - read out of the same installed
+`obsidian.asar` in that session, `app.js` sha256
+`8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898`, at byte offset
+22284 - sets
 
-### Other residual risks, stated plainly
+```js
+u.interruptParagraph = [["thematicBreak"],["list"],["atxHeading"],["fencedCode"],
+  ["blockquote"],["html"],["setextHeading",{commonmark:!1}],["definition",{commonmark:!1}]]
+```
 
-- `lastHtmlCloser` is a crude text scan. It counts a `-->` inside a fenced block,
-  inside frontmatter, inside another comment or inside a code span. Measured: the
-  fence and frontmatter shapes are in the two-class probe and neither newly leaks
-  or newly loses.
+so a thematic break and a setext underline both DO end the paragraph the inline
+regex is applied to. Note what that list does NOT contain, read at NRL-95's ship
+review and load-bearing for the `TABLE_ROW` decision below: **`table`**, nowhere,
+and the only two terms ever inserted into it anywhere in `app.js` are `math` and
+`comment`. The numbers above are from `oracle95.mjs`, a copy of
+`oracle.mjs` with those two terms added on that primary-source authority and
+nothing else changed, re-run against the unmodified 21-case self-test with all 21
+still passing. `list`, `blockquote` and `definition` were deliberately NOT added,
+because the oracle models neither container prefix re-offering nor link reference
+definitions and adding the terms without the structure would trade one wrong
+answer for another.
+
+**And the direction claim NRL-74 recorded here was BACKWARDS.** It said bounding
+term 2 would **narrow** `codeSpanClosesLater` and `bracketClosesLater`. It
+**WIDENS** them: bounding term 2 narrows `opensHtmlBlock` -> `opensHiddenComment`
+-> `interruptsParagraph`, so both carries return false LESS often and confirm MORE
+often. Measured on fixtures - a code span and a label each now survive a paragraph
+break base refused - and on the predicate layer: over 697 documents / 2,794
+(document, line) pairs the shipped term-2 array is **0 widened, 178 narrowed**
+against base's `lastHtmlCloser > n`, a strict subset, so the change is fail-closed
+by measurement rather than by argument. The three destination pins and
+`guard-nrl74-variant-C-disclosure` were re-measured rather than assumed and all
+four are **UNMOVED, 0 of 512 differing cells each**, because none of their `-->`s
+sits outside the opener's paragraph.
+
+### Residual risks left by NRL-95's own bound, stated plainly
+
+- **The stop set drops `BLOCKQUOTE` and `TABLE_ROW`, and replaces `LIST_BULLET`
+  with `TERM2_LIST`.** Three departures, three reasons. The first draft of this
+  ADR gave one reason for all three and the ship-review critique falsified it for
+  the list half, so read the three separately.
+
+  **`BLOCKQUOTE`, dropped - correct, and compatible with `blockquote` being in
+  `u.interruptParagraph`.** The renderer's blockquote tokenizer PEELS the `>`
+  prefix and re-runs the paragraph tokenizer on the stripped content, so a
+  continuation line of the SAME quote is never a quote STARTING;
+  `u.interruptParagraph` is about the other case. So `> Prose <!--` /
+  `> HIDDENQ` / `> more -->` is one paragraph inside the quote, module 4839's
+  regex does find the closer, and Obsidian HIDES `HIDDENQ`. Stopping there speaks
+  it. Measured: the two quote guards are RED on the arm that puts `BLOCKQUOTE`
+  back. The cost is real and is now pinned as a tripwire rather than left
+  unstated: where the quote STARTS after the opener (`Prose <!--` /
+  `> HIDDENQ3` / `more -->`) the renderer's paragraph really does end at line 2
+  and displays everything, and we hide it. Fail-closed, identical on base, and
+  only fixable with container-prefix awareness - the NRL-88 root-1 class
+  (`pin-nrl95-quote-starting-after-opener-still-hidden`).
+
+  **`TABLE_ROW`, dropped - correct, and for a STRONGER reason than this ADR first
+  gave.** The first reason was that our `TABLE_ROW` is `/^\s*\|/` and matches a
+  lone `| a |` line GFM does not treat as a table. True but narrow. The real
+  reason, read out of `app.js` this session: **`table` appears nowhere in
+  `u.interruptParagraph`**, and the only two terms ever inserted into that list
+  are `math` and `comment` (`RE(t.interruptParagraph,"fencedCode","math")` and
+  `RE(i.interruptParagraph,"fencedCode","comment")` are the only two such calls
+  in the file). So NO table row can interrupt a paragraph in Obsidian, delimiter
+  row or not, and a REAL GFM table between opener and closer is hidden too.
+  **Do not "fix" `TABLE_ROW` to require a delimiter row and then add it here**;
+  that reopens the disclosure on exactly the real-table shape, which is why
+  `guard-nrl95-real-gfm-table-closer` was added. All three table guards are RED
+  on the arm that puts `TABLE_ROW` back.
+
+  **`LIST_BULLET`, REPLACED - the first draft's reason here was FALSE and the
+  behaviour was changed at ship review.** The draft said a list, like a
+  blockquote, re-offers its lines as one paragraph. It does not: `- x` / `- y` /
+  `- z` is three items with three paragraphs, so the closer is NOT in the
+  opener's paragraph and Obsidian DISPLAYS every line. Dropping `LIST_BULLET`
+  whole therefore retained prose loss with no disclosure to justify it. The
+  correct term is module 745's own silent-mode rule, transcribed into
+  `TERM2_LIST = /^[ \t]*(?:[-*+]|1\.)[ \t]/`: a bullet at ANY indent interrupts
+  a paragraph (no three-space cap in that loop), and an ordered marker interrupts
+  only when it is literally `1.` - Obsidian runs `commonmark` falsy, so `)` is
+  not a marker, and the silent path returns unless the digit string is exactly
+  `"1"`. `LIST_BULLET`'s `\d+[.)]` accepts `7.`, `01.` and `1)`, and stopping at
+  one of those IS a disclosure: three guards are RED on the arm that puts the
+  whole of `LIST_BULLET` in the stop set. Measured on the change itself: five
+  fixtures RED against the pre-ship-review arm
+  (`pin-nrl95-bullet-items-are-three-paragraphs`, `-bullet-line-between`,
+  `-bullet-any-indent`, `-bullet-tab-indent`, `-ordered-one-dot-interrupts`), 0
+  after; and over a **19,584-cell sweep** (3 openers x 32 middle lines x 3 tails
+  x 64 content-key combinations) the arm with `TERM2_LIST` diverges from the arm
+  without it in **3,456 cells and in 0 cells where an independent transcription
+  of module 745's silent path says the middle line does NOT interrupt** - so the
+  widening never speaks text the renderer hides. `sourceIndex` clean by numeric
+  UTF-16 code-unit index over every chunk of all 19,584 cells, 0 failures.
+
+  What survives all three: the stop set answers `true` for a strict subset of the
+  lines the document-scoped predicate did, so omitting a term is fail-closed and
+  ADDING one is the dangerous direction. Two residual prose losses stay, both
+  pinned as tripwires and both of the container-prefix class: a quote or a bullet
+  that our anchored regexes cannot see because the `>` is never peeled before the
+  scan (`pin-nrl95-quote-starting-after-opener-still-hidden`,
+  `pin-nrl95-bullet-inside-quote-still-hidden`).
+- **The scan is forward-only from the opener line and does not bound the OPENER's
+  own block.** An ATX heading's or a table row's mid-line `<!--` therefore still
+  reaches a later closer that module 4839's paragraph-scoped path could not.
+  Over-hiding, so fail-closed; pre-existing; the same class as the already-pinned
+  `heading-tracking` `%%` divergence. Pinned as
+  `guard-nrl95-atx-opener-not-bounded`, identical to `heading-html-tracking`, and
+  out of NRL-95's scope. So NRL-95 does NOT make term 2 fully faithful to module
+  4839, and must not be read as claiming it.
+- `htmlCloserAhead` is still a crude text scan within a paragraph. It counts a
+  `-->` inside a code span or inside another comment on a non-stop line. NRL-95
+  **partly mitigated** the older, wider form of this bullet, which said the scan
+  also counted a `-->` inside a fenced block, inside frontmatter or behind a blank
+  line: a fence line and a blank line now stop the scan, and frontmatter's `---`
+  is matched by the same `SETEXT`/`HR` terms, so a closer there no longer reaches
+  an earlier opener. Measured: the fence and frontmatter shapes are in the
+  two-class probe and neither newly leaks nor newly loses.
 - `appendRemainder` hands `cleanLine` a **suffix**, so term 1 is measured from
   the remainder's start rather than the physical line's. Inherited from the `%%`
   predicate, NRL-73's own known limit, not opened here.
@@ -490,6 +685,21 @@ diff, so decision 6's three destination pins and decision 7's
   from what the tokenizers say, because a `%%` in an ATX heading reaches the
   anchored inline tokenizer rather than the block one. Identical on base and fix,
   pinned as `heading-tracking`, and **no ticket has been filed**.
-- `interruptsParagraph`'s answer set changed, so **whichever of NRL-74 and NRL-88
-  merges second must re-measure NRL-88's five roots.** NRL-88's numbers are
-  neither re-measured nor claimed here.
+- `interruptsParagraph`'s answer set changed AGAIN at NRL-95: **28 (document,
+  line) pairs over 697 documents, on 3 distinct lines, every one of them a
+  mid-line `<!--` line the tokenizer oracle does NOT call a comment-block
+  opener.** So **whichever of NRL-74, NRL-95, NRL-98 and NRL-93 merges last must
+  re-measure NRL-88's remaining roots.** Their numbers are neither re-measured nor
+  claimed here.
+- `codeSpanClosesLater` and `bracketClosesLater` were shown structurally
+  unweakened rather than asserted to be: brace-matched out of both trees and
+  **byte-identical modulo the threaded argument's type and the two index
+  expressions**. `opensObsidianBlock`, `opensHtmlBlock`, `opensHiddenComment`,
+  `interruptsParagraph`, `opensMathBlock` and `labelClose` are **byte-identical**
+  across the NRL-95 diff, by sha256 of each brace-matched body.
+- **NOTHING IN NRL-95 WAS OBSERVED IN OBSIDIAN.** CDP port 9222 was not listening
+  and no Obsidian process was running for the whole of that run, and no deploy
+  happened. Every renderer claim above, including the whole case for moving pin
+  `:1201`, rests on reading `obsidian.asar` 1.13.7 (sha256 confirmed identical to
+  the bytes NRL-74 read) plus a transcribed oracle. Rule 11 applies to every
+  number.

@@ -490,9 +490,10 @@ function wikiTargetClose(raw: string, from: number): number {
  * being literal text?
  *
  * Two terms, and neither is sufficient alone. `<!--` begins its line (leading
- * whitespace allowed), OR some later line in the note carries `-->`. Anything
- * else - a mid-line `<!--` with no closer anywhere - is literal text that
- * CommonMark renders and Obsidian displays, so it is spoken (NRL-74, ADR 0025).
+ * whitespace allowed), OR some later line OF THE SAME PARAGRAPH carries `-->`.
+ * Anything else - a mid-line `<!--` with no closer in its own paragraph - is
+ * literal text that CommonMark renders and Obsidian displays, so it is spoken
+ * (NRL-74, ADR 0025; term 2's paragraph bound is NRL-95).
  *
  * Deliberately a SECOND predicate rather than a widened opensObsidianBlock, and
  * the two bodies show why: `%%` carries the lone-`%` disqualifier and no
@@ -501,9 +502,15 @@ function wikiTargetClose(raw: string, from: number): number {
  * srs.md's `%%` bullet all forbid in as many words, and the NRL-66 precedent
  * says not to merge two scans that answer different questions.
  *
- * `closesLater` is handed in, never computed here: the second term is
- * document-scoped and this function is line-local. See ADR 0025 for why the
- * scan runs to EOF and not to the end of the paragraph.
+ * `closesLater` is handed in, never computed here: this function is line-local
+ * and the second term is not. The two terms have DIFFERENT scopes and that is
+ * the renderer's own asymmetry, not an inconsistency. Term 1 is module 8776's
+ * HTML BLOCK rule, which really does walk to end of input once it has opened,
+ * so it keeps its EOF scan. Term 2 has no block counterpart at all: a mid-line
+ * `<!--` never reaches 8776, it reaches module 4839's inline `.T` regex applied
+ * to ONE paragraph's inline text, so its closer must be in the same paragraph.
+ * `closesLater` therefore arrives already bounded - see `endsTerm2Scan` and the
+ * `htmlCloserAhead` pass in extractChunks (NRL-95, ADR 0025 decisions 3 and 4).
  */
 function opensHtmlBlock(view: string, at: number, closesLater: boolean): boolean {
 	return view.slice(0, at).trim() === "" || closesLater;
@@ -1785,6 +1792,90 @@ function opensHiddenComment(line: string, htmlClosesLater: boolean): boolean {
 }
 
 /**
+ * A list-item line that the renderer's OWN list tokenizer accepts as
+ * interrupting a paragraph. Deliberately NOT `LIST_BULLET`, and the difference
+ * is the whole reason this constant exists.
+ *
+ * Transcribed from module 745 of the installed obsidian.asar 1.13.7 (app.js
+ * sha256 8efbf58...), silent-mode entry, which is the path
+ * `interruptParagraph` takes:
+ *
+ *   for (;U<_ && (t[U]==="\t" || t[U]===" ");) U++;      // NO three-space cap
+ *   if (t[U]==="*"||t[U]==="+"||t[U]==="-") { ... }      // any bullet, always
+ *   else { o = digits;
+ *          if (!o || !(t[U]==="." || commonmark && t[U]===")")) return;
+ *          if (silent && o !== "1") return; }            // silent needs "1"
+ *   if (next!==" " && next!=="\t" && (pedantic || next!=="\n" && next!=="")) return;
+ *
+ * So a bullet at ANY indent interrupts a paragraph, and an ordered marker
+ * interrupts only when it is literally `1.` - Obsidian runs with `commonmark`
+ * falsy (that is why its `interruptParagraph` list uses the `{commonmark:!1}`
+ * setext and definition entries at all), so `)` is not a marker there either.
+ * `LIST_BULLET`'s `\d+[.)]` accepts `7.`, `01.` and `1)`, and remark lets none
+ * of those interrupt. Stopping at one of them would make term 2 false, the
+ * `<!--` literal, and text the renderer HIDES spoken - which is why the ordered
+ * half stays out of the stop set below while the bullet half is in it. Each
+ * half is pinned in tests/extract.test.ts.
+ *
+ * Narrower than remark in one direction only, deliberately: a marker alone on
+ * its line (`1.`, `*`) is not matched here, because `[ \t]` is required rather
+ * than end-of-line. That fails CLOSED, toward hiding, and a lone `-` is already
+ * caught by `SETEXT`.
+ */
+const TERM2_LIST = /^[ \t]*(?:[-*+]|1\.)[ \t]/;
+
+/**
+ * Does this line end the paragraph a `<!--` on an earlier line belongs to, for
+ * the purpose of term 2 of the HTML-comment block rule?
+ *
+ * THE TRAP, and the reason this is a separate function rather than a call to
+ * interruptsParagraph: interruptsParagraph -> opensHiddenComment ->
+ * opensHtmlBlock CONSUMES the very answer this predicate is used to produce, so
+ * reusing it here is MUTUALLY RECURSIVE - unbounded, or needing a sentinel
+ * argument threaded through four functions to break the cycle. This helper is
+ * therefore comment-blind BY CONSTRUCTION rather than by a flag (NRL-95, ADR
+ * 0025 decision 4).
+ *
+ * The stop set is interruptsParagraph's terms with `BLOCKQUOTE` and `TABLE_ROW`
+ * dropped and `LIST_BULLET` REPLACED by `TERM2_LIST`. All three departures are
+ * measured, and they are three different reasons rather than one:
+ *
+ * - `BLOCKQUOTE` is dropped because the renderer's blockquote tokenizer PEELS
+ *   the `>` prefix and re-runs the paragraph tokenizer on the stripped content,
+ *   so a continuation line of the SAME quote is not a quote STARTING. Module
+ *   4839's inline regex therefore does find a `-->` there and Obsidian really
+ *   does hide that text. `blockquote` being in `u.interruptParagraph` is about
+ *   the other case - a quote starting mid-paragraph - and the two are not the
+ *   same question. Measured: stopping here newly SPOKE the hidden sentinel in
+ *   every quote shape tried, `> Prose <!--` / `> HIDDENQ` / `> more -->` among
+ *   them.
+ * - `TABLE_ROW` is dropped because NO table row can interrupt a paragraph in
+ *   Obsidian at all: `table` appears nowhere in `u.interruptParagraph`, and the
+ *   only two terms ever inserted into that list are `math` and `comment`. So a
+ *   `| a |` line is a paragraph continuation for the renderer whether or not a
+ *   delimiter row follows it, and a REAL GFM table between opener and closer is
+ *   hidden too. Do not "fix" `TABLE_ROW` to require a delimiter row and then
+ *   add it here; that reopens the disclosure on the real-table shape.
+ * - `LIST_BULLET` is replaced rather than dropped, because it is right for
+ *   bullets and wrong for ordered markers. See `TERM2_LIST`.
+ *
+ * Omitting a term only ever makes term 2 TRUE more often, i.e. fail-closed
+ * toward hiding, so the set of lines this answers `true` for stays a strict
+ * subset of the document-scoped predicate it replaces. ADDING one is the
+ * dangerous direction and is what the guards above exist to hold.
+ */
+function endsTerm2Scan(line: string): boolean {
+	return (
+		line.trim() === "" ||
+		FENCE.test(line) ||
+		HEADING.test(line) ||
+		HR.test(line) ||
+		SETEXT.test(line) ||
+		TERM2_LIST.test(line)
+	);
+}
+
+/**
  * A line that starts its own block, so a paragraph, and with it any code span
  * inside that paragraph, cannot continue across it. A blank line counts too,
  * and so does a line that opens a comment: the text it hides is not code
@@ -1825,11 +1916,11 @@ function interruptsParagraph(line: string, htmlClosesLater: boolean): boolean {
  * as every line scanned, because a table row reaches the carry site as plain
  * paragraph text when tables are spoken and a span cannot leave its own row.
  */
-function codeSpanClosesLater(lines: string[], from: number, len: number, lastHtmlCloser: number): boolean {
-	if (interruptsParagraph(lines[from]!, lastHtmlCloser > from)) return false;
+function codeSpanClosesLater(lines: string[], from: number, len: number, htmlCloserAhead: readonly boolean[]): boolean {
+	if (interruptsParagraph(lines[from]!, htmlCloserAhead[from]!)) return false;
 	for (let n = from + 1; n < lines.length; n++) {
 		const line = lines[n]!;
-		if (interruptsParagraph(line, lastHtmlCloser > n)) return false;
+		if (interruptsParagraph(line, htmlCloserAhead[n]!)) return false;
 		if (firstRunOfLength(line, len, 0) !== -1) return true;
 	}
 	return false;
@@ -1947,8 +2038,8 @@ function labelClose(line: string, from: number, depth: number): { close: number;
  * consumption site in cleanLine uses, so the two can never disagree about which
  * `]` is the label's own (NRL-88, D-88-10).
  */
-function bracketClosesLater(lines: string[], from: number, lastHtmlCloser: number): boolean {
-	if (interruptsParagraph(lines[from]!, lastHtmlCloser > from) || opensMathBlock(lines, from)) return false;
+function bracketClosesLater(lines: string[], from: number, htmlCloserAhead: readonly boolean[]): boolean {
+	if (interruptsParagraph(lines[from]!, htmlCloserAhead[from]!) || opensMathBlock(lines, from)) return false;
 	// Starts at 0 rather than at a depth read off the opener line, and that is
 	// provable rather than an approximation: the carry is armed only when
 	// `inlineContainerClose(raw, openerAt, "]")` is -1, so there is no `]` after
@@ -1959,7 +2050,7 @@ function bracketClosesLater(lines: string[], from: number, lastHtmlCloser: numbe
 	let depth = 0;
 	for (let n = from + 1; n < lines.length; n++) {
 		const line = lines[n]!;
-		if (interruptsParagraph(line, lastHtmlCloser > n) || opensMathBlock(lines, n)) return false;
+		if (interruptsParagraph(line, htmlCloserAhead[n]!) || opensMathBlock(lines, n)) return false;
 		const found = labelClose(line, 0, depth);
 		if (found.close === -1) {
 			depth = found.depth;
@@ -2102,21 +2193,31 @@ export function extractChunks(
 ): SpeechChunk[] {
 	const chunks: SpeechChunk[] = [];
 	const lines = source.split("\n");
-	// The highest index of a line carrying `-->`, computed once. `lastHtmlCloser
-	// > n` is then exactly "some line after n carries a closer", which is the
-	// document-scoped half of the HTML-comment block rule (NRL-74, ADR 0025).
-	// One scalar rather than a helper that rescans `lines` per test: that would
-	// be an O(L) scan inside codeSpanClosesLater's O(L) loop inside this O(L)
-	// loop, so O(L^3) on a long note. This is O(L) once and O(1) per test.
-	// Strict `>` is deliberate - a `-->` earlier on the SAME line cannot close an
-	// opener later on it, and the caller has already ruled out one after the
-	// opener on that line.
-	let lastHtmlCloser = -1;
+	// `htmlCloserAhead[n]` is "some line AFTER n, and before the first line that
+	// ends n's paragraph, carries `-->`" - term 2 of the HTML-comment block rule
+	// (NRL-74, ADR 0025), bounded by the paragraph as module 4839's inline `.T`
+	// is (NRL-95). One backward pass, still O(L) time once and O(1) per test,
+	// now with O(L) booleans of state. NOT a helper that rescans `lines` per
+	// test: that would be an O(L) scan inside codeSpanClosesLater's O(L) loop
+	// inside this O(L) loop, so O(L^3) on a long note.
+	//
+	// Three details are load-bearing. The assignment PRECEDES folding line k in,
+	// which is the old scalar's strict `>` - a `-->` on line n cannot close an
+	// opener later on n, and the caller has already ruled out one after the
+	// opener on that line. `ahead` is reset at a stop line, because a paragraph
+	// cannot see past its own end. And a `-->` sitting ON a stop line is
+	// deliberately unreachable from earlier lines, while the stop line itself
+	// still gets the following run's answer.
+	const htmlCloserAhead: boolean[] = new Array<boolean>(lines.length).fill(false);
+	let ahead = false;
 	for (let k = lines.length - 1; k >= 0; k--) {
-		if (lines[k]!.includes("-->")) {
-			lastHtmlCloser = k;
-			break;
+		const line = lines[k]!;
+		htmlCloserAhead[k] = ahead;
+		if (endsTerm2Scan(line)) {
+			ahead = false;
+			continue;
 		}
+		if (line.includes("-->")) ahead = true;
 	}
 	const segmentCtx: SegmentContext = { locale: opts.locale, src };
 	let chunkSequence = 0;
@@ -2239,7 +2340,7 @@ export function extractChunks(
 			undefined,
 			undefined,
 			undefined,
-			lastHtmlCloser > lineNo,
+			htmlCloserAhead[lineNo]!,
 		);
 		inComment = cleaned.openComment;
 		if (cleaned.text.trim() !== "") appendToParagraph(cleaned, lineStart + from);
@@ -2497,13 +2598,13 @@ export function extractChunks(
 		 * confirmed unmatched run, which is rare, and provably a no-op on a line
 		 * wholly inside an already-carried span.
 		 */
-		const htmlClosesLater = lastHtmlCloser > lineNo;
+		const htmlClosesLater = htmlCloserAhead[lineNo]!;
 		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
 			cleaned.openCode !== undefined &&
-			codeSpanClosesLater(lines, lineNo, cleaned.openCode, lastHtmlCloser)
+			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlCloserAhead)
 		) {
 			confirmed = cleaned.openCode;
 			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth);
@@ -2527,7 +2628,7 @@ export function extractChunks(
 			blockType === "paragraph" &&
 			confirmed === undefined &&
 			cleaned.unclosedBracket !== undefined &&
-			bracketClosesLater(lines, lineNo, lastHtmlCloser)
+			bracketClosesLater(lines, lineNo, htmlCloserAhead)
 		) {
 			confirmedBracket = cleaned.unclosedBracket;
 			cleaned = cleanLine(

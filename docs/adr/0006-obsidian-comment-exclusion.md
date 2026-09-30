@@ -2,8 +2,8 @@
 
 - Status: accepted
 - Date: 2026-09-29
-- Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44, NRL-64 and NRL-74;
-  clause 2 amended by NRL-68, NRL-73 and NRL-74
+- Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44, NRL-64, NRL-74 and
+  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74 and NRL-95
 
 ## Context
 
@@ -176,8 +176,15 @@ evidence, not a live Obsidian reading or highlighting observation.
    mid-line `<!--` cannot open a block at all. The second term is the renderer's
    **inline** path instead (module 4839's `.T`, used by module 7648), whose
    `<!--(?:-?[^>-])(?:-?[^-])*-->` alternative requires a closer - and that path
-   is **paragraph-scoped**, so our EOF scan is wider than the renderer there.
-   That divergence is recorded in ADR 0025 as a known gap rather than fixed.
+   is **paragraph-scoped**. NRL-74 scanned to EOF for both terms, which was wider
+   than the renderer for term 2; **NRL-95 closed that**, and the two terms now
+   have two scopes on purpose. Term 1 keeps its EOF scan, because module 8776
+   really does walk to end of input once it has opened. Term 2 is bounded by the
+   end of the opener's paragraph, where the bound is a blank line, a fence, an ATX
+   heading, a thematic break or a setext underline, and deliberately **not** a
+   blockquote, list or table-row line - a container re-offers its content as one
+   paragraph, so stopping there was a measured disclosure. See ADR 0025 decisions
+   3 and 4, and the residual list there.
 
    One known miss, not opened by NRL-73 and not fixed by it: the line-start half
    uses `.trim()`, which accepts a **tab**, where the tokenizer's skip loop
@@ -225,6 +232,16 @@ evidence, not a live Obsidian reading or highlighting observation.
      block (fence, ATX heading, thematic break, setext underline, table row,
      list bullet, blockquote), and the opening line is tested the same way,
      because a span cannot leave the block it is in.
+
+     This stop set and the one NRL-95 added for term 2 of the `<!--` rule are
+     **deliberately different sets answering different questions**, and must not
+     be merged. This one asks where a code span or a label may not cross;
+     `endsTerm2Scan` asks where the renderer's inline raw-HTML regex stops
+     looking, and it omits table row, list bullet and blockquote for the reason
+     clause 2 gives. More importantly `endsTerm2Scan` must never CALL this
+     predicate: `interruptsParagraph` -> `opensHiddenComment` -> `opensHtmlBlock`
+     consumes the very answer `endsTerm2Scan` produces, so reusing it there is
+     mutually recursive.
    - **A line that opens a comment also stops the search.** That is an opening
      `%%` with only whitespace before it and no `%%` closer on the line, or a
      `<!--` with no `-->` on the line **that also passes clause 2's two-term
@@ -234,7 +251,10 @@ evidence, not a live Obsidian reading or highlighting observation.
      opener at all; narrowing it is what lets a soft-wrapped code span or label
      be confirmed across such a line. This is why `interruptsParagraph` takes a
      second parameter and is no longer a pure line predicate: the second term is
-     document-scoped. Both remain exactly the shapes that hide the lines after
+     not line-local. As of NRL-95 it is **paragraph-bounded** rather than
+     document-scoped, precomputed once per note as a per-line boolean array
+     because the bound differs per line, and it reaches this predicate as a
+     scalar so the predicate itself stays line-local. Both remain exactly the shapes that hide the lines after
      them. Obsidian 1.13.7's Reading-view parser puts `comment` in
      its `interruptParagraph` list and already has `html` there, so such a line
      terminates the paragraph before any inline tokenizing runs and a code span
