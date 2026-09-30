@@ -30,6 +30,7 @@ import {
 	clearWordHighlight,
 	highlightPlan,
 	scrollTargetForChunk,
+	shouldHighlightLeaf,
 } from "../src/ui/highlight.ts";
 import type { HighlightToggles } from "../src/ui/highlight.ts";
 import {
@@ -593,6 +594,35 @@ console.log("17. NRL-72 F1: the scroll is gated on a layer being drawn");
 	// Zero is a real offset: the first chunk of a note starts there, and a
 	// `!target` test would silently stop scrolling to the top of every note.
 	check("17h GUARD sourceStart 0 is returned, not treated as absent", scrollTargetForChunk({ sentence: true, word: false }, 0) === 0, `${scrollTargetForChunk({ sentence: true, word: false }, 0)}`);
+}
+
+// --- NRL-89: a leaf-change must not decorate or scroll the wrong document --
+
+console.log("18. NRL-89: a leaf only gets the playback highlight while its file matches the in-flight read");
+{
+	/*
+	 * The defect: there was no leaf-change handler anywhere in the plugin, so
+	 * switching notes mid-read left the chunk/word handlers' existing
+	 * `if (!this.activeEditor) return;` guards pointed at whatever editor
+	 * `retargetHighlightEditor` last touched - the note the read STARTED on,
+	 * not the one in front. Before NRL-72 that drew a stale decoration on the
+	 * wrong document; after NRL-72's viewport scroll the same path also moves
+	 * that document, which is what made this worth a ticket of its own.
+	 *
+	 * `shouldHighlightLeaf` is the pure decision `handleActiveLeafChange` (in
+	 * main.ts, which cannot run in this suite) consults before touching the
+	 * editor. `readingFilePath` alone cannot answer it: `Player.getFilePath()`
+	 * is deliberately not cleared by `stop()` (player.ts:147-171), so a
+	 * finished or stopped read still names its note by path long after
+	 * nothing is in flight - without `readingInFlight`, switching back to a
+	 * note whose reading already ended would re-arm its highlight.
+	 */
+	check("match while in flight -> true", shouldHighlightLeaf("Notes/A.md", "Notes/A.md", true) === true);
+	check("different file while in flight -> false", shouldHighlightLeaf("Notes/B.md", "Notes/A.md", true) === false);
+	check("match but NOT in flight (finished/stopped read) -> false", shouldHighlightLeaf("Notes/A.md", "Notes/A.md", false) === false);
+	check("non-markdown leaf (null active path) while in flight -> false", shouldHighlightLeaf(null, "Notes/A.md", true) === false);
+	check("no read ever started (readingFilePath empty) -> false even if in flight", shouldHighlightLeaf("Notes/A.md", "", true) === false);
+	check("neither in flight nor matching -> false", shouldHighlightLeaf("Notes/B.md", "Notes/A.md", false) === false);
 }
 
 if (failures > 0) {
