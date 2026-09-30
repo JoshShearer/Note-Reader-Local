@@ -2,8 +2,8 @@
 
 - Status: accepted
 - Date: 2026-09-29
-- Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44 and NRL-64; clause 2
-  amended by NRL-68 and NRL-73
+- Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44, NRL-64 and NRL-74;
+  clause 2 amended by NRL-68, NRL-73 and NRL-74
 
 ## Context
 
@@ -69,8 +69,8 @@ evidence, not a live Obsidian reading or highlighting observation.
 
    Two real divergences fell out of the same reading, and both go the other
    way - they hide text Obsidian displays, which is the direction this clause
-   calls out as the one that discards visible prose. **NRL-73 is now fixed;
-   NRL-74 is not.**
+   calls out as the one that discards visible prose. **Both are now fixed:
+   NRL-73 below, and NRL-74 in its own subsection after it.**
 
    **NRL-73, resolved.** `if (37 === a) return` means **any** `%` before the
    newline disqualifies the block, while we looked only for a later `%%` closer,
@@ -142,12 +142,42 @@ evidence, not a live Obsidian reading or highlighting observation.
    hides leaked 1,024 -> 0 and text it displays was lost 8,704 -> 0, with 0 cells
    newly leaking or newly lost.
 
-   **NRL-74, still open.** The line-start half of the guard at
-   `src/text/extract.ts:903` is gated on `obsidianComment`, so an unmatched
-   mid-line `<!--` still opens a block while `%%` correctly does not. The
-   renderer-faithful fix is to narrow `<!--`, not to widen `%%`. NRL-73 replaced
-   the expression at that line, so the `%%` half is now a helper call and the
-   `<!--` half is still the bare gate, which isolates the two.
+   **NRL-74, resolved.** The line-start half of the guard at
+   `src/text/extract.ts:903` was gated on `obsidianComment`, so an unmatched
+   mid-line `<!--` opened a block while `%%` correctly did not. It is narrowed,
+   not `%%` widened, and by a **second** predicate rather than a widened
+   `opensObsidianBlock` - the two bodies answer different questions, and merging
+   them would import `if (37 === a) return` into `<!--`, which clause 2's own
+   D-73-4 note forbids. This is the one place NRL-66's "do not merge the two
+   scans" note DOES apply, where NRL-73's merge did not:
+
+   ```ts
+   function opensHtmlBlock(view: string, at: number, closesLater: boolean): boolean {
+       return view.slice(0, at).trim() === "" || closesLater;
+   }
+   ```
+
+   Two terms, neither sufficient alone, and the second cannot be answered from
+   the line: it is "some LATER line carries `-->`", computed once per note in
+   `extractChunks` as the scalar `lastHtmlCloser` and threaded down as a required
+   parameter through `cleanLine`, `opensHiddenComment`, `interruptsParagraph`,
+   `codeSpanClosesLater` and `bracketClosesLater`. `interruptsParagraph` is
+   therefore no longer a pure line predicate. Both terms or neither: adopting the
+   line-start term alone is a measured disclosure, because it answers false for a
+   mid-line `<!--` that a later `-->` genuinely closes, so `codeSpanClosesLater`
+   confirms a carry across a line that really does open a hidden block. ADR 0025
+   carries the rule, the EOF scope, the measurements and the residual risks.
+
+   The tokenizer was read this session and it **agrees with the line-start term
+   exactly**. Obsidian 1.13.7's HTML block tokenizer (module 8776 of the
+   installed `obsidian.asar`) skips leading spaces AND tabs with no three-space
+   cap, requires `<`, and tests `u=/^<!--/` **anchored** against the first line,
+   closing on the first later line matching `h=/-->/` or running to EOF. So a
+   mid-line `<!--` cannot open a block at all. The second term is the renderer's
+   **inline** path instead (module 4839's `.T`, used by module 7648), whose
+   `<!--(?:-?[^>-])(?:-?[^-])*-->` alternative requires a closer - and that path
+   is **paragraph-scoped**, so our EOF scan is wider than the renderer there.
+   That divergence is recorded in ADR 0025 as a known gap rather than fixed.
 
    One known miss, not opened by NRL-73 and not fixed by it: the line-start half
    uses `.trim()`, which accepts a **tab**, where the tokenizer's skip loop
@@ -161,7 +191,9 @@ evidence, not a live Obsidian reading or highlighting observation.
    not nest. HTML comments end at `-->`; Obsidian comments end at `%%`.
    Delimiters of the other kind, escapes, backticks, fences, math and blank
    lines inside a comment are just hidden content, with no parser-state
-   changes. Existing unclosed HTML comments continue to hide through EOF.
+   changes. An unclosed HTML comment continues to hide through EOF **when it
+   opened a block at all**, which since NRL-74 is the two-term test in clause 2's
+   NRL-74 subsection rather than the bare presence of `<!--`.
 
 4. **Literal code stays literal.** Inline code, fenced code and indented code
    keep `%%` when their code setting enables speech. Fenced and indented code
@@ -195,8 +227,15 @@ evidence, not a live Obsidian reading or highlighting observation.
      because a span cannot leave the block it is in.
    - **A line that opens a comment also stops the search.** That is an opening
      `%%` with only whitespace before it and no `%%` closer on the line, or a
-     `<!--` with no `-->` on the line: exactly the two shapes that hide the
-     lines after them. Obsidian 1.13.7's Reading-view parser puts `comment` in
+     `<!--` with no `-->` on the line **that also passes clause 2's two-term
+     HTML test** - it begins its line, or a later line in the note carries `-->`
+     (NRL-74). Before NRL-74 the `<!--` half here was the bare "no `-->` on the
+     line", which stopped the search on a line the renderer does not treat as an
+     opener at all; narrowing it is what lets a soft-wrapped code span or label
+     be confirmed across such a line. This is why `interruptsParagraph` takes a
+     second parameter and is no longer a pure line predicate: the second term is
+     document-scoped. Both remain exactly the shapes that hide the lines after
+     them. Obsidian 1.13.7's Reading-view parser puts `comment` in
      its `interruptParagraph` list and already has `html` there, so such a line
      terminates the paragraph before any inline tokenizing runs and a code span
      provably cannot contain one. Without this, a run on the far side of a real

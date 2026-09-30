@@ -952,11 +952,25 @@ console.log("NRL-45 link reference definitions (R-M08)");
 
 	/*
 	 * Decision Q9, the disclosure direction. The branch sits AFTER cleanLine and
-	 * after `inComment` is assigned, so a title carrying an unclosed `<!--`
-	 * still opens the comment that hides the rest of the note. Dropping the line
-	 * earlier would make text the author hid audible.
+	 * after `inComment` is assigned, so a title carrying an unclosed `<!--` that
+	 * a later line closes still opens the comment that hides what is between
+	 * them. Dropping the line earlier would make text the author hid audible.
+	 *
+	 * The first of these two REPLACED an expectation of `[]` (NRL-74, D-74-12).
+	 * It is the only pre-existing fixture in the suite that the HTML-comment
+	 * block rule moves, and it moves SILENT -> SPOKEN. That is renderer-faithful:
+	 * the `<!--` sits inside a quoted title, mid-line, with no `-->` anywhere in
+	 * the note, so it opens nothing and ZSECRETZ is displayed. It also makes the
+	 * shape AGREE with its `%%` sibling - '[a]: x.png "%%"' followed by the same
+	 * line already spoke ZSECRETZ before this change, measured identical on both
+	 * sides - and removing exactly that asymmetry is what NRL-74 is for.
+	 *
+	 * Decision Q9's own ordering property does NOT lose its test: the second
+	 * line below is the same shape with a `-->` four lines down, so the title's
+	 * `<!--` really is an opener, and it still expects ["ZAFTERZ here."] and is
+	 * green on both sides. Do not collapse the pair into one.
 	 */
-	expect('[a]: x.png "<!--"\n\nZSECRETZ sentence here.', []);
+	expect('[a]: x.png "<!--"\n\nZSECRETZ sentence here.', ["ZSECRETZ sentence here."]);
 	expect('[a]: x.png "<!--"\n\nZSECRETZ sentence here.\n\n-->\n\nZAFTERZ here.', ["ZAFTERZ here."]);
 
 	/*
@@ -1266,8 +1280,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// backtick run must still be silent.
 		["guard-nrl73-genuine-opener-beside-code-run", "Before `a\n%%\nHIDEME\nb` after.", "Before a", { skipInlineCode: false }],
 		// The lone-% rule is %%-only (NRL-73 D-73-4). Obsidian has no equivalent
-		// rule for an HTML comment, so <!-- is untouched here; the mid-line <!--
-		// asymmetry is NRL-74's.
+		// rule for an HTML comment, so the lone % does not disqualify this
+		// opener. Still green after NRL-74, but for a reason that did not exist
+		// when this was written: the <!-- is at a LINE START, which is now the
+		// first term of opensHtmlBlock rather than unconditional (ADR 0025).
 		["guard-nrl73-html-opener-unaffected", "<!-- 50% off\nHIDEME", ""],
 		// A closed inline pair takes the `close !== -1` path, which this change
 		// does not touch, so a % inside one is still hidden.
@@ -1287,6 +1303,58 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// line here is displayed by Obsidian, as code.
 		["pin-nrl73-span-of-only-disqualified-openers", "Before `a\n%% 50% off\nSPANPROSE\n%% 2% w\nb` after.", "Before after."],
 		["pin-nrl73-span-of-only-disqualified-openers-spoken", "Before `a\n%% 50% off\nSPANPROSE\n%% 2% w\nb` after.", "Before a %% 50% off SPANPROSE %% 2% w b after.", { skipInlineCode: false }],
+		// NRL-74. An HTML comment block opener is `<!--` with no `-->` on the
+		// line AND either only whitespace before it or a `-->` on some LATER
+		// line (ADR 0025). Anything else is literal text CommonMark renders, so
+		// a mid-line `<!--` with no closer anywhere is spoken, delimiters
+		// included, exactly as an unmatched mid-line `%%` already is. We used to
+		// open a block on any mid-line `<!--`, silencing the note to EOF, which
+		// is prose loss rather than leaked markup. These are the defect
+		// reproduction: each was measured red against base 8635ed2.
+		["pin-nrl74-midline-html-is-literal", "Plain prose <!--\nSECRETA\nmore", "Plain prose <!-- SECRETA more"],
+		// The prefix-peel path, so the rule is applied to the peeled `body` and
+		// not to the physical line: a `> ` before the prose must not make the
+		// `<!--` look line-start, and must not stop it being literal either.
+		["pin-nrl74-midline-html-in-quote", "> Plain prose <!--\n> more", "Plain prose <!-- more"],
+		// D-74-9. THE ONLY FIXTURE STOPPING A DESTINATION LEAK. Narrowing
+		// cleanLine alone, leaving opensHiddenComment wide, is NOT a safe subset
+		// of this fix: the now-literal `<!--` stops the label line truncating, so
+		// the unmatched `![` survives to the carry site, but bracketClosesLater
+		// still refuses to confirm it, the label is never recognised, and the
+		// whole construct including `(zdestz.png)` falls through as prose.
+		// Measured in Plan: 1,024 of 2,560 destination-bearing cells leak under
+		// that variant against 0 on base and 0 here. So this pair, and the link
+		// twin below, are what a later "simplification" of the opensHiddenComment
+		// narrowing would trip over - nothing else in the suite would.
+		["pin-nrl74-label-destination-not-spoken", "Before ![alt <!--x\nmore](zdestz.png) after.", "Before after.", { speakImageAlt: false }],
+		["pin-nrl74-label-destination-not-spoken-alt", "Before ![alt <!--x\nmore](zdestz.png) after.", "Before alt more after.", { speakImageAlt: true }],
+		["pin-nrl74-link-label-destination-not-spoken", "Before [lab <!--x\nmore](zdestz.png) after.", "Before lab more after."],
+		// GUARDS. Green on both sides of the fix, so none is evidence of
+		// anything; they exist so the two-term rule cannot be half-adopted.
+		// AC 2: the line-start term alone still hides through EOF.
+		["guard-nrl74-linestart-html-still-hides", "<!--\nSECRETA\nmore", ""],
+		// AC 3: a complete mid-line pair closes on its own line and is dropped.
+		["guard-nrl74-complete-midline-pair", "Before <!-- x --> after.", "Before after."],
+		// The second term. A mid-line `<!--` whose `-->` is four lines down IS an
+		// opener, so HIDSENT stays silent. NOT evidence for the EOF scope of that
+		// lookahead - a paragraph-scoped one would pass this too. The evidence
+		// for EOF scope is obsidian-inside-html-block above, whose `-->` sits
+		// past a fence AND a `$$` line.
+		["guard-nrl74-midline-later-closer-hides", "Before x.\nProse <!--\nHIDSENT\n--> tail.", "Before x. Prose tail."],
+		// D-74-10, and what it guards is specific: the line-start-only narrowing
+		// of opensHiddenComment. That half-rule answers false for a mid-line
+		// `<!--` a later `-->` genuinely closes, so codeSpanClosesLater confirms
+		// a carry across a line that really does open a hidden block and HIDDENX
+		// becomes code content. Measured: base and this fix both say
+		// "Before a Prose b after."; the half-rule says
+		// "Before a Prose <!-- HIDDENX --> b after.". Both terms or neither.
+		["guard-nrl74-variant-C-disclosure", "Before `a\nProse <!--\nHIDDENX\n--> b` after.", "Before a Prose b after.", { skipInlineCode: false }],
+		// D-74-11. Duplicates local-html-state above under a name that says WHY:
+		// the new literal escape gates on `blockComments` POSITIVELY, where the
+		// `%%` escape negates it, so a recursively cleaned label never takes it
+		// and its unmatched `<!--` goes on truncating locally. srs.md's
+		// non-nesting bullet requires that; the symmetric form breaks it.
+		["guard-nrl74-recursive-label-stays-local", "[label <!--hidden](target) after.\nVisible.", "label after. Visible."],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
