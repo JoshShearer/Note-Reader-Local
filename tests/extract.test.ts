@@ -1327,20 +1327,19 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		// so the words either side do not run together - the `no doubled space`
 		// assertion below covers that from the other direction.
 		//
-		// "first" is still spoken, and that is NRL-64 (N1), not a defect in this
-		// fix: the literal region covers continuation lines and the closing line
-		// only. cleanLine runs on the OPENING line before codeSpanClosesLater has
-		// confirmed the span, so at that moment `\`first` is an unmatched run, and
-		// an unmatched run is literal text in CommonMark - silencing its tail
-		// without the confirmation would delete visible prose from any line that
-		// simply contains a stray backtick. Confirming before cleaning is the
-		// per-line-loop restructure NRL-64 owns.
-		["pin-skipped-code", "Before `first\n%%literal%%\nlast` after.", "Before first after.", { skipInlineCode: true }],
-		["span-skipped-markdown-silenced", "Before `first\n**bold** #tag <https://x.com>\nlast` after.", "Before first after.", { skipInlineCode: true }],
-		["span-skipped-escape-silenced", "Before `first\n\\%%kept\\%%\nlast` after.", "Before first after.", { skipInlineCode: true }],
+		// "first" used to be spoken here, which was NRL-64 (N1). It is silent as of
+		// NRL-64: extractChunks now confirms the span with codeSpanClosesLater
+		// BEFORE cleanLine commits the opening line's output, so the opening line's
+		// post-opener tail is part of the region like every other part of the span.
+		// The expected value moved from "Before first after." as a consequence of
+		// that fix, not as a weakening of this row - the single-line oracle
+		// `control-single-line-skipped` below says "Before after." too.
+		["pin-skipped-code", "Before `first\n%%literal%%\nlast` after.", "Before after.", { skipInlineCode: true }],
+		["span-skipped-markdown-silenced", "Before `first\n**bold** #tag <https://x.com>\nlast` after.", "Before after.", { skipInlineCode: true }],
+		["span-skipped-escape-silenced", "Before `first\n\\%%kept\\%%\nlast` after.", "Before after.", { skipInlineCode: true }],
 		// Two lines: no wholly-silenced middle line, so this is the shape that
 		// shows the closing line's region silenced on its own.
-		["span-skipped-two-line", "Before `first\nlast` after.", "Before first after.", { skipInlineCode: true }],
+		["span-skipped-two-line", "Before `first\nlast` after.", "Before after.", { skipInlineCode: true }],
 		// NRL-44 (Q3-Q5): inside a confirmed soft-wrapped span nothing is
 		// re-interpreted as markdown. Each span-verbatim-* row is paired with the
 		// single-line control that is its oracle: a single-line span has always
@@ -1399,17 +1398,70 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		// the rest of the region when code is skipped.
 		["span-verbatim-mismatched-run", "Before ``a\nb ` c\nd`` after.", "Before a b ` c d after.", { skipInlineCode: false }],
 		["control-single-line-mismatched-run", "Before ``a b ` c d`` after.", "Before a b ` c d after.", { skipInlineCode: false }],
-		["span-skipped-mismatched-run", "Before ``a\nb ` c\nd`` after.", "Before a after.", { skipInlineCode: true }],
+		["span-skipped-mismatched-run", "Before ``a\nb ` c\nd`` after.", "Before after.", { skipInlineCode: true }],
 		// The tail after the carried closer is ordinary markdown again: the region
 		// ends at the closer, it does not spill into the rest of the line.
 		["span-tail-after-closer-is-markdown", "Before `first\nmid` **bold** after.", "Before first mid bold after.", { skipInlineCode: false }],
 		// Out of scope, pinned so the ticket that owns each one changes it on
 		// purpose rather than by accident - exactly as NRL-42 pinned this ticket.
-		// N1, NRL-64: on the span's OPENING line a complete %%...%% after the
-		// unmatched run is still dropped. cleanLine runs on the opening line
-		// before codeSpanClosesLater has confirmed the span, so fixing it means
-		// confirming before cleaning, which is a restructure of the per-line loop.
-		["pin-nrl64-opening-line", "Before `a %%b%% c\nd` after.", "Before a c d after.", { skipInlineCode: false }],
+		// N1 is CLOSED by NRL-64 (docs/adr/0006 clause 4, docs/adr/0019 clause 3).
+		// extractChunks now runs codeSpanClosesLater BEFORE cleanLine commits the
+		// opening line, and re-cleans that line with the confirmed run length, so
+		// the tail after the unmatched run is part of the literal region. The
+		// expected value moved from "Before a c d after." for that reason; the row
+		// is the AC's named fixture, not a weakened pin. Each row below is paired
+		// with the single-line span that is its oracle, the same shape NRL-44 used:
+		// a single-line span has always been verbatim and option-independent, and
+		// the opening line of a confirmed soft-wrapped span is now no different.
+		["pin-nrl64-opening-line", "Before `a %%b%% c\nd` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["control-nrl64-single-line", "Before `a %%b%% c d` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["nrl64-opening-line-skipped", "Before `a %%b%% c\nd` after.", "Before after.", { skipInlineCode: true }],
+		["control-single-line-skipped", "Before `a %%b%% c d` after.", "Before after.", { skipInlineCode: true }],
+		["nrl64-double-run", "Before ``a %%b%% c\nd`` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["control-nrl64-double-run", "Before ``a %%b%% c d`` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["nrl64-triple-run", "Before ```a %%b%% c\nd``` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["control-nrl64-triple-run", "Before ```a %%b%% c d``` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["nrl64-html-comment", "Before `a <!--b--> c\nd` after.", "Before a <!--b--> c d after.", { skipInlineCode: false }],
+		["control-nrl64-html-comment", "Before `a <!--b--> c d` after.", "Before a <!--b--> c d after.", { skipInlineCode: false }],
+		// The general form, not a list of exempt constructs (ADR 0019): the opening
+		// line's tail is verbatim for every inline construct, not just comments.
+		["nrl64-markdown-literal", "Before `a **bold** #tag c\nd` after.", "Before a **bold** #tag c d after.", { skipInlineCode: false }],
+		["control-nrl64-markdown-literal", "Before `a **bold** #tag c d` after.", "Before a **bold** #tag c d after.", { skipInlineCode: false }],
+		// A COMPLETE span earlier on the same line is untouched; the region starts
+		// at the first UNMATCHED run, and the prose between the two is still prose.
+		["nrl64-two-runs-same-line", "Before `a %%b%% c` d `e %%f%% g\nh` after.", "Before a %%b%% c d e %%f%% g h after.", { skipInlineCode: false }],
+		["control-nrl64-two-runs-same-line", "Before `a %%b%% c` d `e %%f%% g h` after.", "Before a %%b%% c d e %%f%% g h after.", { skipInlineCode: false }],
+		// Disclosure direction, the one NRL-42's ship phase found a HIGH defect in.
+		// In each of these codeSpanClosesLater finds no closer, or finds a hidden-
+		// comment opener first, so NO region is armed on the opening line and the
+		// block comment still hides its text. Every expected value below was
+		// measured on the pre-fix tree and must not move.
+		["guard-nrl64-no-closer-anywhere", "Before `a tail\n%%\nSENTINEL\n%%\nend.", "Before a tail end.", { skipInlineCode: false }],
+		["guard-nrl64-opener-before-closer", "Before `a tail\n%%\nSENTINEL\n%%\nd` after.", "Before a tail d after.", { skipInlineCode: false }],
+		["guard-nrl64-html-opener-before-closer", "Before `a tail\n<!--\nSENTINEL\n-->\nd` after.", "Before a tail d after.", { skipInlineCode: false }],
+		["guard-nrl64-mismatched-no-closer", "Before ``a tail\nb ` c\n%%\nSENTINEL\n%%\nend.", "Before a tail b c end.", { skipInlineCode: false }],
+		["guard-nrl64-stray-backtick-prose", "Before `a tail\nmore prose.\n\n%%\nSENTINEL\n%%", "Before a tail more prose.", { skipInlineCode: false }],
+		["guard-nrl64-stray-backtick-prose-skipped", "Before `a tail\nmore prose.\n\n%%\nSENTINEL\n%%", "Before a tail more prose.", { skipInlineCode: true }],
+		["guard-nrl64-blank-breaks-span", "Before `a %%b%% c\n\nd` after.", "Before a c d after.", { skipInlineCode: false }],
+		["guard-nrl64-heading-breaks-span", "Before `a %%b%% c\n# H\nd` after.", "Before a c H d after.", { skipInlineCode: false }],
+		// A carry must never be armed off a heading, a quote or a list line: a span
+		// cannot leave its own block. These three pin that end to end. They do not
+		// isolate the hoisted `blockType === "paragraph"` test, and saying so is
+		// the point: codeSpanClosesLater already runs interruptsParagraph over the
+		// opening line, which matches HEADING, BLOCKQUOTE and LIST_BULLET, so
+		// deleting that test changed 0 of 9,792 measured extractions. The guard is
+		// redundant belt-and-braces, and these rows stay red if EITHER of the two
+		// things holding the rule up is removed.
+		["guard-nrl64-opening-line-is-heading", "# Before `a %%b%% c\nd` after.", "Before a c d after.", { skipInlineCode: false }],
+		["guard-nrl64-opening-line-is-quote", "> Before `a %%b%% c\n> d` after.", "Before a c d after.", { skipInlineCode: false }],
+		["guard-nrl64-opening-line-is-list", "- Before `a %%b%% c\n  d` after.", "Before a c d after.", { skipInlineCode: false }],
+		// The confirmation is armed AFTER the LINK_REF_DEF drop, so a definition
+		// line carrying an unmatched run still hands no carry to the next line
+		// (ADR 0018). Dropping the line and arming the carry would make the next
+		// line a continuation of a span whose opener was never spoken.
+		["guard-nrl64-linkrefdef-with-run", "[a]: `x.png\nlast ` here.", "last here.", { skipInlineCode: false }],
+		// The region still ends at the carried closer, not at end of line.
+		["guard-nrl64-tail-after-closer", "Before `a %%b%% c\nmid` **bold** after.", "Before a %%b%% c mid bold after.", { skipInlineCode: false }],
 		// F9, NRL-63: an image whose alt text crosses a soft line break is not
 		// recognised as an image at all, so its destination is spoken as prose.
 		["pin-nrl63-softwrapped-image", "A ![alt\nwords](zdestz.png) B", "A [alt words](zdestz.png) B", { skipInlineCode: false }],
