@@ -1898,27 +1898,73 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 	}
 
 	/*
-	 * NRL-46 pin, a PRE-EXISTING defect this ticket did NOT fix.
+	 * NRL-66, replacing NRL-46's `pin-unterminated-by-escape` of the same two
+	 * shapes IN PLACE: a wikilink or embed target ending in a backslash now
+	 * closes on its `]]` and reduces to its final path segment like any other.
 	 *
-	 * A target ending in a backslash immediately before the closer means the
-	 * line holds `\]]`. inlineContainerClose never finds a `]]`, so the whole
-	 * `[[` is treated as unterminated, the brackets are dropped, and the target
-	 * is then read as ordinary prose - through the escape branch, which eats the
-	 * backslashes and speaks the folder segment and one literal `]`. The
-	 * final-segment reduction never runs, because the wikilink branch never
-	 * fires. Measured byte-identical on the merge base 789d3c2 and on this
-	 * working tree by bundling both extractors, so it is not merge drift and it
-	 * is out of this ticket's scope; pinned so it can only change deliberately.
+	 * Before this, the line held `\]]`, the shared `inlineContainerClose` ate
+	 * the `\]` as an escape, no `]]` was ever found, the construct was treated
+	 * as unterminated and the raw target - folder segments included - fell
+	 * through to prose. `[[FOLDERSENTINEL/LEAFOK\]]` said the folder aloud,
+	 * which is exactly what R-M09 and ADR 0017 promise it will not. The fix is
+	 * `wikiTargetClose`, a wikilink/embed-LOCAL closing scan that skips code
+	 * spans and complete comment spans the way the shared helper does but does
+	 * NOT honour `\` as an escape, because inside a vault path a backslash is a
+	 * separator - `isFileTarget` and `finalSegment` both already split on it.
+	 *
+	 * No reduction logic was added and none was needed: `finalSegment` already
+	 * steps back over the trailing separator and the emission loop's
+	 * `k >= segEnd && k < pathEnd` skip already drops it.
 	 */
-	for (const src of ["Before [[pinfolder\\Leaf Note\\]] after.", "Before ![[pinfolder\\Leaf Note\\]] after."]) {
-		for (const speakEmbeds of [false, true]) {
-			const got = say(src, { speakEmbeds });
-			check(
-				`NRL-46 pin-unterminated-by-escape ${JSON.stringify(src)} (speakEmbeds ${speakEmbeds})`,
-				got === "Before pinfolderLeaf Note]] after.",
-				`got: ${JSON.stringify(got)}`,
-			);
-		}
+	for (const [src, want] of [
+		// The two shapes NRL-46 pinned. The folder is now silent.
+		["Before [[pinfolder\\Leaf Note\\]] after.", "Before Leaf Note after."],
+		["Before ![[pinfolder\\Leaf Note\\]] after.", "Before Leaf Note after."],
+		// The sentinel shape the NRL-46 privacy probe reported as its one
+		// surviving path leak.
+		["Before [[FOLDERSENTINEL/LEAFOK\\]] after.", "Before LEAFOK after."],
+		["Before ![[FOLDERSENTINEL/LEAFOK\\]] after.", "Before LEAFOK after."],
+		// Composition with NRL-67: newly recognised, so the target now routes
+		// through emitWikiLabel and the comment-span exclusion applies to it.
+		// Both the folder and the hidden text are silent.
+		["Before [[a/b%%SECRET%%\\]] after.", "Before b after."],
+		["Before ![[a/b%%SECRET%%\\]] after.", "Before b after."],
+		["Before [[a/b<!--SECRET-->\\]] after.", "Before b after."],
+	] as const) {
+		const got = say(src, { speakEmbeds: true });
+		check(`NRL-66 trailing-backslash target ${JSON.stringify(src)}`, got === want, `got: ${JSON.stringify(got)}`);
+		check(
+			`NRL-66 trailing-backslash target ${JSON.stringify(src)} discloses no folder or hidden text`,
+			!got.includes("FOLDERSENTINEL") && !got.includes("SECRET") && !got.includes("pinfolder") && !got.includes("a/"),
+			`got: ${JSON.stringify(got)}`,
+		);
+	}
+	for (const src of ["Before ![[pinfolder\\Leaf Note\\]] after.", "Before ![[FOLDERSENTINEL/LEAFOK\\]] after."]) {
+		const off = say(src, { speakEmbeds: false });
+		check(`NRL-66 embed ${JSON.stringify(src)} silent with speakEmbeds off`, off === "Before after.", `got: ${JSON.stringify(off)}`);
+	}
+
+	/*
+	 * Guards, not new behaviour: `wikiTargetClose` is deliberately LOCAL to the
+	 * wikilink and embed branches, so the shared `inlineContainerClose` and
+	 * every other construct that uses it must be byte-identical. All six were
+	 * measured on both sides of the change and none moved. For an image, link
+	 * or highlight, `\]` not closing the label is CommonMark-correct and the
+	 * destination after the `]` is already dropped, so there is no privacy gain
+	 * to trade against diverging from the renderer.
+	 */
+	for (const [src, want, over] of [
+		// A `\` that is not immediately before the closer: the old and new scans
+		// agree, and `\` is a path separator so the label is the final segment.
+		["Before [[a\\]b]] after.", "Before ]b after.", {}],
+		["Before ![alt\\](dest.png) after.", "Before [alt](dest.png) after.", {}],
+		["Before [label\\](https://x.com) after.", "Before [label]( after.", {}],
+		["Before ==hi\\== there== after.", "Before hi== there after.", {}],
+		// A hidden or literal `]]` still cannot close the target.
+		["Before `[[x/y\\]]` after.", "Before [[x/y\\]] after.", { skipInlineCode: false }],
+	] as const) {
+		const got = say(src, over);
+		check(`NRL-66 guard (unmoved) ${JSON.stringify(src)}`, got === want, `got: ${JSON.stringify(got)}`);
 	}
 
 	/*

@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-30
-- Ticket: NRL-46
+- Ticket: NRL-46 (amended by NRL-66, clause 8 and the amendment section below)
 
 ## Context
 
@@ -85,6 +85,14 @@ not available in this lane.
    ADR 0008 clause 5 says to err towards silence and the existing guard already
    does.
 
+8. **Inside a wikilink or embed target, `\` is a path separator, not a
+   CommonMark escape** (added by NRL-66). The two branches find their closing
+   `]]` with `wikiTargetClose`, a local scan that skips code spans and complete
+   comment spans exactly as the shared `inlineContainerClose` does but does not
+   honour `\`. Clause 2 had already decided that a backslash in a target is
+   folder structure; this is the tokeniser being made to agree with it. See the
+   amendment section below for why the scan is local and what it costs.
+
 The reasoning rests on stated project priorities rather than on an Obsidian
 observation that was unavailable: `srs.md` forbids speaking a destination, ADR
 0008 clause 5 says silence on a filename is recoverable while reading out a path
@@ -149,13 +157,99 @@ trade for URLs by keeping only the host.
   (AGENTS.md known state). This closes one of R-M09's reduction gaps, not the
   requirement.
 
-- **One pre-existing defect found and not fixed.** A target ending in a backslash
-  immediately before the closer puts `\]]` on the line, `inlineContainerClose`
-  never finds a `]]`, the `[[` is treated as unterminated, and the target is read
-  as prose through the escape branch - folder segment, one literal `]`, and no
-  reduction, because the wikilink branch never fires. Byte-identical on the merge
-  base and on this tree. Pinned as `pin-unterminated-by-escape` in
-  `tests/extract.test.ts` so it can only change deliberately.
+- **One pre-existing defect found and not fixed here.** A target ending in a
+  backslash immediately before the closer puts `\]]` on the line,
+  `inlineContainerClose` never finds a `]]`, the `[[` is treated as unterminated,
+  and the target is read as prose through the escape branch - folder segment, one
+  literal `]`, and no reduction, because the wikilink branch never fires.
+  Byte-identical on the merge base and on the NRL-46 tree. It was pinned as
+  `pin-unterminated-by-escape` in `tests/extract.test.ts`, and **NRL-66 closed
+  it**; the amendment below records how.
+
+## Amendment (NRL-66): the tokeniser agrees with clause 2
+
+Clause 2 decided that a `\` in a target is folder structure. The tokeniser did
+not agree: the shared `inlineContainerClose` consumed `\]` as a CommonMark
+escape, so `[[private/folder/Note\]]` never closed, was treated as unterminated,
+and fell through to prose with its folder path intact. Reproduced before any
+change by bundling the real `src/text/extract.ts` at `a8f45db`:
+`Before [[FOLDERSENTINEL/LEAFOK\]] after.` spoke
+`Before FOLDERSENTINEL/LEAFOK]] after.`, identically in `[[ ]]` and `![[ ]]` and
+in both positions of `speakEmbeds`.
+
+**Decision.** Treat it as a wikilink. `wikiTargetClose` is a near-copy of
+`inlineContainerClose` with the escape branch removed and `]]` fixed as the
+delimiter; the embed and wikilink branches call it and nothing else changes.
+
+1. **No new reduction logic, and that was traced and then measured rather than
+   assumed.** With the target recognised as `folder/Note\`, `finalSegment` takes
+   its existing trailing-separator branch (clause 5) and returns `Note`, and the
+   emission loop's existing `k >= segEnd && k < pathEnd` skip drops the trailing
+   `\` itself. `isFileTarget` needed no change either; it already splits on `\`.
+
+2. **The scan is local to these two branches, deliberately.** For a markdown
+   image, link or highlight, `\]` failing to close the label is
+   CommonMark-correct, and their destination sits after the `]` and is already
+   dropped, so changing the shared helper would diverge from the renderer for no
+   privacy gain. Only a wikilink or embed target is a vault path, so only it
+   earns the exception. Keeping it local is also what keeps this independent of
+   the two branches NRL-63 rewrites. Five guard cases pin that the image, link,
+   highlight, non-trailing-escape and code-span shapes are byte-identical.
+
+3. **Composition with ADR 0021.** A target like `[[a/b%%SECRET%%\]]` was
+   previously unrecognised; now that it is, it routes through `emitWikiLabel` and
+   NRL-67's comment-span exclusion applies to it. Measured, not reasoned: it
+   speaks `b` - folder and hidden text both silent - where the base spoke `a/b`.
+
+**Evidence, all bare Node, base `a8f45db` and the fix bundled side by side.**
+Sentinel sweep over 15 trailing-backslash targets x 2 constructs x all 512
+content-key combinations = **15,360 cells: 13,312 leaking on base, 0 on the
+fix**. A wider direction sweep that inserts a backslash at **every** position of
+8 sentinel-bearing targets (242 targets x 2 constructs x 512 = **247,808
+cells**) found **0** cells where a sentinel is audible on the fix and silent on
+the base, and **7,168** where the fix silences one. That **0** is scoped to this
+corpus and must be read with the first cost below: none of those 242 targets
+contains a literal `]]`, which is the one shape that does newly speak. A sweep
+whose corpus includes it finds the 3,072 base-parity cells recorded there, so the
+two numbers are consistent rather than contradictory - but the 0 is not a
+universal claim and must not be quoted as one. `sourceIndex` checked
+numerically by UTF-16 code-unit index for length, monotonicity, bounds and
+character identity: **0 failures over 571,904 units**. Twelve assertions were red
+against the unfixed extractor and green after.
+
+**Costs, measured and accepted.**
+
+- **One family is not only-removes, and it lands on base parity rather than on a
+  new leak.** A target holding a literal `]]` after a backslash
+  (`[[a\]]FOLDERSENTINEL/Leaf]]`) now closes at that `]]`, so the tail becomes
+  prose instead of being swallowed into the target and reduced away. Measured:
+  **3,072 of 3,072 cells** where the fix newly speaks a sentinel are cells where
+  the **backslash-free** shape `[[a]]FOLDERSENTINEL/Leaf]]` **already** speaks it
+  on the base. The fix makes the backslash variant behave as the same text
+  without the backslash always has; it does not open a class of leak the base did
+  not have. A bare path in prose is outside R-M09, which is about link
+  destinations.
+
+- **A dangling backslash can be spoken as itself.** `[[a/b#Head\]]` says
+  `b Head\` and `[[a/b|x\]]` says `x\`, because the trailing-separator skip only
+  covers the path part and `cleanLine` has always emitted a backslash with
+  nothing to escape literally. Markup in the speech, not a destination, and no
+  new reduction rule was invented for it.
+
+- **A URL target with a trailing backslash now speaks its host.**
+  `[[https://user:pw@example.com/private/x\]]` said nothing on the base (it fell
+  to prose and `speakUrls` could drop it) and now says `example.com`. That is
+  clause 3 reaching a shape it could not reach before; the credentials and the
+  path stay silent.
+
+- **NOT VERIFIED IN OBSIDIAN, and the decision does not rest on the renderer.** A
+  targeted grep of the installed `obsidian.asar` did not yield the internal-link
+  tokenizer. The one suggestive hit, a non-greedy `/\[\[.+?\]\]|\[.+?\]/` with no
+  escape clause, is consistent with escape-insensitivity but is not conclusive.
+  The decision rests on silence-on-the-path - clause 1 of this ADR and
+  `srs.md`'s wikilink and embed bullets - not on renderer fidelity. If Obsidian
+  turns out to render `[[folder/Note\]]` as literal text, what changes is the
+  spec sentence, not the privacy outcome.
 
 ## Alternatives considered
 
