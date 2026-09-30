@@ -193,6 +193,86 @@ function makeHangingEngine(): { engine: SpeechEngine } {
 	return { engine };
 }
 
+/**
+ * An engine whose `prepare()` is held open by the test (NRL-48).
+ *
+ * This is the load phase, not the synthesis phase: `isPrepared()` reports
+ * false so a main.ts-shaped `beforeAttempt` hook awaits `prepare()`, and the
+ * test decides when (or whether) that load settles. `synthesize` is
+ * `makeEngine`'s successful body on purpose - if an abort during the load is
+ * ignored, this engine really speaks, and `calls` records it.
+ */
+function makeHangingPrepareEngine(opts: { label?: string } = {}): {
+	engine: SpeechEngine;
+	calls: number[];
+	prepareCalls: () => number;
+	resolveLoad: () => void;
+	failLoad: (err: Error) => void;
+} {
+	const calls: number[] = [];
+	let n = 0;
+	let prepareCalls = 0;
+	let settle: { resolve: () => void; reject: (err: Error) => void } | null = null;
+	const engine: SpeechEngine = {
+		id: "kokoro",
+		label: opts.label ?? "hanging-prepare",
+		capabilities: CAPS,
+		async isAvailable() {
+			return { available: true };
+		},
+		async listVoices() {
+			return [];
+		},
+		async selectVoice() {},
+		isPrepared() {
+			return false;
+		},
+		prepare() {
+			prepareCalls += 1;
+			return new Promise<void>((resolve, reject) => {
+				settle = { resolve, reject };
+			});
+		},
+		async synthesize(req: SynthRequest): Promise<SynthResult> {
+			const index = n++;
+			calls.push(index);
+			const duration = 1000;
+			return {
+				kind: "buffer",
+				audio: pcmToWav(new Int16Array(2400 * (duration / 1000)).buffer, 24000),
+				sampleRate: 24000,
+				durationMs: duration,
+				words: allocateWordTimings(req.chunk, duration, req.rate),
+			};
+		},
+		async dispose() {},
+	};
+	return {
+		engine,
+		calls,
+		prepareCalls: () => prepareCalls,
+		resolveLoad: () => settle?.resolve(),
+		failLoad: (err: Error) => settle?.reject(err),
+	};
+}
+
+/**
+ * Race a promise against a deadline so a pre-fix hang prints FAIL instead of
+ * hanging the whole suite. The timer is cleared either way, so a resolved race
+ * does not hold node open for `ms`.
+ */
+async function withTimeout<T, S>(p: Promise<T>, ms: number, sentinel: S): Promise<T | S> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<S>((resolve) => {
+		timer = setTimeout(() => resolve(sentinel), ms);
+	});
+	const result = await Promise.race([p, deadline]);
+	if (timer !== undefined) clearTimeout(timer);
+	return result;
+}
+
+const TIMED_OUT = "TIMED_OUT" as const;
+
 function candidate(engine: SpeechEngine, id: FallbackCandidate["id"], reason: string): FallbackCandidate {
 	return { engine, id, reason };
 }
@@ -350,6 +430,192 @@ console.log("beforeAttempt is awaited once per candidate actually tried, in orde
 		JSON.stringify(attempts) === JSON.stringify(["espeak", "speechd"]),
 		JSON.stringify(attempts),
 	);
+
+	player.stop();
+}
+
+// --- NRL-48: Stop during the load phase -------------------------------------
+//
+// Bare-Node evidence only. No Obsidian is reachable from this lane, so these
+// cases prove the abort is honoured inside playWithFallback; whether a real
+// "Loading Kokoro..." Notice behaves the same on a cold model load is the
+// Verify phase's job.
+
+console.log("T1 abort during beforeAttempt's prepare(): resolves null promptly, no onFallback, nothing speaks");
+{
+	const first = makeHangingPrepareEngine({ label: "first" });
+	const second = makeEngine({ label: "second" });
+	const candidates = [
+		candidate(first.engine, "kokoro", "r1"),
+		candidate(second.engine, "speechd", "r2"),
+	];
+	const player = new Player({ bufferAhead: 0 });
+	const fallbacks: unknown[] = [];
+	const scope = new AbortController();
+
+	const resultPromise = playWithFallback(
+		player,
+		candidates,
+		numbered(2),
+		1,
+		0,
+		{
+			// The same shape main.ts's hook has: load only when not prepared.
+			beforeAttempt: async (c) => {
+				if (c.engine.prepare && c.engine.isPrepared?.() === false) await c.engine.prepare();
+			},
+			onFallback: (from, to) => fallbacks.push({ from: from.id, to: to.id }),
+		},
+		-1,
+		scope.signal,
+	);
+
+	await tick();
+	check("prepare() is in flight", first.prepareCalls() === 1, `${first.prepareCalls()}`);
+	check("nothing has been synthesized yet", first.calls.length === 0, JSON.stringify(first.calls));
+
+	scope.abort();
+	const winner = await withTimeout(resultPromise, 250, TIMED_OUT);
+
+	check(
+		"resolved null promptly, without waiting for the load to finish",
+		winner === null,
+		winner === TIMED_OUT ? "never settled (still awaiting prepare)" : JSON.stringify(winner),
+	);
+	check("onFallback never called: a Stop is not a candidate failure", fallbacks.length === 0, JSON.stringify(fallbacks));
+	check("second candidate was never tried", second.calls.length === 0, JSON.stringify(second.calls));
+	check("player never reached playing", player.getState() !== "playing", player.getState());
+
+	// The abandoned load finishes anyway (ADR 0013: abandoned, not cancelled).
+	// It must not start speaking after the user's Stop.
+	first.resolveLoad();
+	await tick();
+	check(
+		"the abandoned load completing does not start speech",
+		first.calls.length === 0,
+		JSON.stringify(first.calls),
+	);
+	check("still no fallback after the abandoned load completed", fallbacks.length === 0, JSON.stringify(fallbacks));
+
+	player.stop();
+}
+
+console.log("T2 signal already aborted before the first iteration: resolves null and beforeAttempt is never called");
+{
+	const first = makeEngine({ label: "first" });
+	const second = makeEngine({ label: "second" });
+	const candidates = [
+		candidate(first.engine, "espeak", "r1"),
+		candidate(second.engine, "speechd", "r2"),
+	];
+	const player = new Player({ bufferAhead: 0 });
+	const attempts: string[] = [];
+	const scope = new AbortController();
+	scope.abort();
+
+	const winner = await withTimeout(
+		playWithFallback(
+			player,
+			candidates,
+			numbered(2),
+			1,
+			0,
+			{
+				beforeAttempt: async (c) => {
+					attempts.push(c.id);
+				},
+			},
+			-1,
+			scope.signal,
+		),
+		250,
+		TIMED_OUT,
+	);
+
+	check("resolved null", winner === null, JSON.stringify(winner));
+	check("beforeAttempt never called", attempts.length === 0, JSON.stringify(attempts));
+	check("no engine spoke", first.calls.length === 0 && second.calls.length === 0, JSON.stringify([first.calls, second.calls]));
+
+	player.stop();
+}
+
+console.log("T3 the abandoned prepare() rejecting after the abort: no fallback path, no unhandled rejection");
+{
+	const first = makeHangingPrepareEngine({ label: "first" });
+	const second = makeEngine({ label: "second" });
+	const candidates = [
+		candidate(first.engine, "kokoro", "r1"),
+		candidate(second.engine, "speechd", "r2"),
+	];
+	const player = new Player({ bufferAhead: 0 });
+	const fallbacks: unknown[] = [];
+	const scope = new AbortController();
+	const rejections: unknown[] = [];
+	const collect = (reason: unknown): void => {
+		rejections.push(reason);
+	};
+	process.on("unhandledRejection", collect);
+
+	const resultPromise = playWithFallback(
+		player,
+		candidates,
+		numbered(2),
+		1,
+		0,
+		{
+			beforeAttempt: async (c) => {
+				if (c.engine.prepare && c.engine.isPrepared?.() === false) await c.engine.prepare();
+			},
+			onFallback: (from, to) => fallbacks.push({ from: from.id, to: to.id }),
+		},
+		-1,
+		scope.signal,
+	);
+
+	await tick();
+	scope.abort();
+	const winner = await withTimeout(resultPromise, 250, TIMED_OUT);
+	check(
+		"resolved null on abort",
+		winner === null,
+		winner === TIMED_OUT ? "never settled (still awaiting prepare)" : JSON.stringify(winner),
+	);
+
+	// Now the abandoned load fails. Today this rejection is caught as a load
+	// failure and starts speaking candidate 2 after the user pressed Stop.
+	first.failLoad(new Error("cold load died after the stop"));
+	await tick();
+	await tick();
+
+	check("onFallback never called for the abandoned load's failure", fallbacks.length === 0, JSON.stringify(fallbacks));
+	check("second candidate stayed silent", second.calls.length === 0, JSON.stringify(second.calls));
+	check("no unhandled rejection escaped", rejections.length === 0, `${rejections.length}`);
+
+	process.off("unhandledRejection", collect);
+	player.stop();
+}
+
+console.log("T4 no signal argument: behaviour unchanged");
+{
+	const first = makeEngine({ failOn: 0, label: "first" });
+	const second = makeEngine({ label: "second" });
+	const candidates = [
+		candidate(first.engine, "espeak", "r1"),
+		candidate(second.engine, "speechd", "r2"),
+	];
+	const player = new Player({ bufferAhead: 0 });
+	const fallbacks: Array<{ from: string; to: string }> = [];
+
+	const winner = await withTimeout(
+		playWithFallback(player, candidates, numbered(3), 1, 0, {
+			onFallback: (from, to) => fallbacks.push({ from: from.id, to: to.id }),
+		}),
+		2000,
+		TIMED_OUT,
+	);
+
+	check("second candidate won with no signal passed", winner !== TIMED_OUT && winner?.id === "speechd", JSON.stringify(winner));
+	check("onFallback still fires once", fallbacks.length === 1, JSON.stringify(fallbacks));
 
 	player.stop();
 }
