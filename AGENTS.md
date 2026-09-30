@@ -34,6 +34,28 @@ bundle, the worker, or the esbuild config.
 That `npm test` line's count and its name list are asserted against `package.json`'s
 `pretest` by `tests/suiteRegistry.test.ts`, so a new suite is added by editing the script
 and the prose follows, rather than the two drifting apart on a clean merge (NRL-85).
+Do not add a second gate line of that shape anywhere in this file: that test fails by
+name when it finds zero anchors or more than one.
+
+`npm test` is `node run-tests.mjs` (NRL-80). It used to be a 24-deep `&&` chain, whose
+short-circuit meant the first failing suite hid every later one - measured, with a
+`process.exit(1)` appended to the built extract suite (1 of 24) and a `throw` appended to
+the built loadingNotice suite (23 of 24), the chain exited 1 after ONE suite with zero
+mentions of the late crash. The runner runs all 24 serially, streams each one's output
+verbatim behind a `>>> <name>` banner, and ends with a per-suite `ok` / `FAIL` / `CRASH`
+table, the aggregate check counts, and the failing suite names LAST. The same injection
+against the runner names both. Three things about it are load-bearing. **The suite list
+is not written in it** - `pretest` stays the one registry and `suitePathsFromPretest`
+derives the built paths from it, which is why adding a suite still means editing exactly
+one script. **Its main guard is `path.basename(process.argv[1]) === "run-tests.mjs"`, not
+the usual `import.meta.url` idiom**, which fires inside the esbuild bundle of the test
+that imports the runner and would re-enter the whole run from inside a suite. And
+**classification is by exit code only** - `tests/readSelection.test.ts` prints no
+`all ... passed` line at all, so a summary-line rule would invent a failure; a non-zero
+exit with no `FAIL` line of its own is a CRASH and the summary carries its last lines.
+`run-tests.d.mts` exists so `tsc` can type that import without a `tsconfig.json` change.
+One thing this does not catch, unchanged from the chain: a `test` script that never
+invokes the runner at all cannot be detected from inside a suite the runner is what runs.
 
 ```bash
 npm run deploy         # build + copy into ~/Documents/Notes/.obsidian/plugins/

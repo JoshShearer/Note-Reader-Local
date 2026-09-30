@@ -51,8 +51,12 @@ jobs:
 
       # Mobile safety, AGENTS.md rule 7: manifest.json declares
       # isDesktopOnly: false, so main.js must not require a node builtin. This
-      # sits before the test step because `npm test` is a long `&&` chain and an
-      # unrelated early suite failing would otherwise hide this result.
+      # sits before the test step as its own named step so the require() verdict
+      # is reported separately from the suites, and is reported even if the test
+      # step is red. NRL-80 replaced `npm test`'s `&&` chain with
+      # run-tests.mjs, which now runs every suite and names each failure, so
+      # this step no longer also stands in for that; keep it separate anyway,
+      # because it checks a build artifact rather than a test suite.
       #
       # A quoted heredoc into $RUNNER_TEMP rather than `node -e`: the script
       # contains single quotes and a regex with backslashes, and nesting those

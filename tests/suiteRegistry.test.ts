@@ -14,23 +14,37 @@
  * same file, so there is nothing for it to conflict on. Each was caught by a
  * human re-deriving the count by hand. This test derives it instead.
  *
- * Why `pretest` is the registry and not the `test` chain. `pretest` is the list
+ * Why `pretest` is the registry and not the `test` script. `pretest` is the list
  * of TypeScript entry points handed to build-tests.mjs, so it is the one place
- * a suite must be named to be built at all. `test` is a shell chain today, and
- * NRL-80 is about to rewrite it so the first failing suite stops hiding the
- * rest - very likely into a runner invocation that names no individual suite.
- * So `test` is checked AGAINST the registry rather than used as one, and that
- * check may assume only two things: that the script exists, and that any
- * `tests/.build/<name>.test.mjs` substring in it denotes a registered suite at
- * that textual position. It deliberately does NOT look for `&&`, for a `node `
- * prefix, for one command per suite, for quoting, or for line structure. If the
- * script names no suite path at all, the agreement check prints one counted
- * SKIP rather than a pass or a failure (the NRL_SKIP_REAL_SPEECHD precedent in
- * tests/engine.test.ts): NRL-80 landing must not turn this red for no defect,
- * and must not turn it into a silent `ok` either. Naming SOME but not all stays
- * a hard failure, because a partly-rewritten chain is the drift shape itself.
- * The registry half cannot go vacuous by the same route: a `pretest` naming
- * zero suites is its own named failure (check 1).
+ * a suite must be named to be built at all. `test` no longer names any suite:
+ * NRL-80 replaced its 24-deep `&&` chain, whose short-circuit let the first
+ * failing suite hide every later one, with `node run-tests.mjs`. The runner
+ * DERIVES its list from `pretest` rather than holding a second copy, because a
+ * second copy is exactly the drift this file exists to catch.
+ *
+ * So checks 5 and 6 no longer parse the `test` script for suite paths - it
+ * holds none, and looking for them would only ever reach the SKIP that used to
+ * stand here. They import the runner's own pure `suitePathsFromPretest` and
+ * assert what actually matters now: the runner derives the same suites as
+ * `pretest`, in the same order, with no duplicate, every derived path shaped
+ * `tests/.build/<name>.test.mjs`, and `scripts.test` invoking the runner at all.
+ * That last one is a NAMED FAILURE rather than a skip: if `test` stops calling
+ * run-tests.mjs, nothing else in the tree would notice.
+ *
+ * HOW A SKIPPED SUITE FAILS, the two doors, because one test cannot hold both.
+ * A suite dropped from the DERIVATION makes check 5 red and describeList names
+ * it. A suite dropped from the runner's EXECUTION LOOP with the derivation
+ * intact is invisible here, because this file runs INSIDE that loop - so the
+ * runner reconciles itself, recording one result per planned path and exiting
+ * non-zero with `runner planned M suites and produced N results; not run: ...`
+ * when they differ. That is the only place in the tree that can observe the
+ * whole run.
+ *
+ * HONEST LIMIT, unchanged from the chain and not widened by it: replacing
+ * `test` with a command that never invokes the runner at all (NRL-85 measured
+ * `"test": "true"`) still cannot be caught from inside a suite that `test` is
+ * what invokes. Check 5''' catches the specific shape of `test` still running
+ * something else; it cannot catch `test` running nothing.
  *
  * Why tests/nrl-15-inline-worker.test.ts is allowlisted rather than counted. It
  * is registered under the separate `test:inline-worker` script, needs a real
@@ -63,6 +77,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+// The runner's own derivation, not a copy of it. Importing the real function is
+// the whole point: a reimplementation here could agree with `pretest` while the
+// runner ran something else. run-tests.d.mts declares it; see that file for why
+// the sidecar exists rather than a tsconfig change.
+import { suitePathsFromPretest } from "../run-tests.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,11 +106,15 @@ function check(name: string, cond: boolean, detail = ""): void {
 	}
 }
 // A skip never touches `failures` and never prints `ok`, so a bypassed check
-// cannot be read as a passing one.
+// cannot be read as a passing one. Nothing in this file skips today - NRL-80
+// replaced the two calls that did with hard checks - but the helper and the
+// `skipped > 0` guard on the final line stay, so a future conditional check
+// cannot be added without the bare all-passed line being suppressed for it.
 function skip(name: string, reason: string): void {
 	skipped += 1;
 	console.log(`  SKIP ${name} (${reason})`);
 }
+void skip;
 
 // --- Parsers ---------------------------------------------------------------
 // Every parser takes a string and returns data. None of them touches the
@@ -256,32 +279,65 @@ const onDisk = fs
 	}
 }
 
-console.log("package.json test agrees with pretest");
+console.log("run-tests.mjs agrees with pretest");
 
-// --- 5 and 6. The `test` script against the registry -----------------------
-// NRL-80 rewrites this script one ticket from now. See the header for exactly
-// what may and may not be assumed about it.
+// --- 5 and 6. The runner's derivation against the registry -----------------
+// NRL-80 replaced the `&&` chain with `node run-tests.mjs`, so `test` names no
+// suite at all and there is nothing in it left to compare. What is compared is
+// the runner's own derivation, imported rather than reimplemented. See the
+// header for the two doors a skipped suite can come in by, and for the one
+// shape this cannot catch.
 {
-	const chain = parseTestChain(testScript);
-	if (chain.length === 0) {
-		skip(
-			"test script names the same suites as pretest, in the same order",
-			"test names no tests/.build/*.test.mjs paths; it likely delegates to a runner - NRL-80",
-		);
-		skip("test script names no suite twice", "same reason");
-	} else {
+	const derived = suitePathsFromPretest(pretestScript);
+	const derivedNames = derived.map((p) =>
+		path.basename(p).replace(/\.test\.mjs$/, ""),
+	);
+
+	// 5'. Same count, same set, same textual order.
+	check(
+		`run-tests.mjs derives the same suites as pretest, in the same order (${derived.length} entries)`,
+		listsEqual(registry, derivedNames),
+		describeList(registry, derivedNames),
+	);
+
+	// 6'. No suite run twice. A duplicate would double-count its checks in the
+	// runner's aggregate and make the skip arithmetic stop closing.
+	{
+		const dupes = duplicates(derivedNames);
 		check(
-			`test script names the same suites as pretest, in the same order (${chain.length} entries)`,
-			listsEqual(registry, chain),
-			describeList(registry, chain),
-		);
-		const dupes = duplicates(chain);
-		check(
-			"test script names no suite twice",
+			"run-tests.mjs derives no suite twice",
 			dupes.length === 0,
 			`duplicated: ${dupes.join(", ")}`,
 		);
 	}
+
+	// 5''. Every derived path is literally a built bundle under tests/.build.
+	// Driven through parseTestChain as well as a per-path shape test, so the
+	// names round-trip: a derivation that emitted the right shape with the wrong
+	// name would pass the shape half alone.
+	{
+		const badShape = derived.filter(
+			(p, i) => p !== `tests/.build/${derivedNames[i] ?? ""}.test.mjs`,
+		);
+		const roundTrip = parseTestChain(derived.join(" "));
+		check(
+			"every run-tests.mjs path is tests/.build/<name>.test.mjs and round-trips to its name",
+			badShape.length === 0 && listsEqual(registry, roundTrip),
+			`bad shape [${badShape.join(", ")}]; round-trip ${describeList(registry, roundTrip)}`,
+		);
+	}
+
+	// 5'''. `test` actually invokes the runner. A NAMED FAILURE and not a skip:
+	// if this stops holding, nothing else in the tree notices, and every check
+	// above becomes a statement about a file nobody runs. It cannot catch `test`
+	// running NOTHING - see the header's honest limit.
+	check(
+		"package.json scripts.test invokes run-tests.mjs",
+		/\brun-tests\.mjs\b/.test(testScript),
+		`scripts.test is ${
+			pkg.scripts?.test === undefined ? "absent" : JSON.stringify(testScript)
+		}`,
+	);
 }
 
 console.log("AGENTS.md gate line");
@@ -469,10 +525,68 @@ console.log("anti-vacuity mutation guards");
 			`${JSON.stringify(parseTestChain(dropped))}, ${JSON.stringify(parseTestChain(reordered))}`,
 		);
 		check(
-			"guard: a test chain naming no suite paths parses to 0, reaching the SKIP",
+			"guard: a script naming no suite paths parses to 0, so check 5'' cannot pass vacuously",
 			parseTestChain("node --test tests/.build/").length === 0,
 			JSON.stringify(parseTestChain("node --test tests/.build/")),
 		);
+	}
+
+	// G7. The runner's REAL suitePathsFromPretest, over synthetic pretest
+	// strings. These are what stop check 5' passing because the derivation
+	// always returns the same thing the registry parser returns - both are
+	// driven here from inputs neither of them can have agreed on in advance.
+	{
+		const pre =
+			"node build-tests.mjs tests/alpha.test.ts tests/beta.test.ts tests/gamma.test.ts tests/delta.test.ts";
+		const expected = fakeRegistry.map((n) => `tests/.build/${n}.test.mjs`);
+
+		// G7a. Positive control. Without it G7b and G7c could both pass because
+		// the derivation returns nothing for every input.
+		{
+			const got = suitePathsFromPretest(pre);
+			check(
+				"guard: the runner derives the right built paths from a correct pretest",
+				listsEqual(expected, got),
+				describeList(expected, got),
+			);
+		}
+
+		// G7b. A suite dropped from pretest is a different derivation - door one
+		// of the two in the header.
+		{
+			const got = suitePathsFromPretest(pre.replace(" tests/gamma.test.ts", ""));
+			check(
+				"guard: the runner dropping a suite from its derivation is detected",
+				!listsEqual(expected, got) && got.length === fakeRegistry.length - 1,
+				JSON.stringify(got),
+			);
+		}
+
+		// G7c. Same set, wrong order. Proves check 5' is ordered, so a later
+		// switch to a set comparison cannot pass this file.
+		{
+			const got = suitePathsFromPretest(
+				"node build-tests.mjs tests/alpha.test.ts tests/gamma.test.ts tests/beta.test.ts tests/delta.test.ts",
+			);
+			check(
+				"guard: the runner reordering its derivation is detected",
+				!listsEqual(expected, got) &&
+					got.length === expected.length &&
+					expected.every((p) => got.includes(p)),
+				JSON.stringify(got),
+			);
+		}
+
+		// G7d. An empty pretest derives nothing. This is what makes check 5'
+		// non-vacuous from the other side: if both parsers returned [] for the
+		// real script, 5' would compare [] with [] and pass.
+		{
+			check(
+				"guard: an empty pretest derives 0 suites, so check 5' cannot pass over two empty lists",
+				suitePathsFromPretest("").length === 0 && parsePretest("").length === 0,
+				`${suitePathsFromPretest("").length} derived, ${parsePretest("").length} registered`,
+			);
+		}
 	}
 }
 
