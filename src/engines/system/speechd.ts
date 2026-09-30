@@ -42,22 +42,33 @@ const CAPABILITIES: EngineCapabilities = {
 	// This field is per-voice ("can say whether a GIVEN VOICE needs the
 	// network", types.ts's own doc comment), not "is the daemon local
 	// software" - that second claim is true but a different, coarser one.
-	// Verified live on this machine: `spd-say -L`'s columns are NAME/
-	// LANGUAGE/VARIANT only, no module column, and `spd-say -O` lists
-	// modules (here: espeak-ng, openjtalk) with no link back to individual
-	// NAME rows. So no speechd voice's network need is ever knowable from
-	// this engine, and per the field's own definition that means false, not
-	// true. (`spd-say -o <module> -L` does scope the list per module, which
-	// could in principle attribute NAME rows to a known-local module - but
-	// that is undocumented behaviour verified on exactly one build, too
-	// risky to hang a MUST-relevant claim on; see VoiceInfo population
-	// below.)
+	// `spd-say -L`'s columns are NAME/LANGUAGE/VARIANT only, with no module
+	// column, so nothing in the listing itself attributes a voice to the
+	// output module serving it.
+	//
+	// It stays false even though listVoices() can now attribute some voices
+	// (NRL-55, docs/adr/0015): this is a compile-time constant, read before
+	// any probe has run, so flipping it would promise per-voice
+	// determinability on builds where the runtime self-check fails and every
+	// voice correctly stays "unknown". Attribution is reported per voice, on
+	// VoiceInfo.local, not through this flag.
 	offlineStatus: false,
 	// spd-say plays to the sound card and tells us nothing.
 	ownsPlayback: true,
 };
 
 const ID_PREFIX = "speechd:";
+
+/**
+ * Output modules that are pure local synthesisers, so a voice served only by
+ * one of them genuinely needs no network.
+ *
+ * Closed on purpose: these two are the only modules installed on this machine
+ * and therefore the only ones anyone here could check. Adding a name means
+ * establishing that the module never calls out, not guessing from its name -
+ * srs.md:663 forbids claiming a voice is offline when we cannot tell.
+ */
+const LOCAL_MODULES = new Set(["espeak-ng", "openjtalk"]);
 
 /** ~180 wpm, used only to pace the sentence queue. */
 const CHARS_PER_SECOND = 14;
@@ -71,10 +82,38 @@ const CHARS_PER_SECOND = 14;
  */
 const CANCEL_TIMEOUT_MS = 500;
 
+/**
+ * Cap on the whole module-attribution probe (NRL-55).
+ *
+ * `spd-say -o espeak-ng -L` measured 0.387 s on this machine at spd-say
+ * 0.12.0-rc2, and the probe is one such listing per module, so this is roughly
+ * an order of magnitude of headroom. It exists so a wedged daemon degrades to
+ * "every voice reports unknown" rather than to "the settings tab never opens".
+ */
+const PROBE_TIMEOUT_MS = 5000;
+
 interface SpdVoiceRow {
 	name: string;
 	lang: string;
 	variant: string;
+}
+
+/**
+ * The module names listed under `spd-say -O`'s "OUTPUT MODULES" header, which
+ * prints bare names one per line with no columns.
+ *
+ * One parser, deliberately: isAvailable()'s zero-module guard and the
+ * attribution probe's module list must not be able to disagree about what
+ * counts as a module.
+ */
+function parseOutputModules(output: string): string[] {
+	const lines = output.split("\n");
+	const headerAt = lines.findIndex((l) => /OUTPUT MODULES/i.test(l));
+	if (headerAt === -1) return [];
+	return lines
+		.slice(headerAt + 1)
+		.map((l) => l.trim())
+		.filter((l) => l.length > 0);
 }
 
 /**
@@ -83,10 +122,17 @@ interface SpdVoiceRow {
  * whether any module actually follows it.
  */
 function countOutputModules(output: string): number {
-	const lines = output.split("\n");
-	const headerAt = lines.findIndex((l) => /OUTPUT MODULES/i.test(l));
-	if (headerAt === -1) return 0;
-	return lines.slice(headerAt + 1).filter((l) => l.trim().length > 0).length;
+	return parseOutputModules(output).length;
+}
+
+/** Identity of a `-L` row, for comparing one module's listing against another's. */
+function rowKey(row: SpdVoiceRow): string {
+	return `${row.name}\t${row.lang}\t${row.variant}`;
+}
+
+/** Order-independent identity of a whole listing. */
+function canonicalKey(rows: SpdVoiceRow[]): string {
+	return rows.map(rowKey).sort().join("\n");
 }
 
 /** Parse `spd-say -L`, whose columns are NAME, LANGUAGE, VARIANT. */
@@ -117,6 +163,14 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 	 */
 	private knownNames: Set<string> | null = null;
 	/**
+	 * Voice NAMEs the module-attribution probe could confirm are served only by
+	 * known-local modules, or null when it could not determine anything.
+	 *
+	 * The Promise is memoised rather than the value, so the settings tab and a
+	 * concurrent setVoice() share one probe instead of racing two full listings.
+	 */
+	private attribution: Promise<Map<string, true> | null> | null = null;
+	/**
 	 * Utterances handed to the daemon and not yet finished. Read only by
 	 * dispose(); the abort path never consults it, because a listener scoped to
 	 * one call is self-evidently in flight and cannot go stale.
@@ -125,7 +179,14 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 	/** A `-S` that has been issued but may not have reached the daemon yet. */
 	private cancelInFlight: Promise<void> | null = null;
 
-	constructor(private readonly runner: ProcessRunner) {}
+	constructor(
+		private readonly runner: ProcessRunner,
+		/**
+		 * Overridden only by tests, which cannot sit out PROBE_TIMEOUT_MS to
+		 * exercise the deadline. Production always takes the default.
+		 */
+		private readonly probeTimeoutMs: number = PROBE_TIMEOUT_MS,
+	) {}
 
 	async isAvailable(): Promise<EngineAvailability> {
 		if (!(await this.runner.which("spd-say"))) {
@@ -170,12 +231,139 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 		}
 	}
 
+	/**
+	 * Which voice NAMEs are served only by known-local output modules.
+	 *
+	 * Cached for the life of the engine, failures included. Caching a failure is
+	 * deliberate: it degrades to "unknown" rather than to a wrong claim, and the
+	 * alternative is re-paying a full voice listing per module on every
+	 * settings-tab render.
+	 *
+	 * Called from listVoices() only. isAvailable() must not reach it: that path
+	 * runs at startup and its fake runners throw on any unexpected call.
+	 */
+	private attributionMap(): Promise<Map<string, true> | null> {
+		if (!this.attribution) this.attribution = this.probeAttribution();
+		return this.attribution;
+	}
+
+	/**
+	 * Attribute voices to output modules via `spd-say -o <module> -L`.
+	 *
+	 * `-o` scoping `-L` is undocumented (`spd-say --help` describes `-o` and
+	 * `-O` but never their interaction), so it is not trusted, it is proved at
+	 * runtime: the listings for two different modules must actually differ. On a
+	 * build that ignores `-o` they do not, and then nothing is attributed. This
+	 * matters concretely - measured at spd-say 0.12.0-rc2, `spd-say -o
+	 * no-such-module -L` exits 0 and returns the full default 13363-line
+	 * listing, so an allowlist that took `-o` on faith would have called 13,362
+	 * espeak-ng voices local on any build where the flag means nothing.
+	 *
+	 * Every failure returns null, which listVoices() reads as "unknown". It can
+	 * never produce `local: false`. See docs/adr/0015 for the residual risk the
+	 * differential does not cover.
+	 */
+	private async probeAttribution(): Promise<Map<string, true> | null> {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), this.probeTimeoutMs);
+		try {
+			const modulesRun = await this.runner.run("spd-say", ["-O"], undefined, controller.signal);
+			// The exit code cannot report the deadline. Aborting SIGKILLs the child,
+			// a SIGKILLed child closes with a null code, and run() resolves
+			// `code ?? 0` (spawn.ts), so a run cut short arrives looking like a
+			// success that simply printed less. Checking the abort flag is the only
+			// way to tell the two apart, and it has to happen after every run: a
+			// signal that aborted before spawn never fires the kill listener either,
+			// so the runs after the deadline are not even interrupted.
+			//
+			// The abort flag alone is not enough, because it only ever sees a kill
+			// *we* issued. An external SIGTERM - an OOM killer, a session teardown,
+			// a user's pkill - truncates the listing with the flag still false
+			// (measured: code 0, aborted false, stdout cut short mid-listing). A
+			// truncated `-O` is not merely less information: dropping a
+			// non-allowlisted module means it is never listed, never queried, and
+			// the ambiguity that was keeping a shared NAME "unknown" disappears with
+			// it, while two modules can still remain so the arity guard does not
+			// fire. `RunResult.signal` is read here and in the per-module loop only:
+			// the synthesize and `-S` paths below kill their own child on purpose and
+			// must go on reading that as a success (NRL-41).
+			if (controller.signal.aborted || modulesRun.signal !== null || modulesRun.code !== 0) {
+				return null;
+			}
+			const modules = parseOutputModules(modulesRun.stdout.toString());
+			// A differential needs two listings to compare, so a single-module
+			// desktop can never attribute anything.
+			if (modules.length < 2) return null;
+
+			const perModule = new Map<string, SpdVoiceRow[]>();
+			for (const module of modules) {
+				const { code, stdout, signal } = await this.runner.run(
+					"spd-say",
+					["-o", module, "-L"],
+					undefined,
+					controller.signal,
+				);
+				// See the note on the `-O` run: a truncated listing is worse here than
+				// a missing one, because losing a row from a non-allowlisted module's
+				// listing removes the ambiguity that was keeping a shared name
+				// "unknown", and it makes two identical listings differ, which is the
+				// one thing the differential gate reads as proof that `-o` works. Our
+				// own deadline shows up as `aborted`; any other kill shows up only as
+				// a terminating signal, with `code` laundered to 0.
+				if (controller.signal.aborted || signal !== null || code !== 0) return null;
+				const rows = parseVoiceList(stdout.toString());
+				// An unparseable listing would otherwise give this module an empty
+				// canonical key, which trivially differs from a real one and would
+				// falsely prove that scoping works.
+				if (rows.length === 0) return null;
+				perModule.set(module, rows);
+			}
+
+			// Not a count comparison: two modules can coincidentally serve the
+			// same number of voices. Not "all listings pairwise distinct" either,
+			// because with three modules two of them may genuinely serve the same
+			// voice set while a third differs, and that third still proves scoping
+			// is real. So the rule is only "not all identical".
+			if (new Set([...perModule.values()].map(canonicalKey)).size < 2) return null;
+
+			const servedBy = new Map<string, Set<string>>();
+			for (const [module, rows] of perModule) {
+				for (const row of rows) {
+					let mods = servedBy.get(row.name);
+					if (!mods) {
+						mods = new Set();
+						servedBy.set(row.name, mods);
+					}
+					mods.add(module);
+				}
+			}
+
+			const attributed = new Map<string, true>();
+			for (const [name, mods] of servedBy) {
+				// A name served by both an allowlisted and a non-allowlisted module
+				// is ambiguous: we cannot tell which one would speak it.
+				if (mods.size > 0 && [...mods].every((m) => LOCAL_MODULES.has(m))) {
+					attributed.set(name, true);
+				}
+			}
+			return attributed;
+		} catch {
+			// A runner that rejects rather than resolving, e.g. spd-say missing
+			// between isAvailable() and here. The deadline is handled by the
+			// signal checks above, not here: it does not surface as a rejection.
+			return null;
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
 	async listVoices(): Promise<VoiceInfo[]> {
 		try {
 			const { code, stdout } = await this.runner.run("spd-say", ["-L"]);
 			if (code !== 0) return [];
 			const rows = parseVoiceList(stdout.toString());
 			this.knownNames = new Set(rows.map((row) => row.name));
+			const attributed = await this.attributionMap();
 			// NAME already includes the variant ("Afrikaans+Adam"), and it is
 			// exactly what `-y` accepts, so it is the whole id. Appending the
 			// variant again produced ids spd-say could not select.
@@ -186,11 +374,14 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 				gender: "neutral" as const,
 				engineId: "speechd" as const,
 				isVariant: row.variant !== "none",
-				// `spd-say -L` has no module column (see CAPABILITIES.offlineStatus
-				// above), so no NAME row can be attributed to a module and no
-				// per-voice network need is knowable. Honest answer is unknown.
-				local: "unknown" as const,
-				requiresNetwork: "unknown" as const,
+				// `-L` still has no module column, so the attribution comes from
+				// the differential `-o` probe above rather than from this listing.
+				// A probe that could not prove `-o` scoping, or a name it could not
+				// pin to known-local modules alone, means unknown. This never
+				// yields `local: false`: not knowing is not evidence of a network
+				// voice, and srs.md:663 only forbids the unfounded offline claim.
+				local: attributed?.has(row.name) ? true : ("unknown" as const),
+				requiresNetwork: attributed?.has(row.name) ? false : ("unknown" as const),
 			}));
 		} catch {
 			return [];

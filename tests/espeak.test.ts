@@ -72,7 +72,7 @@ console.log("espeak: isAvailable() distinguishes its failure modes (NRL-25)");
 			return "/usr/bin/espeak-ng";
 		},
 		async run(_cmd, args): Promise<RunResult> {
-			if (args[0] === "--version") return { code: 1, stderr: "", stdout: Buffer.from("") };
+			if (args[0] === "--version") return { code: 1, signal: null, stderr: "", stdout: Buffer.from("") };
 			throw new Error(`unexpected call: ${args.join(" ")}`);
 		},
 	});
@@ -95,7 +95,7 @@ console.log("espeak: isAvailable() distinguishes its failure modes (NRL-25)");
 		},
 		async run(_cmd, args): Promise<RunResult> {
 			if (args[0] === "--version") {
-				return { code: 0, stderr: "", stdout: Buffer.from("eSpeak NG text-to-speech: 1.51\n") };
+				return { code: 0, signal: null, stderr: "", stdout: Buffer.from("eSpeak NG text-to-speech: 1.51\n") };
 			}
 			throw new Error(`unexpected call: ${args.join(" ")}`);
 		},
@@ -132,7 +132,7 @@ console.log("espeak: a synthesis failure never dumps raw stderr (NRL-25 #6)");
 			return "/usr/bin/espeak-ng";
 		},
 		async run(): Promise<RunResult> {
-			return { code: 1, stderr: diagnostic, stdout: Buffer.from("") };
+			return { code: 1, signal: null, stderr: diagnostic, stdout: Buffer.from("") };
 		},
 	});
 	const engine = new EspeakEngine(r);
@@ -167,7 +167,7 @@ console.log("NRL-26: every voice reports local: true, requiresNetwork: false");
 			return "/usr/bin/espeak-ng";
 		},
 		async run(_cmd, args): Promise<RunResult> {
-			if (args[0] === "--voices") return { code: 0, stderr: "", stdout: Buffer.from(listing) };
+			if (args[0] === "--voices") return { code: 0, signal: null, stderr: "", stdout: Buffer.from(listing) };
 			throw new Error(`unexpected call: ${args.join(" ")}`);
 		},
 	});
@@ -183,7 +183,7 @@ console.log("NRL-26: every voice reports local: true, requiresNetwork: false");
 			return "/usr/bin/espeak-ng";
 		},
 		async run(_cmd, args): Promise<RunResult> {
-			if (args[0] === "--voices") return { code: 1, stderr: "", stdout: Buffer.from("") };
+			if (args[0] === "--voices") return { code: 1, signal: null, stderr: "", stdout: Buffer.from("") };
 			throw new Error(`unexpected call: ${args.join(" ")}`);
 		},
 	});

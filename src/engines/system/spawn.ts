@@ -15,6 +15,24 @@ export interface RunResult {
 	stdout: Buffer;
 	stderr: string;
 	code: number;
+	/**
+	 * The signal that terminated the child, or null if it exited on its own.
+	 *
+	 * `code` deliberately cannot carry this. A terminated child closes with a
+	 * null exit code and `run()` resolves `code ?? 0`, which is load-bearing:
+	 * speechd.ts's Stop SIGKILLs its own spd-say and must keep reading that as a
+	 * success (NRL-41). The cost is that any other kill - a deadline, an OOM
+	 * killer, a stray `pkill` - also arrives looking like a clean exit that
+	 * simply printed less, and a silently truncated stdout is worse than a
+	 * missing one for anything that reasons about what was *absent* from the
+	 * output. This field is the only way to tell the two apart, so a caller that
+	 * cannot tolerate truncation checks it.
+	 *
+	 * Required rather than optional on purpose: a forgotten optional field reads
+	 * as "not signal-terminated", which is the unsafe default, so the compiler
+	 * is made to point at every construction site instead.
+	 */
+	signal: NodeJS.Signals | null;
 }
 
 export interface ProcessRunner {
@@ -51,9 +69,17 @@ class NodeProcessRunner implements ProcessRunner {
 				signal?.removeEventListener("abort", onAbort);
 				reject(err);
 			});
-			child.on("close", (code) => {
+			// `close` passes (code, killedBy): exactly one of the two is non-null.
+			// `code ?? 0` stays as it is - see RunResult.signal for why - so the
+			// second argument is reported alongside it rather than folded into it.
+			child.on("close", (code, killedBy) => {
 				signal?.removeEventListener("abort", onAbort);
-				resolve({ stdout: Buffer.concat(stdout), stderr: stderr.join(""), code: code ?? 0 });
+				resolve({
+					stdout: Buffer.concat(stdout),
+					stderr: stderr.join(""),
+					code: code ?? 0,
+					signal: killedBy,
+				});
 			});
 
 			// Always close stdin. A reader like `spd-say -e` waits for EOF before
