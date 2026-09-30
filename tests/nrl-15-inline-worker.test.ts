@@ -80,18 +80,27 @@ console.log("Worker inlining verification");
 }
 
 {
-	// Verify ORT files are still present (not replaced by worker inlining)
-	const ortFiles = await readdir("ort");
-	check("ort directory exists", ortFiles.length > 0);
+	// The runtime is inside main.js, not beside it, and there is deliberately
+	// no ort/ directory. This used to be the opposite check - "ort exists, and
+	// still holds the wasm and mjs" - which passed only because the build
+	// wrote a copy nobody read. A directory install has never had those files,
+	// so asserting their presence described a world where the plugin worked and
+	// every real install did not. `existsSync` rather than readdir: a missing
+	// directory should read as absent, not throw before the check runs.
 	check(
-		"ort contains wasm files",
-		ortFiles.some((f) => f.endsWith(".wasm")),
-		`found: ${ortFiles.join(", ")}`,
+		"no ort/ directory beside the bundle",
+		!existsSync("ort"),
+		"an ort/ directory in the build output is dead weight a reader will assume is load-bearing",
+	);
+
+	const mainJs = await readFile("main.js", "utf8");
+	check(
+		"main.js carries the packed ORT assets",
+		mainJs.includes('"ort-wasm-simd-threaded.jsep.wasm":{gzip:"'),
 	);
 	check(
-		"ort contains mjs files",
-		ortFiles.some((f) => f.endsWith(".mjs")),
-		`found: ${ortFiles.join(", ")}`,
+		"main.js carries no ORT download URL",
+		!mainJs.includes("releases/download"),
 	);
 }
 

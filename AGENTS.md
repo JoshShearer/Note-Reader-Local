@@ -38,8 +38,50 @@ and the prose follows, rather than the two drifting apart on a clean merge (NRL-
 ```bash
 npm run deploy         # build + copy into ~/Documents/Notes/.obsidian/plugins/
 npm run test:obsidian  # CDP smoke test; needs Obsidian on --remote-debugging-port=9222
-npm run test:inline-worker # 1 suite (nrl-15-inline-worker.test.ts): verifies main.js/ort/ after a production build; run separately, not part of npm test's bare-Node chain
+npm run test:inline-worker # 1 suite (nrl-15-inline-worker.test.ts): verifies the shipped main.js (no ort/ directory) after a production build; run separately, not part of npm test's bare-Node chain
 ```
+
+### Driving a real Obsidian over CDP: four traps, all of which cost time
+
+A clean-install harness for this plugin is worked out and lives in
+`/tmp/opencode/nrl96-*.mjs`. Four things about it are not obvious, and each one
+first presented as a plugin defect:
+
+- **A brand-new vault shows a vault-trust prompt, and community plugins do not
+  load until it is answered.** Obsidian blocks all community plugins and
+  `app.plugins.enablePluginAndSave(id)` becomes a **silent no-op** - it resolves,
+  throws nothing, and `app.plugins.enabledPlugins` stays `{}`. The prompt is a
+  `.modal-container` reading *"Do you trust the author of this vault?"*. Click
+  **"Trust author and enable plugins"**. This is what made the plugin look like
+  it "never loads" across several earlier tickets: the manifest was found,
+  `loadPlugin()` returned `{loaded:false, errs:[]}`, and no console error ever
+  appeared, because nothing had actually been enabled. A synthetic test vault
+  you created yourself is safe to trust.
+- **`community-plugins.json` is read at startup only.** Writing it while
+  Obsidian is running has no effect on that process. Enable the plugin, or stop
+  and restart, before concluding anything.
+- **A stale process can hold port 9222 after a kill**, and then every probe
+  describes a dead window. Check the owner: `ss -ltnp | grep 9222` and compare
+  the pid's start time against your launch. Clear the profile's
+  `SingletonLock`/`SingletonCookie`/`SingletonSocket` between runs, and check
+  there is no leftover `about:blank` Settings target.
+- **`connect` must pick the right page target.** Obsidian opens extra page
+  targets, including a Settings window at `about:blank` that can be *first* in
+  `/json/list`. Connecting to it gives `app is not defined` and looks like a
+  crash. Prefer `url.includes('index.html')` for plugin work, and target the
+  `about:blank` page explicitly to click settings UI. Obsidian's classes
+  (`MarkdownView` and friends) are not globals in the main world; use
+  `app.workspace.activeLeaf.view.editor.cm` for CodeMirror and
+  `getActiveFile()` for the file.
+
+Two more measurement notes worth not re-learning. The player creates its audio
+with `new Audio()` and **never attaches it to the document**, so
+`document.querySelector('audio')` finds nothing; read
+`plugin.player.audio` instead and watch `currentTime`, `duration` and
+`readyState`. And `read-note` is asynchronous and slow to first audio on CPU
+(about 17 s here, mostly model load), so poll for `playing` rather than
+assuming a fixed delay, and reset with `stop-reading` first - a finished read
+leaves the player terminal and a naive check reads that as instant success.
 
 `tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running
 speech-dispatcher daemon (here with the `speech-dispatcher-espeak-ng` output module). It
@@ -124,6 +166,62 @@ Each of these is a promise the product makes. Breaking one is a BLOCK, not a con
 The working tree passes its gates. The audit against `srs.md` that opened this repo found
 2 of 16 MUST requirements fully met. That count has not been re-run since, and several
 tickets have closed gaps against it, so treat it as a floor rather than as current state.
+
+**NRL-96 bundled the ONNX runtime and, for the first time in this repo, exercised the
+plugin in a real Obsidian.** The runtime is packed into `main.js` by
+`esbuild.config.mjs` (`docs/adr/0026`, superseding ADR 0024's distribution decision),
+because Obsidian's community-plugin policy prohibits installing or updating dependencies
+at runtime and a release-URL runtime is that however carefully it is verified. Install is
+three files: `main.js`, `manifest.json`, `styles.css`, and `npm run build` no longer emits
+`ort/`. Measured: 32,794,766 plain ORT bytes, 10,579,272 gzipped into a 13,649,236-byte
+`main.js`. `tests/release.test.ts` (30 checks) unpacks all four assets from the shipped
+bundle and compares them by SHA-256 against `node_modules/onnxruntime-web/dist`, so the
+pack is verified against the publisher's bytes rather than against itself; mutations that
+add a weight, drop a digest, reintroduce a download URL, or drop a file from the build's
+own list each turn it red.
+
+**What that bought, in a real Obsidian 1.13.7 on Linux** (synthetic vault, three files
+deployed and nothing else): the plugin loads and registers all ten commands; the settings
+tab renders the new row as **"ONNX Runtime / Status: Bundled with the plugin. Nothing to
+download"**; clicking the real `Download` button fetched 148 MB of Kokoro weights plus a
+voice, still user-initiated as `AGENTS.md` non-negotiable 6 requires; a read completed
+`idle` -> `finished` over both chunks in 25.2 s on the CPU/WASM backend, which is the
+backend that reads the pack; **zero non-local network requests** were captured on the CDP
+`Network` domain across a whole read; the audio element played in real time
+(`currentTime` 0.12 -> 1.24 against a 3.95 s duration, `readyState` 4); the word mark
+advanced `This` -> `is` -> `a` -> `synthetic` inside a held sentence mark and both cleared
+on Stop; and `resume from stored position @ 22` appears in the trace. Rule 9 was re-checked
+on the real UI: `setRate(1.5)` gives an element `playbackRate` of exactly 1.5 and 1.37x
+observed advance, not 2.25x. **The headline `2 of 16` count does not move** - R-M01 was
+already counted, and its *release path* is still unexercised (no tag has ever been pushed).
+
+**Three claims remain open and are the honest limit of the ticket.** Nothing was observed
+on **Android**: whether a 13.6 MB `main.js` parses acceptably in that WebView, and whether
+`DecompressionStream` exists there and inflates 21 MB in tolerable time, are both unmeasured
+(desktop Chromium has both). The **JSEP/WebGPU pair was never loaded** by a running
+Obsidian: this machine reported `GPU available (nvidia ampere, no shader-f16)` and the
+plugin fell back to the CPU, so `ort-wasm-simd-threaded.jsep.*` is packed and
+byte-verified but not yet executed by the host. And **no engine other than Kokoro was
+heard** - inside the flatpak sandbox `espeak-ng`, `spd-say` and system voices are all
+absent, so all three reported unavailable, which is correct behaviour on a machine with no
+speech tooling rather than a gap in the plugin.
+
+**The first of those three has since closed, on a second, independent device.** A Pixel 9
+Pro XL (Android 17, WebView `app.vanium.webview`, Chromium 154) loaded the identical
+13,649,236-byte `main.js`, all 9 commands registered, and the runtime unpacked with
+matching digests (SIMD 354.2 ms, JSEP 524.9 ms). A real Kokoro read produced real-time
+audio, stop/restart survived an actual `adb shell am force-stop` process kill and resumed
+mid-chunk, `setRate(1.5)` gave exactly 1.5 with no doubling, and the whole session captured
+zero non-local network requests. The **JSEP/WebGPU claim is still open**: this device also
+has no GPU-loadable weights downloaded, so the packed JSEP build remains verified-but-
+unexecuted on both platforms tested so far. Two new, real findings came out of that same
+session, filed rather than folded in here: a Kokoro ONNX crash that leaves the session
+poisoned until Obsidian reloads, trigger unidentified (NRL-101), and the 4-thread WASM load
+failing reproducibly on a desktop Flatpak install, falling back to ~2.7x-real-time
+single-threaded synthesis rather than the README's assumed near-1x (NRL-102). Full
+measurement detail for both the Android acceptance and the two findings is in NRL-96's
+comment thread, not duplicated here.
+
 Two confirmed moves: R-M01 (standard Obsidian Community Plugin) is met as of NRL-16, with
 all release infrastructure in place (README.md, LICENSE, versions.json, SLSA Level 3 workflow,
 and ORT runtime checksum validation) - but read the R-M01 evidence correction below before
@@ -370,6 +468,18 @@ heard whether sixty six-character utterances sound like speech or like a stutter
 headline count stays at 2 of 16. Move it when someone has read a CJK note aloud in a real
 Obsidian and confirmed the segmenter is there.
 
+**The `Intl.Segmenter`-presence half of this has since closed**, on the Pixel 9 Pro XL from
+NRL-96's second-device pass. `typeof Intl.Segmenter` reported `"function"` over CDP, and a
+live Chinese paragraph's chunk boundaries - measured at [19, 32, 23, 18] characters for the
+first four sentences of a six-sentence source - matched
+`new Intl.Segmenter("zh", {granularity:"sentence"}).segment()`'s own output on that same host
+exactly, rather than collapsing to one chunk. So the central behaviour this requirement
+worries about does happen on the target runtime, on this device. The audible half stands
+exactly as written above: nothing was listened to for tone or naturalness this pass either,
+only structural facts (chunk count, word-event count, real-time `currentTime` advance) were
+measured, so whether a run of many short Chinese utterances sounds like speech or a stutter
+is still unheard.
+
 One thing R-M10 does *not* cover, recorded so it is not mistaken for it. The grapheme snap
 is on the hard split only: `splitOversized` snaps every cut back to a cluster boundary and
 `splitSentences` does not, so a non-ASCII terminator followed directly by a combining mark
@@ -396,6 +506,15 @@ it matters more here: the no-segmenter fallback deliberately keeps the old one-s
 behaviour, so on a runtime without `Intl.Segmenter` the fix does not happen. And nobody has
 watched a 4-span Chinese sentence or a 12-span Korean one highlight in a real editor, so
 whether that granularity reads as speech or as flicker is unknown.
+
+**Word events during a live CJK read were observed for the first time in that same NRL-96
+device pass**, though not the exact per-sentence span counts the bare-Node numbers above
+describe. A 4-chunk Chinese read fired 85 `word` events - far more than one per sentence -
+consistent with the segmenter-based subdivision being active on a real WebView rather than
+the no-segmenter one-span fallback, but the granularity was not counted chunk-by-chunk the
+way the bare-Node evidence above was, and nothing was watched or listened to for whether it
+reads as speech or as flicker. That half of the open question stands exactly as written
+above.
 
 Two leftovers from NRL-47 itself, from the PR rather than rediscovered later. `hasCjkScript`
 covers Han, Kana and Hangul only, so Thai, Lao, Khmer, Myanmar and Tibetan still get one span

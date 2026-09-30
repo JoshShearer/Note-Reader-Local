@@ -59,8 +59,6 @@ import {
 } from "./ui/highlightColour";
 import {
 	createModelStore,
-	checkOrtStatus,
-	worstOrtStatus,
 	type VaultModelStore,
 } from "./ui/modelStore";
 import { withLoadingNotice } from "./ui/loadingNotice";
@@ -68,14 +66,6 @@ import { reportError, trace } from "./diagnostics";
 import { LocalTtsSettingTab } from "./ui/settingsTab";
 import { ControlBar } from "./ui/controlBar";
 import { controlAffordances } from "./ui/affordances";
-
-/**
- * ORT runtime file checksums, compiled at build time (production only).
- * Non-negotiable: read-only and never modified at runtime.
- * Validated against local files to ensure integrity.
- * Injected by esbuild.config.mjs via __ORT_CHECKSUMS__ define.
- */
-declare const __ORT_CHECKSUMS__: Record<string, string> | undefined;
 
 export default class LocalTtsReaderPlugin extends Plugin {
 	override settings: Settings = { ...DEFAULT_SETTINGS };
@@ -152,28 +142,6 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			this.manifest.dir!,
 			this.settings.kokoroModelPath,
 		);
-
-		// Validate ORT runtime checksums on load if present (production builds
-		// only). Non-negotiable: ensures integrity of already-downloaded
-		// runtime files without triggering a download itself. Moved to after
-		// modelStore creation (NRL-37): the files now live in the vault-
-		// adjacent model directory, not the plugin folder, so resolving where
-		// to look needs settings.kokoroModelPath, which is not known until
-		// after loadPluginData() above. No automatic fallback on failure;
-		// user is told to re-install the plugin (report the error with
-		// manifest.dir).
-		if (__ORT_CHECKSUMS__) {
-			try {
-				await this.validateOrtChecksums();
-			} catch (err) {
-				reportError(
-					this.app,
-					this.manifest.dir!,
-					"ORT checksum validation failed",
-					err,
-				);
-			}
-		}
 
 		this.engines = createEngines(this.modelStore, this.kokoroOptions());
 
@@ -1418,62 +1386,6 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		void this.warmUpEngine();
 	}
 
-	/**
-	 * The build-time-compiled ORT checksums, or undefined outside a
-	 * production build. Exposed for settingsTab.ts, which needs the same map
-	 * both to show download-status UI and to hand to `downloadOrtRuntime()`
-	 * as the digest every downloaded byte is verified against.
-	 */
-	getOrtChecksums(): Record<string, string> | undefined {
-		return __ORT_CHECKSUMS__;
-	}
-
-	/**
-	 * Validate ORT runtime file checksums against expected values.
-	 * Non-negotiable: no silent failure or automatic fallback.
-	 * Only runs in production builds where __ORT_CHECKSUMS__ is defined.
-	 *
-	 * `missing` (NRL-37) is the expected state before the user has ever
-	 * clicked Download - a directory install has no `ort/` bundled with it
-	 * at all (that is the whole point of the on-demand move), so treating an
-	 * absent file as a failure here would trace and alarm on every ordinary
-	 * fresh install. Only `mismatch` - a file that exists but does not hash
-	 * to its compiled-in digest, meaning real corruption or tampering after
-	 * a successful download - is traced AND surfaced as a Notice. Before
-	 * NRL-37 both cases were folded into one silent trace() call, which is
-	 * not "visible actionable failure on mismatch" (the ticket's acceptance
-	 * criterion): trace() only reaches a diagnostics log nobody opens
-	 * unprompted.
-	 */
-	private async validateOrtChecksums(): Promise<void> {
-		if (!__ORT_CHECKSUMS__) return;
-
-		const expectedChecksums = __ORT_CHECKSUMS__;
-		const pluginDir = this.manifest.dir!;
-		const files = Object.keys(expectedChecksums);
-
-		const statuses = await checkOrtStatus(
-			this.app.vault.adapter,
-			this.modelStore.dir,
-			files,
-			expectedChecksums,
-		);
-		const worst = worstOrtStatus(statuses);
-
-		if (worst === "missing") return;
-
-		if (worst === "mismatch") {
-			const mismatched = Object.entries(statuses)
-				.filter(([, status]) => status === "mismatch")
-				.map(([file]) => file)
-				.join(", ");
-			trace(this.app, pluginDir, "ORT checksum mismatch", mismatched);
-			new Notice(
-				"ONNX Runtime files are corrupted. Open Settings and re-download the runtime to fix speech synthesis.",
-				0,
-			);
-		}
-	}
 
 	/** Vault path of the style vector a voice id needs. */
 	voiceFileFor(voiceId: string): string {

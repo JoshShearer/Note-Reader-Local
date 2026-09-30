@@ -35,7 +35,6 @@ function fakeStore(present: string[]): ModelStore {
 		dir: "models",
 		modelBase: "local-model://kokoro/",
 		workerPath: "plugin/kokoro-worker.js",
-		ortFile: (name: string) => `plugin/ort/${name}`,
 		async readPluginFile() {
 			return new ArrayBuffer(0);
 		},
@@ -119,7 +118,6 @@ console.log("a store that throws is reported, not propagated (NRL-25)");
 		dir: "models",
 		modelBase: "local-model://kokoro/",
 		workerPath: "plugin/kokoro-worker.js",
-		ortFile: (name: string) => `plugin/ort/${name}`,
 		async readPluginFile() {
 			return new ArrayBuffer(0);
 		},

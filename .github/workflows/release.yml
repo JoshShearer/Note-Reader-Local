@@ -83,6 +83,14 @@ jobs:
           draft: false
           prerelease: false
 
+      # Exactly the three files Obsidian's own installer fetches, and nothing
+      # else. The four ort/ assets used to be published here so the plugin
+      # could fetch its runtime from a release URL; they do not any more,
+      # because that is executable dependency management and the
+      # community-plugin policies prohibit it (ADR 0026). The runtime now
+      # ships inside main.js. Publishing them anyway would leave a
+      # downloadable copy of executable code that nothing installs and that a
+      # future reader would reasonably assume is load-bearing.
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
@@ -90,10 +98,6 @@ jobs:
             main.js
             manifest.json
             styles.css
-            ort/ort-wasm-simd-threaded.mjs
-            ort/ort-wasm-simd-threaded.wasm
-            ort/ort-wasm-simd-threaded.jsep.mjs
-            ort/ort-wasm-simd-threaded.jsep.wasm
 
   # NRL-69: the SLSA generator is a REUSABLE WORKFLOW, so it has to be called
   # at job level via `jobs.<id>.uses:`. It used to be a step's `uses:`, which

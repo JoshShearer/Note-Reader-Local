@@ -1,15 +1,22 @@
 /**
- * Regression tests for release infrastructure (NRL-16).
+ * Release-artifact regression tests (NRL-16, amended by NRL-96).
  *
- * These tests verify:
- * 1. Build succeeds with ORT checksums compiled
- * 2. Checksums are read-only in main.js
- * 3. No model weights downloaded during build
- * 4. Workflow file is valid GitHub Actions YAML
+ * The load-bearing test in here is "the runtime unpacks byte-identical to
+ * node_modules". Everything else is a cheap guard on the shape of that: the
+ * asset table has to exist in the bundle, deploy has to copy three files, the
+ * release must not publish a runtime to download, and the policies that
+ * forbid that must be recorded.
+ *
+ * It reads the real built main.js, not the sources, because the thing being
+ * asserted is what ships. It never runs the plugin: `obsidian` has no runtime
+ * in this suite (AGENTS.md), so a passing run here is evidence about the
+ * artifact and not about a working install.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { gunzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,23 +31,32 @@ const README_FILE = path.join(ROOT, "README.md");
 const LICENSE_FILE = path.join(ROOT, "LICENSE");
 const ADR_FILE = path.join(ROOT, "docs/adr/0011-release-attestation.md");
 const ADR_ORT_FILE = path.join(ROOT, "docs/adr/0024-ort-on-demand.md");
+const ADR_RUNTIME_FILE = path.join(ROOT, "docs/adr/0026-bundle-executable-runtime.md");
+const RUNTIME_TS_FILE = path.join(ROOT, "src/engines/onnx/runtime.ts");
+const ORT_DIST = path.join(ROOT, "node_modules/onnxruntime-web/dist");
 const DEPLOY_FILE = path.join(ROOT, "deploy.mjs");
 const MAIN_TS_FILE = path.join(ROOT, "src/main.ts");
 
 let totalTests = 0;
 let passedTests = 0;
 
-function test(name: string, fn: () => void) {
-	totalTests++;
-	try {
-		fn();
-		console.log(`  ok   ${name}`);
-		passedTests++;
-	} catch (err: unknown) {
-		const message = err instanceof Error ? err.message : String(err);
-		console.log(`  FAIL ${name}`);
-		console.log(`       ${message}`);
-	}
+const pending: Array<Promise<void>> = [];
+
+function test(name: string, fn: () => void | Promise<void>): void {
+	pending.push(
+		(async () => {
+			totalTests++;
+			try {
+				await fn();
+				console.log(`  ok   ${name}`);
+				passedTests++;
+			} catch (err: unknown) {
+				const message = err instanceof Error ? err.message : String(err);
+				console.log(`  FAIL ${name}`);
+				console.log(`       ${message}`);
+			}
+		})(),
+	);
 }
 
 function assert(condition: boolean, message: string) {
@@ -98,145 +114,199 @@ test("Inlined worker code is assigned to globalThis, not a bare var", () => {
 	);
 });
 
-// --- ORT Checksum Validation Reads Binary, Not Text (NRL-60)
-//
-// validateOrtChecksums() in main.ts used to read these binary .wasm/.mjs
-// files with the text-mode adapter.read(), then re-encode the (already
-// UTF-8-decoded, lossy) string back to bytes with TextEncoder before
-// hashing. That round-trip corrupts real binary data - invalid UTF-8 byte
-// sequences collapse to U+FFFD - so it hashed its own mangled copy, never
-// the file, and reported a mismatch unconditionally regardless of whether
-// the file on disk was actually correct. TextEncoder has exactly one call
-// site in the whole source tree (this one), so its absence from the bundle
-// is an unambiguous signal the buggy read+re-encode path is gone.
+/** Every ORT asset name, read off disk rather than hard-coded twice. */
 
-test("ORT checksum validation does not round-trip binary data through text", () => {
+// --- Only the runtime is packed: no model weights
+
+test("nothing but the ORT runtime is packed into the bundle", () => {
+	// Weights must only ever arrive on an explicit user click (AGENTS.md
+	// non-negotiable 6), so the thing to assert is that the pack contains no
+	// weight file - not that the strings "onnx" or "model" are absent from
+	// main.js, which they are and must be: the default model is the
+	// HuggingFace repo id "onnx-community/Kokoro-82M-v1.0-ONNX" and it appears
+	// verbatim in the bundle. A substring test over that would be a false
+	// positive by construction, and the first version of this check was.
+	//
+	// The pack is a table keyed by filename, so the key set is the pack. Every
+	// key must be one we read off disk in node_modules, which is what makes
+	// this non-vacuous: a packed 82 MB weights file would add its own key and
+	// fail here rather than hide inside an unreferenced string.
 	const content = fs.readFileSync(MAIN_JS, "utf-8");
-	assert(
-		!content.includes("TextEncoder"),
-		"TextEncoder should not appear in main.js - it was only ever used to " +
-			"re-encode a lossy UTF-8 decode of binary ORT files before hashing " +
-			"them, which made checksum validation always fail regardless of " +
-			"whether the file was correct",
-	);
-});
+	// `m[1]` is `string | undefined` to tsc even though the group is a
+	// mandatory capture; the filter is what narrows it, and dropping the
+	// undefined here would be what turns a name-shape change into a silent
+	// hole rather than a loud one.
+	const keys = [...content.matchAll(/"([^"]+)":\{gzip:"/g)]
+		.map((m) => m[1])
+		.filter((name): name is string => name !== undefined);
+	assert(keys.length > 0, "no packed-asset table found in main.js");
 
-test("main.js contains ORT checksums", () => {
-	const content = fs.readFileSync(MAIN_JS, "utf-8");
-	assertMatch(content, /ort-wasm-simd-threaded\.mjs/, "main.js missing ORT .mjs checksum");
-	assertMatch(content, /ort-wasm-simd-threaded\.wasm/, "main.js missing ORT .wasm checksum");
-	assertMatch(
-		content,
-		/ort-wasm-simd-threaded\.jsep\.mjs/,
-		"main.js missing ORT JSEP .mjs checksum",
-	);
-	assertMatch(
-		content,
-		/ort-wasm-simd-threaded\.jsep\.wasm/,
-		"main.js missing ORT JSEP .wasm checksum",
-	);
-});
-
-test("Checksums in main.js are valid hex strings", () => {
-	const content = fs.readFileSync(MAIN_JS, "utf-8");
-	// Extract all hex strings that look like SHA-256 hashes (64 hex chars).
-	const hexPattern = /"([a-f0-9]{64})"/g;
-	const matches = content.match(hexPattern) || [];
-	assert(matches.length >= 4, "Expected at least 4 SHA-256 hashes in main.js");
-});
-
-// --- Checksums are Read-Only in main.js
-
-test("Checksums are not wrapped in eval() or Function()", () => {
-	const content = fs.readFileSync(MAIN_JS, "utf-8");
-	const hashInEval = /eval\s*\(\s*["'`].*[a-f0-9]{64}/.test(content);
-	const hashInFunction = /Function\s*\(\s*["'`].*[a-f0-9]{64}/.test(content);
-	assert(
-		!hashInEval && !hashInFunction,
-		"Checksums should not be wrapped in eval() or Function() calls",
-	);
-});
-
-test("__ORT_CHECKSUMS__ is not reassigned in main.js", () => {
-	const content = fs.readFileSync(MAIN_JS, "utf-8");
-	// Count assignments to __ORT_CHECKSUMS__.
-	const assignmentPattern = /__ORT_CHECKSUMS__\s*=/g;
-	const assignments = content.match(assignmentPattern) || [];
-	// Only the initial definition should exist (esbuild inlines it as a define).
-	// We don't expect a reassignment in the code.
-	assert(assignments.length <= 1, "Checksums should be assigned only once (at define-time)");
-});
-
-test("Checksums are not modified by plugin code", () => {
-	const content = fs.readFileSync(MAIN_JS, "utf-8");
-	// Check that the checksums object is not reassigned or deleted at the
-	// statement level (excluding esbuild's internal minification machinery).
-	// The checksums are defined once at the top and then used in the plugin,
-	// never reassigned or destroyed.
-	const reassignments = content.match(/var S\s*=.*; var S\s*=/g) || [];
-	const deletes = content.match(/delete\s+S\s*\[/g) || [];
-	assert(
-		reassignments.length === 0 && deletes.length === 0,
-		"Checksums object should not be reassigned or deleted",
-	);
-});
-
-// --- No Model Weights Downloaded During Build
-
-test("ORT directory contains only published files", () => {
-	const ortDir = path.join(ROOT, "ort");
-	const expectedFiles = [
-		"ort-wasm-simd-threaded.mjs",
-		"ort-wasm-simd-threaded.wasm",
-		"ort-wasm-simd-threaded.jsep.mjs",
-		"ort-wasm-simd-threaded.jsep.wasm",
-	];
-
-	for (const file of expectedFiles) {
-		const filePath = path.join(ortDir, file);
-		assertFileExists(filePath, `Expected ORT file not found: ${file}`);
-	}
-
-	// Check that no other files were downloaded (e.g., Kokoro weights).
-	const allFiles = fs.readdirSync(ortDir);
-	for (const file of allFiles) {
-		const isExpected = expectedFiles.includes(file);
-		assert(isExpected, `Unexpected file in ort/: ${file} (should not be there)`);
+	const ortNames = ortAssetNames();
+	for (const key of keys) {
+		assert(
+			ortNames.includes(key),
+			`main.js packs ${key}, which is not a published ORT asset. Model weights ` +
+				"may only be downloaded on an explicit user click, never packed",
+		);
 	}
 });
 
-test("No Kokoro weights in ort directory", () => {
-	const ortDir = path.join(ROOT, "ort");
-	const allFiles = fs.readdirSync(ortDir);
-	const hasKokoroWeights = allFiles.some((f) =>
-		/kokoro|model|weight|pt$|safetensors$|bin$/.test(f),
-	);
-	assert(!hasKokoroWeights, "Kokoro weights should not be downloaded during build");
+// --- The runtime is bundled, and it unpacks byte-identical (NRL-96, ADR 0026)
+//
+// This is the test that matters. Obsidian's community-plugin policies
+// prohibit installing or updating dependencies, so a runtime fetched from a
+// release URL is not shippable however well it is verified, and the only
+// remaining question is whether the bytes we embed are the bytes
+// onnxruntime-web published. Everything below either reads the same table or
+// guards the ways that answer could become a lie.
+
+/**
+ * Extract one packed asset out of the real bundle.
+ *
+ * Hand-scanned rather than eval'd, and matched per filename rather than by
+ * parsing the whole table, for three reasons that all matter here. esbuild
+ * minifies the object literal so its keys are bare (`{gzip:"..."`), which means
+ * it is not JSON and `JSON.parse` rejects it at position 31. Scanning for the
+ * matching brace handles ~10 MB of base64 without the catastrophic backtracking
+ * a regex over that would cause, and the string-literal handling is what keeps
+ * an escaped quote inside a payload from closing the scan early. The failure is
+ * a throw rather than a silent undefined, because "no table in the bundle" and
+ * "table present, asset missing" are very different bugs and must not read the
+ * same.
+ */
+function readPackedAsset(content: string, name: string): { gzip: string; sha256: string } {
+	const anchor = content.indexOf(`"${name}":{gzip:"`);
+	assert(anchor >= 0, `main.js carries no packed asset for ${name}`);
+
+	// Read the two string fields out of the object that follows the anchor.
+	const gzipStart = anchor + `"${name}":{gzip:"`.length;
+	const gzipEnd = content.indexOf('"', gzipStart);
+	assert(gzipEnd > gzipStart, `the packed gzip payload for ${name} is not terminated`);
+
+	const shaStart = content.indexOf('sha256:"', gzipEnd);
+	assert(shaStart >= 0, `the packed asset for ${name} carries no digest`);
+	const shaFrom = shaStart + 'sha256:"'.length;
+	const shaEnd = content.indexOf('"', shaFrom);
+	assert(shaEnd > shaFrom, `the packed digest for ${name} is not terminated`);
+
+	return { gzip: content.slice(gzipStart, gzipEnd), sha256: content.slice(shaFrom, shaEnd) };
+}
+
+function ortAssetNames(): string[] {
+	return fs
+		.readdirSync(ORT_DIST)
+		.filter((name) => name.startsWith("ort-wasm-") && (name.endsWith(".mjs") || name.endsWith(".wasm")))
+		.sort();
+}
+
+
+test("every ORT file is packed into main.js and unpacks to the published bytes", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	const names = ortAssetNames();
+	assert(names.length > 0, `no ORT assets found in ${ORT_DIST}`);
+
+	for (const name of names) {
+		const packed = readPackedAsset(content, name);
+		const plain = gunzipSync(Buffer.from(packed.gzip, "base64"));
+		const digest = createHash("sha256").update(plain).digest("hex");
+		assertEquals(
+			digest,
+			packed.sha256,
+			`${name}: unpacked bytes do not hash to the digest recorded beside them`,
+		);
+
+		// The published bytes, not the ones this build happened to copy. If
+		// node_modules and the embedded pack ever disagree, the install is
+		// running code nobody upstream shipped, and that is the whole claim.
+		const published = fs.readFileSync(path.join(ORT_DIST, name));
+		assertEquals(
+			digest,
+			createHash("sha256").update(published).digest("hex"),
+			`${name}: the embedded copy is not the file onnxruntime-web published`,
+		);
+	}
 });
 
-// --- ONNX Runtime is fetched on demand, not bundled with the plugin (NRL-37)
-//
-// `esbuild.config.mjs`'s copyOrtRuntime() still populates a repo-root `ort/`
-// build-output directory (checked above), but that directory is not itself
-// "the shipped plugin bundle" - deploy.mjs's copy loop was what made it part
-// of an installed plugin folder, and only a real directory install (main.js,
-// manifest.json, styles.css - exactly what Obsidian's own installer fetches)
-// proves whether that copy actually happened. `npm run deploy` copying `ort/`
-// silently hid the bug this ticket fixes (AGENTS.md verification rule 11),
-// so `ort` must be gone from its copy list, permanently, or the next person
-// to touch deploy.mjs could silently reintroduce the exact bug NRL-37 fixed.
+test("the build packs exactly RUNTIME_FILES, and nothing else", async () => {
+	// esbuild.config.mjs cannot import runtime.ts - it runs in plain Node
+	// before any bundle exists, with no TS loader - so the canonical list and
+	// the build's own list are two copies that have to be kept in agreement by
+	// a check rather than by import. This is that check, and it is a real
+	// equality on both sides: not "every build entry is a known name" (which
+	// would pass with a build that packed only one of the four) and not "every
+	// canonical name is packed" (which cannot see a stray extra).
+	const { RUNTIME_FILES } = await import("../src/engines/onnx/runtime.ts");
+	const config = fs.readFileSync(path.join(ROOT, "esbuild.config.mjs"), "utf-8");
 
-test("deploy.mjs's copy list excludes ort/ (NRL-37)", () => {
+	const arrayMatch = config.match(/const ORT_FILES = \[([^\]]*)\]/);
+	const arraySource = arrayMatch?.[1] ?? "";
+	assert(arraySource !== "", "esbuild.config.mjs's ORT_FILES list not found");
+	const buildFiles = [...arraySource.matchAll(/"([^"]+)"/g)]
+		.map((m) => m[1])
+		.filter((name): name is string => name !== undefined);
+
+	assert(
+		JSON.stringify(buildFiles) === JSON.stringify([...RUNTIME_FILES]),
+		`esbuild.config.mjs packs ${buildFiles.join(", ")} but runtime.ts declares ` +
+			`${RUNTIME_FILES.join(", ")}; a pack and its reader that disagree about ` +
+			"which files exist is a missing-runtime bug at play time",
+	);
+
+	// And the bundle itself carries exactly that set.
+	const packed = [...fs.readFileSync(MAIN_JS, "utf-8").matchAll(/"([^"]+)":\{gzip:"/g)]
+		.map((m) => m[1])
+		.filter((name): name is string => name !== undefined);
+	assert(
+		JSON.stringify([...packed].sort()) === JSON.stringify([...RUNTIME_FILES].sort()),
+		`main.js packs ${packed.join(", ")} rather than the declared runtime files`,
+	);
+});
+
+test("the pack is gzip, so the bundle grows far less than the runtime's raw size", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	let raw = 0;
+	let packed = 0;
+	for (const name of ortAssetNames()) {
+		raw += fs.readFileSync(path.join(ORT_DIST, name)).length;
+		packed += Buffer.from(readPackedAsset(content, name).gzip, "base64").length;
+	}
+	// Measured this session: 32,794,766 raw against 10,579,272 packed. The
+	// threshold is deliberately loose - it is here to catch a regression to
+	// storing the files uncompressed, not to pin a ratio that moves whenever
+	// onnxruntime-web ships a new build.
+	assert(
+		packed < raw * 0.5,
+		`expected the pack to be under half the raw size, got ${packed} of ${raw}`,
+	);
+});
+
+test("nothing in the bundle can fetch a runtime at runtime", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	assert(
+		!content.includes("releases/download"),
+		"main.js references a release download URL - the runtime must ship inside " +
+			"the bundle, and a fetch is executable dependency management regardless " +
+			"of how it is verified (ADR 0026)",
+	);
+	assert(
+		!content.includes("ORT_RELEASE_REPO"),
+		"main.js still carries the release-repo constant the on-demand download used",
+	);
+});
+
+test("deploy.mjs copies exactly the three files Obsidian's installer fetches", () => {
 	const content = fs.readFileSync(DEPLOY_FILE, "utf-8");
 	const arrayMatch = content.match(/for \(const item of (\[[^\]]*\])/);
 	const arraySource = arrayMatch?.[1];
 	assert(arraySource !== undefined, "deploy.mjs's copy-item array not found");
 	const items = JSON.parse(arraySource!.replace(/'/g, '"'));
+
 	assert(
 		!items.includes("ort"),
-		"deploy.mjs must not copy ort/ into the vault plugin folder - it is now " +
-			"fetched by the user via the Settings tab's Download button, and " +
-			"copying it here would hide the directory-install bug NRL-37 fixed",
+		"deploy.mjs must not copy ort/ into the vault plugin folder. A directory " +
+			"install is only main.js, manifest.json and styles.css, so shipping ort/ " +
+			"would hide a load path that is broken for every real user (AGENTS.md " +
+			"verification rule 11)",
 	);
 	assert(
 		items.includes("main.js") && items.includes("manifest.json") && items.includes("styles.css"),
@@ -244,71 +314,73 @@ test("deploy.mjs's copy list excludes ort/ (NRL-37)", () => {
 	);
 });
 
-test("release.yml's Upload Release Assets step includes the four ORT filenames (NRL-37)", () => {
+test("release.yml publishes no runtime asset to download", () => {
 	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
-	const uploadStepMatch = content.match(
-		/Upload Release Assets[\s\S]*?files:\s*\|([\s\S]*?)\n\s*\n/,
+	assert(
+		!/ort\/ort-wasm/.test(content),
+		"release.yml still uploads the ORT files as release assets. Nothing fetches " +
+			"them any more, and publishing a downloadable runtime is what ADR 0026 " +
+			"exists to stop",
 	);
-	const filesBlock = uploadStepMatch?.[1];
-	assert(filesBlock !== undefined, "Upload Release Assets step's files: block not found");
-	for (const file of [
-		"ort/ort-wasm-simd-threaded.mjs",
-		"ort/ort-wasm-simd-threaded.wasm",
-		"ort/ort-wasm-simd-threaded.jsep.mjs",
-		"ort/ort-wasm-simd-threaded.jsep.wasm",
-	]) {
-		assert(
-			filesBlock!.includes(file),
-			`Upload Release Assets step must publish ${file} as an extra release ` +
-				"asset so it is fetchable at releases/download/<tag>/<filename> " +
-				"without changing what Obsidian's own installer fetches",
-		);
-	}
 });
 
-// --- ORT checksum validation distinguishes "missing" from "mismatch" (NRL-37)
-//
-// Before NRL-37, a missing ORT file (the only possible state on a fresh
-// directory install, since the files were never bundled there) and a
-// genuinely corrupt one were folded into the same trace()-only path. Pinned
-// against src/main.ts, not the minified main.js: the pretest chain builds
-// tests from TypeScript sources via build-tests.mjs, and this is a source-
-// shape assertion, not a build-output one. If a future edit collapses the
-// two branches back together, this fails rather than silently reintroducing
-// the bug this ticket fixes.
+test("a corrupt pack is rejected rather than executed", async () => {
+	// The check that matters is that a digest mismatch throws, so a damaged
+	// install reports itself instead of handing wrong bytes to onnxruntime.
+	// Driven against the real module with a deliberately wrong digest, which is
+	// the only way to reach the failure from outside: unpacking a genuinely
+	// valid pack is the passing case and cannot fail here.
+	const { unpackRuntimeFile } = await import("../src/engines/onnx/runtime.ts");
+	const name = "ort-wasm-simd-threaded.mjs";
+	const good = readPackedAsset(fs.readFileSync(MAIN_JS, "utf-8"), name);
 
-test("validateOrtChecksums branches on missing vs mismatch as distinct outcomes", () => {
-	const content = fs.readFileSync(MAIN_TS_FILE, "utf-8");
-	assertMatch(
-		content,
-		/worst === "missing"/,
-		"main.ts must check for a missing-runtime status separately from mismatch",
+	const bytes = await unpackRuntimeFile(good);
+	assertEquals(
+		bytes.byteLength,
+		fs.readFileSync(path.join(ORT_DIST, name)).length,
+		"a good pack must inflate to the published size",
 	);
-	assertMatch(
-		content,
-		/worst === "mismatch"/,
-		"main.ts must check for a mismatch status separately from missing",
-	);
-	// The missing branch must return without alarming the user - it is the
-	// expected pre-download state, not a failure.
-	const missingBranch = content.match(/if \(worst === "missing"\) return;/);
+
+	let threw = false;
+	try {
+		await unpackRuntimeFile({ gzip: good.gzip, sha256: "0".repeat(64) });
+	} catch {
+		threw = true;
+	}
+	assert(threw, "a pack whose digest does not match must throw, not be returned");
+});
+
+test("runtime.ts reaches the network for nothing", () => {
+	const content = fs.readFileSync(RUNTIME_TS_FILE, "utf-8");
+	for (const forbidden of ["fetch(", "XMLHttpRequest", "https://", "http://"]) {
+		assert(
+			!content.includes(forbidden),
+			`src/engines/onnx/runtime.ts contains ${forbidden} - the unpack path must ` +
+				"be entirely local, since that is the property that replaces the download",
+		);
+	}
 	assert(
-		missingBranch !== null,
-		'the "missing" branch must be a silent early return, not a trace or Notice',
+		content.includes("DecompressionStream"),
+		"runtime.ts must decompress through the platform's own gzip decoder rather " +
+			"than shipping a second inflate implementation",
 	);
-	// The mismatch branch must both trace() (diagnostics) and raise a Notice
-	// (user-visible) - a trace()-only failure is not "visible actionable
-	// failure on mismatch" (the ticket's acceptance criterion).
-	const mismatchSection = content.slice(content.indexOf('worst === "mismatch"'));
+});
+
+test("ADR 0026 records the bundling decision and supersedes ADR 0024's", () => {
+	assertFileExists(ADR_RUNTIME_FILE, "docs/adr/0026-bundle-executable-runtime.md not found");
+	const content = fs.readFileSync(ADR_RUNTIME_FILE, "utf-8");
+	assertMatch(content, /0024/, "ADR 0026 must name the decision it supersedes");
+	assertMatch(content, /polic/i, "ADR 0026 must state the policy that forced this");
+});
+
+test("ADR 0024 is marked superseded, and kept", () => {
+	assertFileExists(ADR_ORT_FILE, "docs/adr/0024-ort-on-demand.md not found");
+	const content = fs.readFileSync(ADR_ORT_FILE, "utf-8");
 	assertMatch(
-		mismatchSection.slice(0, 800),
-		/trace\(/,
-		'the "mismatch" branch must call trace() for diagnostics',
-	);
-	assertMatch(
-		mismatchSection.slice(0, 800),
-		/new Notice\(/,
-		'the "mismatch" branch must raise a user-visible Notice, unlike "missing"',
+		content,
+		/[Ss]uperseded/,
+		"ADR 0024 must be marked superseded - the history is kept deliberately, " +
+			"so leaving it unmarked is how the old decision gets re-implemented",
 	);
 });
 
@@ -444,12 +516,13 @@ test("ADR 0011 mentions ORT checksums", () => {
 });
 
 // Summary
-// Conditional (NRL-69): printed unconditionally this line claimed a pass on a red
-// run, and a reader scanning the log sees it before the count below.
+//
+// Conditional (NRL-69): printed unconditionally this line claimed a pass on a
+// red run, and a reader scanning the log sees it before the count below. It
+// also runs after every pending test has settled, since three of them are
+// async and would otherwise be counted as neither pass nor fail.
+await Promise.all(pending);
+
 if (passedTests === totalTests) console.log(`\nall release tests passed\n`);
 console.log(`${passedTests} of ${totalTests} passed`);
-if (passedTests === totalTests) {
-	process.exit(0);
-} else {
-	process.exit(1);
-}
+process.exit(passedTests === totalTests ? 0 : 1);

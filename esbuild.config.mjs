@@ -1,10 +1,11 @@
 import { build } from "esbuild";
 import process from "process";
-import { copyFile, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { readFile, writeFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import builtins from "builtin-modules";
 import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 
 const require = createRequire(import.meta.url);
 const production = process.argv[2] === "production";
@@ -20,28 +21,6 @@ function ortDistDir() {
 	return path.join(path.dirname(entry), "..");
 }
 
-/**
- * Compute SHA-256 checksums of ORT runtime files at build time.
- * Read-only in the bundle: used to validate file integrity on load.
- * Non-negotiable (NRL-16 ADR 0011): no model weights downloaded during build.
- */
-async function computeOrtChecksums(ortFiles) {
-	const checksums = {};
-	const ortDist = ortDistDir();
-	for (const file of ortFiles) {
-		const filePath = path.join(ortDist, "dist", file);
-		try {
-			const data = await readFile(filePath);
-			const hash = createHash("sha256").update(data).digest("hex");
-			checksums[file] = hash;
-		} catch (err) {
-			console.error(`Failed to compute checksum for ${file}:`, err.message);
-			throw err;
-		}
-	}
-	return checksums;
-}
-
 const banner = `/*
 Local TTS Reader - on-device text-to-speech for Obsidian.
 Independent implementation; no code derived from any other plugin.
@@ -49,23 +28,24 @@ Independent implementation; no code derived from any other plugin.
 
 /**
  * Build configuration for main.js.
- * ORT checksums are injected at build time (production only) for runtime validation.
- * Non-negotiable: checksums are read-only, never modified after build.
  *
- * The Kokoro worker code is inlined into main.js as base64 at build time,
- * reducing installer download from 5 files to 4. The inlineWorkerIntoMain()
- * function runs after the worker is built.
+ * The Kokoro worker code is inlined into main.js as base64 at build time, and
+ * the ORT runtime is packed in the same pass, so the installer download is the
+ * three files Obsidian's installer fetches and nothing more.
+ * inlineWorkerIntoMain() runs after the worker is built.
  */
-function createMainConfig(ortChecksums = null) {
+function createMainConfig(ortAssets = null) {
 	const define = {
 		// transformers.js branches on this to pick a browser or node build.
 		"process.env.NODE_ENV": JSON.stringify(production ? "production" : "development"),
 	};
 
-	// Inject ORT checksums at build time for production builds.
-	// Checksums are read-only in the bundle and validated on load (src/main.ts).
-	if (production && ortChecksums) {
-		define["__ORT_CHECKSUMS__"] = JSON.stringify(ortChecksums);
+	// Unconditional, and deliberately so. A packed-asset path that only
+	// existed in production would be a path nobody develops against, and the
+	// three-file install is the only shape that reaches a user - so dev carries
+	// the same bytes rather than a cheaper stand-in.
+	if (ortAssets) {
+		define["__ORT_ASSETS__"] = JSON.stringify(ortAssets);
 	}
 
 	return {
@@ -120,13 +100,20 @@ const workerConfig = {
 };
 
 /**
- * Ship the ONNX runtime's WASM binary alongside the plugin.
+ * The ORT runtime's WASM and glue files, packed into main.js.
  *
  * Left to itself, onnxruntime-web resolves its `.wasm` from a jsdelivr CDN URL
  * the first time a session is created. That would mean the plugin reaches the
  * network on every cold start, and would fail outright on a phone that is
- * offline. Copying the binary in and pointing `wasmPaths` at the plugin folder
- * keeps the whole inference stack on-device.
+ * offline. ADR 0026 settles the alternative: it cannot be shipped as a
+ * side-directory, because the three-file install has no side-directory, and it
+ * cannot be fetched on demand, because the plugin review guidelines treat that
+ * as executable dependency management. So it goes into the bundle.
+ *
+ * The list is not trimmed per platform. A build whose shipped bytes depended on
+ * the build machine would make the release unreproducible and the SLSA
+ * attestation meaningless, and a smaller-JSEP-build follow-up is a measured
+ * question, not a build-time guess.
  */
 const ORT_DIST = ortDistDir();
 const ORT_FILES = [
@@ -136,12 +123,28 @@ const ORT_FILES = [
 	"ort-wasm-simd-threaded.jsep.wasm",
 ];
 
-async function copyOrtRuntime() {
-	const dest = "ort";
-	await mkdir(dest, { recursive: true });
+/**
+ * Gzip and base64 each ORT dist file for injection into main.js.
+ *
+ * One read per file, serving both the digest and the payload, so the bytes
+ * that are hashed and the bytes that ship cannot come from two reads of a file
+ * that changed underneath the build.
+ *
+ * Level 9 because these are already-compressed-ish WASM blobs that never
+ * compress further, and the whole point is that the embedded copy is paid for
+ * by every install (ADR 0026). The digest stays of the *plain* bytes, so a
+ * decompression bug cannot pass verification by agreeing with itself.
+ */
+async function packOrtAssets() {
+	const assets = {};
 	for (const file of ORT_FILES) {
-		await copyFile(path.join(ORT_DIST, "dist", file), path.join(dest, file));
+		const bytes = await readFile(path.join(ORT_DIST, "dist", file));
+		assets[file] = {
+			gzip: gzipSync(bytes, { level: 9 }).toString("base64"),
+			sha256: createHash("sha256").update(bytes).digest("hex"),
+		};
 	}
+	return assets;
 }
 
 /**
@@ -192,19 +195,21 @@ globalThis.KOKORO_WORKER_CODE = "${workerBase64}";
 }
 
 if (production) {
-	// Compute ORT checksums at build time for runtime validation.
-	// Non-negotiable: no model weights downloaded, only published ORT files.
-	const ortChecksums = await computeOrtChecksums(ORT_FILES);
-	const mainConfig = createMainConfig(ortChecksums);
+	// Read the published ORT files and pack them in. No weights are fetched at
+	// any point: only what is already in node_modules.
+	const mainConfig = createMainConfig(await packOrtAssets());
 	await build(mainConfig);
 	await build(workerConfig);
 	await inlineWorkerIntoMain();
-	await copyOrtRuntime();
 } else {
-	const mainConfig = createMainConfig();
+	// Development carries the same packed assets as production on purpose. If
+	// dev read the files from disk instead, a load path broken only in the
+	// packed form would stay invisible until release, and the three-file
+	// install never has those files beside it anyway - so that is the only
+	// shape worth developing.
+	const mainConfig = createMainConfig(await packOrtAssets());
 	const ctx = await (await import("esbuild")).context(mainConfig);
 	await ctx.watch();
 	const workerCtx = await (await import("esbuild")).context(workerConfig);
 	await workerCtx.watch();
-	await copyOrtRuntime();
 }

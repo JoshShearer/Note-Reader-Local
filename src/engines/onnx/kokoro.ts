@@ -9,6 +9,7 @@ import type {
 } from "../../audio/types";
 import { allocateWordTimings } from "../../audio/words";
 import { pcmToWav } from "../../audio/wav";
+import { readBundledRuntime, RUNTIME_FILES } from "./runtime";
 import type { DeviceRequest, FromWorker, ModelFile, ToWorker } from "./kokoro.worker";
 
 /**
@@ -317,8 +318,13 @@ export interface ModelStore {
 	modelBase: string;
 	/** Vault path of the bundled worker script. */
 	workerPath: string;
-	/** Vault path of one bundled onnxruntime file. */
-	ortFile(name: string): string;
+	/**
+	 * There is deliberately no `ortFile` here. The onnxruntime runtime is
+	 * packed inside main.js and unpacked as a blob URL (ADR 0026), so the
+	 * engine has no runtime file to resolve. `ModelStorePaths.ortFile` still
+	 * exists for disk-usage accounting of a pre-ADR-0026 install; that is a
+	 * settings-tab concern and never reaches the engine.
+	 */
 	/** Read any file the vault adapter knows about, including plugin files. */
 	readPluginFile(vaultPath: string): Promise<ArrayBuffer>;
 	exists(relativePath: string): Promise<boolean>;
@@ -561,6 +567,24 @@ export class KokoroEngine implements SpeechEngine {
 	}
 
 	/**
+	 * Expose a bundled runtime asset as a same-origin blob URL.
+	 *
+	 * Unpacks lazily and caches per instance, so a reader on a system voice
+	 * never decompresses the 21 MB WebGPU build at all (ADR 0026). The
+	 * verification happens inside `unpackRuntimeFile`; a corrupt pack throws
+	 * before any Worker is constructed, which is the visible-failure
+	 * direction the project requires rather than a half-booted worker.
+	 */
+	private async bundledRuntimeBlob(name: string, type: string): Promise<string> {
+		const cached = this.blobs.get(name);
+		if (cached) return cached;
+		const bytes = await readBundledRuntime(name);
+		const url = URL.createObjectURL(new Blob([bytes], { type }));
+		this.blobs.set(name, url);
+		return url;
+	}
+
+	/**
 	 * Get the Kokoro worker as a blob URL.
 	 *
 	 * The worker code is embedded in main.js at build time as a base64 string.
@@ -651,12 +675,12 @@ export class KokoroEngine implements SpeechEngine {
 			// `app://<vault-hash>` resource URL Obsidian hands out is a
 			// different origin and cannot construct a Worker at all.
 			const workerBlob = await this.getWorkerBlobUrl();
-			const ortBlob = await this.blobFor(
-				this.store.ortFile("ort-wasm-simd-threaded.jsep.mjs"),
+			const ortBlob = await this.bundledRuntimeBlob(
+				RUNTIME_FILES[2],
 				"text/javascript",
 			);
-			const wasmBlob = await this.blobFor(
-				this.store.ortFile("ort-wasm-simd-threaded.jsep.wasm"),
+			const wasmBlob = await this.bundledRuntimeBlob(
+				RUNTIME_FILES[3],
 				"application/wasm",
 			);
 

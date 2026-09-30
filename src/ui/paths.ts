@@ -46,7 +46,16 @@ export interface ModelStorePaths {
 	modelFile(relative: string): string;
 	/** Vault path of the bundled worker script. */
 	workerPath: string;
-	/** Vault path of one onnxruntime WASM file, by file name. */
+	/**
+	 * Vault path of one onnxruntime file, in a model directory written by a
+	 * build that predates ADR 0026.
+	 *
+	 * The runtime is bundled inside main.js now and nothing reads this, but an
+	 * upgrading install can still have real `ort/` files on disk, and
+	 * `getTotalUsage` counts them so the disk-usage figure stays true rather
+	 * than quietly shrinking. Delete this once no supported upgrade path
+	 * reaches back to ADR 0024.
+	 */
 	ortFile(name: string): string;
 }
 
@@ -56,12 +65,10 @@ export interface ModelStorePaths {
  * The model directory is deliberately not derived from the plugin folder: a
  * plugin update replaces that folder wholesale, and the weights are a 90MB
  * download that should not have to be repeated each time. The ONNX runtime
- * files live in the same vault-adjacent directory as the weights, for the
- * same reason (NRL-37): a directory install of the plugin (main.js,
- * manifest.json, styles.css only) never had `ort/` bundled with it in the
- * first place, so resolving it inside the plugin folder pointed at files
- * that would never be there. They are fetched into the model directory on
- * explicit user action instead (see `downloadOrtRuntime` in modelStore.ts).
+ * once lived there too (NRL-37) and no longer does: it is bundled inside
+ * main.js, because a runtime fetched from a release URL is executable
+ * dependency management, which the community-plugin policies prohibit
+ * (ADR 0026). See `ortFile` above for why the path survives anyway.
  */
 export function modelStorePaths(manifestDir: string, modelDir: string): ModelStorePaths {
 	const pluginRoot = pluginVaultPath(manifestDir);

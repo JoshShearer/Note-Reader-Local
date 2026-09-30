@@ -47,11 +47,11 @@ The solution: SLSA Level 3 provenance attests that the released bundle was built
 
 1. **SLSA provenance** gives users and distribution tools a cryptographic proof of origin. The slsa-github-generator workflow publishes provenance to the GitHub release as an SLSA provenance statement.
 
-2. **ORT checksum validation** catches file corruption (accidental or malicious) without downloading anything on load. The check is fast (read files from disk, compute hash) and provides immediate visibility if something is wrong.
+2. **ORT checksum validation** catches file corruption (accidental or malicious) without downloading anything. As of NRL-96 (ADR 0026) it also covers the case where there is nothing on disk to be corrupt: the runtime is packed into `main.js`, and each pack entry is verified against its compiled-in digest after decompression, so a damaged bundle reports itself instead of handing wrong bytes to onnxruntime.
 
 3. **Quality gates in the release workflow** ensure that builds tagged for release have passed all automated checks, matching the promise that `npm run build` would pass locally.
 
-4. **Checksums compiled into main.js** means they travel with the plugin and are auditable in a bundle reader (e.g., decompiling main.js would show the expected hashes).
+4. **Checksums compiled into main.js** means they travel with the plugin and are auditable in a bundle reader (e.g., decompiling main.js would show the expected hashes). Since ADR 0026 that is no longer only an audit affordance: the digests now guard the only copy of the runtime that exists.
 
 5. **No automatic fallback** keeps the non-negotiable-4 promise ("no silent cloud fallback") airtight: a checksum failure is visible, not hidden.
 
