@@ -164,8 +164,16 @@ real before trusting it, and confirm before the line's output is committed.
 
 **The worker is a jail.** `kokoro.worker.ts` shims `fetch` to reject any cross-origin
 URL and asserts locality on the ORT paths, because both transformers.js and kokoro-js
-default to CDN URLs. The ONNX runtime is vendored at build time by `esbuild.config.mjs`
-for the same reason.
+default to CDN URLs. `esbuild.config.mjs` still computes the ORT files' SHA-256 checksums
+at build time and compiles them into `main.js`, but as of NRL-37 (ADR 0024) the runtime
+files themselves are no longer vendored into the shipped plugin bundle: Obsidian's
+community-plugin installer only ever fetches `main.js`, `manifest.json` and `styles.css`,
+so a real directory install never had the old build-output `ort/` folder in the first
+place. The runtime is instead fetched on explicit user action from this plugin's own
+tagged GitHub Release, into the vault-adjacent model directory, and verified against
+those same compiled-in digests before use - the download is the one place this jail's
+network ban is deliberately not absolute, and it stays narrow: pinned version, this
+plugin's own release, nothing executed before the checksum matches.
 
 **Blob URLs for local code.** Obsidian serves the plugin folder from `app://`, which
 cannot be used as a worker origin, so `kokoro.ts` reads its own worker and ORT files out
@@ -173,7 +181,9 @@ of the vault and re-wraps them as same-origin blobs.
 
 **Weights live outside the plugin folder** (`.obsidian/local-tts/kokoro`) so a plugin
 update does not discard hundreds of megabytes, and out of the file tree so they do not
-clutter the vault.
+clutter the vault. The ORT runtime files live in the same directory, under `ort/`, for
+the identical reason (NRL-37): a plugin update must not force a 31 MB re-download any
+more than it should for the weights.
 
 **One setting key, one option field, no negation.** Each row in the settings tab's
 "Content" group writes exactly one `Settings` key, `main.ts` hands that key to the
