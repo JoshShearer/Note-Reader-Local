@@ -121,7 +121,9 @@ The working tree passes its gates. The audit against `srs.md` that opened this r
 tickets have closed gaps against it, so treat it as a floor rather than as current state.
 Two confirmed moves: R-M01 (standard Obsidian Community Plugin) is met as of NRL-16, with
 all release infrastructure in place (README.md, LICENSE, versions.json, SLSA Level 3 workflow,
-and ORT runtime checksum validation). R-M14 (backend capability detection) is met as of NRL-22,
+and ORT runtime checksum validation) - but read the R-M01 evidence correction below before
+relying on that parenthesis, because until NRL-69 that workflow had never run successfully
+even once. R-M14 (backend capability detection) is met as of NRL-22,
 because every capability that differs across the four engines now gates the control it affects,
 and the ones that gate nothing have no control to gate. R-M03's spike (SPIKE-ANDROID-001) is
 resolved as of NRL-35, and this one did need a real device, not bare-Node reasoning:
@@ -134,6 +136,43 @@ vault, enabled, and run through `executeCommandById` exactly as the command pale
 the same `BLOCKED_BY_HOST` result in the plugin's own diagnostics log. Result: BLOCKED_BY_HOST,
 demonstrated rather than assumed, which is the valid terminal state the spec's Spike Failure clause
 describes and is why Kokoro-in-WebView is the Android backend rather than a native bridge.
+
+R-M01's *evidence* is weaker than that parenthesis reads, and NRL-69 corrected it without
+moving the count. The "SLSA Level 3 workflow" had **never completed a single successful
+run**. Measured over the repo's full paginated Actions history at `01c9a84`: 112 recorded
+runs, of which `release.yml` accounts for 103 and **all 103 are failures, with zero
+successes ever**; 95 runs preceded the repo's first-ever successful run and every one of
+those 95 was a `release.yml` failure. Two compounding defects caused it, both fixed by
+NRL-69, and the comment block in `.github/workflows/release.yml` records the A/B that
+isolated them: the SLSA generator was called as a step's `uses:` when a reusable workflow
+has to be called at job level, **and** the reference was missing its `.yml` extension.
+Either half alone stops the whole file compiling, which is why every historical run was a
+0-second, 0-job failure with no log, created on branch pushes that `on: push: tags` should
+never have matched at all. NRL-69 also added `.github/workflows/ci.yml`, which runs
+`npm ci`, `npm run typecheck`, `npm run build`, a `require()`-list assertion and `npm test`
+on every push and every `pull_request`; its first run, `36677239800`, is this repo's first
+successful workflow run of any kind, and a deliberate one-line test inversion on a throwaway
+branch went red as run `36678786748` with the `Test` step the only failing step, so the check
+is demonstrated in both directions rather than inferred from YAML that parses.
+
+What that does **not** establish is anything the release path does. `release.yml` is now
+shown only to *compile*: the merge commit `01c9a84` on `main` produced a green `ci.yml` run
+(`36679940668`) and **no** `release.yml` run at all, where every earlier push to `main`
+produced a failing one. **No release tag has ever been pushed** - `git ls-remote --tags
+origin` is empty and `gh release list` is empty - so `actions/create-release`, the artifact
+upload and the SLSA provenance job have never executed once, and `srs.md`'s "SLSA Level 3
+provenance" MUST still rests on a workflow that has never produced an attestation. Treat
+R-M01 as met on its shipped files and **unexercised on its release path**. Tracked as
+NRL-79, and two defects are already known to sit on that unexercised path: NRL-75
+(`tags: ["*"]` matches any tag, so pushing a backup tag would cut a real GitHub Release)
+and NRL-76 (the checksum step `cd dist || true` into a directory that does not exist, whose
+output feeds the provenance job's subjects). `actionlint` 1.7.7 is not a substitute for
+running it: measured during NRL-69, it was silent on **both** halves of the compile defect
+that had broken every run in this repo's history, so its silence on this file is weak
+evidence. The `2 of 16` headline count does not move in either direction. Note also that
+`release.yml` runs will keep being created and failing on pushes of refs that predate
+`01c9a84`, because GitHub compiles the workflow from the pushed ref; that is expected, not
+a regression, so the 103 above grows rather than being a fixed total.
 
 R-M09 (configurable content exclusions) did **not** move, and the reason matters because
 NRL-21's title invites the opposite conclusion. Its *configurability* half is met: all six
