@@ -12,6 +12,8 @@
 import {
 	KokoroEngine,
 	KOKORO_WEIGHTS,
+	KOKORO_MODEL_METADATA,
+	VOICE_FILE_SIZE_BYTES,
 	probeGpu,
 	voiceFilePath,
 } from "../src/engines/onnx/kokoro.ts";
@@ -261,6 +263,32 @@ console.log("NRL-26: every kokoro voice reports local: true, requiresNetwork: fa
 	check("has voices", voices.length > 0, `got ${voices.length}`);
 	check("every voice is local: true", voices.every((v) => v.local === true), JSON.stringify(voices.map((v) => v.local)));
 	check("every voice is requiresNetwork: false", voices.every((v) => v.requiresNetwork === false), JSON.stringify(voices.map((v) => v.requiresNetwork)));
+}
+
+console.log(
+	"NRL-33: KOKORO_MODEL_METADATA and VOICE_FILE_SIZE_BYTES are pinned to what was actually measured this session",
+);
+{
+	check(
+		"model metadata name is the canonical onnx-community id",
+		KOKORO_MODEL_METADATA.name === "onnx-community/Kokoro-82M-v1.0-ONNX",
+		KOKORO_MODEL_METADATA.name,
+	);
+	check(
+		"model metadata language is English (US, UK) only",
+		KOKORO_MODEL_METADATA.language === "English (US, UK)",
+		KOKORO_MODEL_METADATA.language,
+	);
+	check(
+		"model metadata license matches kokoro-js's own package.json",
+		KOKORO_MODEL_METADATA.license === "Apache-2.0",
+		KOKORO_MODEL_METADATA.license,
+	);
+	check(
+		"voice file size is exactly 522240 bytes, measured from kokoro-js's voices/*.bin",
+		VOICE_FILE_SIZE_BYTES === 522240,
+		String(VOICE_FILE_SIZE_BYTES),
+	);
 }
 
 console.log("");

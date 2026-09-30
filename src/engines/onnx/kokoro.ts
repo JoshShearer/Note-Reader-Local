@@ -29,6 +29,23 @@ import type { DeviceRequest, FromWorker, ModelFile, ToWorker } from "./kokoro.wo
 const KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 const SAMPLE_RATE = 24000;
 
+/**
+ * Model card fields for the settings page (NRL-33, R-C02).
+ *
+ * `license` is read directly off kokoro-js@1.2.1's own package.json
+ * (`"license": "Apache-2.0"`), matching Kokoro's published license rather
+ * than being guessed. `language` is deliberately narrow rather than a
+ * generic "multilingual" claim: kokoro-js@1.2.1 freezes its voice map at 28
+ * English (20 en-us, 8 en-gb) voices and throws outside it, and its
+ * phonemizer hardcodes en-us/en with no third branch, so English (US, UK) is
+ * the whole of what this build can ever speak.
+ */
+export const KOKORO_MODEL_METADATA = {
+	name: KOKORO_MODEL_ID,
+	language: "English (US, UK)",
+	license: "Apache-2.0",
+};
+
 /** Files that must be present for the engine to run. */
 const REQUIRED_FILES = ["config.json", "tokenizer.json"];
 
@@ -252,6 +269,14 @@ interface KokoroVoice {
 	lang: string;
 	gender: "male" | "female" | "neutral";
 }
+
+/**
+ * Every shipped English voice's style-vector file is exactly this many
+ * bytes. Measured directly this session from `node_modules/kokoro-js/voices/
+ * *.bin` in a sibling worktree: all 28 files (every entry in `VOICES` below)
+ * are 522240 bytes, not assumed from a table.
+ */
+export const VOICE_FILE_SIZE_BYTES = 522240;
 
 /** The voices shipped with Kokoro. `af`/`am` are en-US, `bf`/`bm` en-GB. */
 const VOICES: KokoroVoice[] = [
