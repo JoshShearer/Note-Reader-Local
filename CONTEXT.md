@@ -128,16 +128,39 @@ character. Stripping is exactly what makes that false, so the paragraph above wa
 already true when the defect was written under it: say "read the index" rather than
 "carry offsets", because arithmetic on an offset also looks like carrying one.
 
-**Lines are scanned one at a time, with one deliberate exception.** `cleanLine` sees a
-single source line and nothing else, which is why the same `%%` can be a comment on one
-line and literal text on another. The exception is an inline code span, which CommonMark
-lets cross a soft line break: `Cleaned.openCode` reports the length of a backtick run left
-open, and `extractChunks` only carries it forward once `codeSpanClosesLater` has found a
-run of the same length on a later line of the same paragraph. The confirmation is not an
-optimisation. An unmatched run is literal text, so carrying it blindly would stop the next
-line's `%%` being recognised as a block opener and would speak text the author hid, which
-is the one direction ADR 0006 exists to prevent. Anything else that needs cross-line state
-should follow that shape: prove the span is real before trusting it.
+**Lines are scanned one at a time, with two deliberate exceptions, and the loop is a
+two-pass.** `cleanLine` sees a single source line and nothing else, which is why the same
+`%%` can be a comment on one line and literal text on another. The two exceptions are
+constructs CommonMark lets cross a soft line break: an inline code span, and an image or
+link label.
+
+For a code span, `Cleaned.openCode` reports the length of a backtick run left open and
+`extractChunks` only carries it forward once `codeSpanClosesLater` has found a run of the
+same length on a later line of the same paragraph. The confirmation is not an optimisation.
+An unmatched run is literal text, so carrying it blindly would stop the next line's `%%`
+being recognised as a block opener and would speak text the author hid, which is the one
+direction ADR 0006 exists to prevent.
+
+**The per-line loop cleans a paragraph line twice** (NRL-64, ADR 0006 clause 4 and ADR 0019
+clause 3 as amended). The first pass exists only to learn the unmatched run length;
+`codeSpanClosesLater` is then called with the identical arguments; and only then is the line
+cleaned again, with `cleanLine`'s 6th parameter `outgoingCode` set, so the tail after the
+opener goes through the **same region emitter** as a carried-in span. Confirming before
+committing the line's output is the whole point: it is what makes the opening line's tail
+literal too, and it is why `codeSpanClosesLater` and `interruptsParagraph` could stay
+byte-identical while the behaviour changed.
+
+A soft-wrapped image or link label uses the same shape through `bracketClosesLater`
+(NRL-63, ADR 0023), which mirrors `codeSpanClosesLater` including its `interruptsParagraph`
+stops and adds one requirement of its own: the closing line's first `]` must be followed by
+`(` or `[`, so a shortcut label with no destination is never confirmed and no visible prose
+is silenced. The two carries are mutually exclusive on any one line and a code span binds
+tighter, so a line opening both arms the code carry only. The label carry is a **partial**
+fix: five distinct roots still leave a destination spoken, tracked as NRL-88 and enumerated
+in `AGENTS.md`.
+
+Anything else that needs cross-line state should follow that shape: prove the construct is
+real before trusting it, and confirm before the line's output is committed.
 
 **The worker is a jail.** `kokoro.worker.ts` shims `fetch` to reject any cross-origin
 URL and asserts locality on the ORT paths, because both transformers.js and kokoro-js
