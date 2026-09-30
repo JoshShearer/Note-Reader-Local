@@ -90,6 +90,10 @@ jobs:
             main.js
             manifest.json
             styles.css
+            ort/ort-wasm-simd-threaded.mjs
+            ort/ort-wasm-simd-threaded.wasm
+            ort/ort-wasm-simd-threaded.jsep.mjs
+            ort/ort-wasm-simd-threaded.jsep.wasm
 
   # NRL-69: the SLSA generator is a REUSABLE WORKFLOW, so it has to be called
   # at job level via `jobs.<id>.uses:`. It used to be a step's `uses:`, which

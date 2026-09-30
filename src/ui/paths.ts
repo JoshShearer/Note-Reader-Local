@@ -46,7 +46,7 @@ export interface ModelStorePaths {
 	modelFile(relative: string): string;
 	/** Vault path of the bundled worker script. */
 	workerPath: string;
-	/** Vault path of one bundled onnxruntime WASM file, by file name. */
+	/** Vault path of one onnxruntime WASM file, by file name. */
 	ortFile(name: string): string;
 }
 
@@ -55,7 +55,13 @@ export interface ModelStorePaths {
  *
  * The model directory is deliberately not derived from the plugin folder: a
  * plugin update replaces that folder wholesale, and the weights are a 90MB
- * download that should not have to be repeated each time.
+ * download that should not have to be repeated each time. The ONNX runtime
+ * files live in the same vault-adjacent directory as the weights, for the
+ * same reason (NRL-37): a directory install of the plugin (main.js,
+ * manifest.json, styles.css only) never had `ort/` bundled with it in the
+ * first place, so resolving it inside the plugin folder pointed at files
+ * that would never be there. They are fetched into the model directory on
+ * explicit user action instead (see `downloadOrtRuntime` in modelStore.ts).
  */
 export function modelStorePaths(manifestDir: string, modelDir: string): ModelStorePaths {
 	const pluginRoot = pluginVaultPath(manifestDir);
@@ -66,6 +72,6 @@ export function modelStorePaths(manifestDir: string, modelDir: string): ModelSto
 		modelDir: dir,
 		modelFile: (relative: string) => normaliseVaultPath(`${dir}/${relative}`),
 		workerPath: `${pluginRoot}/kokoro-worker.js`,
-		ortFile: (name: string) => `${pluginRoot}/ort/${name}`,
+		ortFile: (name: string) => normaliseVaultPath(`${dir}/ort/${name}`),
 	};
 }

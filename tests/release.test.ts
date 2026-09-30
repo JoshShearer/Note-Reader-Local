@@ -23,6 +23,9 @@ const VERSIONS_FILE = path.join(ROOT, "versions.json");
 const README_FILE = path.join(ROOT, "README.md");
 const LICENSE_FILE = path.join(ROOT, "LICENSE");
 const ADR_FILE = path.join(ROOT, "docs/adr/0011-release-attestation.md");
+const ADR_ORT_FILE = path.join(ROOT, "docs/adr/0024-ort-on-demand.md");
+const DEPLOY_FILE = path.join(ROOT, "deploy.mjs");
+const MAIN_TS_FILE = path.join(ROOT, "src/main.ts");
 
 let totalTests = 0;
 let passedTests = 0;
@@ -209,6 +212,112 @@ test("No Kokoro weights in ort directory", () => {
 		/kokoro|model|weight|pt$|safetensors$|bin$/.test(f),
 	);
 	assert(!hasKokoroWeights, "Kokoro weights should not be downloaded during build");
+});
+
+// --- ONNX Runtime is fetched on demand, not bundled with the plugin (NRL-37)
+//
+// `esbuild.config.mjs`'s copyOrtRuntime() still populates a repo-root `ort/`
+// build-output directory (checked above), but that directory is not itself
+// "the shipped plugin bundle" - deploy.mjs's copy loop was what made it part
+// of an installed plugin folder, and only a real directory install (main.js,
+// manifest.json, styles.css - exactly what Obsidian's own installer fetches)
+// proves whether that copy actually happened. `npm run deploy` copying `ort/`
+// silently hid the bug this ticket fixes (AGENTS.md verification rule 11),
+// so `ort` must be gone from its copy list, permanently, or the next person
+// to touch deploy.mjs could silently reintroduce the exact bug NRL-37 fixed.
+
+test("deploy.mjs's copy list excludes ort/ (NRL-37)", () => {
+	const content = fs.readFileSync(DEPLOY_FILE, "utf-8");
+	const arrayMatch = content.match(/for \(const item of (\[[^\]]*\])/);
+	const arraySource = arrayMatch?.[1];
+	assert(arraySource !== undefined, "deploy.mjs's copy-item array not found");
+	const items = JSON.parse(arraySource!.replace(/'/g, '"'));
+	assert(
+		!items.includes("ort"),
+		"deploy.mjs must not copy ort/ into the vault plugin folder - it is now " +
+			"fetched by the user via the Settings tab's Download button, and " +
+			"copying it here would hide the directory-install bug NRL-37 fixed",
+	);
+	assert(
+		items.includes("main.js") && items.includes("manifest.json") && items.includes("styles.css"),
+		"deploy.mjs must still copy the three files Obsidian's own installer fetches",
+	);
+});
+
+test("release.yml's Upload Release Assets step includes the four ORT filenames (NRL-37)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const uploadStepMatch = content.match(
+		/Upload Release Assets[\s\S]*?files:\s*\|([\s\S]*?)\n\s*\n/,
+	);
+	const filesBlock = uploadStepMatch?.[1];
+	assert(filesBlock !== undefined, "Upload Release Assets step's files: block not found");
+	for (const file of [
+		"ort/ort-wasm-simd-threaded.mjs",
+		"ort/ort-wasm-simd-threaded.wasm",
+		"ort/ort-wasm-simd-threaded.jsep.mjs",
+		"ort/ort-wasm-simd-threaded.jsep.wasm",
+	]) {
+		assert(
+			filesBlock!.includes(file),
+			`Upload Release Assets step must publish ${file} as an extra release ` +
+				"asset so it is fetchable at releases/download/<tag>/<filename> " +
+				"without changing what Obsidian's own installer fetches",
+		);
+	}
+});
+
+// --- ORT checksum validation distinguishes "missing" from "mismatch" (NRL-37)
+//
+// Before NRL-37, a missing ORT file (the only possible state on a fresh
+// directory install, since the files were never bundled there) and a
+// genuinely corrupt one were folded into the same trace()-only path. Pinned
+// against src/main.ts, not the minified main.js: the pretest chain builds
+// tests from TypeScript sources via build-tests.mjs, and this is a source-
+// shape assertion, not a build-output one. If a future edit collapses the
+// two branches back together, this fails rather than silently reintroducing
+// the bug this ticket fixes.
+
+test("validateOrtChecksums branches on missing vs mismatch as distinct outcomes", () => {
+	const content = fs.readFileSync(MAIN_TS_FILE, "utf-8");
+	assertMatch(
+		content,
+		/worst === "missing"/,
+		"main.ts must check for a missing-runtime status separately from mismatch",
+	);
+	assertMatch(
+		content,
+		/worst === "mismatch"/,
+		"main.ts must check for a mismatch status separately from missing",
+	);
+	// The missing branch must return without alarming the user - it is the
+	// expected pre-download state, not a failure.
+	const missingBranch = content.match(/if \(worst === "missing"\) return;/);
+	assert(
+		missingBranch !== null,
+		'the "missing" branch must be a silent early return, not a trace or Notice',
+	);
+	// The mismatch branch must both trace() (diagnostics) and raise a Notice
+	// (user-visible) - a trace()-only failure is not "visible actionable
+	// failure on mismatch" (the ticket's acceptance criterion).
+	const mismatchSection = content.slice(content.indexOf('worst === "mismatch"'));
+	assertMatch(
+		mismatchSection.slice(0, 800),
+		/trace\(/,
+		'the "mismatch" branch must call trace() for diagnostics',
+	);
+	assertMatch(
+		mismatchSection.slice(0, 800),
+		/new Notice\(/,
+		'the "mismatch" branch must raise a user-visible Notice, unlike "missing"',
+	);
+});
+
+test("ADR 0024 exists and documents the ort-on-demand decision", () => {
+	assertFileExists(ADR_ORT_FILE, "docs/adr/0024-ort-on-demand.md not found");
+	const content = fs.readFileSync(ADR_ORT_FILE, "utf-8");
+	assertMatch(content, /NRL-37/, "ADR 0024 missing NRL-37 ticket reference");
+	assertMatch(content, /checksum/i, "ADR 0024 missing checksum mention");
+	assertMatch(content, /atomic/i, "ADR 0024 missing atomic-write mention");
 });
 
 // --- Workflow File is Valid GitHub Actions YAML
