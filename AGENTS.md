@@ -702,6 +702,37 @@ rediscover them:
   and removed between the two `-O` calls, and the N per-module listings are still read at N
   different instants), and the give-up is memoised with no retry, so a daemon reconfigured
   inside the window leaves every voice `"unknown"` until the plugin reloads.
+  **NRL-87 corrected that machinery's test coverage, not the machinery.** It is test-only:
+  `git diff origin/main...HEAD -- src/` was empty and `speechd.ts` is byte-identical, so no
+  behaviour changed and no requirement became met. What moved is the evidence. NRL-71's
+  `AttributionScript.modulesAgain` in `tests/engine.test.ts` defaults to `modules` when unset,
+  which buys five pre-existing cases as free control arms for the closing `-O` but also replays
+  each case's injected failure onto that closing call, so a failure meant to be caught at the
+  *opening* run was caught at the closing one instead. Two guards silently stopped
+  discriminating - the opening `-O`'s `modulesRun.signal !== null` and the per-module loop's
+  `controller.signal.aborted` - and the closing `-O`'s own `controller.signal.aborted` had never
+  been covered at all. All three are pinned now (case J gains an explicit clean `modulesAgain`;
+  new cases H2 and M5), the default is deliberately kept for the arms that benefit from it, and
+  ADR 0015's "cases I-L pin all of it" is replaced by a per-clause coverage table. Two details
+  are load-bearing and must not be "tidied". **H2 pins by call trace, not by verdict**: with the
+  loop's abort clause deleted the closing guard still gives up and every voice is still
+  `"unknown"`, so `scopedCalls` is the only observable that moves. And **M5's `oCount() === 2` is
+  not decoration**: without it the case degrades into being caught by the loop's abort clause
+  with an identical verdict, leaving the closing clause unpinned again, which is the exact
+  failure the ticket exists to fix.
+  **Four clauses still survive deletion, recorded rather than fixed so they are not
+  rediscovered as new:** **O1**, the opening `-O`'s `controller.signal.aborted`; **O3**, the
+  opening `-O`'s `code !== 0`; **P3**, the per-module loop's `code !== 0`; and **S3**, a
+  count-instead-of-set module comparison. No case in the suite exercises a deadline or a
+  non-zero exit on the opening `-O`, or a non-zero exit on a per-module listing. **No follow-up
+  ticket has been filed.** Do not read the ADR table's "nothing" rows as saying those clauses
+  are dispensable - every clause is load-bearing per the comments on it.
+  All of the above is **bare-Node mutation evidence**: 21 mutations of
+  `src/engines/system/speechd.ts` (19 single-clause plus 2 combined), the full `npm test` after
+  each, the file restored and its sha256 re-asserted every time, with no mutation that was red
+  before going green after. **Nothing was observed in Obsidian**, and that caveat is unusually
+  toothless here because the change has no user-visible surface to observe. R-S01 is a SHOULD
+  and stays narrowed, not closed; the `2 of 16` MUST headline count does not move.
 - Stop now aborts a read that is still in its load phase, as of NRL-48 (`docs/adr/0013`).
   Before it, `main.ts` held no `AbortController` at all and `Player`'s own one is created
   inside `play()`, so during `beforeAttempt`'s `await engine.prepare()` a Stop was
