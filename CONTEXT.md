@@ -83,6 +83,7 @@ src/
 │   ├── types.ts                SpeechEngine, EngineCapabilities, SpeechChunk, VoiceInfo
 │   ├── player.ts               the single playback controller
 │   ├── fallback.ts             playWithFallback(): tries the next engine on a load/first-chunk failure (ADR 0010)
+│   ├── clip.ts                 clipChunksToSelection(): narrows a queue to a selection by scanning sourceIndex (NRL-57)
 │   ├── words.ts                word spans and timing apportionment
 │   ├── wav.ts                  WAV parsing / duration
 │   └── emitter.ts              tiny typed event emitter, isolates listener throws
@@ -115,7 +116,14 @@ src/
 **Offsets, not search.** Highlighting never looks for the spoken string in the editor.
 It carries raw-markdown offsets end to end. This is why `extract.ts` pushes an index
 entry for every dropped span, and why a stripping change that forgets to is a silent
-corruption rather than a crash.
+corruption rather than a crash. Three consumers turn a raw offset into a position in
+spoken text, not one: the highlight, the stored-position resume, and since NRL-57 the
+selection clip in `audio/clip.ts`. All three must **read** `sourceIndex` to find that
+position. The clip is the one that got it wrong, by subtracting `chunk.sourceStart`
+from the selection's `from`, which assumes one raw character produced one spoken
+character. Stripping is exactly what makes that false, so the paragraph above was
+already true when the defect was written under it: say "read the index" rather than
+"carry offsets", because arithmetic on an offset also looks like carrying one.
 
 **Lines are scanned one at a time, with one deliberate exception.** `cleanLine` sees a
 single source line and nothing else, which is why the same `%%` can be a comment on one

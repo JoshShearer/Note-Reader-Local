@@ -7,7 +7,7 @@ import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
 import { platformSegmenters } from "./text/segment";
 import { resolveStoredVoice } from "./audio/voiceChoice";
-import { clipWordSpans } from "./audio/words";
+import { clipChunksToSelection } from "./audio/clip";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
 import {
 	KokoroEngine,
@@ -753,50 +753,20 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			current.filePath,
 		);
 
-		// Filter chunks to only those within the selection range
-		let selectedChunks = chunks.filter((chunk) => chunk.sourceEnd > from && chunk.sourceStart < to);
+		// Each chunk's slice is derived from its own sourceIndex, never from
+		// raw-offset arithmetic: markdown stripping breaks the
+		// one-raw-character-to-one-spoken-character assumption that
+		// `from - chunk.sourceStart` needed (non-negotiable 8, NRL-57).
+		const selectedChunks = clipChunksToSelection(chunks, from, to);
 
+		// Zero speakable content. This now also covers a selection that DID
+		// overlap chunks but contributed no spoken character, because it held
+		// only content extraction excludes - a selection of just `%%hidden%%`
+		// speaks nothing rather than speaking the words after it.
 		if (selectedChunks.length === 0) {
 			new Notice("No text in selection.");
 			return;
 		}
-
-		// Clip chunks to selection boundaries, maintaining sourceIndex synchronization
-		selectedChunks = selectedChunks.map((chunk, idx, arr) => {
-			const isFirst = idx === 0;
-			const isLast = idx === arr.length - 1;
-
-			let textStart = 0;
-			let textEnd = chunk.text.length;
-
-			// Clip first chunk: remove text before selection start
-			if (isFirst && chunk.sourceStart < from) {
-				textStart = from - chunk.sourceStart;
-			}
-
-			// Clip last chunk: remove text after selection end
-			if (isLast && chunk.sourceEnd > to) {
-				textEnd = to - chunk.sourceStart;
-			}
-
-			const newText = chunk.text.slice(textStart, textEnd);
-			const newSourceIndex = chunk.sourceIndex.slice(textStart, textEnd);
-			const newSourceStart = newSourceIndex[0] ?? chunk.sourceStart;
-			const newSourceEnd = (newSourceIndex[newSourceIndex.length - 1] ?? chunk.sourceEnd - 1) + 1;
-
-			return {
-				...chunk,
-				text: newText,
-				sourceIndex: newSourceIndex,
-				sourceStart: newSourceStart,
-				sourceEnd: newSourceEnd,
-				// The spread would carry wordSpans through unchanged, still
-				// indexing the UNCLIPPED text, so every span past the clip
-				// point would be off by textStart and the highlight would land
-				// on the wrong characters (non-negotiable 8).
-				wordSpans: chunk.wordSpans && clipWordSpans(chunk.wordSpans, chunk.text, textStart, textEnd),
-			};
-		});
 
 		const selection = this.settings.engine;
 		const isAutomatic = selection === "auto";
