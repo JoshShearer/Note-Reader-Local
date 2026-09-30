@@ -301,9 +301,19 @@ break exactly as it does on one line.
 **11,520 of 19,456 cells still leak a destination**, tracked as **NRL-88**. Record them as
 **five distinct roots and not one**, because earlier drafts of ADR 0023 and `srs.md:366` said
 "one mechanism" and a reader who assumes it is just containers will fix two of the five and
-believe they are done:
+believe they are done.
 
-1. `interruptsParagraph` matching on the **opener** line - 2,048 of 2,048 cells.
+**Every count in this list is a pre-NRL-74 baseline and root 1's is known to be low.** NRL-74
+made an unmatched mid-line `<!--` literal instead of opening a comment block, and that
+**unmasked 5,120 cells of root 1** which the prose-loss bug had been hiding: a container-prefixed
+soft-wrapped label carrying a mid-line `<!--` used to swallow the rest of the note, so its
+destination was never reached. Measured at NRL-74's correction against base `5009eb6`, base 0 and
+fix 512 in each of 10 shapes; the same shapes without the `<!--` already leaked 512/512 on both
+sides, which is what makes them root 1 rather than a new class. **Re-measure this list before
+reasoning from it** - see NRL-74's bullet below for the numbers and the method.
+
+1. `interruptsParagraph` matching on the **opener** line - 2,048 of 2,048 cells, **plus the
+   5,120 NRL-74 unmasked**; this row is the one the re-measure will move most.
 2. `interruptsParagraph` matching on a line **between** opener and closer - 1,792 of 2,048.
 3. `opensMathBlock`, clause 7a's separate stop - 512 of 512.
 4. **`bracketClosesLater` returns at the first later line bearing any `]`**, so a line that
@@ -1154,11 +1164,41 @@ rediscover them:
   is what keeps a recursively cleaned label truncating locally (`local-html-state`, srs.md's
   non-nesting bullet). And **narrowing `opensHiddenComment` with BOTH terms is mandatory, not
   optional**: the `cleanLine`-only variant newly speaks an image/link **destination** in
-  **2,560 of 2,560** measured cells against 0 on base and 0 on the fix, turning an R-M08
-  prose-loss defect into an R-M09 leak, while adopting the **line-start term alone** is a
-  measured **disclosure** (`Before BT a` / `Prose <!--` / `HIDDENX` / `--> b BT after.` speaks
-  HIDDENX, which base and the fix both keep silent). Three fixtures pin the first and
+  **2,560 of 2,560** measured cells against 0 on base and 0 on the fix **for the
+  plain-paragraph shapes that corpus used**, turning an R-M08 prose-loss defect into an R-M09
+  leak, while adopting the **line-start term alone** is a measured **disclosure**
+  (`Before BT a` / `Prose <!--` / `HIDDENX` / `--> b BT after.` speaks HIDDENX, which base and
+  the fix both keep silent). Three fixtures pin the first and
   `guard-nrl74-variant-C-disclosure` pins the second.
+
+  **That "0 on the fix" is true of the PLAIN shape only, and the full fix DOES newly speak a
+  destination in the container-prefixed class.** This is the correction Verify blocked PR #113
+  for, and the earlier wording asserted the opposite of what is measurable, so read the numbers
+  here and not that sentence's implication. A container-prefixed soft-wrapped image or link
+  label whose label carries a mid-line `<!--` - `> Before ![alt <!--x` / `> more](zdestz.png)
+  after.` - went from `"Before [alt"` on base to `"Before [alt <!--x more](zdestz.png) after."`
+  on the fix. Measured at correction by bundling both arms against base `5009eb6` with the
+  repo's own esbuild: **5,120 of 6,144 cells newly speak the destination, base 0 and fix 512 in
+  every one of 10 shapes** (blockquote / nested quote / bullet / ordered / task, x image, link,
+  x all 512 content-key combinations). The **plain** shapes are **0 -> 0**, widened at
+  correction to 8 plain shapes / **4,096 cells, 0 on base and 0 on the fix** - which is exactly
+  why the three pins above and every probe the PR ran missed it.
+
+  **It is not a new leak class, and that distinction is the whole of why the behaviour was not
+  reverted.** The identical container shapes **without** the `<!--` already leak **5,120 of
+  5,120 on base AND on the fix** (measured at correction, same arms): that is **NRL-88 root 1**,
+  `interruptsParagraph` matching a container on the opener line, so `bracketClosesLater` never
+  confirms and the construct falls through as prose. Base's 0 was the prose-loss bug *masking*
+  exactly the `<!--`-bearing members of that class - it hid the destination by swallowing the
+  rest of the note - and fixing the prose loss unmasks them. The root was **traced, not
+  guessed**: `interruptsParagraph` tests `BLOCKQUOTE` and `LIST_BULLET` directly, and a
+  **3-space indent**, which is not a container it matches, measures **0 -> 0** with the
+  destination correctly dropped. Attribute it to **root 1 and not root 2**. CommonMark parses
+  these as valid images, so the destination is an attribute and speaking it is a genuine R-M09
+  disclosure rather than renderer-faithful; keeping a prose-loss defect in order to mask it is
+  not the trade, which is why this is documented and pinned rather than reverted.
+  `pin-nrl74-container-label-still-leaks-destination` pins one shape of it, **as a tripwire and
+  not as evidence of a fix**: when NRL-88 closes root 1 that expectation must change on purpose.
 
   Evidence, all bare-Node, four arms built side by side against base `8635ed2`, keyed on an
   oracle **transcribed from those tokenizers** and self-tested on 21 hand-traced cases first
@@ -1168,6 +1208,11 @@ rediscover them:
   renderer hides, 0 spoken on base and 0 on the fix; Class B, text it displays, lost 9,216 ->
   2,304 of 13,312; 0 cells newly leaking and 0 newly lost**, with the residual 2,304 fully
   accounted for (1,024 the known gap above, 1,280 content exclusions the oracle cannot see).
+  **Read that "0 newly leaking" with its scope attached**: the oracle's two classes are *text*
+  the renderer hides and *text* it displays, and an image or link **destination** is an
+  attribute rather than either, so the 5,120-cell destination move above sits **outside both
+  classes** and this probe could not have reported it. That is a scope limit of the oracle, not
+  a contradiction of its numbers.
   Disclosure probes for **both** widened lookaheads: `codeSpanClosesLater` **8,704 cells** and
   `bracketClosesLater` **3,072 cells**, hidden sentinel **0 on base, 0 on the fix, 768 each on
   the forbidden line-start-only variant** - which is what makes them non-vacuous. Both
@@ -1182,8 +1227,13 @@ rediscover them:
   the `text[i] === " "` exemption shown pre-existing (without it the fix reports 8,192 and BASE
   reports 512). A **4,000-note fuzz**: 0 newly leaking; its 8 "lost" cells are all at
   `skipInlineCode: true` and 0 at false, the exclusion class NRL-73's ship review already
-  recorded; and its 58 destination cells **all 58** speak the whole literal `](zdestz.png)` on a
-  construct with no matching opener, so they are literal text the renderer shows.
+  recorded; and its 58 destination cells **all 58** speak the whole literal `](zdestz.png)`,
+  which the PR dismissed as "a construct with no matching opener, so literal text the renderer
+  shows". **That dismissal was wrong, and it is how the 5,120-cell class above got through.**
+  A container-prefixed soft-wrapped label has a matching `![`/`[` opener *and* a matching
+  `](...)`, so speaking the whole literal is precisely the symptom, not a reason it is benign.
+  The fuzz saw the signal and the reasoning discarded it. Which of those 58 cells are that class
+  was **not** re-measured at correction; the class itself was, at 5,120 cells, directly.
 
   **One pre-existing fixture moved, silent -> spoken**: `tests/extract.test.ts:959` (NRL-45
   decision Q9) went `[]` -> `["ZSECRETZ sentence here."]`, the only one in the whole suite. It
@@ -1211,8 +1261,11 @@ rediscover them:
   divergence** (`# %% off` / `ZHZ` / `%% after ZPZ.`), identical on both sides, pinned as
   `heading-tracking`, **no ticket filed**. **`interruptsParagraph`'s answer set changed, so
   whichever of NRL-74 and NRL-88 merges second must re-measure NRL-88's five roots**; they are
-  neither re-measured nor claimed here. R-M08 is **NOT** met and the `2 of 16` count does not
-  move.
+  neither re-measured nor claimed here. **Concretely: NRL-74 UNMASKS 5,120 cells of NRL-88 root
+  1** that the prose-loss bug was hiding, so root 1's recorded `2,048 of 2,048` and the
+  `11,520 of 19,456` headline in the R-M09 section are both **pre-NRL-74 baselines** and neither
+  is current. NRL-88 runs next in this batch and must re-measure before it reasons from them.
+  R-M08 is **NOT** met and the `2 of 16` count does not move.
 - R-C02's Context table named three gaps: three of five install-time fields missing (language,
   installed size, license), and no remove action at all, so up to 573 MB across three Kokoro
   builds plus the ~31 MB ORT runtime could accumulate in a directory deliberately hidden from

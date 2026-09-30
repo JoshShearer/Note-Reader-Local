@@ -1326,9 +1326,41 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// that variant against 0 on base and 0 here. So this pair, and the link
 		// twin below, are what a later "simplification" of the opensHiddenComment
 		// narrowing would trip over - nothing else in the suite would.
+		// SCOPE, measured at correction: "0 here" is true of the PLAIN-paragraph
+		// shape these three use, and of that shape only. Put a container prefix
+		// on the same construct and the destination IS spoken on this fix - see
+		// pin-nrl74-container-label-still-leaks-destination below.
 		["pin-nrl74-label-destination-not-spoken", "Before ![alt <!--x\nmore](zdestz.png) after.", "Before after.", { speakImageAlt: false }],
 		["pin-nrl74-label-destination-not-spoken-alt", "Before ![alt <!--x\nmore](zdestz.png) after.", "Before alt more after.", { speakImageAlt: true }],
 		["pin-nrl74-link-label-destination-not-spoken", "Before [lab <!--x\nmore](zdestz.png) after.", "Before lab more after."],
+		// NOT EVIDENCE OF A FIX. This pins a KNOWN LEAK that this fix UNMASKED,
+		// so it is a guard against silent change and nothing more. Read it as a
+		// tripwire for NRL-88, not as a promise kept.
+		//
+		// A container-prefixed soft-wrapped label is never confirmed, because
+		// bracketClosesLater runs interruptsParagraph over the opener line and
+		// BLOCKQUOTE/LIST_BULLET match it - NRL-88 root 1, which leaks 512/512 on
+		// base and on this fix alike in its `<!--`-free form. The `<!--`-bearing
+		// members of that class USED to be masked: base opened a comment block on
+		// the mid-line `<!--` and swallowed the rest of the note ("Before [alt"),
+		// which hid the destination by losing prose. Making the `<!--` literal is
+		// the right trade - you do not keep a prose-loss defect to mask a leak -
+		// but it does mean the whole construct, `](zdestz.png)` included, now
+		// falls through as prose.
+		//
+		// Measured at correction by bundling both arms against base 5009eb6:
+		// 5,120 of 6,144 cells newly speak the destination, 512 in each of 10
+		// shapes (blockquote / nested quote / bullet / ordered / task, x image,
+		// link, x all 512 content-key combinations), base 0 and fix 512 in every
+		// one. The 2 PLAIN shapes in that 6,144 are 0 on both sides, which is why
+		// the three pins above did not see it. Root traced rather than guessed: a
+		// 3-space indent is not a container interruptsParagraph matches, and that
+		// shape is 0 -> 0 with the destination correctly dropped.
+		//
+		// So when NRL-88 closes root 1, THIS EXPECTATION MUST CHANGE, to the
+		// "Before after." / "Before alt more after." pair its plain twins carry.
+		// It is written down so that happens on purpose.
+		["pin-nrl74-container-label-still-leaks-destination", "> Before ![alt <!--x\n> more](zdestz.png) after.", "Before [alt <!--x more](zdestz.png) after."],
 		// GUARDS. Green on both sides of the fix, so none is evidence of
 		// anything; they exist so the two-term rule cannot be half-adopted.
 		// AC 2: the line-start term alone still hides through EOF.

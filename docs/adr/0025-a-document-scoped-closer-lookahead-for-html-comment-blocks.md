@@ -196,16 +196,50 @@ express it.
    The `cleanLine` half alone is not a safe subset, and this is the conclusion a
    future reader is most likely to "simplify" away, so it is measured rather than
    asserted. Built as its own arm against base `8635ed2`: over **2,560
-   destination-bearing cells** (5 shapes x 512 content-key combinations),
-   `zdestz` is spoken in **0 on base, 0 on the full fix, and 2,560 on the
-   `cleanLine`-only variant**. The mechanism is that the now-literal `<!--` stops
-   the label line truncating, so the unmatched `![` survives to the carry site -
-   but with `opensHiddenComment` left wide, `bracketClosesLater` still refuses to
-   confirm, the label is never recognised, and the whole construct including
-   `(zdestz.png)` falls through as prose. That turns an R-M08 prose-loss defect
-   into an R-M09 destination leak. `pin-nrl74-label-destination-not-spoken`, its
-   `-alt` twin and `pin-nrl74-link-label-destination-not-spoken` are the only
-   things in the suite that would catch a revert.
+   destination-bearing cells** (5 shapes x 512 content-key combinations, **all of
+   them plain-paragraph**), `zdestz` is spoken in **0 on base, 0 on the full fix,
+   and 2,560 on the `cleanLine`-only variant**. The mechanism is that the
+   now-literal `<!--` stops the label line truncating, so the unmatched `![`
+   survives to the carry site - but with `opensHiddenComment` left wide,
+   `bracketClosesLater` still refuses to confirm, the label is never recognised,
+   and the whole construct including `(zdestz.png)` falls through as prose. That
+   turns an R-M08 prose-loss defect into an R-M09 destination leak.
+   `pin-nrl74-label-destination-not-spoken`, its `-alt` twin and
+   `pin-nrl74-link-label-destination-not-spoken` are the only things in the suite
+   that would catch a revert.
+
+   **CORRECTION. "0 on the full fix" holds for the plain shapes only.** The
+   sentence above was written as though it settled the destination question for
+   the whole fix, and it does not: PR #113 was blocked for asserting exactly that.
+   Put a **container prefix** on the same construct and the full fix speaks the
+   destination. `> Before ![alt <!--x` / `> more](zdestz.png) after.` goes
+   `"Before [alt"` on base to `"Before [alt <!--x more](zdestz.png) after."` on
+   the fix. Measured at correction against base `5009eb6`, both arms bundled with
+   the repo's own esbuild: **5,120 of 6,144 cells newly speak `zdestz`, base 0 and
+   fix 512 in each of 10 shapes** (blockquote / nested quote / bullet / ordered /
+   task, x image, link, x 512 content-key combinations). The **plain** family is
+   **0 -> 0**, re-measured over 8 plain shapes / **4,096 cells**.
+
+   **The cause is this fix unmasking NRL-88 root 1, not a mechanism of its own.**
+   The identical container shapes **without** the `<!--` already speak the
+   destination **5,120 of 5,120 on base and on the fix alike**:
+   `bracketClosesLater` runs `interruptsParagraph` over the opener line, which
+   matches `BLOCKQUOTE` and `LIST_BULLET`, so a container-prefixed label is never
+   confirmed either way. Base's 0 on the `<!--`-bearing members was the prose-loss
+   defect masking them - it hid the destination by swallowing the note - and
+   removing the prose loss exposes what was already broken underneath. Traced
+   rather than assumed: a **3-space indent**, which `interruptsParagraph` does not
+   match, is **0 -> 0** on the same corpus with the destination correctly dropped.
+   So it is **root 1**, not root 2.
+
+   This is **not** grounds to revert decision 6 or the fix: you do not keep a
+   prose-loss defect in order to mask a destination leak, and the leak was already
+   present for every container-prefixed label that did not happen to carry a
+   `<!--`. It is grounds to record it and pin it, which
+   `pin-nrl74-container-label-still-leaks-destination` does **as a tripwire, not as
+   evidence** - when NRL-88 closes root 1 that fixture's expectation must change.
+   CommonMark parses these as valid images, so the destination is an attribute the
+   renderer never displays and speaking it is a real R-M09 disclosure.
 
 7. **Adopting the line-start term ALONE is FORBIDDEN.** `opensHiddenComment` can
    answer term 1 from its own argument and not term 2, so half the rule looks
@@ -246,7 +280,12 @@ that way: the `%%` tokenizer eats `t.slice(0, s)` and so leaves its closer line'
 remainder displayed, where the HTML block tokenizer consumes its closer line
 whole. Modelling both the same way manufactured 1,536 phantom leaks.
 
-- **Two-class probe**, 20 shapes x 512 combinations. Class A (renderer hides):
+- **Two-class probe**, 20 shapes x 512 combinations. **Scope first, because this
+  probe's "0 newly leaking" was over-read**: its classes are *text* the renderer
+  hides and *text* it displays, and an image or link **destination** is an
+  attribute rather than either, so the 5,120-cell destination move in decision 6's
+  correction lies **outside both classes** and this probe was structurally unable
+  to see it. Class A (renderer hides):
   **0 spoken on base, 0 on fix, 0 on `conly`**, out of 6,656 cells per arm.
   Class B (renderer displays): lost **9,216 -> 2,304** of 13,312. **0 cells newly
   leaking and 0 newly lost.** Of the residual 2,304: **1,024** are the known gap
@@ -262,10 +301,16 @@ whole. Modelling both the same way manufactured 1,536 phantom leaks.
   **0 base / 0 fix / 0 conly / 768 vc**. `bracketClosesLater`: 6 shapes x 512 =
   **3,072 cells**, hidden sentinel **0 / 0 / 0 / 768 vc**. The `vc` column is
   what makes these non-vacuous: the probe can see the class it is looking for.
-  The destination `zdestz` in that second matrix is spoken in **2,048 of 3,072
-  on base, fix and conly alike** - unchanged by this diff, and attributable to
-  NRL-88 root 2 (`interruptsParagraph` matching on a line between opener and
-  closer). Not claimed here.
+  The destination `zdestz` **in that second matrix, and in that matrix only**, is
+  spoken in **2,048 of 3,072 on base, fix and `conly`** - unchanged across those
+  three arms for those 6 shapes. **Do not read the "alike" as a statement about
+  the diff, which is how it was originally written and is false**: outside that
+  matrix the destination **does** move, 0 -> 5,120 cells in the
+  container-prefixed class (decision 6's correction above), and that class is
+  **root 1** - `interruptsParagraph` matching a container on the **opener** line -
+  not root 2. Whether the 6 shapes in this matrix are themselves root 2 was taken
+  from the original probe and **not** re-measured at correction; what was
+  re-measured is the class that moved.
 - **Both confirmations are structurally unweakened.** `codeSpanClosesLater` and
   `bracketClosesLater` were brace-matched out of `git show 8635ed2` and out of
   the branch: after removing ONLY the new parameter and the two
@@ -303,8 +348,15 @@ whole. Modelling both the same way manufactured 1,536 phantom leaks.
   `skipInlineCode: false`**, all in notes carrying both a backtick and a label
   opener - the exclusion class above, not prose loss. 58 cells speak `zdestz`
   where base said nothing, and **58 of 58 speak the whole literal
-  `](zdestz.png)`**: the construct has no matching opener, so it is literal text
-  the renderer also displays, not a destination leak. `sourceIndex` clean on both
+  `](zdestz.png)`**, which this ADR originally dismissed as "the construct has no
+  matching opener, so it is literal text the renderer also displays, not a
+  destination leak". **That dismissal was wrong and it is how the class in decision
+  6's correction got through.** A container-prefixed soft-wrapped label has a
+  matching `![`/`[` opener *and* a matching `](...)`; speaking the whole literal is
+  the symptom of the leak, not evidence against it. The fuzz saw the signal and the
+  reasoning threw it away. How many of the 58 belong to that class was not
+  re-measured at correction - the class was measured directly instead, at 5,120
+  cells. `sourceIndex` clean on both
   arms once the synthesised `"equation"` chunk is excluded (ADR 0004 builds its
   index by hand, so `src[at]` is `$`; 306 base / 316 fix), with **0 notes failing
   on the fix that do not also fail on base**.
@@ -349,9 +401,13 @@ arms, same esbuild, base `8635ed2`. All bare Node.
     either side (the `<!--` breaks the frontmatter scan, and so does a `%%`), so
     it is a setext heading whose `%%` sibling **already spoke `DDD` on base**.
     256 of 512, every one at `skipHeadings: false`.
-- **D-74-9 re-measured on a 5-shape corpus**: `zdestz` spoken in **0 of 2,560 on
-  base, 0 of 2,560 on the fix, 2,560 of 2,560 on the `cleanLine`-only arm**,
-  which reproduces decision 6 exactly.
+- **D-74-9 re-measured on a 5-shape corpus, all of it plain-paragraph**: `zdestz`
+  spoken in **0 of 2,560 on base, 0 of 2,560 on the fix, 2,560 of 2,560 on the
+  `cleanLine`-only arm**, which reproduces decision 6 exactly. **Ship review shared
+  Implement's blind spot here**: a second corpus was built to avoid one probe's
+  blind spot being the whole evidence, and it was plain-paragraph too, so it
+  confirmed the plain result twice and never reached the container-prefixed class
+  that moves 0 -> 5,120. See decision 6's correction.
 - **D-74-11 re-measured** by building the symmetric variant: `[label <!--hidden](target) after.`
   / `Visible.` speaks `"label after. Visible."` on base and on the fix and
   `"label <!--hidden after. Visible."` on the symmetric arm, with the image twin
