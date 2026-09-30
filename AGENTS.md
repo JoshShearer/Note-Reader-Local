@@ -936,8 +936,9 @@ rediscover them:
   **unknown**: the transcribed tokenizer models the `%%` construct only, and `FE(e, "comment",
   "fencedCode", ...)` orders it against *fencedCode*, saying nothing about indented code. So
   narrowing the predicate would be right for the paragraph-continuation case and possibly the
-  wrong shape for the fresh-block one. Tracked as **NRL-89**, and it needs the indented-code
-  question answered first.
+  wrong shape for the fresh-block one. Tracked as **NRL-93**, and it needs the indented-code
+  question answered first. (The commit message for this change says NRL-89: that number was
+  written before the issue was filed and Linear assigned 93. NRL-93 is the real one.)
 
   One behaviour class NRL-73's own probes did not report, found by the ship-review fuzz over
   120,960 cells: a soft-wrapped code span whose interior holds **only disqualified `%%` lines**
