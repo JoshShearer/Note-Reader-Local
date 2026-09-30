@@ -107,17 +107,18 @@ the file - the coverage is per clause, not per case:
 
 | Clause | Pinned by |
 | -- | -- |
-| opening `-O`: `controller.signal.aborted` | **nothing** (survives deletion) |
+| opening `-O`: `controller.signal.aborted` | case J2 (NRL-94), by call trace: the loop's own abort clause catches the deletion one step later, so the verdict cannot move |
 | opening `-O`: `modulesRun.signal !== null` | case J, which needs an explicit clean `modulesAgain` to do it |
-| opening `-O`: `modulesRun.code !== 0` | **nothing** (survives deletion) |
+| opening `-O`: `modulesRun.code !== 0` | case J3 (NRL-94), which needs a valid two-module stdout and an explicit clean `modulesAgain` to do it |
 | per-module loop: `controller.signal.aborted` | cases H and H2, by verdict AND call trace (NRL-84; was H2 by call trace only) |
 | per-module loop: `signal !== null` | cases I and L |
-| per-module loop: `code !== 0` | **nothing** (survives deletion) |
+| per-module loop: `code !== 0` | case D4 (NRL-94), whose failing listing must have parseable rows or the `rows.length === 0` guard catches it instead |
 | closing `-O`: `closingScope.signal.aborted` | case M5, re-fixtured onto the closing budget (NRL-84) |
 | closing `-O`: `againRun.signal !== null` | case M3 |
 | closing `-O`: runs under `closingScope.signal`, not the outer one | case M7 (NRL-84) |
 | closing `-O`: the outer abort clause is ABSENT | case M7 (NRL-84) |
 | closing `-O`: `againRun.code !== 0` | case M4 |
+| closing `-O`: the module set is compared as a SET, not by count | case M8 (NRL-94); case M2 is its other half, pinning that a REORDERED set still attributes |
 
 Two of those pins did not exist before NRL-87 and one was silently lost.
 NRL-71's `modulesAgain` field defaults to `modules` when unset, which buys five
@@ -144,9 +145,17 @@ discriminator for this clause without being edited. The call trace is kept as a
 check in its own right because it is the only observable that says *where* the
 loop stopped, but it is no longer the only one that moves.
 
-The three rows marked "nothing" are measured survivors, recorded rather than
-fixed: they are outside NRL-87's scope and no case exercises a deadline or a
-non-zero exit on the opening `-O`, or a non-zero exit on a per-module listing.
+**Closed by NRL-94.** The three rows above used to read "**nothing** (survives
+deletion)", and a fourth clause - the module-set re-read compared as a set rather
+than by count - had no row at all. All four are now pinned: the opening `-O`'s
+`controller.signal.aborted` by **case J2**, its `modulesRun.code !== 0` by **case
+J3**, the per-module loop's `code !== 0` by **case D4**, and the set-not-count
+comparison by **case M8**. Each was reproduced as a survivor first - the mutation
+applied to `src/engines/system/speechd.ts`, the full 24-suite `npm test`
+observed exiting 0 with the engine suite green at 207 checks - and then measured
+red with the new case present, with the failing check named in each direction.
+The evidence is bare-Node mutation testing only; NRL-94 changed nothing under
+`src/`, so `probeAttribution()` is byte-identical and no requirement moved.
 Do not read this table as saying the clauses are dispensable - `probeAttribution()`
 is unchanged and every clause is load-bearing per the comments on it.
 
