@@ -137,6 +137,29 @@ the same `BLOCKED_BY_HOST` result in the plugin's own diagnostics log. Result: B
 demonstrated rather than assumed, which is the valid terminal state the spec's Spike Failure clause
 describes and is why Kokoro-in-WebView is the Android backend rather than a native bridge.
 
+That same device surfaced a second, narrower blocker after NRL-60 and NRL-61 fixed the
+worker-loading bug and polyfilled two missing runtime APIs (`Object.hasOwn`, `ReadableStream`
+async iteration): Kokoro's vendored `onnxruntime-web` runtime is a WASM SIMD build by name
+(`ort-wasm-simd-threaded.wasm` / `.jsep.wasm`), and the device's WebView reports
+`WebAssembly SIMD is not supported in the current environment`. This is a VM instruction-set
+gap, not a missing JS API, so it cannot be polyfilled - confirmed by live re-testing on the
+device, not assumed. NRL-62 considered and rejected building a non-SIMD fallback (a second
+vendored WASM build set, `WebAssembly.validate()` feature detection, and a parallel path in
+`kokoro.ts`'s backend plan): Chrome shipped WASM SIMD in May 2021, so the large majority of
+Android devices in real use today already support it, and the one confirmed non-SIMD device is
+this same frozen Huawei OEM WebView component (`com.huawei.webview`, no Play-Store-updatable
+Android System WebView package on it) that NRL-35 already found unusual rather than
+representative. Weighed against that speculative benefit, the concrete cost is real: a second
+set of vendored WASM files, a second set of build-time checksums, and a larger install for
+every user, not only pre-2021 ones. The decision is to document pre-2021-WebView /
+non-SIMD Android as an **explicit out-of-support tier** rather than build the fallback.
+`srs.md` makes no formal WASM/SIMD requirement to amend - R-M03 only requires the native-bridge
+spike NRL-35 already resolved, and is silent on WASM instruction-set support entirely, so this
+is a scoping decision on an unstarted requirement, not a documented spec deviation, and no ADR
+is warranted. Revisit if a second independent non-SIMD device report surfaces, or after NRL-37
+ships: on-demand ORT download changes the cost side of this calculus, since a non-SIMD build
+would then be a second optional download rather than a mandatory addition to every install.
+
 R-M01's *evidence* is weaker than that parenthesis reads, and NRL-69 corrected it without
 moving the count. The "SLSA Level 3 workflow" had **never completed a single successful
 run**. Measured over the repo's full paginated Actions history at `01c9a84`: 112 recorded
