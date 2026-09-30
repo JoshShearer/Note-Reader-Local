@@ -295,6 +295,38 @@ rediscover them:
   wikilink NRL-46 works to avoid saying - which is inherent to a span-based mark and has
   no privacy consequence, since nothing is logged or spoken and the text is already on
   screen, but the mark does assert "I am reading this" over a skipped span.
+- A selection-scoped read clips its queue by **scanning** `sourceIndex` as of NRL-57
+  (`src/audio/clip.ts`, `srs.md` R-M11). This defect was not recorded here before, and it
+  shipped inside NRL-52. The deleted expression was `textStart = from - chunk.sourceStart`
+  in `main.ts`: subtracting one raw offset from another is only right while one raw
+  character produces one spoken character, and markdown stripping is exactly what breaks
+  that, so the slice slid by however many characters had been stripped. Measured at
+  `bbe37f3` by bundling the real `extract.ts`, `segment.ts` and `words.ts` with the old
+  clip transcribed verbatim: selecting `bold` out of `Before **bold** after.` spoke
+  `ld a` mapped [11,17), 2 offsets outside the selection; selecting `after` in the same
+  note spoke `r.`, 1 outside; selecting `label` out of `Before [label](destination)
+  after.` spoke `abel `, 1 outside; and selecting `hidden` out of `Before %%hidden%%
+  after.` spoke `ter.` mapped [20,24), 4 outside - text from outside the selection
+  entirely. The scan compares with `<` against the selection bounds and never searches for
+  an exact offset, because `sourceIndex` is non-decreasing but **not** strictly
+  increasing: `mergeShort`'s synthesised join space can take the same offset as the entry
+  before it. **The load-bearing warning is about the test, not the code.**
+  `note[sourceIndex[i]] === text[i]` was GREEN on the bug, 0 mismatches on all four cases,
+  because the old clip sliced `text` and `sourceIndex` by the same wrong window, so
+  character identity survived while the window was wrong. That assertion passing is how 73
+  green checks in `tests/readSelection.test.ts` hid this through PR #58, and it is kept
+  only as a guard, explicitly labelled one. That file no longer holds a 37-line copy of the
+  implementation; it imports the real symbol, which is the other half of why it could not
+  fail. Evidence: 17 checks red against the old algorithm staged in the new module (16
+  C-cases plus the point-selection case), 0 red after, with every check that was green on
+  both sides relabelled a guard rather than counted. One **user-visible behaviour change**:
+  a selection holding only content extraction excludes now shows "No text in selection."
+  and starts no playback, where it used to speak whatever the miscomputed slice landed on.
+  **Nothing was observed in Obsidian** - no deploy and no CDP session happened during this
+  work - so the two host-side halves are unverified: that `read-selection` still appears in
+  the palette only with a selection, and that the Notice appears in the real UI. This does
+  **not** move the `2 of 16` MUST count. R-M11 was never on the met list, `main.ts` still
+  has no runtime in the suite, and rule 11 applies.
 - Rename and delete handlers exist as of NRL-51: `this.app.vault.on("rename")` and
   `("delete")` in `onload`, both through `registerEvent`. One path-boundary-safe prefix
   sweep covers stored positions for files and folders with no type branch. Repeated events

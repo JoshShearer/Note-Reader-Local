@@ -430,6 +430,16 @@ Source mapping SHALL support:
 - Cursor-based playback.
 - Future editing/navigation features.
 
+A selection-scoped read is one of those consumers, and it is worth stating
+explicitly because the abstract wording above left room for the arithmetic that
+NRL-57 removed. A read restricted to a selection SHALL derive the boundaries of
+each segment's spoken text by scanning `SpeechChunk.sourceIndex` for the raw
+offsets the selection names, and SHALL NOT derive them by arithmetic on
+`sourceStart`/`sourceEnd` or by searching the note for the spoken string.
+Subtracting one raw offset from another assumes one raw character produced one
+spoken character, which Markdown stripping is precisely what breaks. This adds
+no promise R-M11 did not already make; it names the one way of keeping it.
+
 ---
 
 ### R-M12 — Reading Position
