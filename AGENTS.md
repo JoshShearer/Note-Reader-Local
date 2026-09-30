@@ -237,9 +237,10 @@ origin` is empty and `gh release list` is empty - so `actions/create-release`, t
 upload and the SLSA provenance job have never executed once, and `srs.md`'s "SLSA Level 3
 provenance" MUST still rests on a workflow that has never produced an attestation. Treat
 R-M01 as met on its shipped files and **unexercised on its release path**. Tracked as
-NRL-79. Of the two defects known to sit on that unexercised path, **NRL-75 is fixed** and
-NRL-76 is not. NRL-75's own parenthesis needs correcting as well as closing: `tags: ["*"]`
-does **not** match any tag, it matches any tag whose name holds no `/`, because GitHub's
+NRL-79. Of the two defects known to sit on that unexercised path, **both are now fixed**,
+NRL-75 and NRL-76, and both are fixed desk-verified only. NRL-75's own parenthesis needs
+correcting as well as closing: `tags: ["*"]` does **not** match any tag, it matches any tag
+whose name holds no `/`, because GitHub's
 published table row for `'*'` reads "Matches all branch and tag names that don't contain a
 slash (`/`)" (github/docs@main `workflow-syntax.md`, read verbatim during NRL-75). So the
 `backup/nrl-54-pre-split-...` tag the ticket cited was **documented-inert**, and the live
@@ -273,8 +274,33 @@ adjacent `release_name` line uses the bare `github.ref_name`; and **nothing anyw
 a pushed tag matches `manifest.json`'s version**, so the trigger now admits only bare semver but
 admits any bare semver. Neither was measured, because the path has never run, and both belong to
 NRL-79 rather than to NRL-75.
-NRL-76 is untouched (the checksum step `cd dist || true` into a directory that does not
-exist, whose output feeds the provenance job's subjects). `actionlint` 1.7.7 is not a substitute for
+**NRL-76 is fixed** (`8797745`), and the defect it closed was worse than the ticket recorded.
+The old step's `cd dist || true` plus its `if [ -f ... ]` guard did not merely hash the repo
+root by accident: with one published asset missing it exited **0** and wrote a *silently
+truncated* attestation - 216 bytes covering two subjects - rather than the absent one the
+ticket predicted, so a green run could have shipped provenance that omitted files the release
+carried. The step now hashes **all seven** published paths, including the four `ort/` WASM
+runtime files, and three parts of that are load-bearing. `set -euo pipefail` is not
+decoration: without `pipefail` a missing asset still gives exit 0 and 720 bytes of truncated
+`hashes=`, because the failing `sha256sum` sits upstream of a pipe. The non-empty guard lives
+**in the build step**, and there is deliberately **no `if:` on the provenance job** - a
+failing step already stops it through `needs: build`, whereas an `if:` would SKIP provenance
+silently and produce a green run with no attestation, which is the same silence being removed.
+And the `ort/` path prefixes are safe in the SLSA input format, settled at source rather than
+assumed: the generator's `parseSubjects` validates the **digest** only, and `verifyDigest`
+never reads `subject.Name`. In `tests/release.test.ts`, `extractUploadedFiles` is the single
+source of truth tying the hashed set to the published set, and it and `extractRunBlock` both
+**throw** rather than returning empty, so a parser that stops matching fails the suite instead
+of passing vacuously. **Still entirely unexercised**: nothing here has run on a GitHub runner,
+no tag has ever been pushed and no attestation has ever been produced, so every number above
+is a local bash execution of the step body. R-M01 does not move and stays unmet on its
+release path.
+One method trap from that work, recorded because mutation testing is how several tickets in
+this repo establish their counts: **symlinking a shadow root defeats mutation testing**. Node
+resolves symlinks, so a `__dirname`-derived `ROOT` silently resolves back to the real
+worktree, the mutation is never read, and every run comes back green. Copy the bundle instead
+of linking it, and sanity-mutate once before trusting a shadow.
+`actionlint` 1.7.7 is not a substitute for
 running it: measured during NRL-69, it was silent on **both** halves of the compile defect
 that had broken every run in this repo's history, so its silence on this file is weak
 evidence. The `2 of 16` headline count does not move in either direction. Note also that
