@@ -338,6 +338,31 @@ rediscover them:
   neither a latency problem: `-S` still cuts off another client sharing the daemon, and the
   Player can still run a chunk ahead after a stop because `-w` is not an audio-end signal
   (`CONTEXT.md` explains that part).
+- speechd voices are no longer uniformly `"unknown"` as of NRL-55 (`docs/adr/0015`).
+  `spd-say -L` still has no module column, so `listVoices()` now runs a differential
+  self-check instead: enumerate modules with `spd-say -O`, require at least two, run
+  `spd-say -o <module> -L` per module, and attribute rows **only if not all modules' row
+  sets are identical**, which is what catches a build that ignores `-o`. A NAME is
+  `local: true` / `requiresNetwork: false` only when every module serving it is on the
+  closed allowlist (`espeak-ng`, `openjtalk`); everything else stays `"unknown"` and the
+  engine can never emit `local: false`. `RunResult.signal` in `src/engines/system/spawn.ts`
+  became a **required** field for this: an aborted or externally killed child closes with a
+  null exit code, `code ?? 0` reads that as success, and a silently truncated listing is
+  worse than a missing one, because losing a row removes the ambiguity that was keeping a
+  shared NAME `"unknown"` *and* makes two identical listings differ. Do not make it optional
+  again, and do not "simplify" `code ?? 0`, which NRL-41's Stop depends on.
+  **R-S01 is narrowed, not closed, and R-S04 is explicitly not claimed** (ADR 0015 says why,
+  and corrects a stale premise about `offlinePreferred` while it is there). The evidence is
+  bare-Node and real-daemon measurement: against the running daemon 13,231 voices moved from
+  `"unknown"` to `local: true` with 0 left `"unknown"`; the allowlist demonstrably gates,
+  since replaying the real daemon's own bytes with `espeak-ng` relabelled non-allowlisted
+  flips all 13,231 back to `"unknown"`; and a 40-mode / 66-check fail-closed matrix all
+  landed on `"unknown"`. **Nothing was observed in Obsidian** - CDP port 9222 was refused at
+  every attempt. Two residual shapes are named in ADR 0015's Residual risk with their
+  measurements: a short read that exits `code 0` with no signal, which no observable can
+  detect, and the probe's non-atomicity across `-O` then N x `-o -L`, where removal fails
+  closed but addition inside the measured 778 ms window could produce a wrong `local: true`.
+  NRL-71 tracks the partial mitigation for the second.
 - Stop now aborts a read that is still in its load phase, as of NRL-48 (`docs/adr/0013`).
   Before it, `main.ts` held no `AbortController` at all and `Player`'s own one is created
   inside `play()`, so during `beforeAttempt`'s `await engine.prepare()` a Stop was
