@@ -1327,20 +1327,19 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		// so the words either side do not run together - the `no doubled space`
 		// assertion below covers that from the other direction.
 		//
-		// "first" is still spoken, and that is NRL-64 (N1), not a defect in this
-		// fix: the literal region covers continuation lines and the closing line
-		// only. cleanLine runs on the OPENING line before codeSpanClosesLater has
-		// confirmed the span, so at that moment `\`first` is an unmatched run, and
-		// an unmatched run is literal text in CommonMark - silencing its tail
-		// without the confirmation would delete visible prose from any line that
-		// simply contains a stray backtick. Confirming before cleaning is the
-		// per-line-loop restructure NRL-64 owns.
-		["pin-skipped-code", "Before `first\n%%literal%%\nlast` after.", "Before first after.", { skipInlineCode: true }],
-		["span-skipped-markdown-silenced", "Before `first\n**bold** #tag <https://x.com>\nlast` after.", "Before first after.", { skipInlineCode: true }],
-		["span-skipped-escape-silenced", "Before `first\n\\%%kept\\%%\nlast` after.", "Before first after.", { skipInlineCode: true }],
+		// "first" used to be spoken here, which was NRL-64 (N1). It is silent as of
+		// NRL-64: extractChunks now confirms the span with codeSpanClosesLater
+		// BEFORE cleanLine commits the opening line's output, so the opening line's
+		// post-opener tail is part of the region like every other part of the span.
+		// The expected value moved from "Before first after." as a consequence of
+		// that fix, not as a weakening of this row - the single-line oracle
+		// `control-single-line-skipped` below says "Before after." too.
+		["pin-skipped-code", "Before `first\n%%literal%%\nlast` after.", "Before after.", { skipInlineCode: true }],
+		["span-skipped-markdown-silenced", "Before `first\n**bold** #tag <https://x.com>\nlast` after.", "Before after.", { skipInlineCode: true }],
+		["span-skipped-escape-silenced", "Before `first\n\\%%kept\\%%\nlast` after.", "Before after.", { skipInlineCode: true }],
 		// Two lines: no wholly-silenced middle line, so this is the shape that
 		// shows the closing line's region silenced on its own.
-		["span-skipped-two-line", "Before `first\nlast` after.", "Before first after.", { skipInlineCode: true }],
+		["span-skipped-two-line", "Before `first\nlast` after.", "Before after.", { skipInlineCode: true }],
 		// NRL-44 (Q3-Q5): inside a confirmed soft-wrapped span nothing is
 		// re-interpreted as markdown. Each span-verbatim-* row is paired with the
 		// single-line control that is its oracle: a single-line span has always
@@ -1399,20 +1398,139 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		// the rest of the region when code is skipped.
 		["span-verbatim-mismatched-run", "Before ``a\nb ` c\nd`` after.", "Before a b ` c d after.", { skipInlineCode: false }],
 		["control-single-line-mismatched-run", "Before ``a b ` c d`` after.", "Before a b ` c d after.", { skipInlineCode: false }],
-		["span-skipped-mismatched-run", "Before ``a\nb ` c\nd`` after.", "Before a after.", { skipInlineCode: true }],
+		["span-skipped-mismatched-run", "Before ``a\nb ` c\nd`` after.", "Before after.", { skipInlineCode: true }],
 		// The tail after the carried closer is ordinary markdown again: the region
 		// ends at the closer, it does not spill into the rest of the line.
 		["span-tail-after-closer-is-markdown", "Before `first\nmid` **bold** after.", "Before first mid bold after.", { skipInlineCode: false }],
 		// Out of scope, pinned so the ticket that owns each one changes it on
 		// purpose rather than by accident - exactly as NRL-42 pinned this ticket.
-		// N1, NRL-64: on the span's OPENING line a complete %%...%% after the
-		// unmatched run is still dropped. cleanLine runs on the opening line
-		// before codeSpanClosesLater has confirmed the span, so fixing it means
-		// confirming before cleaning, which is a restructure of the per-line loop.
-		["pin-nrl64-opening-line", "Before `a %%b%% c\nd` after.", "Before a c d after.", { skipInlineCode: false }],
-		// F9, NRL-63: an image whose alt text crosses a soft line break is not
-		// recognised as an image at all, so its destination is spoken as prose.
-		["pin-nrl63-softwrapped-image", "A ![alt\nwords](zdestz.png) B", "A [alt words](zdestz.png) B", { skipInlineCode: false }],
+		// N1 is CLOSED by NRL-64 (docs/adr/0006 clause 4, docs/adr/0019 clause 3).
+		// extractChunks now runs codeSpanClosesLater BEFORE cleanLine commits the
+		// opening line, and re-cleans that line with the confirmed run length, so
+		// the tail after the unmatched run is part of the literal region. The
+		// expected value moved from "Before a c d after." for that reason; the row
+		// is the AC's named fixture, not a weakened pin. Each row below is paired
+		// with the single-line span that is its oracle, the same shape NRL-44 used:
+		// a single-line span has always been verbatim and option-independent, and
+		// the opening line of a confirmed soft-wrapped span is now no different.
+		["pin-nrl64-opening-line", "Before `a %%b%% c\nd` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["control-nrl64-single-line", "Before `a %%b%% c d` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["nrl64-opening-line-skipped", "Before `a %%b%% c\nd` after.", "Before after.", { skipInlineCode: true }],
+		["control-single-line-skipped", "Before `a %%b%% c d` after.", "Before after.", { skipInlineCode: true }],
+		["nrl64-double-run", "Before ``a %%b%% c\nd`` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["control-nrl64-double-run", "Before ``a %%b%% c d`` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["nrl64-triple-run", "Before ```a %%b%% c\nd``` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["control-nrl64-triple-run", "Before ```a %%b%% c d``` after.", "Before a %%b%% c d after.", { skipInlineCode: false }],
+		["nrl64-html-comment", "Before `a <!--b--> c\nd` after.", "Before a <!--b--> c d after.", { skipInlineCode: false }],
+		["control-nrl64-html-comment", "Before `a <!--b--> c d` after.", "Before a <!--b--> c d after.", { skipInlineCode: false }],
+		// The general form, not a list of exempt constructs (ADR 0019): the opening
+		// line's tail is verbatim for every inline construct, not just comments.
+		["nrl64-markdown-literal", "Before `a **bold** #tag c\nd` after.", "Before a **bold** #tag c d after.", { skipInlineCode: false }],
+		["control-nrl64-markdown-literal", "Before `a **bold** #tag c d` after.", "Before a **bold** #tag c d after.", { skipInlineCode: false }],
+		// A COMPLETE span earlier on the same line is untouched; the region starts
+		// at the first UNMATCHED run, and the prose between the two is still prose.
+		["nrl64-two-runs-same-line", "Before `a %%b%% c` d `e %%f%% g\nh` after.", "Before a %%b%% c d e %%f%% g h after.", { skipInlineCode: false }],
+		["control-nrl64-two-runs-same-line", "Before `a %%b%% c` d `e %%f%% g h` after.", "Before a %%b%% c d e %%f%% g h after.", { skipInlineCode: false }],
+		// Disclosure direction, the one NRL-42's ship phase found a HIGH defect in.
+		// In each of these codeSpanClosesLater finds no closer, or finds a hidden-
+		// comment opener first, so NO region is armed on the opening line and the
+		// block comment still hides its text. Every expected value below was
+		// measured on the pre-fix tree and must not move.
+		["guard-nrl64-no-closer-anywhere", "Before `a tail\n%%\nSENTINEL\n%%\nend.", "Before a tail end.", { skipInlineCode: false }],
+		["guard-nrl64-opener-before-closer", "Before `a tail\n%%\nSENTINEL\n%%\nd` after.", "Before a tail d after.", { skipInlineCode: false }],
+		["guard-nrl64-html-opener-before-closer", "Before `a tail\n<!--\nSENTINEL\n-->\nd` after.", "Before a tail d after.", { skipInlineCode: false }],
+		["guard-nrl64-mismatched-no-closer", "Before ``a tail\nb ` c\n%%\nSENTINEL\n%%\nend.", "Before a tail b c end.", { skipInlineCode: false }],
+		["guard-nrl64-stray-backtick-prose", "Before `a tail\nmore prose.\n\n%%\nSENTINEL\n%%", "Before a tail more prose.", { skipInlineCode: false }],
+		["guard-nrl64-stray-backtick-prose-skipped", "Before `a tail\nmore prose.\n\n%%\nSENTINEL\n%%", "Before a tail more prose.", { skipInlineCode: true }],
+		["guard-nrl64-blank-breaks-span", "Before `a %%b%% c\n\nd` after.", "Before a c d after.", { skipInlineCode: false }],
+		["guard-nrl64-heading-breaks-span", "Before `a %%b%% c\n# H\nd` after.", "Before a c H d after.", { skipInlineCode: false }],
+		// A carry must never be armed off a heading, a quote or a list line: a span
+		// cannot leave its own block. These three pin that end to end. They do not
+		// isolate the hoisted `blockType === "paragraph"` test, and saying so is
+		// the point: codeSpanClosesLater already runs interruptsParagraph over the
+		// opening line, which matches HEADING, BLOCKQUOTE and LIST_BULLET, so
+		// deleting that test changed 0 of 9,792 measured extractions. The guard is
+		// redundant belt-and-braces, and these rows stay red if EITHER of the two
+		// things holding the rule up is removed.
+		["guard-nrl64-opening-line-is-heading", "# Before `a %%b%% c\nd` after.", "Before a c d after.", { skipInlineCode: false }],
+		["guard-nrl64-opening-line-is-quote", "> Before `a %%b%% c\n> d` after.", "Before a c d after.", { skipInlineCode: false }],
+		["guard-nrl64-opening-line-is-list", "- Before `a %%b%% c\n  d` after.", "Before a c d after.", { skipInlineCode: false }],
+		// The confirmation is armed AFTER the LINK_REF_DEF drop, so a definition
+		// line carrying an unmatched run still hands no carry to the next line
+		// (ADR 0018). Dropping the line and arming the carry would make the next
+		// line a continuation of a span whose opener was never spoken.
+		["guard-nrl64-linkrefdef-with-run", "[a]: `x.png\nlast ` here.", "last here.", { skipInlineCode: false }],
+		// The region still ends at the carried closer, not at end of line.
+		["guard-nrl64-tail-after-closer", "Before `a %%b%% c\nmid` **bold** after.", "Before a %%b%% c mid bold after.", { skipInlineCode: false }],
+		// F9, NRL-63, now fixed: an image whose alt text crosses a soft line break
+		// is recognised across it, so its destination is silent and speakImageAlt
+		// governs the alt. The pin's VALUE moved; the row did not. Each of the
+		// three below has a single-line control beside it, and the two must agree
+		// character for character - that equality is the fix, not the value.
+		["pin-nrl63-softwrapped-image", "A ![alt\nwords](zdestz.png) B", "A alt words B", { skipInlineCode: false }],
+		["control-nrl63-single-line-image", "A ![alt words](zdestz.png) B", "A alt words B", { skipInlineCode: false }],
+		["nrl63-softwrapped-image-silenced", "A ![alt\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["control-nrl63-single-line-image-silenced", "A ![alt words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		// The same scanner covers a soft-wrapped LINK, and a markdown link's
+		// destination is dropped in both speakUrls positions (that setting governs
+		// bare URLs and autolinks, ADR 0003), so both rows read the label only.
+		["nrl63-softwrapped-link", "A [lab\nwords](zdestz.png) B", "A lab words B"],
+		["nrl63-softwrapped-link-urls-on", "A [lab\nwords](zdestz.png) B", "A lab words B", { speakUrls: true }],
+		["control-nrl63-single-line-link", "A [lab words](zdestz.png) B", "A lab words B"],
+		// The `[ref]` tail of the reference form goes too, exactly as it does on
+		// one line (srs.md R-M09).
+		["nrl63-reference-form", "A ![alt\nwords][zrefz] B", "A B", { speakImageAlt: false }],
+		// A label may cross several breaks; the carry holds until the `]`.
+		["nrl63-three-lines-silenced", "A ![alt\nmid\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["nrl63-three-lines-spoken", "A ![alt\nmid\nwords](zdestz.png) B", "A alt mid words B", { speakImageAlt: true }],
+		// Label content is re-cleaned, not emitted raw, so nested markup and a
+		// complete comment span inside a soft-wrapped label behave as on one line.
+		["nrl63-nested-markup-in-label", "A ![**alt**\n#tag words](zdestz.png) B", "A alt words B"],
+		["nrl63-comment-in-label", "A ![alt %%SENTINEL%%\nwords](zdestz.png) B", "A alt words B"],
+		// Prose-loss direction. A label that never closes, or whose closer is past
+		// a paragraph boundary, is never recognised, so nothing is swallowed and
+		// every one of these is byte-identical to the pre-NRL-63 tree.
+		["guard-nrl63-never-closed", "A ![alt\nwords B\n\nlast here.", "A [alt words B last here."],
+		["guard-nrl63-blank-breaks-label", "A ![alt\n\nwords](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		["guard-nrl63-heading-breaks-label", "A ![alt\n# H\nwords](zdestz.png) B", "A [alt H words](zdestz.png) B"],
+		["guard-nrl63-comment-opener-breaks-label", "A ![alt\n%%\nSENTINEL\n%%\nwords](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		// The math-block stop is precise rather than blanket: a stray `$$` with no
+		// closer anywhere is not a block, extractChunks does not consume it, and
+		// the carry still works, so the destination is still silenced. (The
+		// closed-block case cannot live in this table - see the block below.)
+		["guard-nrl63-stray-math-still-carries", "PA ![alt W1 W2\n$$ stray\nW3](zdestz.png) PC", "PA PC", { speakImageAlt: false }],
+		["guard-nrl63-opening-line-is-heading", "# A ![alt\nwords](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		["guard-nrl63-opening-line-is-list", "- A ![alt\n  words](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		// A shortcut `![alt\nwords]` carries no destination and renders literally
+		// when nothing defines the reference, so the carry deliberately requires
+		// `](` or `][` on the closing line and this stays spoken (ADR 0023).
+		["guard-nrl63-shortcut-no-tail", "A ![alt\nwords] B", "A [alt words] B", { speakImageAlt: false }],
+		// Both carries live on one line, in both directions. First: a code span
+		// carried in closes, then an image opens and carries out.
+		["nrl63-code-carry-then-image", "A `x\ny` z ![alt\nwords](zdestz.png) B", "A x y z alt words B", { skipInlineCode: false }],
+		// Second: both open on the same line, where the code carry wins because a
+		// code span binds tighter than a label. Both rows are byte-identical to
+		// the pre-NRL-63 tree and pin the residual ADR 0023 records - the
+		// destination is still spoken here.
+		["guard-nrl63-code-wins-inside-label", "A ![alt `x\ny` words](zdestz.png) B", "A [alt x y words](zdestz.png) B", { skipInlineCode: false }],
+		["guard-nrl63-code-wins-inside-label-skipped", "A ![alt `x\ny` words](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		// Nested bracket constructs in a label are the open R-M09 family this does
+		// not close. The carry takes the FIRST unmatched opener, as the code carry
+		// takes the first unmatched run, so the outer `[` claims the inner image's
+		// `](`. Measured, and strictly fewer destination characters than the
+		// pre-fix tree, which spoke both of them.
+		["guard-nrl63-nested-label", "A [![alt\nwords](zdestz.png)](zouterz.png) B", "A [alt words ](zouterz.png) B", { speakImageAlt: false }],
+		// NRL-68, closed as not-a-defect. A trailing mid-line %% is NOT a block
+		// opener in Obsidian: its %% tokenizer is a block tokenizer, skips leading
+		// spaces only, and then requires %% at the block start (read out of the
+		// installed obsidian.asar, ADR 0006 clause 2). So HIDEME is displayed there
+		// and speaking it is right. This is a GUARD, not a regression test - it
+		// passes before and after NRL-68 because no code changed, and it exists so
+		// the correct behaviour cannot be "fixed" back on the original bug report.
+		["pin-nrl68-midline-opener-is-literal", "Plain prose %%\nHIDEME\n%%", "Plain prose %% HIDEME"],
+		// The control for it: at the start of a line the same %% does open a block,
+		// and the hidden text stays silent.
+		["pin-nrl68-line-start-opener-hides", "%%\nHIDEME\n%%", ""],
 		// The paragraph join added a second space after any line whose last
 		// mapped character was already one.
 		["join-inline-comment", "Before %%hidden%%\nafter.", "Before after."],
@@ -1455,6 +1573,46 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 	// A confirmed span does not fold the paragraph break away.
 	const paced = extractChunks("Before `x\n%%\nSENTINEL\n%%\ntail.\n\nNext `first\n%%literal%%\nlast` end.", { ...OPTS, skipInlineCode: false });
 	check("NRL-42 paragraph boundaries retained", paced.length === 2);
+
+	/*
+	 * NRL-63: a display-math block between a label's opener and its closer.
+	 *
+	 * extractChunks consumes such a block with a `continue` that never reaches the
+	 * carry site, so a carry armed on the line before it is read into
+	 * carriedBracket and then dropped. Left unguarded that silences the label's
+	 * words AND still speaks the destination - strictly worse than either
+	 * recognising the label or not recognising it, and the one direction ADR 0023
+	 * clause 3 exists to foreclose. bracketClosesLater therefore refuses to
+	 * confirm across one, so this is byte-identical to the pre-NRL-63 tree in
+	 * BOTH speakImageAlt positions.
+	 *
+	 * This cannot live in the table above. That harness asserts
+	 * `src[sourceIndex[i]] === text[i]` for every non-space character, and the
+	 * synthetic "equation" chunk deliberately maps all seven letters to the `$`
+	 * offsets (docs/adr/0004), so it fails that clause on ANY math fixture -
+	 * measured on base d1fff6e too, and with no label anywhere in the note. The
+	 * length, bounds and monotonicity invariants below are the ones that do apply.
+	 */
+	{
+		const src = "PA ![alt W1 W2\n$$\nq\n$$\nW3](zdestz.png) PC";
+		for (const alt of [false, true]) {
+			const chunks = extractChunks(src, { ...OPTS, speakImageAlt: alt });
+			const spoken = chunks.map(c => c.text).join(" ");
+			check(`NRL-63 math block breaks the label (speakImageAlt ${alt}): visible output`,
+				spoken === "PA [alt W1 W2 equation W3](zdestz.png) PC");
+			check(`NRL-63 math block breaks the label (speakImageAlt ${alt}): no prose lost`,
+				["PA", "alt", "W1", "W2", "W3", "PC"].every(w => spoken.includes(w)));
+			check(`NRL-63 math block breaks the label (speakImageAlt ${alt}): offsets sane`,
+				chunks.every(c => {
+					if (c.sourceIndex.length !== c.text.length) return false;
+					for (let i = 0; i < c.text.length; i++) {
+						const at = c.sourceIndex[i]!;
+						if (at < 0 || at >= src.length || (i > 0 && at < c.sourceIndex[i - 1]!)) return false;
+					}
+					return true;
+				}));
+		}
+	}
 
 	/*
 	 * NRL-44 F5, as an enforced invariant rather than a code change.
@@ -1887,63 +2045,194 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 	}
 
 	/*
-	 * NRL-46 pin, a PRE-EXISTING defect this ticket did NOT fix.
+	 * NRL-66, replacing NRL-46's `pin-unterminated-by-escape` of the same two
+	 * shapes IN PLACE: a wikilink or embed target ending in a backslash now
+	 * closes on its `]]` and reduces to its final path segment like any other.
 	 *
-	 * A target ending in a backslash immediately before the closer means the
-	 * line holds `\]]`. inlineContainerClose never finds a `]]`, so the whole
-	 * `[[` is treated as unterminated, the brackets are dropped, and the target
-	 * is then read as ordinary prose - through the escape branch, which eats the
-	 * backslashes and speaks the folder segment and one literal `]`. The
-	 * final-segment reduction never runs, because the wikilink branch never
-	 * fires. Measured byte-identical on the merge base 789d3c2 and on this
-	 * working tree by bundling both extractors, so it is not merge drift and it
-	 * is out of this ticket's scope; pinned so it can only change deliberately.
+	 * Before this, the line held `\]]`, the shared `inlineContainerClose` ate
+	 * the `\]` as an escape, no `]]` was ever found, the construct was treated
+	 * as unterminated and the raw target - folder segments included - fell
+	 * through to prose. `[[FOLDERSENTINEL/LEAFOK\]]` said the folder aloud,
+	 * which is exactly what R-M09 and ADR 0017 promise it will not. The fix is
+	 * `wikiTargetClose`, a wikilink/embed-LOCAL closing scan that skips code
+	 * spans and complete comment spans the way the shared helper does but does
+	 * NOT honour `\` as an escape, because inside a vault path a backslash is a
+	 * separator - `isFileTarget` and `finalSegment` both already split on it.
+	 *
+	 * No reduction logic was added and none was needed: `finalSegment` already
+	 * steps back over the trailing separator and the emission loop's
+	 * `k >= segEnd && k < pathEnd` skip already drops it.
 	 */
-	for (const src of ["Before [[pinfolder\\Leaf Note\\]] after.", "Before ![[pinfolder\\Leaf Note\\]] after."]) {
-		for (const speakEmbeds of [false, true]) {
-			const got = say(src, { speakEmbeds });
-			check(
-				`NRL-46 pin-unterminated-by-escape ${JSON.stringify(src)} (speakEmbeds ${speakEmbeds})`,
-				got === "Before pinfolderLeaf Note]] after.",
-				`got: ${JSON.stringify(got)}`,
-			);
-		}
+	for (const [src, want] of [
+		// The two shapes NRL-46 pinned. The folder is now silent.
+		["Before [[pinfolder\\Leaf Note\\]] after.", "Before Leaf Note after."],
+		["Before ![[pinfolder\\Leaf Note\\]] after.", "Before Leaf Note after."],
+		// The sentinel shape the NRL-46 privacy probe reported as its one
+		// surviving path leak.
+		["Before [[FOLDERSENTINEL/LEAFOK\\]] after.", "Before LEAFOK after."],
+		["Before ![[FOLDERSENTINEL/LEAFOK\\]] after.", "Before LEAFOK after."],
+		// Composition with NRL-67: newly recognised, so the target now routes
+		// through emitWikiLabel and the comment-span exclusion applies to it.
+		// Both the folder and the hidden text are silent.
+		["Before [[a/b%%SECRET%%\\]] after.", "Before b after."],
+		["Before ![[a/b%%SECRET%%\\]] after.", "Before b after."],
+		["Before [[a/b<!--SECRET-->\\]] after.", "Before b after."],
+	] as const) {
+		const got = say(src, { speakEmbeds: true });
+		check(`NRL-66 trailing-backslash target ${JSON.stringify(src)}`, got === want, `got: ${JSON.stringify(got)}`);
+		check(
+			`NRL-66 trailing-backslash target ${JSON.stringify(src)} discloses no folder or hidden text`,
+			!got.includes("FOLDERSENTINEL") && !got.includes("SECRET") && !got.includes("pinfolder") && !got.includes("a/"),
+			`got: ${JSON.stringify(got)}`,
+		);
+	}
+	for (const src of ["Before ![[pinfolder\\Leaf Note\\]] after.", "Before ![[FOLDERSENTINEL/LEAFOK\\]] after."]) {
+		const off = say(src, { speakEmbeds: false });
+		check(`NRL-66 embed ${JSON.stringify(src)} silent with speakEmbeds off`, off === "Before after.", `got: ${JSON.stringify(off)}`);
 	}
 
 	/*
-	 * NRL-46 pin, a SECOND pre-existing defect this ticket did not fix, found by
-	 * the Ship critique rather than by the ticket.
+	 * Guards, not new behaviour: `wikiTargetClose` is deliberately LOCAL to the
+	 * wikilink and embed branches, so the shared `inlineContainerClose` and
+	 * every other construct that uses it must be byte-identical. All six were
+	 * measured on both sides of the change and none moved. For an image, link
+	 * or highlight, `\]` not closing the label is CommonMark-correct and the
+	 * destination after the `]` is already dropped, so there is no privacy gain
+	 * to trade against diverging from the renderer.
+	 */
+	for (const [src, want, over] of [
+		// A `\` that is not immediately before the closer: the old and new scans
+		// agree, and `\` is a path separator so the label is the final segment.
+		["Before [[a\\]b]] after.", "Before ]b after.", {}],
+		["Before ![alt\\](dest.png) after.", "Before [alt](dest.png) after.", {}],
+		["Before [label\\](https://x.com) after.", "Before [label]( after.", {}],
+		["Before ==hi\\== there== after.", "Before hi== there after.", {}],
+		// A hidden or literal `]]` still cannot close the target.
+		["Before `[[x/y\\]]` after.", "Before [[x/y\\]] after.", { skipInlineCode: false }],
+	] as const) {
+		const got = say(src, over);
+		check(`NRL-66 guard (unmoved) ${JSON.stringify(src)}`, got === want, `got: ${JSON.stringify(got)}`);
+	}
+
+	/*
+	 * NRL-67 pin, replacing NRL-46's pin of the same shape IN PLACE: a comment
+	 * span inside a wikilink or embed TARGET is now silent, delimiters and
+	 * content, and the visible text either side of it is still spoken.
 	 *
 	 * A link target is emitted raw rather than re-cleaned - deliberately, so the
-	 * tag branch cannot eat `#Section` when stripTags is on - so a comment span
-	 * written INSIDE the brackets is spoken, markers and all. That contradicts
-	 * srs.md's promise that `%%` and `<!-- -->` content is never spoken, but only
-	 * within `[[ ]]`, and it is not this change's doing: measured byte-identical
-	 * in kind on the merge base 789d3c2, which spoke the same comment with the
-	 * folder path in front of it. The final-segment reduction strictly shrinks
-	 * what is disclosed here; it does not introduce it. No content key moves it
-	 * except speakEmbeds, which decides whether the embed speaks at all.
-	 * Fixing it means re-cleaning the target, which is a different decision and
-	 * needs its own ADR, so it is pinned rather than patched.
+	 * tag branch cannot eat `#Section` when stripTags is on. Before NRL-67 that
+	 * also meant `cleanLine`'s comment branch never ran on a target, so a `%%`
+	 * or `<!-- -->` span written inside the brackets was spoken, markers and all.
+	 * NRL-46 pinned that as a pre-existing defect; NRL-67 fixes it by scanning
+	 * the target for comment spans once and skipping them from the SAME raw
+	 * emission loop, so every surviving character is still emitted at its own
+	 * raw offset and `sourceIndex` stays in lockstep (docs/adr/0021, AGENTS.md
+	 * rule 8). An unmatched opener is target-local: it silences from itself to
+	 * the closing bracket and never consumes a later source line.
+	 *
+	 * Three things here are GUARDS on behaviour that was already correct, kept
+	 * so it stops being accidental: the alias form, which has always dropped a
+	 * complete span via `cleanLine`; the paired folder-is-dropped assertion from
+	 * NRL-46; and the three embed shapes below, which stay SILENT because
+	 * `isFileTarget` and `finalSegment` still classify the RAW target and the
+	 * stripping is emission-only (ADR 0021, decision Q4). `![[a/b%%x.y%%]]` is
+	 * the case that forces that rule: on a comment-stripped view its segment is
+	 * `b`, no dot, a note, and the embed would START speaking - a silent-to-
+	 * spoken move ADR 0008 clause 5 forbids.
 	 */
 	for (const [src, want] of [
-		["Before [[pincomment/Leaf%%SECRET%%]] after.", "Before Leaf%%SECRET%% after."],
-		["Before [[pincomment/<!--SECRET-->Leaf]] after.", "Before <!--SECRET-->Leaf after."],
+		["Before [[pincomment/Leaf%%SECRET%%]] after.", "Before Leaf after."],
+		["Before [[pincomment/<!--SECRET-->Leaf]] after.", "Before Leaf after."],
+		["Before [[pincomment/Le%%SECRET%%af]] after.", "Before Leaf after."],
+		// Unmatched: visible text before the opener survives, the rest is silent.
+		["Before [[pincomment/Leaf%%SECRET]] after.", "Before Leaf after."],
+		["Before [[pincomment/%%SECRET]] after.", "Before after."],
+		["Before [[pincomment/Leaf<!--SECRET]] after.", "Before Leaf after."],
+		// The `#` fragment leaks too, so the scan spans the whole target.
+		["Before [[pincomment/Leaf#Section%%x%%]] after.", "Before Leaf Section after."],
+		["Before [[pincomment/Leaf%%x%%#Section]] after.", "Before Leaf Section after."],
+		["Before [[pincomment/Leaf%%x%%#^blk]] after.", "Before Leaf after."],
+		// A `#^blockid` ends the label, and WHERE it ends is decided on the raw
+		// target for the same reason isFileTarget and finalSegment are (ADR 0021
+		// decision 5). A `#^` written inside a comment span still ends it. On a
+		// comment-stripped view there is no `#^` left, so the tail after the span
+		// would become audible where the base silenced it - the one direction this
+		// change must never move in.
+		["Before [[pincomment/Leaf%%x#^%%SECRET]] after.", "Before Leaf after."],
+		["Before [[pincomment/Leaf<!--x#^-->SECRET]] after.", "Before Leaf after."],
+		["Before [[pincomment/Leaf%%x#^y%%]] after.", "Before Leaf after."],
+		["Before [[pincomment/Leaf#^blk%%x%%]] after.", "Before Leaf after."],
+		// The scan starts at the target start, not at the final segment: a `/`
+		// inside a comment makes finalSegment open the emission window on a
+		// CLOSING `%%`, which a segment-local scan would read as an opener and
+		// would then silence the visible `Leaf`.
+		["Before [[pincomment%%/%%Leaf]] after.", "Before Leaf after."],
+		// Q4: classification stays raw, so a wikilink to a file still speaks it
+		// and the comment goes whichever side of the dot it was written on.
+		["Before [[pincomment/Leaf%%x%%.png]] after.", "Before Leaf.png after."],
+		["Before [[pincomment/Leaf.png%%x%%]] after.", "Before Leaf.png after."],
+		// GUARD: already correct before NRL-67, via cleanLine on the alias.
+		["Before [[pincomment/Leaf|label %%SECRET%%]] after.", "Before label after."],
 	] as const) {
 		for (const speakEmbeds of [false, true]) {
 			const got = say(src, { speakEmbeds });
 			check(
-				`NRL-46 pin-comment-inside-target ${JSON.stringify(src)} (speakEmbeds ${speakEmbeds})`,
+				`NRL-67 pin-comment-inside-target ${JSON.stringify(src)} (speakEmbeds ${speakEmbeds})`,
 				got === want,
 				`got: ${JSON.stringify(got)}`,
 			);
-			// The half this change IS responsible for: the folder is gone.
+			// NRL-46's half, kept: the folder is gone.
 			check(
-				`NRL-46 pin-comment-inside-target ${JSON.stringify(src)} still drops the folder (speakEmbeds ${speakEmbeds})`,
+				`NRL-67 pin-comment-inside-target ${JSON.stringify(src)} still drops the folder (speakEmbeds ${speakEmbeds})`,
 				!got.includes("pincomment"),
 				`got: ${JSON.stringify(got)}`,
 			);
 		}
+	}
+	for (const [src, want] of [
+		["Before ![[pincomment/Leaf%%SECRET%%]] after.", "Before Leaf after."],
+		["Before ![[pincomment/<!--SECRET-->Leaf]] after.", "Before Leaf after."],
+		["Before ![[pincomment/Leaf%%SECRET]] after.", "Before Leaf after."],
+		["Before ![[pincomment%%/%%Leaf]] after.", "Before Leaf after."],
+		["Before ![[pincomment/Leaf%%x#^%%SECRET]] after.", "Before Leaf after."],
+		// GUARD, unchanged by NRL-67: a file target is a destination, so the
+		// embed is silent whichever side of the dot the comment sits, and stays
+		// silent when the comment is the only thing holding the dot.
+		["Before ![[pincomment/Leaf%%x%%.png]] after.", "Before after."],
+		["Before ![[pincomment/Leaf.png%%x%%]] after.", "Before after."],
+		["Before ![[pincomment/Leaf%%x.y%%]] after.", "Before after."],
+		// GUARD: the alias path is untouched.
+		["Before ![[pincomment/Leaf|label %%SECRET%%]] after.", "Before label after."],
+	] as const) {
+		const got = say(src, { speakEmbeds: true });
+		check(
+			`NRL-67 pin-comment-inside-target ${JSON.stringify(src)} (speakEmbeds true)`,
+			got === want,
+			`got: ${JSON.stringify(got)}`,
+		);
+		check(
+			`NRL-67 pin-comment-inside-target ${JSON.stringify(src)} still drops the folder (speakEmbeds true)`,
+			!got.includes("pincomment"),
+			`got: ${JSON.stringify(got)}`,
+		);
+		// The same source with embeds off speaks neither the label nor the comment.
+		const off = say(src, { speakEmbeds: false });
+		check(
+			`NRL-67 pin-comment-inside-target ${JSON.stringify(src)} (speakEmbeds false)`,
+			off === "Before after.",
+			`got: ${JSON.stringify(off)}`,
+		);
+	}
+	// A comment opened inside a target is target-local and must never hide the
+	// lines below it (ADR 0006 clause 5). Measured true before NRL-67 too; this
+	// pins that the scan did not change it.
+	{
+		const got = say("Before [[pincomment/Leaf%%SECRET]] after.\nNext prose line.");
+		check(
+			"NRL-67 an unmatched opener in a target does not escape to the next line",
+			got === "Before Leaf after. Next prose line.",
+			`got: ${JSON.stringify(got)}`,
+		);
 	}
 
 	// The two constructs are governed by different keys, which is the whole

@@ -66,7 +66,7 @@ const ID_PREFIX = "speechd:";
  * Closed on purpose: these two are the only modules installed on this machine
  * and therefore the only ones anyone here could check. Adding a name means
  * establishing that the module never calls out, not guessing from its name -
- * srs.md:663 forbids claiming a voice is offline when we cannot tell.
+ * `srs.md` R-S01 forbids claiming a voice is offline when we cannot tell.
  */
 const LOCAL_MODULES = new Set(["espeak-ng", "openjtalk"]);
 
@@ -133,6 +133,17 @@ function rowKey(row: SpdVoiceRow): string {
 /** Order-independent identity of a whole listing. */
 function canonicalKey(rows: SpdVoiceRow[]): string {
 	return rows.map(rowKey).sort().join("\n");
+}
+
+/**
+ * Order-independent identity of a `-O` module list.
+ *
+ * Copies before sorting so the caller's array is not reordered, and does not
+ * dedupe: ["a", "a"] and ["a"] read as different, which is the fail-closed
+ * direction for the comparison this feeds.
+ */
+function moduleSetKey(modules: string[]): string {
+	return [...modules].sort().join("\n");
 }
 
 /** Parse `spd-say -L`, whose columns are NAME, LANGUAGE, VARIANT. */
@@ -319,6 +330,36 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 				perModule.set(module, rows);
 			}
 
+			// Re-read the module set (NRL-71). The probe is a sequence of separate
+			// `spd-say` runs, so the daemon's configured modules can change between
+			// them, and module ADDITION is the one direction that can produce a wrong
+			// `local: true`: a non-allowlisted module configured in after `-O` was read
+			// serves names the probe never observes it serving, so those names get
+			// attributed to an allowlisted module alone. Removal already fails closed,
+			// because `spd-say -o <gone> -L` falls back to the default module's full
+			// listing and that fallback makes the shared names ambiguous.
+			//
+			// This NARROWS the window, it does not close it. A module can still be
+			// added and removed entirely between the two `-O` calls, and the
+			// per-module listings above are still read at N different instants. No
+			// `spd-say` call reads the module list and the per-module listings as one
+			// observation, so a real fix needs a different interface to the daemon (a
+			// direct SSIP client) rather than a better sequence of `spd-say` calls,
+			// which is deliberately out of scope. See docs/adr/0015 Residual risk.
+			//
+			// Compared as a parsed, order-independent set rather than as stdout bytes:
+			// the daemon is not promised to list modules in a stable order, and a
+			// reordered listing would otherwise cost every voice its attribution for
+			// nothing. Same controller, so it stays inside the one probe deadline, and
+			// the same three checks as every other run here.
+			const againRun = await this.runner.run("spd-say", ["-O"], undefined, controller.signal);
+			if (controller.signal.aborted || againRun.signal !== null || againRun.code !== 0) {
+				return null;
+			}
+			if (moduleSetKey(parseOutputModules(againRun.stdout.toString())) !== moduleSetKey(modules)) {
+				return null;
+			}
+
 			// Not a count comparison: two modules can coincidentally serve the
 			// same number of voices. Not "all listings pairwise distinct" either,
 			// because with three modules two of them may genuinely serve the same
@@ -379,7 +420,7 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 				// A probe that could not prove `-o` scoping, or a name it could not
 				// pin to known-local modules alone, means unknown. This never
 				// yields `local: false`: not knowing is not evidence of a network
-				// voice, and srs.md:663 only forbids the unfounded offline claim.
+				// voice, and `srs.md` R-S01 only forbids the unfounded offline claim.
 				local: attributed?.has(row.name) ? true : ("unknown" as const),
 				requiresNetwork: attributed?.has(row.name) ? false : ("unknown" as const),
 			}));

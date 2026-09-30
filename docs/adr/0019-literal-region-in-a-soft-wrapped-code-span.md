@@ -2,7 +2,8 @@
 
 - Status: accepted
 - Date: 2026-09-30
-- Ticket: NRL-44 (R-M08, R-M09); amends ADR 0006 clause 4, which NRL-42 amended before it
+- Ticket: NRL-44 (R-M08, R-M09); amends ADR 0006 clause 4, which NRL-42 amended before it;
+  clause 3 amended by NRL-64, which also amends ADR 0006 clause 4 again
 
 ## Context
 
@@ -81,6 +82,30 @@ neither toggle position.
    the confirmation would delete visible prose from any line containing a stray
    backtick. Confirming before cleaning is a restructure of the per-line loop and
    is tracked as **NRL-64**, pinned by `pin-nrl64-opening-line`.
+
+   **Amended by NRL-64: the opening line is now in scope, and the reasoning above
+   is why the fix had to be an ordering change.** The constraint was never that
+   the tail should be spoken as prose; it was that nothing on that line yet knew
+   the run was confirmed. `extractChunks` now cleans the line once to learn the
+   run length, calls `codeSpanClosesLater` with the identical arguments, and
+   cleans the line a second time passing the confirmed length as a new sixth
+   `cleanLine` parameter, `outgoingCode`. The tail `[runEnd, end-of-line)` is
+   then emitted by **the same region emitter** as `[0, literalCodeEnd)`, so the
+   two halves of a soft-wrapped span are provably one rule rather than two
+   similar ones - verbatim when code is spoken, one mapped space when it is
+   skipped. Three things this deliberately does *not* do: it does not give
+   `cleanLine` a lookahead callback, which would make it document-aware, where a
+   second pass keeps it line-local but for one scalar; it does not touch
+   `codeSpanClosesLater` or `interruptsParagraph`, so clause 4 below stands
+   unchanged and an unconfirmed run still arms nothing; and it does not arm the
+   carry before the link reference definition drop (ADR 0018), because a line
+   that renders as nothing must hand on no span.
+   `pin-nrl64-opening-line` keeps its name and its source and now expects
+   `Before a %%b%% c d after.`; `pin-skipped-code` now expects `Before after.`
+   Both are consequences of the rule, and both match their single-line oracle.
+   A second confirmed-carry kind - a soft-wrapped image or link, NRL-63 - would
+   attach at the same site: another `confirmed*` scalar computed between the two
+   passes and another parameter consumed by the same emitter.
 
 4. **`codeSpanClosesLater` keeps its mandatory confirmation, and
    `interruptsParagraph` is not touched.** The confirmation now carries more

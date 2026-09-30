@@ -11,6 +11,7 @@
 
 import { Player } from "../src/audio/player.ts";
 import { playWithFallback, type FallbackCandidate } from "../src/audio/fallback.ts";
+import { withLoadingNotice, type Dismissable } from "../src/ui/loadingNotice.ts";
 import { pcmToWav } from "../src/audio/wav.ts";
 import { allocateWordTimings } from "../src/audio/words.ts";
 import type { SpeechChunk, SpeechEngine, SynthRequest, SynthResult } from "../src/audio/types.ts";
@@ -616,6 +617,68 @@ console.log("T4 no signal argument: behaviour unchanged");
 
 	check("second candidate won with no signal passed", winner !== TIMED_OUT && winner?.id === "speechd", JSON.stringify(winner));
 	check("onFallback still fires once", fallbacks.length === 1, JSON.stringify(fallbacks));
+
+	player.stop();
+}
+
+console.log("T5 [NRL-65] the loading Notice is dismissed at the Stop, not when the abandoned load settles");
+{
+	// The integration half of tests/loadingNotice.test.ts: a main.ts-shaped
+	// `beforeAttempt` running the REAL withLoadingNotice against a fake
+	// Dismissable, driven by the REAL playWithFallback. Only (i) is red
+	// pre-fix; (ii) and (iii) are guards already green from NRL-48.
+	const first = makeHangingPrepareEngine({ label: "first" });
+	const second = makeEngine({ label: "second" });
+	const candidates = [
+		candidate(first.engine, "kokoro", "r1"),
+		candidate(second.engine, "speechd", "r2"),
+	];
+	const player = new Player({ bufferAhead: 0 });
+	const scope = new AbortController();
+
+	let hideCalls = 0;
+	const notice: Dismissable = {
+		hide() {
+			hideCalls += 1;
+		},
+	};
+
+	const resultPromise = playWithFallback(
+		player,
+		candidates,
+		numbered(2),
+		1,
+		0,
+		{
+			beforeAttempt: (c) => {
+				if (!(c.engine.prepare && c.engine.isPrepared?.() === false)) return Promise.resolve();
+				const load = c.engine.prepare.bind(c.engine);
+				return withLoadingNotice(() => notice, () => load(), scope.signal);
+			},
+		},
+		-1,
+		scope.signal,
+	);
+
+	await tick();
+	check("T5 the Notice is up while the load is in flight", hideCalls === 0, `${hideCalls}`);
+
+	scope.abort();
+	await tick();
+	// (i) RED pre-fix: the old policy hid only in the abandoned load's finally.
+	check("T5(i) hidden at the Stop, before the abandoned load settled", hideCalls === 1, `${hideCalls}`);
+
+	// (ii) guard, already green from NRL-48.
+	const winner = await withTimeout(resultPromise, 250, TIMED_OUT);
+	check("T5(ii) playWithFallback resolved null", winner === null, JSON.stringify(winner));
+
+	// (iii) guards: the abandoned load settles anyway (ADR 0013), and neither
+	// hides a second time nor speaks.
+	first.resolveLoad();
+	await tick();
+	check("T5(iii) still exactly one hide after the abandoned load settled", hideCalls === 1, `${hideCalls}`);
+	check("T5(iii) nothing was spoken", first.calls.length === 0, JSON.stringify(first.calls));
+	check("T5(iii) the second candidate stayed silent", second.calls.length === 0, JSON.stringify(second.calls));
 
 	player.stop();
 }

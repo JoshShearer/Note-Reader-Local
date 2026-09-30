@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EditorState } from "@codemirror/state";
+import type { Transaction } from "@codemirror/state";
 import {
 	sentenceHighlightField,
 	wordHighlightField,
@@ -23,11 +24,14 @@ import {
 	setWordHighlight,
 	applySentenceHighlight,
 	applyWordHighlight,
+	applyHighlightLayers,
 	clearHighlights,
 	clearSentenceHighlight,
 	clearWordHighlight,
 	highlightPlan,
+	scrollTargetForChunk,
 } from "../src/ui/highlight.ts";
+import type { HighlightToggles } from "../src/ui/highlight.ts";
 import {
 	SENTENCE_HIGHLIGHT_VAR,
 	WORD_HIGHLIGHT_VAR,
@@ -151,15 +155,41 @@ console.log('3. An engine reporting timing "none" draws no word mark');
  * and a `state` they read nothing from here. Backed by a real EditorState so the
  * fields actually run, which is the point - a recording spy would prove the
  * effect was sent but not that the mark went away.
+ *
+ * Each dispatch is also recorded, spec and resulting Transaction both, because
+ * NRL-72's scroll effect is only observable on the transaction and the "one
+ * transaction, not two" property is only observable as a count. Blocks 4 and 5
+ * read none of that and are unaffected.
  */
+type DispatchSpec = Parameters<EditorState["update"]>[0];
 function fakeEditor(initial: EditorState) {
 	const editor = {
 		state: initial,
-		dispatch(spec: Parameters<EditorState["update"]>[0]) {
-			editor.state = editor.state.update(spec).state;
+		dispatched: [] as { spec: DispatchSpec; tr: Transaction }[],
+		dispatch(spec: DispatchSpec) {
+			const tr = editor.state.update(spec);
+			editor.dispatched.push({ spec, tr });
+			editor.state = tr.state;
 		},
 	};
 	return editor as typeof editor & { state: EditorState };
+}
+
+/**
+ * The scroll effect, identified STRUCTURALLY rather than by its effect type.
+ *
+ * `EditorView.scrollIntoView` wraps its position in a `ScrollTarget`, and
+ * neither that class nor `StateEffect.type` is on `@codemirror/view`'s public
+ * `.d.ts` export list, while `tsconfig.json` typechecks `tests/**\/*.ts` - so an
+ * `e.is(...)` comparison against it would not compile. The filter is exact
+ * anyway: `applyHighlightLayers` is the only dispatcher involved and its effects
+ * array is fully known, so "not one of our two effects" names exactly one thing.
+ */
+type ScrollLike = { range?: { head: number }; y?: string; x?: string };
+function scrollEffects(tr: Transaction): ScrollLike[] {
+	return tr.effects
+		.filter((e) => !e.is(setSentenceHighlight) && !e.is(setWordHighlight))
+		.map((e) => e.value as ScrollLike);
 }
 
 console.log("4. clearHighlights() clears both layers");
@@ -291,7 +321,7 @@ console.log("10. Defaults, missing keys and invalid values");
 
 /*
  * styles.css is the whole mechanism by which the two layers are tellable apart,
- * and nothing else in the 19 suites reads a byte of it. Without these checks
+ * and nothing else in the 20 suites reads a byte of it. Without these checks
  * someone "tidying" the two rules into one shared block reproduces the exact
  * defect this ticket exists to fix, with a fully green suite - which is how the
  * defect got here the first time.
@@ -370,6 +400,199 @@ console.log("13. applySentenceHighlightColour writes and clears its own property
 	// the fallback in styles.css is the single source of the theme colour.
 	applySentenceHighlightColour(style as never, "");
 	check("empty removes the property rather than setting a value", !props.has(SENTENCE_HIGHLIGHT_VAR), JSON.stringify([...props]));
+}
+
+// --- NRL-72: the viewport follows the sentence (ADR 0022) ------------------
+
+/*
+ * This is a FEATURE, not a defect, so there is nothing here to reproduce. The
+ * fail-first demonstration is narrower and is labelled as such: 14a, 14b, 14c,
+ * 14e and 14f are red against the pre-NRL-72 code, which dispatches no scroll
+ * effect of any kind, so they are evidence of NEW CAPABILITY rather than of a
+ * bug. Everything named GUARD below is green on both sides of the change and is
+ * not counted toward that total - it exists to stop a later edit taking the
+ * scroll somewhere it must not go.
+ */
+
+console.log("14. NRL-72: the chunk dispatch scrolls to the chunk's sourceStart");
+{
+	const editor = fakeEditor(fresh());
+	applyHighlightLayers(editor as never, { sentence: { from: 18, to: 37 }, word: null }, 18);
+
+	const tr = editor.dispatched[0]!.tr;
+	check("14a the dispatch carries three effects, not two", tr.effects.length === 3, `${tr.effects.length}`);
+
+	const scrolls = scrollEffects(tr);
+	check("14b exactly one scroll effect, targeting the chunk's sourceStart", scrolls.length === 1 && scrolls[0]?.range?.head === 18, JSON.stringify(scrolls));
+
+	// No options object is passed to EditorView.scrollIntoView, so CodeMirror's
+	// own defaults apply. `yMargin` is deliberately NOT asserted: it is a
+	// library default we do not own and do not rely on.
+	check("14c the scroll uses CodeMirror's nearest defaults on both axes", scrolls[0]?.y === "nearest" && scrolls[0]?.x === "nearest", JSON.stringify(scrolls[0]));
+
+	check("14d GUARD the scroll effect leaves the decoration layers alone", marks(editor.state).join() === "local-tts-reader-sentence[18,37]", marks(editor.state).join());
+
+	// One transaction, not two. Two would give CodeMirror a legal intermediate
+	// state in which the previous sentence's word mark is still lit, which is
+	// the one-frame disagreement ADR 0020 exists to prevent.
+	//
+	// GUARD, not evidence, and the plan predicted otherwise: it expected this
+	// to be red pre-NRL-72 and it was measured green, because the old code also
+	// dispatched exactly one transaction - it simply put no scroll in it. The
+	// count alone therefore cannot tell the two versions apart. Conjoining it
+	// with 14a would manufacture a red out of a check that constrains nothing
+	// on its own, so it is relabelled rather than strengthened. Post-change it
+	// does constrain: it is what forbids a second dispatch for the scroll.
+	check("14e GUARD one transaction carries both layers and the scroll", editor.dispatched.length === 1, `${editor.dispatched.length}`);
+}
+{
+	// A stale offset from a document edited mid-read is the real case. An
+	// unclamped head does not throw at dispatch time - measured, it rides
+	// forward as `range.head 9999` - so this is about scrolling somewhere
+	// wrong, not about a crash.
+	const editor = fakeEditor(fresh());
+	applyHighlightLayers(editor as never, { sentence: null, word: null }, 9999);
+	const scrolls = scrollEffects(editor.dispatched[0]!.tr);
+	check("14f an offset past the document end is clamped to its length", scrolls[0]?.range?.head === DOC.length, JSON.stringify(scrolls));
+}
+{
+	// Every pre-existing call site omits the parameter, clearHighlights among
+	// them, and must be behaviourally byte-unchanged.
+	const editor = fakeEditor(fresh());
+	applyHighlightLayers(editor as never, { sentence: null, word: null });
+	const tr = editor.dispatched[0]!.tr;
+	check("14g GUARD omitting the offset dispatches the two layer effects and nothing else", tr.effects.length === 2 && scrollEffects(tr).length === 0, `${tr.effects.length}`);
+}
+
+console.log("15. GUARDS: the scroll moves the viewport, never the cursor or the document");
+{
+	/*
+	 * All four are green before NRL-72 too, because the old code dispatched no
+	 * scroll at all. They are not evidence of the feature. They forbid the
+	 * wrong implementation: a `dispatch({ selection, scrollIntoView: true })`
+	 * would put the highlight on screen and move the user's cursor to do it.
+	 */
+	const editor = fakeEditor(fresh());
+	const before = JSON.stringify(editor.state.selection.toJSON());
+	applyHighlightLayers(editor as never, { sentence: { from: 18, to: 37 }, word: null }, 18);
+	const { spec, tr } = editor.dispatched[0]!;
+
+	check("15a GUARD the selection is byte-identical after the scrolling dispatch", JSON.stringify(tr.state.selection.toJSON()) === before, JSON.stringify(tr.state.selection.toJSON()));
+	check("15b GUARD the scrolling dispatch changes no document text", tr.docChanged === false);
+	check("15c GUARD the dispatch spec carries no selection key", !("selection" in (spec as object)), JSON.stringify(Object.keys(spec as object)));
+	check("15d GUARD the dispatch spec carries no changes key", !("changes" in (spec as object)), JSON.stringify(Object.keys(spec as object)));
+}
+
+console.log("16. GUARDS: only the chunk event scrolls, never a word tick or a clear");
+{
+	/*
+	 * Green on both sides, again. The point is the pin: scrolling per word
+	 * would override a manual mid-read scroll several times a second instead of
+	 * once a sentence, and scrolling on the clear would yank the viewport at
+	 * the moment the user pressed Stop.
+	 */
+	const editor = fakeEditor(fresh());
+	applyWordHighlight(editor as never, { from: 0, to: 5 });
+	const wordTr = editor.dispatched[0]!.tr;
+	check("16a GUARD a word tick dispatches one effect and it is the word effect", wordTr.effects.length === 1 && wordTr.effects[0]!.is(setWordHighlight), `${wordTr.effects.length}`);
+
+	clearHighlights(editor as never);
+	const clearTr = editor.dispatched[1]!.tr;
+	check("16b GUARD ending a reading dispatches two effects and no scroll", clearTr.effects.length === 2 && scrollEffects(clearTr).length === 0, `${clearTr.effects.length}`);
+
+	// The settings-toggle redraw goes through applySentenceHighlight, which
+	// gains no scroll parameter at all: a settings change is not playback
+	// advancing, so flipping a toggle mid-read must not move the viewport.
+	applySentenceHighlight(editor as never, { from: 0, to: 17 });
+	const redrawTr = editor.dispatched[2]!.tr;
+	check("16c GUARD a sentence-only redraw dispatches one effect and no scroll", redrawTr.effects.length === 1 && scrollEffects(redrawTr).length === 0, `${redrawTr.effects.length}`);
+}
+
+// --- NRL-72 F1: no layer drawn means no scroll (ADR 0022 decision 7) -------
+
+console.log("17. NRL-72 F1: the scroll is gated on a layer being drawn");
+{
+	/*
+	 * The defect: NRL-72 passed `chunk.sourceStart` unconditionally, so with
+	 * highlighting switched off the chunk dispatch drew zero decoration ranges
+	 * and still carried one scroll effect at head 18. Measured against
+	 * `e8ec604` by staging the old unconditional expression in this same block:
+	 * 17a and 17f red, the rest green. 17g is red there too, but for a
+	 * different reason - the function did not exist - so it is labelled new
+	 * capability rather than counted as a reproduction.
+	 *
+	 * `main.ts`'s chunk handler is TRANSCRIBED below, because `main.ts` imports
+	 * `obsidian` and has no runtime in this suite. What is transcribed is the
+	 * shape of the call and nothing else: `highlightPlan`,
+	 * `scrollTargetForChunk` and `applyHighlightLayers` are all the real
+	 * symbols, and `word: null` at chunk time is main.ts's own value, not a
+	 * simplification - the word range is not known until the word event.
+	 */
+	const chunk = { sourceStart: 18, sourceEnd: 37 };
+	const chunkDispatch = (toggles: HighlightToggles, hasWordTiming: boolean) => {
+		const editor = fakeEditor(fresh());
+		const layers = highlightPlan(toggles, hasWordTiming);
+		applyHighlightLayers(
+			editor as never,
+			{
+				sentence: layers.sentence ? { from: chunk.sourceStart, to: chunk.sourceEnd } : null,
+				word: null,
+			},
+			scrollTargetForChunk(layers, chunk.sourceStart),
+		);
+		return editor;
+	};
+
+	// The master switch off. Nothing can ever be drawn for this reading.
+	const off = chunkDispatch({ enabled: false, sentence: true, word: true }, true);
+	const offTr = off.dispatched[0]!.tr;
+	check("17a highlighting disabled dispatches no scroll effect", scrollEffects(offTr).length === 0, JSON.stringify(scrollEffects(offTr)));
+	// The premise of the finding, and green on both sides: the old code drew no
+	// ranges either. It is here so 17a cannot be read as gating on something
+	// other than "no highlight is drawn".
+	check("17b GUARD highlighting disabled draws zero decoration ranges", marks(off.state).length === 0, marks(off.state).join());
+
+	// Master on, both rows off. Also reachable, also nothing drawn.
+	const bothRowsOff = chunkDispatch({ enabled: true, sentence: false, word: false }, true);
+	check("17f both layer rows off dispatches no scroll effect", scrollEffects(bothRowsOff.dispatched[0]!.tr).length === 0, JSON.stringify(scrollEffects(bothRowsOff.dispatched[0]!.tr)));
+
+	// The common case must not regress. Green on both sides by construction.
+	const on = chunkDispatch({ enabled: true, sentence: true, word: true }, true);
+	const onScrolls = scrollEffects(on.dispatched[0]!.tr);
+	check("17c GUARD the default settings still scroll to the chunk's sourceStart", onScrolls.length === 1 && onScrolls[0]?.range?.head === 18, JSON.stringify(onScrolls));
+
+	// speech-dispatcher: no word timings, so the sentence is the only layer it
+	// can ever show. The gate must not consult the word row, or the one engine
+	// that most needs this loses it (ADR 0020: a capability gates only its own
+	// layer).
+	const noTiming = chunkDispatch({ enabled: true, sentence: true, word: true }, false);
+	const noTimingScrolls = scrollEffects(noTiming.dispatched[0]!.tr);
+	check("17d GUARD an engine with no word timings still scrolls on the sentence", noTimingScrolls.length === 1 && noTimingScrolls[0]?.range?.head === 18, JSON.stringify(noTimingScrolls));
+	check("17d2 GUARD and that plan really is sentence-only", JSON.stringify(highlightPlan({ enabled: true, sentence: true, word: true }, false)) === '{"sentence":true,"word":false}', JSON.stringify(highlightPlan({ enabled: true, sentence: true, word: true }, false)));
+
+	// Word drawn, sentence not. Reachable: three independent toggles. The word
+	// mark arrives inside this chunk on the next word event, so the viewport
+	// has to follow even though this transaction draws nothing.
+	const wordOnly = chunkDispatch({ enabled: true, sentence: false, word: true }, true);
+	const wordOnlyScrolls = scrollEffects(wordOnly.dispatched[0]!.tr);
+	check("17e GUARD a word-only plan still scrolls, though the chunk draws no range yet", wordOnlyScrolls.length === 1 && wordOnlyScrolls[0]?.range?.head === 18, JSON.stringify(wordOnlyScrolls));
+	check("17e2 GUARD and that plan really is word-only", JSON.stringify(highlightPlan({ enabled: true, sentence: false, word: true }, true)) === '{"sentence":false,"word":true}', JSON.stringify(highlightPlan({ enabled: true, sentence: false, word: true }, true)));
+
+	// The gate itself, over all four layer combinations. NEW CAPABILITY, not a
+	// reproduction: this function did not exist before the fix.
+	const table = [
+		[{ sentence: false, word: false }, null],
+		[{ sentence: true, word: false }, 18],
+		[{ sentence: false, word: true }, 18],
+		[{ sentence: true, word: true }, 18],
+	] as const;
+	const got = table.map(([layers]) => scrollTargetForChunk(layers, 18));
+	const want = table.map(([, expected]) => expected);
+	check("17g NEW scrollTargetForChunk is null only when neither layer is drawn", JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got));
+
+	// Zero is a real offset: the first chunk of a note starts there, and a
+	// `!target` test would silently stop scrolling to the top of every note.
+	check("17h GUARD sourceStart 0 is returned, not treated as absent", scrollTargetForChunk({ sentence: true, word: false }, 0) === 0, `${scrollTargetForChunk({ sentence: true, word: false }, 0)}`);
 }
 
 if (failures > 0) {

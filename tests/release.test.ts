@@ -23,7 +23,7 @@ const VERSIONS_FILE = path.join(ROOT, "versions.json");
 const README_FILE = path.join(ROOT, "README.md");
 const LICENSE_FILE = path.join(ROOT, "LICENSE");
 const ADR_FILE = path.join(ROOT, "docs/adr/0011-release-attestation.md");
-const ADR_0021_FILE = path.join(ROOT, "docs/adr/0021-ort-on-demand.md");
+const ADR_ORT_FILE = path.join(ROOT, "docs/adr/0024-ort-on-demand.md");
 const DEPLOY_FILE = path.join(ROOT, "deploy.mjs");
 const MAIN_TS_FILE = path.join(ROOT, "src/main.ts");
 
@@ -312,12 +312,12 @@ test("validateOrtChecksums branches on missing vs mismatch as distinct outcomes"
 	);
 });
 
-test("ADR 0021 exists and documents the ort-on-demand decision", () => {
-	assertFileExists(ADR_0021_FILE, "docs/adr/0021-ort-on-demand.md not found");
-	const content = fs.readFileSync(ADR_0021_FILE, "utf-8");
-	assertMatch(content, /NRL-37/, "ADR 0021 missing NRL-37 ticket reference");
-	assertMatch(content, /checksum/i, "ADR 0021 missing checksum mention");
-	assertMatch(content, /atomic/i, "ADR 0021 missing atomic-write mention");
+test("ADR 0024 exists and documents the ort-on-demand decision", () => {
+	assertFileExists(ADR_ORT_FILE, "docs/adr/0024-ort-on-demand.md not found");
+	const content = fs.readFileSync(ADR_ORT_FILE, "utf-8");
+	assertMatch(content, /NRL-37/, "ADR 0024 missing NRL-37 ticket reference");
+	assertMatch(content, /checksum/i, "ADR 0024 missing checksum mention");
+	assertMatch(content, /atomic/i, "ADR 0024 missing atomic-write mention");
 });
 
 // --- Workflow File is Valid GitHub Actions YAML
@@ -444,7 +444,9 @@ test("ADR 0011 mentions ORT checksums", () => {
 });
 
 // Summary
-console.log(`\nall release tests passed\n`);
+// Conditional (NRL-69): printed unconditionally this line claimed a pass on a red
+// run, and a reader scanning the log sees it before the count below.
+if (passedTests === totalTests) console.log(`\nall release tests passed\n`);
 console.log(`${passedTests} of ${totalTests} passed`);
 if (passedTests === totalTests) {
 	process.exit(0);

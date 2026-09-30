@@ -1,4 +1,4 @@
-# 0021. Download the ONNX runtime on demand
+# 0024. Download the ONNX runtime on demand
 
 - Status: accepted
 - Date: 2026-09-30

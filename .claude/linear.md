@@ -194,7 +194,10 @@ hold the deployed build, and whoever deploys should say so.
 
 ## Quality gates
 
-No CI, no lint script. Full detail in `AGENTS.md`; the short version:
+`.github/workflows/ci.yml` runs the gates on `push` and `pull_request`, and
+`.github/workflows/release.yml` runs on tags. No lint script, no git hook. A check
+conclusion may be read once, never waited on, and branch protection is deliberately out of
+scope, so a red check does not block a merge. Full detail in `AGENTS.md`; the short version:
 
 ```bash
 npm test          # suite list: package.json pretest and test scripts

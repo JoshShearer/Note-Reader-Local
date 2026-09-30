@@ -16,11 +16,14 @@ Code and opencode read the same rules.
 
 ## Quality gates
 
-There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The gates
-are local and nothing runs them for you.
+`.github/workflows/ci.yml` runs `npm ci`, then `npm run typecheck`, then `npm run build`,
+then `npm test` on every push and every pull request, and
+`.github/workflows/release.yml` gates tagged commits as well. There is still no lint
+script and no git hook, so nothing runs the gates at the moment you commit: CI is a
+backstop, not a substitute. Run them locally first.
 
 ```bash
-npm test          # 20 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, modelStore
+npm test          # 23 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, modelStore, adrNumbers, vaultPersistence, loadingNotice
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -38,7 +41,12 @@ speech-dispatcher daemon (here with the `speech-dispatcher-espeak-ng` output mod
 is a Linux desktop test and will fail elsewhere. `tests/espeak.test.ts` covers `espeak.ts`
 with a fake `ProcessRunner` only: the `espeak-ng` binary itself is not installed on this
 machine (confirmed via `which espeak-ng`), so there is still no real-binary coverage for
-that engine, only for speech-dispatcher.
+that engine, only for speech-dispatcher. The two regions of `tests/engine.test.ts` that
+need the daemon - the preamble checks and the real-binary block that speaks aloud and
+asserts wall-clock duration - are bypassed when `NRL_SKIP_REAL_SPEECHD` is exactly `"1"`,
+which is what both workflows set. A skip prints one `SKIP <name>` line per bypassed check
+and is counted separately from `ok`, so a partial run can never read as a full one. With
+the variable unset, a missing binary or a dead daemon still fails the suite.
 
 ---
 
@@ -113,7 +121,9 @@ The working tree passes its gates. The audit against `srs.md` that opened this r
 tickets have closed gaps against it, so treat it as a floor rather than as current state.
 Two confirmed moves: R-M01 (standard Obsidian Community Plugin) is met as of NRL-16, with
 all release infrastructure in place (README.md, LICENSE, versions.json, SLSA Level 3 workflow,
-and ORT runtime checksum validation). R-M14 (backend capability detection) is met as of NRL-22,
+and ORT runtime checksum validation) - but read the R-M01 evidence correction below before
+relying on that parenthesis, because until NRL-69 that workflow had never run successfully
+even once. R-M14 (backend capability detection) is met as of NRL-22,
 because every capability that differs across the four engines now gates the control it affects,
 and the ones that gate nothing have no control to gate. R-M03's spike (SPIKE-ANDROID-001) is
 resolved as of NRL-35, and this one did need a real device, not bare-Node reasoning:
@@ -126,6 +136,66 @@ vault, enabled, and run through `executeCommandById` exactly as the command pale
 the same `BLOCKED_BY_HOST` result in the plugin's own diagnostics log. Result: BLOCKED_BY_HOST,
 demonstrated rather than assumed, which is the valid terminal state the spec's Spike Failure clause
 describes and is why Kokoro-in-WebView is the Android backend rather than a native bridge.
+
+That same device surfaced a second, narrower blocker after NRL-60 and NRL-61 fixed the
+worker-loading bug and polyfilled two missing runtime APIs (`Object.hasOwn`, `ReadableStream`
+async iteration): Kokoro's vendored `onnxruntime-web` runtime is a WASM SIMD build by name
+(`ort-wasm-simd-threaded.wasm` / `.jsep.wasm`), and the device's WebView reports
+`WebAssembly SIMD is not supported in the current environment`. This is a VM instruction-set
+gap, not a missing JS API, so it cannot be polyfilled - confirmed by live re-testing on the
+device, not assumed. NRL-62 considered and rejected building a non-SIMD fallback (a second
+vendored WASM build set, `WebAssembly.validate()` feature detection, and a parallel path in
+`kokoro.ts`'s backend plan): Chrome shipped WASM SIMD in May 2021, so the large majority of
+Android devices in real use today already support it, and the one confirmed non-SIMD device is
+this same frozen Huawei OEM WebView component (`com.huawei.webview`, no Play-Store-updatable
+Android System WebView package on it) that NRL-35 already found unusual rather than
+representative. Weighed against that speculative benefit, the concrete cost is real: a second
+set of vendored WASM files, a second set of build-time checksums, and a larger install for
+every user, not only pre-2021 ones. The decision is to document pre-2021-WebView /
+non-SIMD Android as an **explicit out-of-support tier** rather than build the fallback.
+`srs.md` makes no formal WASM/SIMD requirement to amend - R-M03 only requires the native-bridge
+spike NRL-35 already resolved, and is silent on WASM instruction-set support entirely, so this
+is a scoping decision on an unstarted requirement, not a documented spec deviation, and no ADR
+is warranted. Revisit if a second independent non-SIMD device report surfaces, or after NRL-37
+ships: on-demand ORT download changes the cost side of this calculus, since a non-SIMD build
+would then be a second optional download rather than a mandatory addition to every install.
+
+R-M01's *evidence* is weaker than that parenthesis reads, and NRL-69 corrected it without
+moving the count. The "SLSA Level 3 workflow" had **never completed a single successful
+run**. Measured over the repo's full paginated Actions history at `01c9a84`: 112 recorded
+runs, of which `release.yml` accounts for 103 and **all 103 are failures, with zero
+successes ever**; 95 runs preceded the repo's first-ever successful run and every one of
+those 95 was a `release.yml` failure. Two compounding defects caused it, both fixed by
+NRL-69, and the comment block in `.github/workflows/release.yml` records the A/B that
+isolated them: the SLSA generator was called as a step's `uses:` when a reusable workflow
+has to be called at job level, **and** the reference was missing its `.yml` extension.
+Either half alone stops the whole file compiling, which is why every historical run was a
+0-second, 0-job failure with no log, created on branch pushes that `on: push: tags` should
+never have matched at all. NRL-69 also added `.github/workflows/ci.yml`, which runs
+`npm ci`, `npm run typecheck`, `npm run build`, a `require()`-list assertion and `npm test`
+on every push and every `pull_request`; its first run, `36677239800`, is this repo's first
+successful workflow run of any kind, and a deliberate one-line test inversion on a throwaway
+branch went red as run `36678786748` with the `Test` step the only failing step, so the check
+is demonstrated in both directions rather than inferred from YAML that parses.
+
+What that does **not** establish is anything the release path does. `release.yml` is now
+shown only to *compile*: the merge commit `01c9a84` on `main` produced a green `ci.yml` run
+(`36679940668`) and **no** `release.yml` run at all, where every earlier push to `main`
+produced a failing one. **No release tag has ever been pushed** - `git ls-remote --tags
+origin` is empty and `gh release list` is empty - so `actions/create-release`, the artifact
+upload and the SLSA provenance job have never executed once, and `srs.md`'s "SLSA Level 3
+provenance" MUST still rests on a workflow that has never produced an attestation. Treat
+R-M01 as met on its shipped files and **unexercised on its release path**. Tracked as
+NRL-79, and two defects are already known to sit on that unexercised path: NRL-75
+(`tags: ["*"]` matches any tag, so pushing a backup tag would cut a real GitHub Release)
+and NRL-76 (the checksum step `cd dist || true` into a directory that does not exist, whose
+output feeds the provenance job's subjects). `actionlint` 1.7.7 is not a substitute for
+running it: measured during NRL-69, it was silent on **both** halves of the compile defect
+that had broken every run in this repo's history, so its silence on this file is weak
+evidence. The `2 of 16` headline count does not move in either direction. Note also that
+`release.yml` runs will keep being created and failing on pushes of refs that predate
+`01c9a84`, because GitHub compiles the workflow from the pushed ref; that is expected, not
+a regression, so the 103 above grows rather than being a fixed total.
 
 R-M09 (configurable content exclusions) did **not** move, and the reason matters because
 NRL-21's title invites the opposite conclusion. Its *configurability* half is met: all six
@@ -151,27 +221,121 @@ numerically by UTF-16 code-unit index for length, monotonicity, bounds and chara
 **Nothing was observed in Obsidian.** CDP port 9222 was unreachable during that ticket, so what
 Obsidian itself displays for a folder-qualified wikilink is still unknown.
 
-Two residual leaks on that same path half, recorded so the paragraph above is not read as
-finishing it. `[[folder/Note\]]` still speaks its folder: the trailing backslash is consumed as
-an escape, so the construct is never recognised as a wikilink at all, no reduction runs, and the
-raw text falls through to prose. 10 cells, byte-identical on both sides of NRL-46, pre-existing,
-tracked as **NRL-66**. And `[[a/b%%SECRET%%]]` speaks `b%%SECRET%%`: a wikilink label is emitted
-raw so `sourceIndex` can map every character to its exact offset, which is also why `cleanLine`'s
-comment branch never runs on it. Strictly better than the base, which spoke the folder as well,
-but it discloses hidden text and is filed High as **NRL-67**. Both are pinned in
-`tests/extract.test.ts` (`pin-unterminated-by-escape`, `pin-comment-inside-target`) so they can
-only change deliberately.
+Two residual leaks on that same path half, **both closed in the 2026-09-30 batch**. They are
+recorded rather than deleted because the shapes are worth knowing and the fixes are worth not
+undoing.
 
-The **image** half has not moved. `srs.md:365` promises that an image's "destination and any
-quoted title are never spoken", and two shapes still speak one, in **both** positions of
-`speakImageAlt`: a label holding another bracket construct (`![a [[N|l]] b](dest.png)`) and an
-alt text crossing a soft line break (NRL-44 F9, which **survived NRL-44** and is now tracked
-on its own as **NRL-63**, because the fix made the confirmed region verbatim and did not make
-the scanner recognise a construct across a break at all). A third speaks a fragment of one,
-`![alt](dest(1).png)` saying `.png)`.
-All three are pre-existing, all are tracked, and none was opened by NRL-21. **Do not record
-R-M09 as met until they close**, and the headline count stays at 2 of 16: NRL-46 and NRL-44
-each closed a leftover, not the requirement.
+`[[folder/Note\]]` used to speak its folder: the trailing backslash was consumed as a
+CommonMark escape, so the construct was never recognised as a wikilink at all, no reduction
+ran, and the raw text fell through to prose. **NRL-66** (`fee0aa1`, `docs/adr/0017` clause 8
+plus an amendment section) added `wikiTargetClose`, a wikilink- and embed-local closing scan
+that skips code spans and complete comment spans exactly as the shared `inlineContainerClose`
+does but does **not** honour `\` as an escape, and pointed the embed and wikilink branches at
+it. `inlineContainerClose` itself and its image, link and highlight call sites are
+**untouched**, which is what kept NRL-66 independent of NRL-63; do not merge the two scans.
+No reduction logic was needed and that was traced rather than assumed: `finalSegment`'s
+trailing-separator branch already returns `Note` for the target `folder/Note\`, the emission
+loop's existing skip already drops the trailing backslash, and `isFileTarget` already split on
+`\`. Measured by bundling the real extractor against base `a8f45db`: **13,312 leaking cells of
+15,360 fell to 0**, and `sourceIndex` was clean over 571,904 UTF-16 code units. Three
+deviations are accepted rather than fixed, all measured: a target holding a literal `]]` after
+a backslash now closes at that `]]` so its tail becomes prose, silent-to-audible in 3,072
+cells, **every one of which already speaks the same sentinel on base in its backslash-free
+form** (base parity, not a new leak class); a dangling backslash after a `#fragment` or an
+`|alias` is spoken as itself (`[[a/b#Head\]]` says `b Head\`), because the trailing-separator
+skip covers the path part only; and a URL target with a trailing backslash now speaks its host
+where the base said nothing, credentials and path still silent.
+
+And `[[a/b%%SECRET%%]]` used to speak `b%%SECRET%%`: a wikilink label is emitted raw so
+`sourceIndex` can map every character to its exact offset, which is why `cleanLine`'s comment
+branch never ran on it. **NRL-67** (`a8f45db`, `docs/adr/0021`) fixed it without giving up the
+raw path. `commentSpans()` scans `[innerStart, targetEnd)` once, pairing `%%` with the next
+`%%` and `<!--` with the next `-->`, and `emitWikiLabel` skips a span by **advancing `k` inside
+the existing emission loop**, so every surviving character is still emitted by the same
+`emit(c, rawStart + k)` and the offset mapping is preserved by construction rather than by a
+second check. Four parts are load-bearing. The target is **not** routed through `cleanLine`,
+whose tag branch would eat `#Section` under `stripTags`. The scan window starts at `innerStart`
+and not `segStart`, because `[[a%%/%%b]]` opens the emission window on a *closing* `%%`, and
+ends at `targetEnd` and not `pathEnd`, because the `#` fragment leaked too. An unmatched opener
+is **target-local**: the scan is a local array and never assigns `openComment`, so ADR 0006
+clause 5 holds by construction. And `isFileTarget` and `finalSegment` still classify the **raw**
+target (decision Q4), never a comment-stripped view, which is what keeps the exclusion able
+only to remove spoken characters: on a stripped view `![[a/b%%x.y%%]]` would lose its only dot,
+become a note and **start speaking**, the silent-to-spoken direction ADR 0008 clause 5 forbids.
+`[[a/b%%SECRET%%]]` now speaks `b`. Measured against base `51a20c8`: **19,456 leaking cells fell
+to 0** over 43,008 hidden-class cells; the deliberately-literal class (a `%%` pair inside a
+*spoken* inline code span, ADR 0019's designed behaviour) was unchanged at 1,024 on both sides,
+kept as its own class for the reason NRL-44 measured; and the "only removes spoken characters"
+property held over **108,992 cells with 0 additions**. One known leftover, in the removal
+direction: the scan does not honour a backslash escape, so `[[a/b\%%x%%]]` now silences the
+whole label where it spoke `%%x%%`, recorded in ADR 0021 because the emission loop does not
+honour escapes either.
+
+Both fixtures were **replaced in place** rather than deleted, keeping their paired
+folder-is-dropped assertions - NRL-66 replaced `pin-unterminated-by-escape` and
+`pin-comment-inside-target` kept its name - so the new behaviour can only change deliberately.
+**Nothing in either fix was observed in Obsidian.** CDP port 9222 was unreachable throughout
+that batch, so what Obsidian renders for `[[folder/Note\]]` or `[[a/b%%SECRET%%]]` is still
+unknown; both decisions rest on never speaking a path (ADR 0017, ADR 0021) rather than on
+renderer fidelity, and rule 11 applies in full to every number above.
+
+The **image** half moved **partway** with NRL-63 (`0e44050`, `docs/adr/0023`), and "partway"
+is the whole of it. `srs.md:313` and `:366` promise that an image's "destination and any
+quoted title are never spoken", and an alt text crossing a soft line break did not honour that
+(NRL-44 F9, which **survived NRL-44** because that fix made the confirmed region verbatim and
+did not make the scanner recognise a construct across a break at all). A soft-wrapped image or
+link label is now carried across the break by `bracketClosesLater`, which mirrors
+`codeSpanClosesLater` exactly - including its `interruptsParagraph` stopping rules at both ends
+- and adds one requirement of its own: the closing line's first `]` must be followed by `(` or
+`[`, so a shortcut label with no destination is never confirmed and no visible prose is
+silenced to close a leak that is not there. The **plain-paragraph** image and link cases are
+fixed: **512/512 leaking cells fell to 0/512** for each, and the wrapped form is now
+byte-identical to the single-line form, so `speakImageAlt` governs the alt text across the
+break exactly as it does on one line.
+
+**11,520 of 19,456 cells still leak a destination**, tracked as **NRL-88**. Record them as
+**five distinct roots and not one**, because earlier drafts of ADR 0023 and `srs.md:366` said
+"one mechanism" and a reader who assumes it is just containers will fix two of the five and
+believe they are done:
+
+1. `interruptsParagraph` matching on the **opener** line - 2,048 of 2,048 cells.
+2. `interruptsParagraph` matching on a line **between** opener and closer - 1,792 of 2,048.
+3. `opensMathBlock`, clause 7a's separate stop - 512 of 512.
+4. **`bracketClosesLater` returns at the first later line bearing any `]`**, so a line that
+   does *not* end the paragraph but carries a non-closing bracket aborts the confirmation.
+   Measured on seven such lines - `[bracket]` in prose, `[^1]`, `[[wk]]`, `[x]`, a link
+   reference definition, `![[embed]]` and a bare `]` - each leaking 512 of 512 where the same
+   shape without the stray bracket leaks 0 of 512. **3,584 cells.** **This one is not a
+   container problem at all**, and it is why "just handle blockquotes and lists" would not
+   finish the ticket.
+5. Clause 6 and 7 precedence - a line opening both a label and a soft-wrapped code span arms
+   the code carry only, and a code span opening on a later line inside a live label is not
+   recognised - 1,024 of 1,024.
+
+All five are **destination-only, fail-closed and prose-safe**: an aborted confirmation leaves
+the line exactly as the pre-NRL-63 tree had it, so none of them can lose prose. Part of the
+11,520 is also not a defect and must not be "fixed": an ATX heading is a single line and cannot
+soft-wrap, and a setext heading is in fact already carried.
+
+One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
+widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
+commit: a `$$` display-math block between a label's opener and closer silenced the alt text
+**and** still spoke the destination, because `extractChunks` consumes such a block with a
+`continue` that never reaches the carry site. `opensMathBlock` fixed it, called from
+`bracketClosesLater` at both ends and mirroring `extractChunks`' own test including its
+later-closer search; `interruptsParagraph` was deliberately **not** widened, because it is
+shared with `codeSpanClosesLater` and widening it would move NRL-64. Verify then enumerated
+**all 20 skip-paths** between the carry read and the carry arm and found the rest fail-closed:
+31,744 cells, 0 prose loss. **Re-run that enumeration** before touching the lookahead.
+
+Two pre-existing image shapes are **not** NRL-88 and remain open against the same requirement,
+in **both** positions of `speakImageAlt`: a label holding another bracket construct
+(`![a [[N|l]] b](dest.png)`), and `![alt](dest(1).png)`, which speaks a fragment of the
+destination, `.png)`. Neither was opened by NRL-21. **Do not record R-M09 as met until NRL-88
+and those two close**, and the headline count stays at 2 of 16: NRL-46, NRL-44, NRL-66, NRL-67
+and NRL-63 each closed a leftover, not the requirement. **Nothing in any of it was observed in
+Obsidian** - CDP port 9222 was unreachable at every attempt, so rule 11 applies to every number
+in this section.
 
 R-M10 (speech segmentation) did not move the count either, and the reason is different
 from R-M09's. Its acceptance criteria are met on the automated evidence and the evidence
@@ -253,9 +417,14 @@ deliberate - it keeps that half honest at the cost of leaked markup, which ADR 0
 prefers to a swallowed sentence. And a multi-line definition,
 with the destination on the following line, is out of scope (decision Q7) - it has the same
 per-line-scanner root as NRL-44's whole family. **Do not record R-M08 as fully met.** NRL-44
-closed the literal-region family (see the NRL-42/NRL-44 bullet below), but NRL-64 and NRL-63
-keep `srs.md`'s "known gap" clause alive against the same requirement, and nothing in that
-family has been observed in Obsidian. The headline count stays at 2 of 16.
+closed the literal-region family (see the NRL-42/NRL-44 bullet below), NRL-64 closed its
+opening-line leftover and NRL-63 closed the plain-paragraph half of F9, but NRL-63's remainder
+- five roots, tracked as **NRL-88** and enumerated in the R-M09 section above - keeps
+`srs.md`'s "known gap" clause alive against the same requirement; NRL-45's own
+`[a]: x.png "%%"` leftover in the paragraph above is untouched; and the 2026-09-30 batch filed
+two **new** defects against R-M08 that go the opposite way, hiding text Obsidian displays:
+**NRL-73** (High) and **NRL-74** (Medium), both in the last bullet of this section. Nothing in
+that family has been observed in Obsidian. The headline count stays at 2 of 16.
 
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
@@ -295,6 +464,95 @@ rediscover them:
   wikilink NRL-46 works to avoid saying - which is inherent to a span-based mark and has
   no privacy consequence, since nothing is logged or spoken and the text is already on
   screen, but the mark does assert "I am reading this" over a skipped span.
+- The editor viewport follows the spoken sentence as of NRL-72 (`docs/adr/0022`,
+  `srs.md` R-S03). `applyHighlightLayers` gained a third optional `scrollTo` offset and
+  pushes `EditorView.scrollIntoView` onto the effects array it already had, so the scroll
+  is a **third effect in the same dispatch**. That is load-bearing rather than tidy: a
+  second transaction would give CodeMirror a legal intermediate state between the two
+  layer updates, which is exactly the one-frame disagreement NRL-54 and ADR 0020 exist to
+  prevent. The scroll fires on the **chunk event only, never per word**, deliberately - per
+  word it would override a manual mid-read scroll several times a second instead of once a
+  sentence, and the word is on screen anyway inside a chunk capped at 220 characters.
+  `applyWordHighlight`, all three clears and `applySentenceHighlight` are unchanged and
+  take no offset, so ending a reading and flipping a settings toggle mid-read both leave
+  the viewport where it is. **The scroll is gated on a layer being drawn** (ADR 0022
+  decision 7, `scrollTargetForChunk`), which the first implementation was not: with
+  `highlight.enabled` false the chunk dispatch drew zero decoration ranges and still
+  carried one scroll effect. The condition is the **disjunction** of the two layers and
+  each half of it is load-bearing. `layers.word` is in it because "word drawn, sentence
+  not" is reachable - three independent toggles - and the word mark lands inside that
+  chunk on the next word event, which is also why the *plan* is consulted rather than the
+  ranges in this transaction: at chunk time `main.ts` always passes `word: null`.
+  `layers.sentence` must be able to carry the decision alone, with no reference to word
+  timing, or speech-dispatcher loses the scroll along with the word row it can never have.
+  And 0 is returned as an offset rather than filtered, so the first chunk of a note still
+  scrolls to the top. **`y: "nearest"` is load-bearing**: no options object is passed,
+  so "no jump when the highlight is already visible" is the library's behaviour, not ours.
+  Measured in bare Node against the vendored `@codemirror/view`: `scrollIntoView(5)` gives
+  one effect carrying `range.head 5`, `y "nearest"`, `x "nearest"`, `yMargin 5`, and in
+  `dist/index.js` `moveY` is assigned only when the rect falls outside the bounding box,
+  with the scroll gated on `if (moveX || moveY)`. **Do not add a `coordsAtPos` visibility
+  test**: it needs a DOM the bare-Node suite cannot build and duplicates what `nearest`
+  already does. `highlight.ts` is therefore **no longer decoration-only**, and its header
+  comment was rewritten rather than left lying; the guarantee that survives is the cursor,
+  the text selection, the focused element and the undo history, measured as a
+  byte-identical `state.selection` with `docChanged === false`. The user's scroll position
+  is deliberately no longer promised.
+  Evidence, **bare-Node only**: `tests/highlight.test.ts` blocks 14-16, **4 red before the
+  change and 0 after** (14a effect count, 14b the target offset, 14c the `nearest`
+  defaults, 14f the document-length clamp). Block 17 covers the gate and is a **defect
+  reproduction** rather than new capability, since the ungated scroll shipped in this same
+  branch: **2 red** against the old unconditional expression staged in the block (17a
+  highlighting off, 17f both rows off), 0 after, with 17b green on both sides establishing
+  that zero ranges were drawn in the offending case. 17g is red there too but only because
+  the function did not exist, so it is labelled new capability and not counted. This is a FEATURE, so those four are **new
+  capability, not a defect reproduction** - there was no bug to reproduce. The plan
+  predicted five; 14e ("one transaction") was measured **green on both sides**, because the
+  old code also dispatched exactly one transaction and simply put no scroll in it, so it is
+  relabelled a guard rather than conjoined with 14a to manufacture a red. Blocks 15 and 16
+  and checks 14d/14e/14g are all guards, green both sides, and are not counted.
+  **NOTHING WAS OBSERVED IN OBSIDIAN.** No deploy happened and no CDP session was
+  attempted. A bare-Node assertion that a `StateEffect` with `range.head === 18` rode on
+  the transaction is **not** evidence that a user sees the view move: it says nothing about
+  `scrollDOM.scrollTop`, nothing about whether Obsidian's own editor extensions intercept
+  or override a scroll effect, nothing about whether the movement reads as smooth or as a
+  jolt, and nothing about whether Live Preview's folds and widgets put `chunk.sourceStart`
+  at the screen position a plain-text offset implies - which would scroll to the wrong
+  place with a fully green suite. **Not solved, and an explicit follow-up:** nothing
+  detects a manual mid-read scroll, so one is overridden at the next sentence boundary.
+  R-S03 is a SHOULD, so the `2 of 16` MUST headline count does not move.
+- A selection-scoped read clips its queue by **scanning** `sourceIndex` as of NRL-57
+  (`src/audio/clip.ts`, `srs.md` R-M11). This defect was not recorded here before, and it
+  shipped inside NRL-52. The deleted expression was `textStart = from - chunk.sourceStart`
+  in `main.ts`: subtracting one raw offset from another is only right while one raw
+  character produces one spoken character, and markdown stripping is exactly what breaks
+  that, so the slice slid by however many characters had been stripped. Measured at
+  `bbe37f3` by bundling the real `extract.ts`, `segment.ts` and `words.ts` with the old
+  clip transcribed verbatim: selecting `bold` out of `Before **bold** after.` spoke
+  `ld a` mapped [11,17), 2 offsets outside the selection; selecting `after` in the same
+  note spoke `r.`, 1 outside; selecting `label` out of `Before [label](destination)
+  after.` spoke `abel `, 1 outside; and selecting `hidden` out of `Before %%hidden%%
+  after.` spoke `ter.` mapped [20,24), 4 outside - text from outside the selection
+  entirely. The scan compares with `<` against the selection bounds and never searches for
+  an exact offset, because `sourceIndex` is non-decreasing but **not** strictly
+  increasing: `mergeShort`'s synthesised join space can take the same offset as the entry
+  before it. **The load-bearing warning is about the test, not the code.**
+  `note[sourceIndex[i]] === text[i]` was GREEN on the bug, 0 mismatches on all four cases,
+  because the old clip sliced `text` and `sourceIndex` by the same wrong window, so
+  character identity survived while the window was wrong. That assertion passing is how 73
+  green checks in `tests/readSelection.test.ts` hid this through PR #58, and it is kept
+  only as a guard, explicitly labelled one. That file no longer holds a 37-line copy of the
+  implementation; it imports the real symbol, which is the other half of why it could not
+  fail. Evidence: 17 checks red against the old algorithm staged in the new module (16
+  C-cases plus the point-selection case), 0 red after, with every check that was green on
+  both sides relabelled a guard rather than counted. One **user-visible behaviour change**:
+  a selection holding only content extraction excludes now shows "No text in selection."
+  and starts no playback, where it used to speak whatever the miscomputed slice landed on.
+  **Nothing was observed in Obsidian** - no deploy and no CDP session happened during this
+  work - so the two host-side halves are unverified: that `read-selection` still appears in
+  the palette only with a selection, and that the Notice appears in the real UI. This does
+  **not** move the `2 of 16` MUST count. R-M11 was never on the met list, `main.ts` still
+  has no runtime in the suite, and rule 11 applies.
 - Rename and delete handlers exist as of NRL-51: `this.app.vault.on("rename")` and
   `("delete")` in `onload`, both through `registerEvent`. One path-boundary-safe prefix
   sweep covers stored positions for files and folders with no type branch. Repeated events
@@ -309,16 +567,53 @@ rediscover them:
   therefore keeps reporting the *old* path until the next `play()`. So a handler that
   compared `newPath === player.getFilePath()` would never fire, and one that skipped the
   stop would let the next progress event write the old key back, recreating the orphan the
-  handler just cleaned. The cost is user-visible: the audio stops on an exact-path match.
-  **Folder playback is a remaining limit:** the stop comparisons use exact equality, not
-  the helpers' prefix predicate. A folder-only event does not stop a descendant's queue;
-  later progress can recreate its old key. Whether Obsidian also emits descendant events
-  is unverified, so helper coverage does not establish end-to-end folder correctness.
-  A stop that flushes a pending position can also overlap the handler's `saveData()` call.
-  These writes are not serialised; their completion order and durable result have not been
-  verified in Obsidian. An older write could restore an old or deleted key on disk. There is
-  no measured bound on the race and no guaranteed later save before shutdown, so it is not
-  established as harmless or self-healing. A serialised save queue remains unimplemented.
+  handler just cleaned. The cost is user-visible: the audio stops.
+  **Both of NRL-51's two residual gaps closed with NRL-58**, and the paragraphs that said
+  they were open have been deleted rather than appended to. There is now **one** predicate,
+  `covers`, exported from `src/settings/data.ts` and used by the sweep *and* the stop, which
+  is what "the same path-boundary-safe relation" means: a folder event stops a descendant's
+  read, and `Notes/AB/x.md` survives a `Notes/A` event because of the trailing separator.
+  Its **argument order is load-bearing and not symmetric** - the queue path is the candidate,
+  the event path is the prefix - because reversed, renaming one note would stop a read of
+  every sibling under its parent folder. And **writes are serialised** by
+  `src/settings/saveQueue.ts`: single-flight with coalescing, newest wins, at most one write
+  in flight and one payload pending, a rejection reported exactly once through `reportError`
+  and never wedging the queue, and no retry of a failed payload (a blind retry could
+  resurrect a stale snapshot behind a newer one, which is the defect being closed). Both
+  handler bodies moved out of main.ts into `src/settings/vaultEvents.ts` behind a narrow
+  port, because main.ts has no runtime in the suite and those bodies shipped in NRL-51 with
+  no automated coverage of any kind.
+  Evidence, all bare-Node, measured on both sides of the diff by transcribing the shipped
+  handler bodies and `saveSettings()` line for line and driving the real `PositionThrottle`
+  and the real map sweeps: **7 failures at `c91ee0c`, 0 after**. A `Notes/A` -> `Notes/B`
+  rename while reading `Notes/A/deep.md` left `stop()` uncalled and the in-memory map holding
+  **both** `Notes/A/deep.md` and `Notes/B/deep.md` one throttle window later, and a folder
+  delete resurrected its key the same way. Two writes released in reverse settled in reverse,
+  durable order `[w1, w0]` against an enqueue order of `[w0, w1]`, leaving the disk holding
+  `["Notes/A/deep.md"]` after a rename to `Notes/A/renamed.md`. Staged fail-first in the new
+  modules, as both halves are extractions: **21 failures** in
+  `tests/vaultPersistence.test.ts` against the verbatim old behaviour (10 for the stop, 8 for
+  the ordering, 3 for the post-fix-only failure case), 0 after.
+  **A user-visible behaviour change:** a folder rename or delete now stops a descendant read
+  audibly. That is the identical trade NRL-51 already took and documented for the exact-path
+  case, extended to descendants for consistency rather than as a new decision.
+  What still does **not** hold. **NOTHING WAS OBSERVED IN OBSIDIAN**; CDP 9222 has been
+  refused for every recent ticket in this repo and no deploy happened. main.ts's two handler
+  shells, the port construction and the `SaveQueue` construction still have no automated
+  coverage of any kind, obsidian having no runtime, and the stop-then-flush ordering the
+  combined test relies on is a *transcription* of main.ts's player state subscription, not
+  the real wiring. Whether Obsidian emits descendant events is still unverified, though
+  correctness no longer depends on the answer. A repeated descendant event after a folder
+  event does call `stop()` again: the queue is deliberately not retargeted so it still
+  matches, and the module is stateless so there is nowhere to dedupe. That is harmless
+  rather than merely tolerated, because `Player.stop()` ends in `setState("idle")`, which
+  early-returns on an unchanged state. `onunload` is synchronous and cannot await the
+  queue's `drain()`, so an unload mid-flight can still lose the newest snapshot - unchanged
+  in kind from the pre-existing un-awaited `void this.saveSettings()`, since coalescing only
+  ever discards an intermediate snapshot and the newest payload is a strict successor.
+  **R-M12's MUST audit floor does NOT move** and the `2 of 16` headline count is untouched:
+  nothing here was exercised in a real vault, so rule 11 applies exactly as it does
+  elsewhere on this list.
 - Reading positions are throttled with a leading edge and a trailing flush, in
   `src/settings/positionThrottle.ts`, not in main.ts, and the window is flushed from the
   player's `state` subscription on `paused` / `idle` / `finished` rather than from
@@ -326,8 +621,11 @@ rediscover them:
   `getIndex()`, because on natural completion `getIndex()` is `chunks.length` and resolves to
   no chunk. The pre-change gate recorded nothing inside its window and its timer only
   nulled the handle, so the last position of a read was simply never persisted; measured
-  with a replica of it, 5 progress events produced 2 saves and index 4 was dropped. A second
-  in-flight save race exists on a rate nudge and is pre-existing. The `registerEvent` wiring
+  with a replica of it, 5 progress events produced 2 saves and index 4 was dropped. The
+  second in-flight save race this bullet used to record - a position write overlapping a rate
+  nudge - closed with NRL-58's `src/settings/saveQueue.ts`, and `tests/vaultPersistence.test.ts`
+  T5 pins exactly that pair: a rename's write and a rate change's write, released newest-first,
+  must still end with both the rekeyed map and rate 1.5 durable. The `registerEvent` wiring
   and the state-subscription flush are **not covered by the committed suite**: `obsidian`
   has no runtime in bare Node. Prior scratch probes used a stub, not a real vault. R-M12
   remains unverified in Obsidian, including stop, quit, reopen and resume; this merge does
@@ -397,7 +695,12 @@ rediscover them:
   measurements: a short read that exits `code 0` with no signal, which no observable can
   detect, and the probe's non-atomicity across `-O` then N x `-o -L`, where removal fails
   closed but addition inside the measured 778 ms window could produce a wrong `local: true`.
-  NRL-71 tracks the partial mitigation for the second.
+  NRL-71 took the partial mitigation for the second: a closing `spd-say -O` under the same
+  controller and the same three checks, giving up unless the parsed, order-independent module
+  set is unchanged. It narrows the window rather than closing it (a module can still be added
+  and removed between the two `-O` calls, and the N per-module listings are still read at N
+  different instants), and the give-up is memoised with no retry, so a daemon reconfigured
+  inside the window leaves every voice `"unknown"` until the plugin reloads.
 - Stop now aborts a read that is still in its load phase, as of NRL-48 (`docs/adr/0013`).
   Before it, `main.ts` held no `AbortController` at all and `Player`'s own one is created
   inside `play()`, so during `beforeAttempt`'s `await engine.prepare()` a Stop was
@@ -416,13 +719,52 @@ rediscover them:
   downloading and a finished model is kept for the next read, so Stop does not free work in
   flight. Evidence is **bare-Node only** - `tests/fallback.test.ts` T1-T4 plus an independent
   probe bundling the real `fallback.ts` against the real `Player`, both showing 8 FAILURE(S)
-  at the pre-fix base `d7e64df` and green at the fix. **Nothing was observed in Obsidian**,
-  and one known leftover is on-screen rather than audible: the `Loading X...` Notice is built
-  with duration 0 and hidden only in the abandoned `prepare()`'s `finally`, so after a Stop
-  during a cold Kokoro load it lingers until the load finishes on its own (measured in a
-  transcribed harness as HIDE at +352 ms for a Stop at +51 ms of a 350 ms load). NRL-65
-  tracks that. So R-M07 is **not** recorded as fully met, and the `2 of 16` MUST headline
-  count above does not move.
+  at the pre-fix base `d7e64df` and green at the fix. **Nothing was observed in Obsidian.**
+  NRL-48's one on-screen leftover **closed with NRL-65** (`src/ui/loadingNotice.ts`). The
+  `Loading X...` Notice is built with duration 0, so it never self-dismisses, and it used to
+  be hidden only in the abandoned `prepare()`'s `finally`: after a Stop during a cold Kokoro
+  load it stayed up until the load finished on its own. Reproduced again before the fix, by
+  transcribing `main.ts`'s own Notice block and driving it through the real
+  `playWithFallback`: SHOW +6 ms, Stop +58 ms, resolve null +59 ms, **HIDE +357 ms** of a
+  350 ms load. Re-run against the shipped code on the identical schedule, the hide moves to
+  **+58 ms**, the same millisecond as the Stop, with the abandoned load still settling at
+  +357 ms. `withLoadingNotice(show, work, signal)` now dismisses at whichever comes
+  first, the work settling or the signal aborting, and **`ADR 0013 is unchanged`** - the load
+  is still abandoned rather than cancelled, `prepare()` still takes no signal, `SpeechEngine`
+  is untouched, and nothing about when bytes stop arriving moved. The signal is for the
+  Notice only. Three parts are load-bearing. The signal reaches `prepareCandidate` as an
+  **explicit argument from all three call sites**, never read off `this.readScope`, because
+  that field is reassigned by the next read and this method belongs to one particular read -
+  reading the field would fail to dismiss a superseded read's own Notice and would let a
+  later read's abort dismiss one that is not its own, which is exactly the rule NRL-48
+  established. **Already aborted on entry means `show()` is not called at all** while `work()`
+  still runs exactly once, because a show-then-hide in one turn is a flash that depends on
+  host behaviour nobody has verified, and skipping construction leaves ADR 0013's load
+  behaviour byte-identical. And the dismissal is idempotent by three parts that are not
+  redundant with each other: a captured `hidden` boolean for the cross-path double call,
+  `{ once: true }`, and a `removeEventListener` so a many-candidate read does not accumulate
+  one listener per candidate on the long-lived `scope.signal`.
+  Evidence, **bare-Node only**, staged fail-first because the module *is* the fix: **6
+  failures** against a transcription of the old policy, 0 after - and only **3 of those 6 are
+  defect reproductions** (`tests/loadingNotice.test.ts` L1 and L2, plus `tests/fallback.test.ts`
+  T5(i)). L7 (1) and L8 (2) are red only because the old policy has no signal parameter at
+  all, so they are labelled new capability and new behaviour rather than counted. L9 was
+  *planned* as red and measured green on both sides, so it is relabelled a guard: the old
+  block invoked its load inside the `try`, so a synchronously throwing `prepare()` already hit
+  the `finally`. The transcription itself was checked rather than eyeballed - the verbatim
+  block and the transcription produced identical step transcripts under both the reproduction
+  schedule and a sync-throwing `prepare()` - which is what stops the count being theatre.
+  **Nothing was observed in Obsidian** for NRL-65 either; CDP port 9222 was not available.
+  The specific unverified assumption is **whether obsidian's real `Notice` behaves as this
+  rests on**: that one built with `duration 0` never self-dismisses, and that `hide()` called
+  once at an arbitrary moment removes it cleanly. That is outside what the suite can cover
+  rather than a gap in it - every check is about *when* `hide()` is called, which a fake
+  `Dismissable` observes exactly, and none is about what the host then does to the DOM. It is
+  deliberately **not** written into `srs.md`, which states the requirement rather than the
+  evidence. So R-M07 is **still not** recorded as fully met and the `2 of 16` MUST headline
+  count above does not move: rule 11 applies, `main.ts` has no runtime in the suite, and the
+  three call-site edits, the `new Notice` construction and the `show()` closure therefore have
+  no automated coverage of any kind.
 - `cleanLine` is called once per source line, but since NRL-42 that is no longer the whole
   story: an inline code span may cross a soft line break, so `Cleaned.openCode` carries the
   length of a run left open and `codeSpanClosesLater` confirms a later line closes it. The
@@ -453,13 +795,32 @@ rediscover them:
   **4,000-note fuzz** found **0 new disclosures and 0 prose loss**. Keeping the oracle's
   two classes apart is load-bearing rather than tidy: collapsing them scores NRL-42's
   designed literal `%%` as a leak and invents failures that are not there.
-  **Nothing was observed in Obsidian.** Two shapes stay open and are pinned so they change deliberately: **NRL-64**
-  (N1 - on the span's *opening* line the tail after the unmatched run is still spoken as
-  prose, because `cleanLine` runs there before `codeSpanClosesLater` has confirmed the span,
-  and silencing it without the confirmation would delete visible prose) and **NRL-63** (F9 -
-  a soft-wrapped image is not recognised across the break at all). `pin-skipped-code` now
-  pins the *new* behaviour, `"Before first after."`, with `first` audible for NRL-64's
-  reason. Two things NRL-44 did **not** weaken, and must not be: `codeSpanClosesLater`'s
+  **Nothing was observed in Obsidian.** One of the two shapes NRL-44 left open has since
+  closed. **NRL-64** (N1 - the tail after the unmatched run on the span's *opening* line was
+  spoken as prose) closed by reordering the per-line loop: `extractChunks` cleans a paragraph
+  line once to learn the run length, calls `codeSpanClosesLater` with the identical arguments,
+  and only then cleans the line again with a new 6th `cleanLine` parameter `outgoingCode`, so
+  the tail goes through the **same region emitter** as a carried-in span. `codeSpanClosesLater`
+  and `interruptsParagraph` were not touched (function bodies byte-identical), and the
+  `blockType === "paragraph"` test moved to the single confirmation site, where it is redundant
+  belt-and-braces rather than load-bearing: `codeSpanClosesLater` already runs
+  `interruptsParagraph` over the opening line, which matches all three constructs that make
+  `blockType` non-paragraph, and deleting the test changed 0 of 9,792 measured extractions. Two
+  consequences that are *not*
+  regressions: `pin-nrl64-opening-line` now expects `"Before a %%b%% c d after."` and
+  `pin-skipped-code` now expects `"Before after."`, both matching their single-line oracle.
+  Evidence, bare-Node, built side by side with base `29c52ae`: **0 hidden sentinels spoken on
+  either side over 11,264 sweep cells per side and 819,200 adversarial cells per side, with 0
+  cells leaking on one side and not the other**; the designed-literal class **0 -> 2,304**
+  spoken, all at `skipInlineCode: false`; **0 prose lost**; `sourceIndex` clean by numeric
+  UTF-16 index over those cells plus a 4,000-note fuzz; 13 fixtures red pre-fix.
+  **Nothing was observed in Obsidian.** The other shape NRL-44 left open, **NRL-63** (F9 - a
+  soft-wrapped image was not recognised across the break at all), closed **partially** with
+  `0e44050` / `docs/adr/0023`: `bracketClosesLater` now carries a label across the break, the
+  plain-paragraph image and link cases went 512/512 leaking to 0/512, and **11,520 of 19,456
+  cells still leak a destination through five distinct roots**, tracked as **NRL-88** and
+  enumerated in the R-M09 section above. Nothing in that fix was observed in Obsidian either.
+  Two things NRL-44 did **not** weaken, and must not be: `codeSpanClosesLater`'s
   confirmation, which now prevents silencing visible prose as well as disclosing hidden
   text, and `interruptsParagraph`, which NRL-45 also depends on.
 - NRL-39's autolink shape (F7) closed with NRL-44, and it closed the way NRL-39 said it had
@@ -478,23 +839,42 @@ rediscover them:
   73,728 extractions, the destination class moved 0 to 4,608, all at `skipInlineCode: false`.
   This is the intended reading of the requirement, not a deviation from it: both ADR 0019
   and `srs.md` R-M08 say so in as many words, so do not "fix" it back.
-- **NRL-68** (High, open): a trailing mid-line `%%` fails to open a block comment, and the
-  hidden text under it is spoken. `Plain prose %%` / `HIDEME` / `%%` says `HIDEME`. Filed
-  out of NRL-44's verify phase because that is where the disclosure direction was probed
-  hardest, but it is **not** NRL-44's defect and **not** a code-span defect: it is
-  byte-identical on both sides of the diff at **9,216 leaking cells each**, and it
-  reproduces with no backticks anywhere in the note. It is a direct violation of the
-  `%%...%%` promise R-M08 makes and NRL-38 was written to keep, through a shape NRL-38 did
-  not cover, since the opener sits at the end of a prose line rather than at the start of
-  one. This is now the **third distinct `%%` gap** open, and they have three different
-  roots, which is why they are tracked apart rather than merged: NRL-68 is a mid-line
-  trailing opener that never opens; **NRL-67** is a `%%` inside a wikilink target, spoken
-  because the label takes a raw-emission path that never runs comment stripping; and
-  **NRL-45's leftover** is `[a]: x.png "%%"` followed by a secret line, where the `%%` in a
-  quoted title is an unmatched inline opener (ADR 0006). NOT VERIFIED IN OBSIDIAN, and for
-  NRL-68 that caveat has teeth in both directions: if Obsidian does not treat a trailing
-  mid-line `%%` as an opener either, the current speech is right and the spec sentence is
-  what needs amending.
+- **NRL-68 is closed as not-a-defect**, and the way it closed is worth carrying, because it
+  was filed High as a disclosure. It reported that a trailing mid-line `%%` fails to open a
+  block comment, so `Plain prose %%` / `HIDEME` / `%%` says `Plain prose %% HIDEME`. That is
+  the measured behaviour and it is correct. Obsidian 1.13.7's `%%` tokenizer, read out of the
+  installed `obsidian.asar`, skips **spaces only**, then requires `%%` at the block start, and
+  is registered as a **block** tokenizer in the `interruptParagraph` set, so it cannot fire
+  part way through a line at all; the inline tokenizer `/^%%(.*?)%%/` is anchored and `.` does
+  not match a newline. So `HIDEME` is displayed in Obsidian, speaking it is renderer-faithful,
+  and the ticket's own Caveat named this outcome. The spec sentence needed the citation, not
+  the code: `src/text/extract.ts` did not change, `srs.md:324` and ADR 0006 clause 2 now carry
+  the tokenizer evidence, and `pin-nrl68-midline-opener-is-literal` in `tests/extract.test.ts`
+  pins the correct behaviour so it cannot be "fixed" back. Read off the installed parser, **NOT
+  VERIFIED IN OBSIDIAN**. Of the three `%%` **disclosure** gaps that were open when this
+  paragraph was first written, **one remains**: **NRL-45's leftover**, `[a]: x.png "%%"`
+  followed by a secret line, where the `%%` in a quoted title is an unmatched inline opener
+  (ADR 0006). NRL-68 itself closed as not-a-defect, above, and **NRL-67** - a `%%` inside a
+  wikilink target, spoken because the label took a raw-emission path that never ran comment
+  stripping - was **fixed** by `a8f45db` / `docs/adr/0021`; see the R-M09 path-half section
+  above. Keep this disclosure-direction list separate from the prose-loss pair in the next
+  bullet. They are opposite failures with opposite fixes, and a merged list would hold entries
+  that cannot share a remedy.
+- Two new defects came out of reading that tokenizer, and both go the **opposite** way to the
+  family above: they hide text Obsidian displays, which is prose loss rather than disclosure.
+  **NRL-73** (High): `if (37 === a) return` means any lone `%` before the newline disqualifies
+  the block in Obsidian, while we look only for a later `%%` closer, so
+  `%% 50% off` / `VISIBLE PROSE AFTER` speaks `""` and the rest of the note is silenced. Fix it
+  in `cleanLine` - `close === -1` at `src/text/extract.ts:618` falls past the guard and sets
+  `openComment` at `:626`. `opensHiddenComment` (`:1351`) encodes the same rule and should move
+  in step, but it is **not** the cause: it is reached only from `interruptsParagraph` (`:1362`),
+  called only at `:1391` and `:1394` inside `codeSpanClosesLater`, so it never runs on a note
+  with no backticks and a fix applied there alone changes nothing. **NRL-74** (Medium): an unmatched mid-line `<!--` does open a block for us
+  while `%%` correctly does not, because the line-start half of the guard at
+  `src/text/extract.ts:619` is gated on `obsidianComment`; `Plain prose <!--` / `SECRETA` /
+  `more` speaks `Plain prose`. Both measured in bare Node by bundling the real extractor, both
+  **NOT VERIFIED IN OBSIDIAN**. The renderer-faithful fix for NRL-74 is to narrow `<!--`, not
+  to widen `%%`.
 
 ## Style
 
