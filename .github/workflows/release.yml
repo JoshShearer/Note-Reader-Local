@@ -93,10 +93,20 @@ jobs:
 
   # NRL-69: the SLSA generator is a REUSABLE WORKFLOW, so it has to be called
   # at job level via `jobs.<id>.uses:`. It used to be a step's `uses:`, which
-  # cannot resolve a workflow path, and that made every run in this repo's
-  # history a 0-second startup failure. A job with a job-level `uses:` may not
-  # carry `runs-on:` or `steps:`, so both are gone; the generator works from the
+  # cannot resolve a workflow path. A job with a job-level `uses:` may not carry
+  # `runs-on:` or `steps:`, so both are gone; the generator works from the
   # base64 subjects alone, so the artifact download was never needed.
+  #
+  # The `.yml` on the end is load-bearing and is the second half of the same
+  # defect. A reusable-workflow reference is `owner/repo/path/to/file.yml@ref`
+  # and the extension is required; without it the ref does not resolve and the
+  # whole FILE fails to compile, which is why every run in this repo's history
+  # was a 0-second, 0-job failure with no log, on branch pushes that
+  # `on: push: tags` should never have matched at all. Both halves were needed:
+  # measured on GitHub within six minutes on 2026-09-30, the job-level call
+  # without `.yml` still produced run 36677235986 (0 jobs, created_at ==
+  # updated_at), removing the job entirely produced no run, and restoring it
+  # with `.yml` produced no run.
   #
   # `needs: build` is kept so `needs.build.outputs.hashes` still resolves.
   # All three permissions are required by the generator's own jobs: it reads
@@ -107,7 +117,7 @@ jobs:
       actions: read
       id-token: write
       contents: write
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3@v2.0.0
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
     with:
       base64-subjects: ${{ needs.build.outputs.hashes }}
       upload-assets: true
