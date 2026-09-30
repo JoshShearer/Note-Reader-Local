@@ -166,7 +166,7 @@ reaches it, and it is already written down in three places - `srs.md:376`, ADR 0
 grapheme-safety consequence, and the comment on `splitSentences` itself.
 
 Word granularity inside a run of Han used to sit beside that one. It no longer does. NRL-47
-(`docs/adr/0013-cjk-word-granularity.md`, `srs.md:689` under R-S03) made `findWords`
+(`docs/adr/0014-cjk-word-granularity.md`, `srs.md:689` under R-S03) made `findWords`
 subdivide a regex span containing Han, Kana or Hangul instead of leaving a whole CJK sentence
 as one span, so the word highlight advances inside a CJK sentence. The evidence is bare-Node
 measurement at `02cd72f` against base `d7e64df`, bundling the real modules: Chinese went from

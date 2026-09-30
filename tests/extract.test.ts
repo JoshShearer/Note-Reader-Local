@@ -2336,7 +2336,7 @@ console.log("NRL-50 blockType is real, not a constant (R-M11)");
 }
 
 /*
- * NRL-47 / ADR 0013: word granularity inside a CJK sentence.
+ * NRL-47 / ADR 0014: word granularity inside a CJK sentence.
  *
  * Before this ticket a whole run of Han, Kana or Hangul matched `findWords`'
  * single regex as ONE span, so `allocateWordTimings` gave that span the entire

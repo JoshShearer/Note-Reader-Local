@@ -941,7 +941,7 @@ function sourceOffsetOfSpace(afterPrev: number, firstOfNext: number): number {
 
 /**
  * Every offset inside `text` where a word may begin, for the word-highlight
- * layer rather than for chunking (NRL-47, ADR 0013).
+ * layer rather than for chunking (NRL-47, ADR 0014).
  *
  * The policy lives here, next to the rest of the segmentation policy, and
  * `findWords` receives a plain sorted number[] so that words.ts keeps importing

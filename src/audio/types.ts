@@ -183,7 +183,7 @@ export interface SpeechChunk {
 	 * Word spans already computed with a segmenter. Absent means the regex in
 	 * `findWords` is the whole rule for this chunk, which is the case for every
 	 * chunk holding no Han, Kana or Hangul and for every chunk at all when the
-	 * platform has no `Intl.Segmenter` (ADR 0013).
+	 * platform has no `Intl.Segmenter` (ADR 0014).
 	 *
 	 * Anything that re-slices `text` must re-slice this too or drop it, or the
 	 * spans index into text that no longer exists - see `clipWordSpans`.

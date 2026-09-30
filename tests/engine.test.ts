@@ -669,7 +669,7 @@ console.log("word timings cover the sentence");
 }
 
 /*
- * NRL-47 / ADR 0013, the end-to-end half.
+ * NRL-47 / ADR 0014, the end-to-end half.
  *
  * P3 is acceptance criterion 3 in its strongest form: the timings a player
  * actually receives must name the same raw-markdown characters they name in

@@ -1,4 +1,4 @@
-# 0013. Word granularity inside a CJK sentence
+# 0014. Word granularity inside a CJK sentence
 
 - Status: accepted
 - Date: 2026-09-29
