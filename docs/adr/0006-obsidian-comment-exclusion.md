@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-29
-- Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42
+- Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42 and NRL-44
 
 ## Context
 
@@ -41,8 +41,9 @@ evidence, not a live Obsidian reading or highlighting observation.
 
 4. **Literal code stays literal.** Inline code, fenced code and indented code
    keep `%%` when their code setting enables speech. Fenced and indented code
-   are entirely silent when skipped; a soft-wrapped inline span is not, which
-   the original wording over-claimed (see the amendment below). Code parsing
+   are entirely silent when skipped, and so is a soft-wrapped inline span as of
+   the NRL-44 amendment below; the NRL-42 amendment recorded that it was not,
+   which was true at the time and is no longer. Code parsing
    precedes comment recognition. Display
    math continues to follow ADR 0004; hidden math inside a comment never
    produces an "equation" announcement.
@@ -88,6 +89,49 @@ evidence, not a live Obsidian reading or highlighting observation.
      Silencing a soft-wrapped span under `skipInlineCode` is a separate,
      pre-existing gap tracked on its own ticket, so that path is left byte for
      byte as it was and pinned in a test rather than changed here.
+     *Superseded by the NRL-44 amendment below.*
+
+   **Amended by NRL-44: the confirmed region is verbatim, and silent when code
+   is skipped.** NRL-42 made `%%` and `<!--` literal on a continuation line by
+   testing `i >= literalCodeEnd` in the comment branch. That was the only branch
+   in the per-line scanner that tested it, so every other construct was still
+   read as markdown inside the span. Measured against the single-line-span
+   oracle, which has always been verbatim and option-independent: **18 of 21
+   inline constructs were re-interpreted** - `**bold**`, `*em*`, `_em_`,
+   `==highlight==`, `$math$`, `$$math$$`, `<html>`, `![[embed]]`, `[[wikilink]]`,
+   `[^fn]`, `![img](d.png)`, `[link](d.png)`, a bare URL, `<autolink>`, `#tag`,
+   `~~strike~~` and both backslash escapes. Only `%%`, `<!--` and `:emoji:` were
+   correct. So:
+
+   - **Inside a confirmed soft-wrapped span nothing is re-interpreted as
+     markdown.** The region is emitted verbatim before the branch loop runs, not
+     guarded branch by branch. Eighteen guards is eighteen chances to miss one,
+     and the set is not closed - the next construct added to the scanner would
+     have needed a nineteenth. This is not a new rule for continuation lines, it
+     is the single-line rule finally reaching them.
+   - **Under `skipInlineCode` the region is silenced whole**, which is what the
+     toggle's name says and what a single-line span already does. It is also the
+     safe direction: a silenced region cannot disclose anything, whereas the
+     disclosure hazard the NRL-42 amendment guards against exists only when the
+     region is spoken. The gap left behind is exactly one mapped space.
+   - **The opening line is still not covered.** `cleanLine` runs on the line
+     that opens the span before `codeSpanClosesLater` has confirmed it, so at
+     that moment the run is unmatched, and an unmatched run is literal text whose
+     tail must be spoken. Silencing or literalising that tail without the
+     confirmation would delete visible prose. Confirming before cleaning is a
+     restructure of the per-line loop, tracked as NRL-64 and pinned in a test.
+   - **Neither the closer confirmation nor the paragraph-interrupter list was
+     weakened.** They now carry more weight, not less: without the confirmation
+     an unmatched run would silence visible prose as well as disclose hidden
+     text. The interrupter list is asserted as an invariant by a test rather than
+     only relied on, so a future prefix family that is not itself a block opener
+     fails loudly instead of opening a hole.
+   - **A destination inside the region is spoken, because inside code the raw
+     text is the rendered text.** `![alt](dest.png)` on a continuation line now
+     reads as itself, delimiters and destination included. That is not a new
+     exception to "a destination is never spoken": a single-line span has done
+     it since long before this ticket, in both `speakImageAlt` positions. It is
+     written down here because it was never written down there.
 
 5. **Output exclusions cannot bypass comment tracking.** Scan skipped heading
    and table bodies for comments before discarding their spoken output.

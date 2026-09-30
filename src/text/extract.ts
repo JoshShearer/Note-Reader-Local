@@ -360,10 +360,11 @@ function cleanLine(
 	// region reaches. -1 for closerRun means the span continues past this line,
 	// so the whole line is literal; literalCodeEnd of -1 means no carried span
 	// at all, and every `i >= literalCodeEnd` test below is then vacuously true.
-	// A carried span is honoured only when code is spoken: silencing a
-	// soft-wrapped span is a separate defect, so the skipInlineCode path stays
-	// byte for byte as it was.
-	const carrying = incomingCode !== undefined && !opts.skipInlineCode;
+	// A carried span is honoured in BOTH toggle positions (NRL-44, ADR 0019):
+	// under skipInlineCode the region is silenced whole, which is what the
+	// toggle's name says and what a single-line span already does, and it is the
+	// safe direction - a silenced region cannot disclose anything.
+	const carrying = incomingCode !== undefined;
 	const closerRun = carrying ? firstRunOfLength(raw, incomingCode!, 0) : -1;
 	const literalCodeEnd = !carrying ? -1 : closerRun === -1 ? raw.length : closerRun;
 
@@ -478,6 +479,49 @@ function cleanLine(
 	let openCode: number | undefined = carrying && closerRun === -1 ? incomingCode : undefined;
 	let i = 0;
 
+	/*
+	 * The carried span's literal region, `[0, literalCodeEnd)`, handled ONCE here
+	 * rather than by an `i >= literalCodeEnd` guard inside each branch below.
+	 *
+	 * That is the whole point of NRL-44. Before it, the comment branch was the
+	 * only branch in this loop that tested literalCodeEnd, so every other one
+	 * still read code content as markdown: an enumeration probe against the
+	 * single-line-span oracle found 18 of 21 inline constructs re-interpreted
+	 * here - emphasis, highlight, math, HTML, embeds, wikilinks, footnotes,
+	 * images, links, bare URLs, autolinks, tags, strikethrough and both backslash
+	 * escapes. Eighteen individual guards is eighteen chances to miss one, and it
+	 * is not a closed set. A single-line span has always been fully verbatim and
+	 * fully option-independent, so this is that same rule finally reaching
+	 * continuation lines, not a new rule being invented for them (ADR 0019).
+	 *
+	 * Consequence worth stating: openComment can no longer be set from inside the
+	 * region, which is the correct reading of ADR 0006 clause 4. The
+	 * `i >= literalCodeEnd` test on the comment branch below becomes vacuous for
+	 * the region because the loop never enters it; it is left in place because it
+	 * still guards the closerRun === -1 case and removing it would be a silent
+	 * behaviour change.
+	 */
+	if (carrying && literalCodeEnd > 0) {
+		if (opts.skipInlineCode) {
+			// Silenced whole. Exactly one space for the gap, the same shape as the
+			// unmatched-run drop below, so the words either side do not run
+			// together and never double up.
+			pushSpace(rawStart + literalCodeEnd);
+		} else {
+			// verbatimLine's emit rule, applied here rather than by calling
+			// verbatimLine: that function pops its own trailing space for the
+			// paragraph join, which is wrong mid-line. Each whitespace RUN
+			// collapses to one mapped space carrying the offset of the run's first
+			// character, which is what keeps the index non-decreasing.
+			for (let k = 0; k < literalCodeEnd; k++) {
+				const c = raw[k]!;
+				if (/\s/.test(c)) pushSpace(rawStart + k);
+				else emit(c, rawStart + k);
+			}
+		}
+		i = literalCodeEnd;
+	}
+
 	while (i < raw.length) {
 		const ch = raw[i]!;
 
@@ -513,9 +557,14 @@ function cleanLine(
 					if (/\s/.test(raw[k]!)) pushSpace(rawStart + k);
 					else emit(raw[k]!, rawStart + k);
 				}
-			} else if (close === -1 && !opts.skipInlineCode) {
+			} else if (close === -1) {
 				// CommonMark's first-unmatched-opener rule: a later run on the
 				// same line never takes the carry from an earlier one.
+				//
+				// Reported in BOTH toggle positions (NRL-44): the length of an
+				// unmatched run is a fact about the source, not about whether we
+				// speak it, and under skipInlineCode it is what arms the carry
+				// that then silences the rest of the span.
 				openCode ??= start - i;
 			}
 			i = end;
@@ -1835,7 +1884,19 @@ export function extractChunks(
 			flushParagraph();
 			continue;
 		}
-		if (cleaned.text.trim() === "") continue;
+		if (cleaned.text.trim() === "") {
+			// A line that produced nothing still has to hand the carry on. NRL-44
+			// made this reachable: under skipInlineCode a continuation line lying
+			// wholly inside a soft-wrapped span is silenced whole, so it cleans to
+			// the empty string, and dropping the carry here would leave the span's
+			// closing line to be read as fresh prose - the very thing the silence
+			// was for. Same guard as the arming site below, same
+			// codeSpanClosesLater confirmation, and paragraph lines only.
+			if (blockType === "paragraph" && cleaned.openCode !== undefined && codeSpanClosesLater(lines, lineNo, cleaned.openCode)) {
+				openCode = cleaned.openCode;
+			}
+			continue;
+		}
 
 		if (blockType !== "paragraph") {
 			flushParagraph();

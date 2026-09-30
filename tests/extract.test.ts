@@ -1321,9 +1321,98 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		["control-no-markers", "Before `first\nmiddle\nlast` after.", "Before first middle last after.", { skipInlineCode: false }],
 		["control-two-line", "Before `first\nlast` after.", "Before first last after.", { skipInlineCode: false }],
 		["control-single-line", "Before `first %%literal%% last` after.", "Before first %%literal%% last after.", { skipInlineCode: false }],
-		// Out of scope (see the ticket): a soft-wrapped span is not silenced by
-		// skipInlineCode. Pinned so its own ticket changes it deliberately.
-		["pin-skipped-code", "Before `first\n%%literal%%\nlast` after.", "Before first last after.", { skipInlineCode: true }],
+		// NRL-44 decision Q1: a confirmed soft-wrapped span is SILENCED when inline
+		// code is skipped, which is what the toggle's name says and what a
+		// single-line span already does. The region leaves exactly one space behind
+		// so the words either side do not run together - the `no doubled space`
+		// assertion below covers that from the other direction.
+		//
+		// "first" is still spoken, and that is NRL-64 (N1), not a defect in this
+		// fix: the literal region covers continuation lines and the closing line
+		// only. cleanLine runs on the OPENING line before codeSpanClosesLater has
+		// confirmed the span, so at that moment `\`first` is an unmatched run, and
+		// an unmatched run is literal text in CommonMark - silencing its tail
+		// without the confirmation would delete visible prose from any line that
+		// simply contains a stray backtick. Confirming before cleaning is the
+		// per-line-loop restructure NRL-64 owns.
+		["pin-skipped-code", "Before `first\n%%literal%%\nlast` after.", "Before first after.", { skipInlineCode: true }],
+		["span-skipped-markdown-silenced", "Before `first\n**bold** #tag <https://x.com>\nlast` after.", "Before first after.", { skipInlineCode: true }],
+		["span-skipped-escape-silenced", "Before `first\n\\%%kept\\%%\nlast` after.", "Before first after.", { skipInlineCode: true }],
+		// Two lines: no wholly-silenced middle line, so this is the shape that
+		// shows the closing line's region silenced on its own.
+		["span-skipped-two-line", "Before `first\nlast` after.", "Before first after.", { skipInlineCode: true }],
+		// NRL-44 (Q3-Q5): inside a confirmed soft-wrapped span nothing is
+		// re-interpreted as markdown. Each span-verbatim-* row is paired with the
+		// single-line control that is its oracle: a single-line span has always
+		// been verbatim and option-independent, so these rows are that same rule
+		// finally reaching continuation lines, not a new rule. The enumeration
+		// probe found 18 of 21 inline constructs re-interpreted here before the
+		// fix, which is why the fix is one verbatim region rather than 18 guards.
+		["span-verbatim-bold", "Before `first\n**bold**\nlast` after.", "Before first **bold** last after.", { skipInlineCode: false }],
+		["control-single-line-bold", "Before `first **bold** last` after.", "Before first **bold** last after.", { skipInlineCode: false }],
+		["span-verbatim-em-star", "Before `first\n*em*\nlast` after.", "Before first *em* last after.", { skipInlineCode: false }],
+		["control-single-line-em-star", "Before `first *em* last` after.", "Before first *em* last after.", { skipInlineCode: false }],
+		["span-verbatim-em-under", "Before `first\n_em_\nlast` after.", "Before first _em_ last after.", { skipInlineCode: false }],
+		["control-single-line-em-under", "Before `first _em_ last` after.", "Before first _em_ last after.", { skipInlineCode: false }],
+		["span-verbatim-highlight", "Before `first\n==high==\nlast` after.", "Before first ==high== last after.", { skipInlineCode: false }],
+		["control-single-line-highlight", "Before `first ==high== last` after.", "Before first ==high== last after.", { skipInlineCode: false }],
+		["span-verbatim-math", "Before `first\n$x + y = z$\nlast` after.", "Before first $x + y = z$ last after.", { skipInlineCode: false }],
+		["control-single-line-math", "Before `first $x + y = z$ last` after.", "Before first $x + y = z$ last after.", { skipInlineCode: false }],
+		["span-verbatim-mathblock", "Before `first\n$$a+b$$\nlast` after.", "Before first $$a+b$$ last after.", { skipInlineCode: false }],
+		["control-single-line-mathblock", "Before `first $$a+b$$ last` after.", "Before first $$a+b$$ last after.", { skipInlineCode: false }],
+		["span-verbatim-html", "Before `first\n<span>h</span>\nlast` after.", "Before first <span>h</span> last after.", { skipInlineCode: false }],
+		["control-single-line-html", "Before `first <span>h</span> last` after.", "Before first <span>h</span> last after.", { skipInlineCode: false }],
+		["span-verbatim-embed", "Before `first\n![[embed]]\nlast` after.", "Before first ![[embed]] last after.", { skipInlineCode: false }],
+		["control-single-line-embed", "Before `first ![[embed]] last` after.", "Before first ![[embed]] last after.", { skipInlineCode: false }],
+		["span-verbatim-wikilink", "Before `first\n[[wikilink]]\nlast` after.", "Before first [[wikilink]] last after.", { skipInlineCode: false }],
+		["control-single-line-wikilink", "Before `first [[wikilink]] last` after.", "Before first [[wikilink]] last after.", { skipInlineCode: false }],
+		["span-verbatim-footnote", "Before `first\n[^fn]\nlast` after.", "Before first [^fn] last after.", { skipInlineCode: false }],
+		["control-single-line-footnote", "Before `first [^fn] last` after.", "Before first [^fn] last after.", { skipInlineCode: false }],
+		["span-verbatim-image", "Before `first\n![alt](d.png)\nlast` after.", "Before first ![alt](d.png) last after.", { skipInlineCode: false }],
+		["control-single-line-image", "Before `first ![alt](d.png) last` after.", "Before first ![alt](d.png) last after.", { skipInlineCode: false }],
+		["span-verbatim-link", "Before `first\n[link](d.png)\nlast` after.", "Before first [link](d.png) last after.", { skipInlineCode: false }],
+		["control-single-line-link", "Before `first [link](d.png) last` after.", "Before first [link](d.png) last after.", { skipInlineCode: false }],
+		["span-verbatim-bareurl", "Before `first\nhttps://x.com/p\nlast` after.", "Before first https://x.com/p last after.", { skipInlineCode: false }],
+		["control-single-line-bareurl", "Before `first https://x.com/p last` after.", "Before first https://x.com/p last after.", { skipInlineCode: false }],
+		["span-verbatim-autolink", "Before `first\n<https://x.com>\nlast` after.", "Before first <https://x.com> last after.", { skipInlineCode: false }],
+		["control-single-line-autolink", "Before `first <https://x.com> last` after.", "Before first <https://x.com> last after.", { skipInlineCode: false }],
+		["span-verbatim-tag", "Before `first\n#tag\nlast` after.", "Before first #tag last after.", { skipInlineCode: false }],
+		["control-single-line-tag", "Before `first #tag last` after.", "Before first #tag last after.", { skipInlineCode: false }],
+		["span-verbatim-strike", "Before `first\n~~strike~~\nlast` after.", "Before first ~~strike~~ last after.", { skipInlineCode: false }],
+		["control-single-line-strike", "Before `first ~~strike~~ last` after.", "Before first ~~strike~~ last after.", { skipInlineCode: false }],
+		// F4: the backslash-escape branch used to fire inside the region, so a
+		// code span lost the backslash a renderer keeps.
+		["span-verbatim-escape-pct", "Before `first\n\\%%kept\\%%\nlast` after.", "Before first \\%%kept\\%% last after.", { skipInlineCode: false }],
+		["control-single-line-escape-pct", "Before `first \\%%kept\\%% last` after.", "Before first \\%%kept\\%% last after.", { skipInlineCode: false }],
+		["span-verbatim-escape-star", "Before `first\n\\*star\\*\nlast` after.", "Before first \\*star\\* last after.", { skipInlineCode: false }],
+		["control-single-line-escape-star", "Before `first \\*star\\* last` after.", "Before first \\*star\\* last after.", { skipInlineCode: false }],
+		// F7, the URL half. The speakUrls:false rows are the ones that prove the
+		// BARE-URL branch is guarded as well as the autolink branch: guarding the
+		// autolink branch alone puts a spoken stray `<` back, which is worse than
+		// guarding neither (measured in NRL-39's verify phase).
+		["span-verbatim-autolink-urls-off", "Before `first\n<https://x.com>\nlast` after.", "Before first <https://x.com> last after.", { skipInlineCode: false, speakUrls: false }],
+		["control-single-line-autolink-urls-off", "Before `first <https://x.com> last` after.", "Before first <https://x.com> last after.", { skipInlineCode: false, speakUrls: false }],
+		["span-verbatim-bareurl-urls-off", "Before `first\nhttps://x.com/p\nlast` after.", "Before first https://x.com/p last after.", { skipInlineCode: false, speakUrls: false }],
+		["control-single-line-bareurl-urls-off", "Before `first https://x.com/p last` after.", "Before first https://x.com/p last after.", { skipInlineCode: false, speakUrls: false }],
+		// N2: a backtick run whose length is not the carried one is content, not a
+		// closer, so it is spoken literally when code is spoken and silenced with
+		// the rest of the region when code is skipped.
+		["span-verbatim-mismatched-run", "Before ``a\nb ` c\nd`` after.", "Before a b ` c d after.", { skipInlineCode: false }],
+		["control-single-line-mismatched-run", "Before ``a b ` c d`` after.", "Before a b ` c d after.", { skipInlineCode: false }],
+		["span-skipped-mismatched-run", "Before ``a\nb ` c\nd`` after.", "Before a after.", { skipInlineCode: true }],
+		// The tail after the carried closer is ordinary markdown again: the region
+		// ends at the closer, it does not spill into the rest of the line.
+		["span-tail-after-closer-is-markdown", "Before `first\nmid` **bold** after.", "Before first mid bold after.", { skipInlineCode: false }],
+		// Out of scope, pinned so the ticket that owns each one changes it on
+		// purpose rather than by accident - exactly as NRL-42 pinned this ticket.
+		// N1, NRL-64: on the span's OPENING line a complete %%...%% after the
+		// unmatched run is still dropped. cleanLine runs on the opening line
+		// before codeSpanClosesLater has confirmed the span, so fixing it means
+		// confirming before cleaning, which is a restructure of the per-line loop.
+		["pin-nrl64-opening-line", "Before `a %%b%% c\nd` after.", "Before a c d after.", { skipInlineCode: false }],
+		// F9, NRL-63: an image whose alt text crosses a soft line break is not
+		// recognised as an image at all, so its destination is spoken as prose.
+		["pin-nrl63-softwrapped-image", "A ![alt\nwords](zdestz.png) B", "A [alt words](zdestz.png) B", { skipInlineCode: false }],
 		// The paragraph join added a second space after any line whose last
 		// mapped character was already one.
 		["join-inline-comment", "Before %%hidden%%\nafter.", "Before after."],
@@ -1366,6 +1455,35 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 	// A confirmed span does not fold the paragraph break away.
 	const paced = extractChunks("Before `x\n%%\nSENTINEL\n%%\ntail.\n\nNext `first\n%%literal%%\nlast` end.", { ...OPTS, skipInlineCode: false });
 	check("NRL-42 paragraph boundaries retained", paced.length === 2);
+
+	/*
+	 * NRL-44 F5, as an enforced invariant rather than a code change.
+	 *
+	 * opensHiddenComment tests the raw line and models no structural prefix, so a
+	 * prefix that is NOT itself a paragraph interrupter would let a `%%` opener
+	 * hide inside a carried span. There is no such prefix today: every family
+	 * below is already in interruptsParagraph, so opensHiddenComment is only ever
+	 * consulted about lines that already stop the carry search. This asserts that
+	 * behaviourally - a span must not be able to carry across any of them - so
+	 * adding a fifth, non-interrupting prefix family fails here loudly instead of
+	 * opening a disclosure hole silently. interruptsParagraph itself is NOT
+	 * touched by NRL-44 (NRL-45 depends on that).
+	 *
+	 * The sentinel is a CLOSED `%%` pair, which is not a block opener, so it is
+	 * dropped as an inline comment when the line is ordinary markdown and spoken
+	 * verbatim when the line is code-span content. Its absence is therefore proof
+	 * that the line was NOT taken as code content.
+	 */
+	for (const [family, line] of [
+		["HEADING", "# H %%SENTINEL%%"],
+		["BLOCKQUOTE", "> q %%SENTINEL%%"],
+		["LIST_BULLET", "- i %%SENTINEL%%"],
+		["TABLE_ROW", "| a | %%SENTINEL%% |"],
+	] as Array<[string, string]>) {
+		const src = `Before \`x\n${line}\nlast\` after.`;
+		const spoken = extractChunks(src, { ...OPTS, skipInlineCode: false, skipTables: false }).map(c => c.text).join(" ");
+		check(`NRL-44 F5 ${family} is in interruptsParagraph: span cannot carry across it`, !spoken.includes("SENTINEL"), spoken);
+	}
 }
 
 console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
@@ -1887,6 +2005,17 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		// either side of it must still hold monotonic offsets across the gap.
 		["link-ref-defs", 'ZBEFOREZ para here.\n\n[theref]: zdestz.png "ZTITLEZ"\n\nUses [label][theref] and [theref] here.\n\n> [qref]: <q dest.png> \'QT\'\n\nZAFTERZ para here.'],
 		["link-ref-def-negatives", '[see also]: not a definition, just a sentence\n\nZPROSEZ line here.\n[theref]: zdestz.png "ZTITLEZ"\n\n[a [b] c]: x.png\n\n[^1]: ZFOOTZ body here.'],
+		// NRL-44: the literal region of a confirmed soft-wrapped span emits every
+		// non-space character at its true offset and collapses each whitespace run
+		// to one space carrying the offset of that run's FIRST character, so these
+		// are the rows most likely to break monotonicity or character identity. No
+		// inline math on the continuation lines of these rows for the reason given
+		// above - inside the region `$x$` is verbatim, not "equation", so it is
+		// safe here, and the mathblock row proves it.
+		["span-markdown-in-region", "Before `first\n**bold** ==h== $x$ ~~s~~\nlast` after."],
+		["span-escape-and-urls-in-region", "Before `first\n\\%%k\\%% <https://x.com> https://y.com/p\nlast` after."],
+		["span-constructs-in-region", "Before `first\n[[w]] ![[e]] [l](d.png) ![a](d.png) [^f] #t <span>h</span>\nlast` after."],
+		["span-mismatched-run-in-region", "Before ``a\nb ` c\nd`` after."],
 	];
 	let sweepRuns = 0;
 	let sweepBad = "";
@@ -1919,8 +2048,8 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 	// pin, so a corpus row added or lost must edit this literal rather than
 	// silently change what "every combination" means. 16 rows at NRL-21, plus
 	// the two NRL-46 link-target rows, plus the two NRL-45
-	// link-reference-definition rows.
-	check("NRL-21 sweep really ran every combination", sweepRuns === corpus.length * (1 << keys.length) && sweepRuns === 20 * 512, String(sweepRuns));
+	// link-reference-definition rows, plus the four NRL-44 literal-region rows.
+	check("NRL-21 sweep really ran every combination", sweepRuns === corpus.length * (1 << keys.length) && sweepRuns === 24 * 512, String(sweepRuns));
 }
 
 console.log("NRL-28 Unicode sentence segmentation and grapheme-safe splitting (R-M10)");
