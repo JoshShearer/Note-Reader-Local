@@ -289,8 +289,9 @@ than letting the next command fail confusingly.
 cd "${PRIMARY}-nrl-<NUM>" && npm test && npm run typecheck
 ```
 
-`tests/engine.test.ts` shells out to real `espeak-ng` and `spd-say`. If it fails, check
-`which espeak-ng spd-say` before blaming the worktree.
+`tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running
+speech-dispatcher daemon, not `espeak-ng`; see `AGENTS.md`'s quality-gates block. If it fails,
+check `spd-say --version` and `spd-say -O` before blaming the worktree.
 
 7. Do **not** deploy. Creating a worktree never takes the deploy slot. Report who currently owns
    it and require `/worktrees deploy NRL-<NUM>` as a separate, deliberate act.
@@ -398,7 +399,7 @@ that exists nowhere else, which is why there is no symlink caveat here.
 | Directory not found | Show the error, list what exists |
 | `git worktree add` fails, branch exists | Offer to check out the existing branch in a new worktree with `worktree add <dir> <branch>` |
 | `npm ci` fails | Report it; the worktree exists but is unusable. Do not proceed to the gates |
-| Gates fail in a fresh worktree | Check `which espeak-ng spd-say` first; `tests/engine.test.ts` needs real binaries |
+| Gates fail in a fresh worktree | Check `spd-say --version` and `spd-say -O` first; `tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running speech-dispatcher daemon |
 | Deploy slot marker missing | Fall back to the byte comparison; if no worktree matches, say the slot holds an unknown build |
 | Linear tool absent | Do the git work, print what you would have asked Linear |
 | `gh` not authenticated | Skip the PR lookup, say it was skipped |

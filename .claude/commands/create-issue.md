@@ -77,10 +77,13 @@ A reproduction in this repo is one of:
   `~/Documents/Notes/.obsidian/plugins/local-tts-reader`. Reload the plugin, run the
   command, record what happened. Obsidian here is the Flatpak `md.obsidian.Obsidian`.
 
-- **A real binary.** `espeak-ng` and `spd-say` are on this machine and `tests/engine.test.ts`
-  shells out to them. Paste the exact command and its exact output, including which stream
-  it appeared on. That detail matters: `spd-say` reports `Invalid voice` on **stdout with
-  exit 0**, which is why one existing defect is silent.
+- **A real binary.** `spd-say` is on this machine and a speech-dispatcher daemon is running;
+  `tests/engine.test.ts` shells out to that binary. `espeak-ng` is **not** installed here - it
+  exists only as a speech-dispatcher output module - so there is no real-binary path for that
+  engine, and `AGENTS.md`'s quality-gates block is the one place that detail lives. Paste the
+  exact command and its exact output, including which stream it appeared on. That detail
+  matters: `spd-say` reports `Invalid voice` on **stdout with exit 0**, which is why one
+  existing defect is silent.
 
 If the conversation never actually ran the failing path, write that sentence verbatim into
 the issue under `## Reproduction`:
