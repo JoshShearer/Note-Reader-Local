@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-09-29
 - Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44 and NRL-64; clause 2
-  amended by NRL-68
+  amended by NRL-68 and NRL-73
 
 ## Context
 
@@ -26,13 +26,20 @@ evidence, not a live Obsidian reading or highlighting observation.
    including trailing prose on the closing line and subsequent comments there.
 
 2. **Distinguish block and inline openers.** At the start of a prose line
-   (allowing whitespace), an unmatched `%%` opens a block that hides through
+   (allowing whitespace) **and with no further `%` before the end of that
+   line**, an unmatched `%%` opens a block that hides through
    the first later `%%`, or through EOF when none exists. Apply this to the
    line body after structural prefixes are peeled and to closing-line prose
    remainders. An unmatched inline `%%` remains literal and does not consume
    later lines. A lone `%` and backslash-escaped openers remain literal.
    Hiding every unmatched inline opener would silently discard visible prose;
    speaking unclosed blocks would disclose renderer-hidden content.
+
+   The lone-`%` half is the renderer's own rule and was missing until NRL-73;
+   see the divergence section below for the evidence and for why it is asked
+   through one shared predicate rather than restated at each site. It applies to
+   `%%` **only**: the disqualifier lives in Obsidian's `%%` tokenizer and has no
+   HTML-comment equivalent, so `<!--` is deliberately not narrowed by it.
 
    **Confirmed against the renderer by NRL-68, which was filed to contradict
    it.** That ticket reported a trailing mid-line `%%` failing to open a block
@@ -62,24 +69,93 @@ evidence, not a live Obsidian reading or highlighting observation.
 
    Two real divergences fell out of the same reading, and both go the other
    way - they hide text Obsidian displays, which is the direction this clause
-   calls out as the one that discards visible prose. `if (37 === a) return`
-   means **any** `%` before the newline disqualifies the block, while we look
-   only for a later `%%` closer, so `%% 50% off` opens a block for us and not
-   for Obsidian and the rest of the note is silenced (NRL-73). The path that
-   actually opens it is `cleanLine`: `close === -1` at `src/text/extract.ts:618`
-   falls past the guard on the next line and sets `openComment` at `:626`.
-   `opensHiddenComment` (`:1351`) encodes the same "no later `%%`" rule and is
-   worth fixing in step, but it is **not** the cause - it is reached only from
-   `interruptsParagraph` (`:1362`), whose only call sites are `:1391` and `:1394`
-   inside `codeSpanClosesLater`, so it never runs on a note with no backticks.
-   A fix applied there alone would leave the output unchanged.
-   And the line-start half of the guard at `src/text/extract.ts:619` is gated on
-   `obsidianComment`, so an unmatched mid-line `<!--` still opens a block while
-   `%%` correctly does not (NRL-74). Neither is fixed here.
+   calls out as the one that discards visible prose. **NRL-73 is now fixed;
+   NRL-74 is not.**
+
+   **NRL-73, resolved.** `if (37 === a) return` means **any** `%` before the
+   newline disqualifies the block, while we looked only for a later `%%` closer,
+   so `%% 50% off` opened a block for us and not for Obsidian and the rest of the
+   note was silenced. Two sites asked that question independently: the
+   literal-emit escape in `cleanLine`'s comment branch (`src/text/extract.ts:903`,
+   the path the reproduction actually takes) and `opensHiddenComment`
+   (`:1656-1661`, reached only from `interruptsParagraph` and in turn only from
+   `codeSpanClosesLater`, so it never runs on a note with no backticks and a fix
+   there alone would have changed nothing). Both now call **one predicate**:
+
+   ```ts
+   function opensObsidianBlock(view: string, at: number): boolean {
+       return view.slice(0, at).trim() === "" && view.indexOf("%", at + 2) === -1;
+   }
+   ```
+
+   One predicate rather than two parallel edits because the two sites are the
+   same question asked from two places and had already drifted on exactly the
+   half that was missing. This is **not** the situation NRL-66's "do not merge
+   the two scans" note describes: those two scans have deliberately *different*
+   escape rules, whereas these two must agree by definition. Three properties are
+   load-bearing. `blockComments &&` stays at the `cleanLine` call site as a
+   **mode flag, not part of the rule**, and that is what makes the forward scan
+   sound - the five recursive `cleanLine` call sites hand it a *middle slice* of a
+   line rather than a suffix, and every one of them leaves `blockComments` at its
+   `false` default, so the predicate is unreachable from them; the two sites that
+   do pass `true` pass `raw.slice(from)` and `raw.slice(prefixChars)`, both
+   suffixes, so scanning to end-of-view equals scanning to end-of-line. The
+   `obsidianComment` gate is untouched, which is what keeps `<!--` out of the
+   change. And the new predicate **strictly subsumes** the old expression - no `%`
+   after the opener implies no `%%` after it - so `opensHiddenComment` can only
+   return `false` where it used to return `true`, never the reverse.
+
+   The scan is a **byte scan with no escape awareness**, mirroring the
+   tokenizer's `charCodeAt(r) === 37`, so an escaped `\%` disqualifies the opener
+   too: `%% 50\% off` / `VISIBLE PROSE AFTER` speaks `%% 50% off VISIBLE PROSE
+   AFTER`. Failing toward what the renderer does is the point.
+
+   Two consequences are **renderer-faithful and must not be reverted as
+   regressions**, both measured. The disqualified opener line is itself spoken,
+   delimiters included, because Obsidian displays it. And a later bare `%%` on its
+   own line is still a genuine opener, so `%% 50% off` / `SECRETC` / `%%` /
+   `tail.` moved from `"tail."` to `"%% 50% off SECRETC"` - the old output was
+   wrong in **both directions at once**, hiding the two displayed lines and
+   speaking the hidden tail. The same shape beside an unmatched backtick run moved
+   from `"Before a b after."` to `"Before a %% 50% off SECRETB"` in both
+   `skipInlineCode` positions.
+
+   Because narrowing `opensHiddenComment` **widens** `codeSpanClosesLater`, the
+   disclosure direction was probed separately rather than assumed: a genuine
+   hidden `%%` block beside an unmatched backtick run of length 1, 2 and 3, a run
+   that never closes, a mismatched pair and an HTML block all stayed silent,
+   0 spoken on both sides over 5,120 cells per side, while ADR 0019's
+   deliberately-literal `%%` pair inside a *spoken* span stayed at 512 on both
+   sides. `codeSpanClosesLater` and `interruptsParagraph` are byte-identical
+   across the diff, confirmed by hashing both function bodies. Of 1,789 distinct
+   probe lines, 52 changed their `interruptsParagraph` answer and all 52 are lines
+   the tokenizer does not treat as a comment opener.
+
+   The oracle for all of the above was **transcribed from the installed
+   `obsidian.asar`** rather than keyed on sentinel names, because a name-keyed
+   oracle mis-classifies a shape whose second `%%` *closes* the block its first
+   opened and so reports phantom leaks on a correct fix. Transcribing it also
+   settled the **closer**, which this ADR had not previously cited: it is
+   `for (var s = i; r < i;) { if (37 === ... && 37 === ...) { s = r + 2; break } r++ }`,
+   the next `%%` **anywhere** from the newline on with no line-start requirement,
+   which is what we already did. Over 19,968 cells per side, text the tokenizer
+   hides leaked 1,024 -> 0 and text it displays was lost 8,704 -> 0, with 0 cells
+   newly leaking or newly lost.
+
+   **NRL-74, still open.** The line-start half of the guard at
+   `src/text/extract.ts:903` is gated on `obsidianComment`, so an unmatched
+   mid-line `<!--` still opens a block while `%%` correctly does not. The
+   renderer-faithful fix is to narrow `<!--`, not to widen `%%`. NRL-73 replaced
+   the expression at that line, so the `%%` half is now a helper call and the
+   `<!--` half is still the bare gate, which isolates the two.
+
+   One known miss, not opened by NRL-73 and not fixed by it: the line-start half
+   uses `.trim()`, which accepts a **tab**, where the tokenizer's skip loop
+   accepts charCode 32 only. So `\t%%` opens a block for us and not for Obsidian.
 
    This was read off the installed parser's own source and was **NOT observed
    live** in Obsidian - the same standing this ADR's other tokenizer citations
-   have.
+   have. Every number above is bare-Node measurement against base `bb77b77`.
 
 3. **Only the active comment's first matching closer ends it.** Comments do
    not nest. HTML comments end at `-->`; Obsidian comments end at `%%`.

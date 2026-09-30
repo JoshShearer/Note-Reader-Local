@@ -1233,6 +1233,60 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["crlf", "Before.\r\n%%\r\nhidden\r\n%% after.", "Before. after."],
 		["utf16", "𐐀lpha %%hidden%% élan after.", "𐐀lpha élan after."],
 		["unconditional", "Before %%hidden%% after.", "Before after.", { stripTags: false, skipCodeBlocks: false, skipInlineCode: false, skipTables: false, skipHeadings: true, speakUrls: true, skipFrontmatter: false, speakImageAlt: true, speakEmbeds: true }],
+		// NRL-73. Obsidian's %% block tokenizer aborts on ANY '%' before the
+		// newline (`if (37 === a) return`, read out of the installed
+		// obsidian.asar - ADR 0006 clause 2), so a line-start %% carrying a lone
+		// percent is not a comment opener there at all and the renderer displays
+		// it. We used to set openComment anyway and silence the note to EOF,
+		// which is prose loss rather than leaked markup. These six are the defect
+		// reproduction: each spoke "" or worse before the fix.
+		["pin-nrl73-lone-percent-is-literal", "%% 50% off\nVISIBLE PROSE AFTER", "%% 50% off VISIBLE PROSE AFTER"],
+		// The disqualifier is a byte scan with no escape awareness, exactly like
+		// the tokenizer's charCodeAt comparison, so an escaped \% disqualifies
+		// too. The spoken form is `%` and not `\%` because the existing emission
+		// path consumes the backslash; pinned so that stays deliberate.
+		["pin-nrl73-escaped-percent-disqualifies", "%% 50\\% off\nVISIBLE PROSE AFTER", "%% 50% off VISIBLE PROSE AFTER"],
+		["pin-nrl73-indented-opener-with-percent", "  %% 50% off\nVISIBLE", "%% 50% off VISIBLE"],
+		// These three move SILENT -> SPOKEN and are renderer-faithful, not leaks.
+		// The lone % disqualifies line 1, so Obsidian displays it; the later bare
+		// %% (next char is a newline, the tokenizer's `10 === a` break) is a
+		// genuine opener with no closer, so Obsidian hides the tail. The old
+		// output was wrong in BOTH directions at once - it hid the displayed
+		// opener line and spoke the hidden tail. Do not "fix" these back.
+		["pin-nrl73-disqualified-then-real-opener", "%% 50% off\nSECRETC\n%%\ntail.", "%% 50% off SECRETC"],
+		["pin-nrl73-disqualified-beside-code-run", "Before `a\n%% 50% off\nSECRETB\n%%\nb` after.", "Before a %% 50% off SECRETB"],
+		["pin-nrl73-disqualified-beside-code-run-spoken", "Before `a\n%% 50% off\nSECRETB\n%%\nb` after.", "Before a %% 50% off SECRETB", { skipInlineCode: false }],
+		// GUARDS. Green on both sides of the fix, so they are not evidence of
+		// anything; they exist so the narrowing cannot be widened by accident.
+		// The ticket's own control: no % after the opener, so it really is an
+		// unclosed block opener and really does hide through EOF.
+		["guard-nrl73-no-percent-still-hides", "%% 50 off\nVISIBLE PROSE AFTER", ""],
+		// The disclosure direction. Narrowing the predicate widens
+		// codeSpanClosesLater, so a GENUINE hidden block beside an unmatched
+		// backtick run must still be silent.
+		["guard-nrl73-genuine-opener-beside-code-run", "Before `a\n%%\nHIDEME\nb` after.", "Before a", { skipInlineCode: false }],
+		// The lone-% rule is %%-only (NRL-73 D-73-4). Obsidian has no equivalent
+		// rule for an HTML comment, so <!-- is untouched here; the mid-line <!--
+		// asymmetry is NRL-74's.
+		["guard-nrl73-html-opener-unaffected", "<!-- 50% off\nHIDEME", ""],
+		// A closed inline pair takes the `close !== -1` path, which this change
+		// does not touch, so a % inside one is still hidden.
+		["guard-nrl73-inline-pair-with-percent", "Before %%a 5% b%% after.", "Before after."],
+		// A soft-wrapped code span whose interior holds ONLY disqualified `%%`
+		// lines - no genuine opener anywhere inside it. Found at ship review, and
+		// red against base in BOTH positions, which is the point: base spoke
+		// "Before a 2% w b after." either way, half-recognising the span. It said
+		// the span's two ends (`a`, `b`) and one interior line as prose while
+		// dropping the rest, so it agreed with neither the skipped form nor the
+		// spoken one. That happened because `opensHiddenComment` called
+		// "%% 50% off" an opener, `interruptsParagraph` therefore stopped
+		// `codeSpanClosesLater`, and the span was never confirmed. Narrowing the
+		// predicate confirms it, and the span is now governed by skipInlineCode
+		// exactly as a single-line span is (ADR 0019, R-M08): silent when code is
+		// skipped, verbatim when it is spoken. Neither of these is a leak - every
+		// line here is displayed by Obsidian, as code.
+		["pin-nrl73-span-of-only-disqualified-openers", "Before `a\n%% 50% off\nSPANPROSE\n%% 2% w\nb` after.", "Before after."],
+		["pin-nrl73-span-of-only-disqualified-openers-spoken", "Before `a\n%% 50% off\nSPANPROSE\n%% 2% w\nb` after.", "Before a %% 50% off SPANPROSE %% 2% w b after.", { skipInlineCode: false }],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
