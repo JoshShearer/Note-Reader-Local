@@ -13,7 +13,7 @@ as a `/COMMANDS` command.
 
 ---
 
-## Workflow (7)
+## Workflow (8)
 
 | Command | Purpose | Linear status |
 |---|---|---|
@@ -21,9 +21,15 @@ as a `/COMMANDS` command.
 | `/create-issue` | Create an issue from conversation, carrying the `srs.md` requirement ID and a real repro | to Todo |
 | `/start-issue` | Start work - branch, context, the AGENTS.md rules for the area being touched | to In Progress |
 | `/ship` | Gates, constraint audit, adversarial pass, commit, push, PR with an Obsidian test plan | stays In Progress + PR comment |
+| `/test-issue` | Triage the PR's CI result - measure whether a red check is this branch's fault, one repair attempt, merge-readiness verdict | - (comments) |
 | `/verify` | Run the real gates, deploy, drive Obsidian, post what was actually observed | - (comments) |
 | `/finish` | **End of cycle** - delete branch, sync, close, correct any doc the fix invalidated | to Done |
 | `/whats-next` | **Session handoff** - decisions, measurements taken, claims still unverified | - |
+
+`/test-issue` and `/verify` are two axes, not two attempts at the same check. `/test-issue` answers
+"did GitHub Actions go red, and is it this branch's fault"; `/verify` answers "does it work in
+Obsidian" and owns the `VERIFIED IN OBSIDIAN` verdict. `/test-issue` never claims that verdict and
+never deploys.
 
 ## Quality (4)
 
@@ -38,8 +44,8 @@ as a `/COMMANDS` command.
 
 | Command | Purpose |
 |---|---|
-| `/worktrees` | Parallel sessions - list, inspect, create, remove; file-overlap and deploy-slot ownership |
-| `/run-tickets` | Run a batch of tickets end to end in fresh subagents, fully autonomously; anything needing a human blocks that ticket and is reported at the end |
+| `/worktrees` | Parallel sessions - list, inspect, create, remove; file-overlap and deploy-slot ownership. Owns the `note-reader-local-nrl-*` pool only |
+| `/run-tickets` | Run a batch of tickets end to end in fresh subagents, fully autonomously, in a disposable `note-reader-local-run-*` lane it creates and removes; anything needing a human blocks that ticket and is reported at the end |
 
 ---
 
@@ -47,9 +53,13 @@ as a `/COMMANDS` command.
 
 ```
 /orient -> /create-issue -> /start-issue -> ...work... -> /ship -> /verify -> merge -> /finish -> /update-docs
+                                                                \
+                                                                 -> /test-issue, if the PR's CI went red
 ```
 
-`/run-tickets` drives that whole loop for a list of issues without you typing each step.
+`/run-tickets` drives that whole loop for a list of issues without you typing each step, minus
+`/test-issue`: an unattended run reads a CI conclusion at most once and never waits on one, so it
+names any red PR in its end-of-run report and leaves the triage to you.
 
 ---
 
@@ -60,6 +70,8 @@ as a `/COMMANDS` command.
 | `/verify` runs the gates itself | `.github/workflows/ci.yml` runs them on `push` and `pull_request`, but there is no git hook and no branch protection, so the check is a backstop. `/verify` may read its conclusion once; it must not wait on it. |
 | Every shipping command demands an Obsidian check | `AGENTS.md` rule 11. The suites run in bare Node against fakes, so green says nothing about whether speech works. |
 | `/run-tickets` never waits for a human | The owner tests by using the app and files new tickets for what they find. Verify is automated (gates, bundled probes of every acceptance input, CDP smoke when reachable) and merge is automatic. Nothing is ever described as verified in Obsidian unless a human saw it; interactive `/verify` still exists for that. |
+| `/run-tickets` works in a worktree it creates and removes | The owner keeps the primary checkout. The lane is `note-reader-local-run-<stamp>` on a throwaway `run/<stamp>` branch cut from `origin/main`, and it is removed at the end **only if nothing would be lost** - a ticket blocked before Ship leaves unpushed commits, and those are kept rather than force-removed. The lock, the state file and the archive live in the **primary**, because a lock inside a fresh lane is free by construction and a state file inside it would be deleted by the run's own cleanup. |
+| `/test-issue` has no `known-failures.json` | ShroomSpy triages CI against a hand-maintained baseline file. Here the triage is measured: reproduce the failing gate locally, then on `origin/main` in a throwaway tree. The one structural exception is already written down - a red `release.yml` on a branch push is expected for refs predating `01c9a84` (`AGENTS.md`, NRL-79). |
 | `/spec-check` is new | This project has a written spec with MoSCoW IDs. Compliance drift is the main risk, and no other repo in the portfolio has that shape. |
 | `/critique` risk factors are rewritten | Scored on source-offset edits, log call sites, the worker's network guards, rate handling, settings normalisation and node-builtin imports, not on generic churn. |
 | Bugs must be reproduced before they are fixed | `AGENTS.md` rule 12, enforced in `/create-issue` and in `/run-tickets` Phase 3. |
@@ -97,10 +109,12 @@ When a Linear call will not resolve, check the operation name before blaming the
 ## Running the pipeline without a human
 
 `/run-tickets` promises it never waits. That is a property of how it is launched, not of the file.
-`opencode.json` sets `git push *`, `git branch -D *` and `rm -rf *` to `ask`, and the pipeline runs
-all three: Ship pushes, Finish deletes the squash-merged branch with `-D`, and the run releases
-`.claude/pipeline.lock` with `rm -rf`. Those rules protect every other session in this repo, so the
-fix is the launch, not the config:
+`opencode.json` sets `git push *`, `git branch -D *`, `git reset --hard*` and `rm -rf *` to `ask`, and
+the pipeline runs all four: Ship pushes, Finish deletes the squash-merged branch with `-D`, the lane is
+resynced between tickets with `reset --hard origin/main`, and the run releases its lock with `rm -rf`.
+`git worktree add` and `git worktree remove` match no rule and are not gated, so the lane itself adds
+no prompt. Those rules protect every other session in this repo, so the fix is the launch, not the
+config:
 
 ```bash
 opencode run --auto --command run-tickets "NRL-19,NRL-20,NRL-21"
