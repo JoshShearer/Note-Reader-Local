@@ -132,13 +132,44 @@ NRL-21's title invites the opposite conclusion. Its *configurability* half is me
 exclusions the requirement names have a live toggle at the spec's default, each toggle
 demonstrably moves extraction in both positions, and inline code is separable from fenced
 code. (Measured at `ad1027d` by bundling the real `extract.ts` and sweeping all 512
-combinations of the nine content keys.) Its *reduction* half is not. `srs.md:307` promises
-that an image's "destination and any quoted title are never spoken", and two shapes still
-speak one, in **both** positions of `speakImageAlt`: a label holding another bracket
-construct (`![a [[N|l]] b](dest.png)`) and an alt text crossing a soft line break (NRL-44
-F9). A third speaks a fragment of one, `![alt](dest(1).png)` saying `.png)`. All three are
-pre-existing, all are tracked, and none was opened by NRL-21. Do not record R-M09 as met
-until they close.
+combinations of the nine content keys.) Its *reduction* half is split in two, and only one
+of the two halves has moved.
+
+The **path** half moved with NRL-46 (`docs/adr/0017`, `srs.md:309` and `:366`). A
+`[[wikilink]]` or `![[embed]]` whose target had no dot in its final segment used to speak the
+whole target, so a note filed under a private folder read the folder structure aloud. The
+label is now the target's final path segment only, in **both** branches - the separator set is
+`/` and `\`, a trailing separator falls back to the last non-empty segment, and a target of
+only separators speaks nothing - and a target that is itself a bare URL is reduced to its host
+with any userinfo stripped, in either position of `speakUrls`. Evidence, from bundling the real
+`src/text/extract.ts` from the tree and from base `789d3c2` side by side with the repo's own
+esbuild: **0 newly-spoken folder, drive or credential sentinels across 731,136 probe cells**
+(645,120 in the sentinel privacy matrix plus 86,016 in the adversarial-context matrix), with
+sentinel-bearing cells falling from 263,680 on base to 6,144 and every shape that still speaks
+one also speaking it on base; and `sourceIndex` clean over **747,008 cells**, checked
+numerically by UTF-16 code-unit index for length, monotonicity, bounds and character identity.
+**Nothing was observed in Obsidian.** CDP port 9222 was unreachable during that ticket, so what
+Obsidian itself displays for a folder-qualified wikilink is still unknown.
+
+Two residual leaks on that same path half, recorded so the paragraph above is not read as
+finishing it. `[[folder/Note\]]` still speaks its folder: the trailing backslash is consumed as
+an escape, so the construct is never recognised as a wikilink at all, no reduction runs, and the
+raw text falls through to prose. 10 cells, byte-identical on both sides of NRL-46, pre-existing,
+tracked as **NRL-66**. And `[[a/b%%SECRET%%]]` speaks `b%%SECRET%%`: a wikilink label is emitted
+raw so `sourceIndex` can map every character to its exact offset, which is also why `cleanLine`'s
+comment branch never runs on it. Strictly better than the base, which spoke the folder as well,
+but it discloses hidden text and is filed High as **NRL-67**. Both are pinned in
+`tests/extract.test.ts` (`pin-unterminated-by-escape`, `pin-comment-inside-target`) so they can
+only change deliberately.
+
+The **image** half has not moved. `srs.md:365` promises that an image's "destination and any
+quoted title are never spoken", and two shapes still speak one, in **both** positions of
+`speakImageAlt`: a label holding another bracket construct (`![a [[N|l]] b](dest.png)`) and an
+alt text crossing a soft line break (NRL-44 F9, also filed on its own as **NRL-63** because it
+is the privacy item). A third speaks a fragment of one, `![alt](dest(1).png)` saying `.png)`.
+All three are pre-existing, all are tracked, and none was opened by NRL-21. **Do not record
+R-M09 as met until they close**, and the headline count stays at 2 of 16: NRL-46 closed a
+leftover, not the requirement.
 
 R-M10 (speech segmentation) did not move the count either, and the reason is different
 from R-M09's. Its acceptance criteria are met on the automated evidence and the evidence
