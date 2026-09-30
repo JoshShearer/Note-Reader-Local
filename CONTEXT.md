@@ -155,12 +155,33 @@ byte-identical while the behaviour changed.
 
 A soft-wrapped image or link label uses the same shape through `bracketClosesLater`
 (NRL-63, ADR 0023), which mirrors `codeSpanClosesLater` including its `interruptsParagraph`
-stops and adds one requirement of its own: the closing line's first `]` must be followed by
+stops and adds one requirement of its own: the label's own `]` must be followed by
 `(` or `[`, so a shortcut label with no destination is never confirmed and no visible prose
 is silenced. The two carries are mutually exclusive on any one line and a code span binds
 tighter, so a line opening both arms the code carry only. The label carry is a **partial**
-fix: five distinct roots still leave a destination spoken, tracked as NRL-88 and enumerated
+fix: four distinct roots still leave a destination spoken, tracked as NRL-88 and enumerated
 in `AGENTS.md`.
+
+**Which `]` is "the label's own" is decided by one shared scan, and the sharing is the
+load-bearing part** (NRL-88, ADR 0027). `labelClose(line, from, depth)` tracks bracket
+**depth** and is called by `bracketClosesLater` *and* by the block in `cleanLine` that
+consumes a carried label. Before it, the confirmation tested the first `]` on the line and
+the consumer closed the label at that same `]` unconditionally, without the test - so
+teaching only the confirmation to walk past an inner bracket pair measured **strictly worse
+than changing nothing**: the destination still leaked and the alt text was silenced too. One
+question, one helper.
+
+Depth rather than "skip any `]` that is not a closer" is also measured rather than
+preferred: the naive skip lets a shortcut label's own closer be skipped and an unrelated
+later `](` adopted, swallowing the prose between. A `]` reached at **depth 0 is ours**, is
+tested, and on failure the confirmation returns false - the fail-closed direction ADR 0023
+clause 3 takes everywhere. And `labelClose` deliberately **stops counting** at the first
+step with no `]` left on the line, so a trailing unmatched `[` is not counted: completing
+that accounting newly leaked a destination and moved a pinned fixture, because this
+codebase's carry takes the **first** unmatched opener where CommonMark takes the **last**.
+The residual depth travels with `openBracket` as `Cleaned.openBracketDepth` and
+`cleanLine`'s tenth parameter, cleared by exactly the same paths, because it is part of that
+one carry rather than state of its own.
 
 The third cross-line fact is the HTML-comment block rule (NRL-74, ADR 0025), and it is
 deliberately a different shape. A `<!--` opens a block only if it begins its line **or**
