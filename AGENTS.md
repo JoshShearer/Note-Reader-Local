@@ -1142,6 +1142,40 @@ rediscover them:
   pinned engine's only build is removed. Move R-C02 to met only after that observation happens
   in a real Obsidian, and name what was seen.
 
+- The suite count is **machine-asserted** as of NRL-85 (`tests/suiteRegistry.test.ts`, PR #117,
+  `b971e96`). It derives the registry from `package.json`'s `pretest` and asserts agreement
+  only, never a literal, which is why it can count itself. Four sites move together: `pretest`,
+  the `test` chain, this file's `npm test` gate line (**count and full name list, in order**)
+  and `srs.md`'s release-gate bullet. Adding a suite now means editing all four or the gate
+  fails. The drift it closes was not hypothetical: the count moved wrong three times in one
+  `/run-tickets` run, every time on a **clean** merge, because two lanes bumping the number from
+  their own bases touch either different files or different lines of one file and git has
+  nothing to conflict on.
+  **One live trap, and it is armed for NRL-80.** Checks 5 and 6 compare the `test` script
+  against the registry, and a `test` naming **no** `tests/.build/*.test.mjs` path prints two
+  counted SKIPs rather than failing, deliberately, so NRL-80's runner rewrite cannot turn this
+  red for no defect. The SKIP is loud rather than silent - it is counted separately, and it
+  suppresses the bare `all suite registry tests passed` line that a reader would grep for - but
+  what is lost is real: once `test` names no suite path, **nothing ties the registry to
+  execution**. Measured at its sharpest against the shipped file rebuilt at `558bd40`, run over
+  a copied tree: with `"test": "true"`, running zero suites, it prints `2 SKIPPED` and
+  `all suite registry tests passed (2 skipped)` and **exits 0**. Naming some but not all stays a
+  hard failure, measured on the same tree by dropping one entry from the real chain:
+  `1 FAILURE(S)`, exit 1, naming the missing suite. So the degradation is the all-or-nothing
+  case specifically, and whoever lands NRL-80 should replace that tie rather than read the SKIP
+  as harmless.
+  Three residual holes, all inside that one file. A **trailing comma** in this file's name list
+  passes silently, because the splitter filters empty entries (measured: exit 0 with a comma
+  appended to `suiteRegistry`); that one is cosmetic, since no wrong count and no wrong name can
+  hide behind it. `UNREGISTERED_SUITES` is an **unguarded escape hatch**: a name added to it
+  drops that suite out of check 4 with nothing asserting the reason still holds. And check 4's
+  disk comparator is the one comparison in the file with **no section 12 mutation guard**,
+  unlike every parser and `listsEqual`, so a tidy-up there could go vacuous the way the guards
+  exist to prevent everywhere else.
+  Evidence is **bare-Node**. Nothing was observed in Obsidian, and for this ticket that is **not
+  applicable** rather than a gap: nothing under `src/` changed and it is not user-facing. No
+  requirement moves and the `2 of 16` MUST count does not move.
+
 ## Style
 
 - No em-dashes. A plain hyphen or a rephrase.
