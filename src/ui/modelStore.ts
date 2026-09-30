@@ -1,5 +1,12 @@
 import { App } from "obsidian";
-import { KOKORO_WEIGHT_PATHS, type ModelStore } from "../engines/onnx/kokoro";
+import {
+	KOKORO_VOICES,
+	KOKORO_WEIGHTS,
+	KOKORO_WEIGHT_PATHS,
+	voiceFilePath,
+	type ModelStore,
+} from "../engines/onnx/kokoro";
+import type { EngineSelection } from "../engines/selection";
 import { modelStorePaths, normaliseVaultPath, pluginVaultPath } from "./paths";
 
 export { modelStorePaths, normaliseVaultPath, pluginVaultPath } from "./paths";
@@ -250,6 +257,12 @@ export interface AtomicAdapter {
 	rename(oldPath: string, newPath: string): Promise<void>;
 	remove(path: string): Promise<void>;
 	exists(path: string): Promise<boolean>;
+	/** Obsidian's real `DataAdapter.stat` (obsidian.d.ts:2027) - structural match, no wrapping. */
+	stat(path: string): Promise<{ size: number } | null>;
+	/** Obsidian's real `DataAdapter.list` (obsidian.d.ts:2033). */
+	list(path: string): Promise<{ files: string[]; folders: string[] }>;
+	/** Obsidian's real `DataAdapter.rmdir` (obsidian.d.ts:2120). */
+	rmdir(path: string, recursive: boolean): Promise<void>;
 }
 
 async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
@@ -489,4 +502,154 @@ async function bufferOrtResponse(
 	const buffer = await res.arrayBuffer();
 	onProgress({ file, loaded: buffer.byteLength, total });
 	return buffer;
+}
+
+// --- Installed size, removal, and total usage (NRL-33, R-C02) -----------
+//
+// "Installed size" is always a real adapter.stat() of the file that is
+// actually on disk, never the download-size table above: a build resumed
+// from a partial download, or one a user hand-edited, would silently lie
+// through a table lookup.
+
+/** The three weights builds a user can download and later remove. */
+export type KokoroBuild = "gpu" | "fast" | "small";
+
+/** MB for one build's weights file, decimal (bytes / 1_000_000), matching
+ *  `WeightsVariant.sizeMb`'s convention. Null if that build is not on disk. */
+export async function getInstalledSizeMb(
+	adapter: Pick<AtomicAdapter, "stat">,
+	modelDir: string,
+	build: KokoroBuild,
+): Promise<number | null> {
+	const dir = normaliseVaultPath(modelDir);
+	const path = normaliseVaultPath(`${dir}/${KOKORO_WEIGHTS[build].path}`);
+	const stat = await adapter.stat(path);
+	if (!stat) return null;
+	return stat.size / 1_000_000;
+}
+
+export interface RemoveBuildResult {
+	ok: boolean;
+	/** Bytes actually freed - 0 whenever `ok` is false. */
+	freedBytes: number;
+	error?: string;
+}
+
+/**
+ * Delete one weights build and report bytes freed.
+ *
+ * `freedBytes` comes from a `stat()` taken immediately before the
+ * `remove()`, never from the download-size table, so the reported number is
+ * what was really on disk. A build that was never installed is a no-op:
+ * `ok: false`, `freedBytes: 0`, and no `remove()` call at all - a caller
+ * cannot tell "removed nothing because nothing was there" from "removal
+ * failed" by the `ok` flag alone, but it can by checking whether anything
+ * was ever on disk first (`getInstalledSizeMb` returning non-null).
+ *
+ * After the weights file is gone, `onnx/` is removed too if it is now
+ * empty, best-effort: a failure there must not mask the weights removal
+ * that already succeeded, the same reasoning `removeQuietly()` above uses
+ * for the download path's own cleanup.
+ */
+export async function removeModelBuild(
+	adapter: Pick<AtomicAdapter, "stat" | "remove" | "list" | "rmdir">,
+	modelDir: string,
+	build: KokoroBuild,
+): Promise<RemoveBuildResult> {
+	const dir = normaliseVaultPath(modelDir);
+	const weightsPath = normaliseVaultPath(`${dir}/${KOKORO_WEIGHTS[build].path}`);
+
+	const stat = await adapter.stat(weightsPath);
+	if (!stat) {
+		return { ok: false, freedBytes: 0 };
+	}
+
+	try {
+		await adapter.remove(weightsPath);
+	} catch (err) {
+		return { ok: false, freedBytes: 0, error: errText(err) };
+	}
+
+	try {
+		const onnxDir = normaliseVaultPath(`${dir}/onnx`);
+		const listing = await adapter.list(onnxDir);
+		if (listing.files.length === 0 && listing.folders.length === 0) {
+			await adapter.rmdir(onnxDir, false);
+		}
+	} catch {
+		// Best-effort only, see doc comment above.
+	}
+
+	return { ok: true, freedBytes: stat.size };
+}
+
+/**
+ * The concrete form of owner Decision 3 (NRL-33): removing the weights
+ * behind a *literal* Kokoro pin must fall back to automatic selection, or
+ * `resolveSelection` returns a one-element list for the pin and the user is
+ * left with "no speech engine is available" and no fallback. An "auto"
+ * selection re-ranks itself on its own and needs no special-casing here,
+ * and a pin that is still available after the removal (a different build
+ * remains) must not be disturbed.
+ */
+export function shouldClearPinnedKokoro(
+	engineSelection: EngineSelection,
+	kokoroAvailableAfterRemoval: boolean,
+): boolean {
+	return engineSelection === "kokoro" && !kokoroAvailableAfterRemoval;
+}
+
+export interface UsageSummary {
+	totalBytes: number;
+	builds: Record<KokoroBuild, number>;
+	voicesBytes: number;
+	sharedBytes: number;
+	ortBytes: number;
+}
+
+/**
+ * Everything this plugin has ever written into the model directory,
+ * including the ORT runtime (owner Decision 2: "everything hidden from the
+ * user"). Every figure is a real `adapter.stat()` against what is actually
+ * on disk - nothing here is assumed from `WeightsVariant.sizeMb` or
+ * `ORT_RUNTIME_SIZE_MB`, both of which are download-size estimates, not
+ * installed-size measurements. A file that is not on disk contributes 0,
+ * never `NaN` or a negative number.
+ */
+export async function getTotalUsage(
+	adapter: Pick<AtomicAdapter, "stat" | "exists">,
+	modelDir: string,
+	ortFiles: string[],
+): Promise<UsageSummary> {
+	const dir = normaliseVaultPath(modelDir);
+
+	const statSize = async (relative: string): Promise<number> => {
+		const stat = await adapter.stat(normaliseVaultPath(`${dir}/${relative}`));
+		return stat?.size ?? 0;
+	};
+
+	let sharedBytes = 0;
+	for (const file of MODEL_FILES) {
+		sharedBytes += await statSize(file);
+	}
+
+	const builds: Record<KokoroBuild, number> = { gpu: 0, fast: 0, small: 0 };
+	for (const key of Object.keys(builds) as KokoroBuild[]) {
+		builds[key] = await statSize(KOKORO_WEIGHTS[key].path);
+	}
+
+	let voicesBytes = 0;
+	for (const voice of KOKORO_VOICES) {
+		voicesBytes += await statSize(voiceFilePath(voice.file));
+	}
+
+	let ortBytes = 0;
+	for (const file of ortFiles) {
+		ortBytes += await statSize(`ort/${file}`);
+	}
+
+	const buildsTotal = builds.gpu + builds.fast + builds.small;
+	const totalBytes = sharedBytes + buildsTotal + voicesBytes + ortBytes;
+
+	return { totalBytes, builds, voicesBytes, sharedBytes, ortBytes };
 }

@@ -1,17 +1,79 @@
-import { App, Notice, PluginSettingTab, Setting, type ColorComponent } from "obsidian";
+import {
+	App,
+	Modal,
+	Notice,
+	PluginSettingTab,
+	Setting,
+	type ButtonComponent,
+	type ColorComponent,
+} from "obsidian";
 import type LocalTtsReaderPlugin from "../main";
 import type { VoiceInfo } from "../audio/types";
-import { KOKORO_VOICES, KOKORO_WEIGHTS, probeGpu } from "../engines/onnx/kokoro";
+import {
+	KOKORO_MODEL_METADATA,
+	KOKORO_VOICES,
+	KOKORO_WEIGHTS,
+	VOICE_FILE_SIZE_BYTES,
+	probeGpu,
+	type WeightsVariant,
+} from "../engines/onnx/kokoro";
 import {
 	downloadModel,
 	downloadVoice,
 	downloadOrtRuntime,
 	checkOrtStatus,
 	worstOrtStatus,
+	getInstalledSizeMb,
+	getTotalUsage,
+	removeModelBuild,
+	shouldClearPinnedKokoro,
 	ORT_RUNTIME_SIZE_MB,
 } from "./modelStore";
 import { isAcceptableColourInput } from "./highlightColour";
 import { controlAffordances, engineLimitations } from "./affordances";
+
+/**
+ * A minimal "are you sure" prompt.
+ *
+ * Obsidian's `Modal` has no built-in confirm dialog (grepped obsidian.d.ts
+ * at plan time) - this is the standard plugin pattern, not a missing
+ * import. Cancel, the close (x) button and clicking outside all close with
+ * no action; only the confirm button runs `onConfirm`.
+ */
+class ConfirmModal extends Modal {
+	constructor(
+		app: App,
+		private readonly modalTitle: string,
+		private readonly message: string,
+		private readonly confirmText: string,
+		private readonly onConfirm: () => void,
+	) {
+		super(app);
+	}
+
+	override onOpen(): void {
+		const { contentEl } = this;
+		contentEl.createEl("h2", { text: this.modalTitle });
+		contentEl.createEl("p", { text: this.message });
+
+		const buttonRow = contentEl.createDiv({ cls: "modal-button-container" });
+		buttonRow.createEl("button", { text: "Cancel" }).addEventListener("click", () => {
+			this.close();
+		});
+		const confirmButton = buttonRow.createEl("button", {
+			text: this.confirmText,
+			cls: "mod-warning",
+		});
+		confirmButton.addEventListener("click", () => {
+			this.close();
+			this.onConfirm();
+		});
+	}
+
+	override onClose(): void {
+		this.contentEl.empty();
+	}
+}
 
 export class LocalTtsSettingTab extends PluginSettingTab {
 	/** Detaches the Speed slider from the player's rate event. */
@@ -259,6 +321,16 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 					"real-hardware testing (SPIKE-ANDROID-001) found no reachable system TTS.",
 			);
 
+		// R-C02's model card fields shown ahead of the Download button:
+		// name, language and license here (build-independent); download
+		// size is on the Model build row below and installed size is on
+		// Status below that, since both are per-build.
+		new Setting(containerEl)
+			.setName("Model")
+			.setDesc(
+				`${KOKORO_MODEL_METADATA.name} - ${KOKORO_MODEL_METADATA.language} - ${KOKORO_MODEL_METADATA.license} license.`,
+			);
+
 		new Setting(containerEl)
 			.setName("Model build")
 			.setDesc(
@@ -280,13 +352,24 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			});
 
 		const status = new Setting(containerEl).setName("Status");
+		let removeButton: ButtonComponent | null = null;
+
 		const refreshStatus = async (): Promise<void> => {
 			const installed = await store.isFullyInstalled();
 			const hasWanted = await store.exists(wanted.path);
+			// Installed size is a real stat() of what is on disk, never the
+			// download-size table: a resumed or hand-edited file must not be
+			// reported as though it matched the table.
+			const installedMb = await getInstalledSizeMb(
+				this.app.vault.adapter,
+				this.plugin.settings.kokoroModelPath,
+				this.plugin.resolvedWeights(),
+			);
+			const installedNote = installedMb !== null ? ` (${installedMb.toFixed(1)} MB installed)` : "";
 			if (!installed) {
 				status.setDesc("Not installed yet.");
 			} else if (hasWanted) {
-				status.setDesc(`Installed: ${wanted.label}.`);
+				status.setDesc(`Installed: ${wanted.label}${installedNote}.`);
 			} else {
 				// The engine will happily run on whatever is already there, so
 				// this is a nudge rather than a failure.
@@ -294,8 +377,8 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 					`Installed, but not the ${wanted.label} build. Download it for faster synthesis.`,
 				);
 			}
+			removeButton?.setDisabled(!hasWanted);
 		};
-		void refreshStatus();
 
 		new Setting(containerEl)
 			.setName(`Download ${wanted.label}`)
@@ -336,7 +419,103 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 							button.setButtonText("Download");
 						}
 					}),
+			)
+			.addButton((button) => {
+				removeButton = button;
+				button
+					// Deprecated in favour of setDestructive(), which needs Obsidian
+					// >=1.13.0 - newer than this plugin's declared minAppVersion
+					// (1.8.0, manifest.json). setWarning() still works everywhere
+					// the plugin claims to support.
+					.setWarning()
+					.setButtonText("Remove")
+					.setDisabled(true)
+					.onClick(() => {
+						new ConfirmModal(
+							this.app,
+							`Remove ${wanted.label}?`,
+							`This deletes the downloaded ${wanted.label} weights file (${wanted.path}) ` +
+								"from your vault. This cannot be undone; you can download it again later.",
+							"Remove",
+							() => {
+								void this.removeKokoroBuild(wanted, button, refreshStatus);
+							},
+						).open();
+					});
+			});
+
+		void refreshStatus();
+
+		const totalUsage = new Setting(containerEl)
+			.setName("Total on-disk usage")
+			.setDesc("Computing...");
+		void getTotalUsage(
+			this.app.vault.adapter,
+			this.plugin.settings.kokoroModelPath,
+			Object.keys(this.plugin.getOrtChecksums() ?? {}),
+		).then((usage) => {
+			if (!containerEl.isConnected) return;
+			const totalMb = Math.round(usage.totalBytes / 1_000_000);
+			totalUsage.setDesc(
+				`${totalMb} MB across every downloaded build, voice, and the ONNX runtime, ` +
+					`in ${this.plugin.settings.kokoroModelPath}.`,
 			);
+		});
+	}
+
+	/**
+	 * Delete one Kokoro weights build, after the user has confirmed.
+	 *
+	 * Removing the build behind a literal Kokoro pin (not "Automatic") must
+	 * not leave the engine dropdown pointed at something with no weights on
+	 * disk - `shouldClearPinnedKokoro` is owner Decision 3's concrete rule
+	 * for when to fall back to automatic selection instead. `reloadKokoro()`
+	 * and `this.display()` run unconditionally on success, matching the
+	 * Download button's own handler above: either one might have changed
+	 * what is on disk under the engine's feet.
+	 */
+	private async removeKokoroBuild(
+		wanted: WeightsVariant,
+		button: ButtonComponent,
+		refreshStatus: () => Promise<void>,
+	): Promise<void> {
+		button.setDisabled(true);
+		button.setButtonText("Removing...");
+		try {
+			const result = await removeModelBuild(
+				this.app.vault.adapter,
+				this.plugin.settings.kokoroModelPath,
+				this.plugin.resolvedWeights(),
+			);
+			if (!result.ok) {
+				new Notice(
+					result.error
+						? `Could not remove ${wanted.label}: ${result.error}`
+						: `${wanted.label} is not installed.`,
+				);
+				await refreshStatus();
+				return;
+			}
+			const freedMb = (result.freedBytes / 1_000_000).toFixed(1);
+			new Notice(`Removed ${wanted.label} (${freedMb} MB freed).`);
+
+			const kokoro = this.plugin.getKokoro();
+			const kokoroAvailableAfterRemoval = kokoro
+				? (await kokoro.isAvailable()).available
+				: false;
+			if (shouldClearPinnedKokoro(this.plugin.settings.engine, kokoroAvailableAfterRemoval)) {
+				await this.plugin.setEngine("auto");
+				new Notice(
+					"Kokoro is no longer installed; switched back to automatic engine selection.",
+				);
+			}
+
+			await this.plugin.reloadKokoro();
+			this.display();
+		} finally {
+			button.setDisabled(false);
+			button.setButtonText("Remove");
+		}
 	}
 
 	/**
@@ -526,7 +705,13 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		if (await store.exists(path)) return true;
 
 		const file = path.replace(/^voices\//, "");
-		const notice = new Notice(`Downloading voice ${file}...`, 0);
+		// States the size up front, per R-C02: it is a fixed, already-known
+		// constant (VOICE_FILE_SIZE_BYTES), so no separate confirmation step
+		// is needed before it starts.
+		const notice = new Notice(
+			`Downloading voice ${file} (~${(VOICE_FILE_SIZE_BYTES / 1_000_000).toFixed(2)} MB)...`,
+			0,
+		);
 		try {
 			const result = await downloadVoice(
 				this.app,
