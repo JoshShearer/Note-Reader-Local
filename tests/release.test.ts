@@ -8,7 +8,10 @@
  * 4. Workflow file is valid GitHub Actions YAML
  */
 
+import { execFileSync } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -244,13 +247,47 @@ test("deploy.mjs's copy list excludes ort/ (NRL-37)", () => {
 	);
 });
 
-test("release.yml's Upload Release Assets step includes the four ORT filenames (NRL-37)", () => {
-	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+/**
+ * The repo-relative paths `Upload Release Assets` publishes to the tagged Release.
+ *
+ * Hoisted out of the NRL-37 check below during NRL-76 so that check and the
+ * NRL-76 subject-set check read ONE source of truth: the provenance subject set
+ * must equal the published set, and two independent transcriptions of the same
+ * list would let them drift apart silently, which is the whole shape of NRL-76.
+ *
+ * Defensive in the same way `parseOnPushTags` is: there is no yaml dependency,
+ * so this is a regex over the text, and every failure mode throws rather than
+ * returning `[]`. An empty list would make the subject-set check vacuously green.
+ */
+function extractUploadedFiles(content: string): string[] {
 	const uploadStepMatch = content.match(
 		/Upload Release Assets[\s\S]*?files:\s*\|([\s\S]*?)\n\s*\n/,
 	);
 	const filesBlock = uploadStepMatch?.[1];
-	assert(filesBlock !== undefined, "Upload Release Assets step's files: block not found");
+	if (filesBlock === undefined) {
+		throw new Error(
+			"could not locate the `Upload Release Assets` step's `files: |` block in the workflow text; " +
+				"refusing to return an empty published-asset list, which would make the NRL-76 subject-set " +
+				"check vacuously green",
+		);
+	}
+	const files: string[] = [];
+	for (const raw of filesBlock.split("\n")) {
+		const line = raw.trim();
+		if (line === "" || line.startsWith("#")) continue;
+		files.push(line);
+	}
+	if (files.length === 0) {
+		throw new Error(
+			"the `Upload Release Assets` `files: |` block was found but holds no entries; " +
+				"refusing to return an empty published-asset list",
+		);
+	}
+	return files;
+}
+
+test("release.yml's Upload Release Assets step includes the four ORT filenames (NRL-37)", () => {
+	const published = extractUploadedFiles(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
 	for (const file of [
 		"ort/ort-wasm-simd-threaded.mjs",
 		"ort/ort-wasm-simd-threaded.wasm",
@@ -258,12 +295,348 @@ test("release.yml's Upload Release Assets step includes the four ORT filenames (
 		"ort/ort-wasm-simd-threaded.jsep.wasm",
 	]) {
 		assert(
-			filesBlock!.includes(file),
+			published.includes(file),
 			`Upload Release Assets step must publish ${file} as an extra release ` +
 				"asset so it is fetchable at releases/download/<tag>/<filename> " +
 				"without changing what Obsidian's own installer fetches",
 		);
 	}
+});
+
+// --- The checksum step's subjects are the published assets (NRL-76)
+//
+// `release.yml`'s `Generate checksums` step is the ONLY thing that decides what
+// the SLSA generator attests: its `hashes` output becomes `base64-subjects`. It
+// used to open with `cd dist || true` into a directory this repo does not have,
+// so it stayed in the workspace root and found three of the right files by
+// accident, and every one of its failure modes was silent.
+//
+// THESE CHECKS EXECUTE THE STEP. They extract its `run:` block, write it to a
+// script and run it in a throwaway sandbox populated at exactly the paths the
+// upload step publishes, then observe the exit code, the `$GITHUB_OUTPUT`
+// bytes, the decoded subject paths, digests this file recomputes itself, and
+// the sandbox filesystem. The ONLY text operation is locating the step. A check
+// that grepped for `cd dist` would pass the moment someone reformatted the
+// YAML while the step still hashed the wrong bytes.
+//
+// `bash -e` and deliberately NOT `-o pipefail`: that is GitHub's documented
+// default for a `run:` (fail-fast via `set -e` alone; `-o pipefail` is added
+// only when `shell: bash` is given explicitly), and its absence is precisely
+// why the old `sha256sum | base64` pipeline could not fail the step. The fix
+// therefore has to put `set -euo pipefail` in the BODY, which is what these
+// checks execute - a `shell: bash` key would be a guarantee nothing here covers.
+
+/**
+ * A named step's `run: |` literal block, common indentation stripped.
+ *
+ * Defensive for the same reason `parseOnPushTags` is: a silently-empty script
+ * would make every execution check below trivially green.
+ */
+function extractRunBlock(content: string, stepName: string): string {
+	const lines = content.split("\n");
+	const stepLine = lines.findIndex((l) => l.trim() === `- name: ${stepName}`);
+	if (stepLine === -1) {
+		throw new Error(
+			`could not locate a \`- name: ${stepName}\` step in the workflow text; refusing to ` +
+				"return an empty script, which would make every execution check vacuously green",
+		);
+	}
+	let runLine = -1;
+	for (let i = stepLine + 1; i < lines.length; i++) {
+		const line = lines[i] ?? "";
+		if (line.trim() === "run: |") {
+			runLine = i;
+			break;
+		}
+		// A new step has begun before any `run: |` was found.
+		if (line.trim().startsWith("- name:")) break;
+	}
+	if (runLine === -1) {
+		throw new Error(`step "${stepName}" has no \`run: |\` literal block`);
+	}
+	const runIndent = (lines[runLine] ?? "").search(/\S/);
+	const body: string[] = [];
+	for (let i = runLine + 1; i < lines.length; i++) {
+		const line = lines[i] ?? "";
+		if (line.trim() === "") {
+			body.push("");
+			continue;
+		}
+		if (line.search(/\S/) <= runIndent) break;
+		body.push(line);
+	}
+	while (body.length > 0 && (body[body.length - 1] ?? "") === "") body.pop();
+	const indents = body.filter((l) => l.trim() !== "").map((l) => l.search(/\S/));
+	if (indents.length === 0) {
+		throw new Error(`step "${stepName}"'s \`run: |\` block is empty`);
+	}
+	const common = Math.min(...indents);
+	return body.map((l) => (l.trim() === "" ? "" : l.slice(common))).join("\n") + "\n";
+}
+
+interface StepRun {
+	/** Process exit status. 0 on success. */
+	status: number;
+	stderr: string;
+	/** Raw `$GITHUB_OUTPUT` file contents. */
+	output: string;
+	/** The value written after `hashes=`, or `""` if none was written. */
+	hashes: string;
+	/** Decoded `sha256sum`-format subject lines. */
+	subjects: Array<{ digest: string; file: string }>;
+	/** The sandbox workspace the step ran in, for filesystem assertions. */
+	work: string;
+	/** Every path this harness planted, relative to `work`. */
+	planted: string[];
+}
+
+/**
+ * Run `release.yml`'s `Generate checksums` step in a throwaway sandbox.
+ *
+ * `omit` leaves one published path absent; `impostorDir` plants a directory of
+ * the same filenames holding DIFFERENT bytes, which is how the `cd` defect is
+ * proved without any check naming `cd`.
+ */
+function runChecksumStep(
+	options: { omit?: readonly string[]; impostorDir?: string } = {},
+): StepRun {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const script = extractRunBlock(content, "Generate checksums");
+	const published = extractUploadedFiles(content);
+	const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "nrl76-checksums-"));
+	const work = path.join(sandbox, "workspace");
+	const runnerTemp = path.join(sandbox, "runner-temp");
+	fs.mkdirSync(work, { recursive: true });
+	fs.mkdirSync(runnerTemp, { recursive: true });
+
+	const omit = new Set(options.omit ?? []);
+	const planted: string[] = [];
+	for (const rel of published) {
+		if (omit.has(rel)) continue;
+		const abs = path.join(work, rel);
+		fs.mkdirSync(path.dirname(abs), { recursive: true });
+		// Per-path bytes, so a digest can only be right by having hashed the
+		// right file - a single shared body would let a wrong file pass.
+		fs.writeFileSync(abs, `workspace-root bytes for ${rel}\n`);
+		planted.push(rel);
+	}
+	if (options.impostorDir !== undefined) {
+		for (const rel of published) {
+			const abs = path.join(work, options.impostorDir, rel);
+			fs.mkdirSync(path.dirname(abs), { recursive: true });
+			fs.writeFileSync(abs, `IMPOSTOR bytes for ${rel}\n`);
+			planted.push(path.posix.join(options.impostorDir, rel));
+		}
+	}
+
+	const scriptPath = path.join(sandbox, "generate-checksums.sh");
+	fs.writeFileSync(scriptPath, script);
+	const outputPath = path.join(runnerTemp, "github_output");
+	fs.writeFileSync(outputPath, "");
+
+	let status = 0;
+	let stderr = "";
+	try {
+		// `-e` only. See the section comment: that is GitHub's documented default.
+		execFileSync("bash", ["-e", scriptPath], {
+			cwd: work,
+			env: { ...process.env, GITHUB_OUTPUT: outputPath, RUNNER_TEMP: runnerTemp },
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+	} catch (err: unknown) {
+		const e = err as { status?: number | null; stderr?: string | Buffer };
+		status = typeof e.status === "number" ? e.status : 1;
+		stderr = e.stderr === undefined ? "" : String(e.stderr);
+	}
+
+	const output = fs.readFileSync(outputPath, "utf-8");
+	const hashesMatch = /^hashes=(.*)$/m.exec(output);
+	const hashes = hashesMatch?.[1] ?? "";
+	const subjects: Array<{ digest: string; file: string }> = [];
+	if (hashes !== "") {
+		const decoded = Buffer.from(hashes, "base64").toString("utf-8");
+		for (const line of decoded.split("\n")) {
+			if (line.trim() === "") continue;
+			const row = /^([0-9a-f]{64})\s+\*?(.*)$/.exec(line);
+			if (row === null) {
+				throw new Error(`decoded subject line is not sha256sum output: ${JSON.stringify(line)}`);
+			}
+			subjects.push({ digest: row[1] ?? "", file: row[2] ?? "" });
+		}
+	}
+	return { status, stderr, output, hashes, subjects, work, planted };
+}
+
+/** sha256 of a file, computed here so a decoded digest is never taken on trust. */
+function sha256OfFile(file: string): string {
+	return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+/** Every file under `dir`, as paths relative to it. */
+function listFilesRecursive(dir: string, prefix = ""): string[] {
+	const out: string[] = [];
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+		if (entry.isDirectory()) out.push(...listFilesRecursive(path.join(dir, entry.name), rel));
+		else out.push(rel);
+	}
+	return out;
+}
+
+// DEFECT REPRODUCTION (NRL-76). Measured red against the pre-fix body: the step
+// attested 3 of the 7 published assets, leaving the four `ort/` files - the bytes
+// a user downloads at runtime under R-M01 clause 3 / ADR 0024, and the two
+// largest downloadables - with no subject at all. Asserted against the upload
+// step's own `files:` list rather than a hardcoded set, so the published set and
+// the attested set cannot drift apart again.
+test("release.yml attests every published release asset and nothing else (NRL-76)", () => {
+	const published = extractUploadedFiles(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	const run = runChecksumStep();
+	assertEquals(run.status, 0, `checksum step exited ${run.status} on a complete workspace: ${run.stderr}`);
+	const attested = run.subjects.map((s) => s.file).sort();
+	const expected = [...published].sort();
+	const missing = expected.filter((f) => !attested.includes(f));
+	const extra = attested.filter((f) => !expected.includes(f));
+	assert(
+		missing.length === 0 && extra.length === 0,
+		`the provenance subject set must equal the set Upload Release Assets publishes. ` +
+			`Missing from the attestation: ${JSON.stringify(missing)}. ` +
+			`Attested but not published: ${JSON.stringify(extra)}. ` +
+			`An asset with no subject is downloadable with no attestation at all.`,
+	);
+});
+
+// GUARD (green on both sides). Without it the check above is satisfiable by a
+// literal string: every decoded digest must be the real sha256 of the file that
+// subject names, recomputed here.
+test("guard: every attested digest is the real sha256 of the file it names", () => {
+	const run = runChecksumStep();
+	assertEquals(run.status, 0, `checksum step exited ${run.status}: ${run.stderr}`);
+	assert(run.subjects.length > 0, "the checksum step produced no subjects at all");
+	const wrong: string[] = [];
+	for (const subject of run.subjects) {
+		const abs = path.join(run.work, subject.file);
+		if (!fs.existsSync(abs)) {
+			wrong.push(`${subject.file}: attested but absent from the workspace`);
+			continue;
+		}
+		const real = sha256OfFile(abs);
+		if (real !== subject.digest) wrong.push(`${subject.file}: attested ${subject.digest}, real ${real}`);
+	}
+	assert(wrong.length === 0, `attested digests do not match the workspace files: ${wrong.join("; ")}`);
+});
+
+// DEFECT REPRODUCTION (NRL-76), and the `cd dist || true` half of it - proved
+// without any check naming `cd`, so a reformat cannot make it vacuous. Measured
+// red against the pre-fix body with a `dist/` present: the attested `main.js`
+// digest was the dist copy's, not the workspace root's, so a directory created
+// by any future build step, cache restore or action would have captured the
+// attestation silently.
+test("a sibling directory of same-named files cannot capture the attestation (NRL-76)", () => {
+	const run = runChecksumStep({ impostorDir: "dist" });
+	assertEquals(run.status, 0, `checksum step exited ${run.status} with a dist/ present: ${run.stderr}`);
+	assert(run.subjects.length > 0, "the checksum step produced no subjects at all");
+	const wrong: string[] = [];
+	for (const subject of run.subjects) {
+		const root = path.join(run.work, subject.file);
+		const impostor = path.join(run.work, "dist", subject.file);
+		if (!fs.existsSync(root)) {
+			wrong.push(`${subject.file}: no such file at the workspace root`);
+			continue;
+		}
+		const rootDigest = sha256OfFile(root);
+		if (subject.digest === rootDigest) continue;
+		const which = fs.existsSync(impostor) && sha256OfFile(impostor) === subject.digest
+			? "the dist/ copy's bytes"
+			: "bytes from neither the root nor dist/";
+		wrong.push(
+			`${subject.file}: attested ${subject.digest} (${which}); the released file's digest is ${rootDigest}`,
+		);
+	}
+	assert(
+		wrong.length === 0,
+		"the attestation must cover the files that are released, which are the ones at the " +
+			`workspace root: ${wrong.join("; ")}`,
+	);
+});
+
+// DEFECT REPRODUCTION (NRL-76), and SHARPER THAN THE TICKET PREDICTED. The
+// description says a missing artifact would leave the step with no `hashes`
+// output. Measured against the pre-fix body with one published asset removed:
+// the step exited 0 AND still wrote a `hashes=` value covering the files that
+// were present - a silently TRUNCATED attestation, not an absent one. Both are
+// worse than a failure, because the generator would sign whatever it was handed.
+test("a missing release asset fails the checksum step outright (NRL-76)", () => {
+	const missing = "ort/ort-wasm-simd-threaded.wasm";
+	const published = extractUploadedFiles(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	assert(published.includes(missing), `${missing} is no longer a published asset; pick another`);
+	const run = runChecksumStep({ omit: [missing] });
+	assert(
+		run.status !== 0,
+		`the checksum step exited 0 with ${missing} absent and wrote ${Buffer.byteLength(run.output)} ` +
+			`bytes to $GITHUB_OUTPUT covering ${run.subjects.length} of ${published.length} assets. ` +
+			"A build that cannot hash everything it publishes must fail, not hand the SLSA generator " +
+			"a truncated subject list.",
+	);
+	assertEquals(
+		Buffer.byteLength(run.output),
+		0,
+		`$GITHUB_OUTPUT must be untouched when the step fails, so \`needs.build.outputs.hashes\` ` +
+			`cannot resolve to a partial list; it holds ${JSON.stringify(run.output)}`,
+	);
+});
+
+// DEFECT REPRODUCTION (NRL-76). The pre-fix body wrote its base64 to a
+// `checksums.txt` in the workspace and read it back. Measured red: the file was
+// there after the run. Asserted as "no file the harness did not plant", not as
+// "no file called checksums.txt", so renaming the side effect cannot dodge it.
+test("the checksum step leaves no file behind in the workspace (NRL-76)", () => {
+	const run = runChecksumStep();
+	assertEquals(run.status, 0, `checksum step exited ${run.status}: ${run.stderr}`);
+	const planted = new Set(run.planted);
+	const strays = listFilesRecursive(run.work).filter((f) => !planted.has(f));
+	assert(
+		strays.length === 0,
+		`the checksum step wrote ${JSON.stringify(strays)} into the workspace. The step runs before ` +
+			"`Upload build artifacts`, so anything it leaves can end up in the artifact it is attesting.",
+	);
+});
+
+// GUARD (green on both sides), on the wiring the checks above cannot see. The
+// subject list only matters if the generator receives it, and the `if:` clause
+// is the one way to make this whole step moot with a GREEN run: `needs: build`
+// already stops `provenance` when the build fails, whereas an
+// `if: needs.build.outputs.hashes != ''` would SKIP provenance silently and
+// produce no attestation at all. See ADR 0011, Amendment (NRL-76), decision 5.
+test("guard: the provenance job consumes the build's hashes and carries no if:", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	assertMatch(
+		content,
+		/^\s+hashes:\s*\$\{\{\s*steps\.hash\.outputs\.hashes\s*\}\}\s*$/m,
+		"the build job must still export the `hash` step's output as `hashes`",
+	);
+	assertMatch(
+		content,
+		/^\s+base64-subjects:\s*\$\{\{\s*needs\.build\.outputs\.hashes\s*\}\}\s*$/m,
+		"the provenance job must still take its subjects from `needs.build.outputs.hashes`",
+	);
+	const lines = content.split("\n");
+	const start = lines.findIndex((l) => /^\s{2}provenance:\s*$/.test(l));
+	assert(start !== -1, "could not locate the `provenance:` job");
+	const jobLines: string[] = [];
+	for (let i = start + 1; i < lines.length; i++) {
+		const line = lines[i] ?? "";
+		if (/^\s{2}\S/.test(line)) break; // next job at the same indent
+		jobLines.push(line);
+	}
+	const conditional = jobLines.filter((l) => /^\s{4}if:/.test(l));
+	assert(
+		conditional.length === 0,
+		`the provenance job carries ${JSON.stringify(conditional)}. A failing build step already stops ` +
+			"it through `needs: build`; an `if:` would SKIP it silently and produce a green run with no " +
+			"attestation, which is strictly worse than the defect NRL-76 fixed.",
+	);
 });
 
 // --- ORT checksum validation distinguishes "missing" from "mismatch" (NRL-37)

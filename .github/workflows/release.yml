@@ -78,14 +78,75 @@ jobs:
         env:
           NRL_SKIP_REAL_SPEECHD: "1"
 
+      # NRL-76. This step feeds `needs.build.outputs.hashes` into the SLSA
+      # generator's `base64-subjects`, so everything it gets wrong becomes a
+      # signed attestation over the wrong bytes rather than a failed run. The
+      # previous body held FOUR independent silencers and all four are gone.
+      #
+      # `cd dist || true`: there is no `dist/` in this repo - `npm run build`
+      # writes `main.js` and `ort/` to the REPO ROOT and deploy.mjs reads from
+      # the root - so the `cd` always failed, `|| true` swallowed it, and the
+      # step stayed in the root and found the right files BY ACCIDENT. Measured
+      # in a sandbox during NRL-76: with a `dist/` present holding different
+      # bytes under the same three names, the attested `main.js` digest was the
+      # dist copy's (`e32e168f...`) and not the root's (`79a8a4a7...`). A
+      # directory created by any future build step, cache restore or action
+      # would therefore capture the attestation silently.
+      #
+      # The `if [ -f ... ]` guard and `2>/dev/null`: measured in the same
+      # sandbox, deleting `styles.css` left the step exiting 0 and still
+      # writing a 216-byte `hashes=` covering only two files - a SILENTLY
+      # TRUNCATED attestation, which is worse than the absent one. `2>/dev/null`
+      # also hid which filename failed.
+      #
+      # `checksums.txt`: written into the workspace as a side effect. The pipe
+      # now feeds a variable, so no file is needed anywhere.
+      #
+      # `set -euo pipefail` is in the BODY rather than via `shell: bash`,
+      # because the body is what tests/release.test.ts extracts and executes;
+      # a harness-level flag would be a guarantee no test covers. GitHub's
+      # documented default for a `run:` is fail-fast via `set -e` ALONE, with
+      # `-o pipefail` added only when `shell: bash` is written explicitly
+      # (github/docs@main workflow-syntax.md) - and that absence is exactly why
+      # a failing `sha256sum` on the left of `| base64` could not fail the step.
+      #
+      # ALL SEVEN published assets are subjects, matching `Upload Release
+      # Assets` below. The four ORT files are the bytes a user downloads at
+      # runtime (R-M01 clause 3, ADR 0024); attesting 3 of 7 left the two
+      # largest downloadables with no subject at all. Subject names keep their
+      # `ort/` prefix: slsa-verifier's verifyDigest compares only
+      # subject.Digest[sha256] and never the name, so flattening them to the
+      # release-asset basenames would buy nothing and add one more silent
+      # transformation of the kind this step is being cleaned of. See
+      # docs/adr/0011-release-attestation.md, Amendment (NRL-76).
+      #
+      # The non-empty guard lives HERE and nowhere else. Do not add
+      # `if: needs.build.outputs.hashes != ''` to the `provenance` job: a
+      # failing step already stops it through `needs: build`, whereas an `if:`
+      # would SKIP provenance silently and produce a green run with no
+      # attestation - the same silence this step is being cleaned of.
+      #
+      # DESK-VERIFIED. Every number above is a local bash execution of this
+      # body; no tag has ever been pushed, so this step has never run on a
+      # runner. NRL-79 owns that half.
       - name: Generate checksums
         id: hash
         run: |
-          cd dist || true
-          if [ -f main.js ] && [ -f manifest.json ]; then
-            sha256sum main.js manifest.json styles.css 2>/dev/null | base64 -w0 > checksums.txt
-            echo "hashes=$(cat checksums.txt)" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          HASHES=$(sha256sum \
+            main.js \
+            manifest.json \
+            styles.css \
+            ort/ort-wasm-simd-threaded.mjs \
+            ort/ort-wasm-simd-threaded.wasm \
+            ort/ort-wasm-simd-threaded.jsep.mjs \
+            ort/ort-wasm-simd-threaded.jsep.wasm \
+            | base64 -w0)
+          if [ -z "$HASHES" ]; then
+            echo "Generate checksums produced an empty subject list; refusing to hand the SLSA generator an empty base64-subjects" >&2
+            exit 1
           fi
+          echo "hashes=$HASHES" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
