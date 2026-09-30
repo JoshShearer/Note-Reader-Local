@@ -1,5 +1,5 @@
 ---
-description: Run a set of Linear tickets end to end, fully autonomously - pre-flight triage, then start, plan, implement, ship, automated verify, merge and finish per ticket in fresh subagents. Never waits on a human; anything that needs one blocks that ticket and is reported at the end.
+description: Run a set of Linear tickets end to end, fully autonomously, in a disposable worktree it creates and removes - pre-flight triage, then start, plan, implement, ship, automated verify, merge and finish per ticket in fresh subagents. Never waits on a human; anything that needs one blocks that ticket and is reported at the end.
 ---
 
 Conventions: `.claude/linear.md`. Rules and gates: `AGENTS.md`.
@@ -15,12 +15,15 @@ table before the first run.
 | **CI runs the gates on `push` and `pull_request`** (`.github/workflows/ci.yml`), but there is still no hook: `.git/hooks` holds only samples. | Verify still runs the gates and the probes itself; the check is a backstop, not the source of truth. Verify **may** read the conclusion (`gh pr checks <n>` once, or `gh run list`) and report it, and **must not wait on it**. Never write a polling loop. Branch protection is out of scope, so a red check does not block a merge. |
 | **A green suite is not a working feature** (`AGENTS.md` rule 11). The suites run in bare Node against fakes. | Automated Verify also runs the real bundled module against the ticket's acceptance inputs, and drives real Obsidian over CDP when it is reachable. Nothing a human did not observe is ever described as "verified in Obsidian". PRs carry `NOT VERIFIED IN OBSIDIAN`, and Linear comments say so plainly. |
 | **Bugs must be reproduced before they are fixed** (`AGENTS.md` rule 12). | Implement begins by reproducing, not by editing. If the repro fails, the ticket blocks rather than proceeding on a guess. |
-| **One deploy slot.** `npm run deploy` writes to one fixed folder in `~/Documents/Notes`. | Multiple worktrees can run phases concurrently (each with its own state file), but only one lane at a time may call `npm run deploy`. Take `.claude/deploy.lock` the same atomic way as the run lock, deploy, write `.deployed-from` with the `runId` and commit, then release. A lane that cannot take it skips the deploy and says so in its report rather than waiting: the vault carries merged `main` either way, and whoever deploys last wins. |
+| **The run works in a disposable worktree it creates itself.** Step 0c adds `note-reader-local-run-<stamp>` beside the primary repo and removes it at the end. | Nothing the run does touches the primary checkout, so the owner can keep working in it. But the run's *records* must outlive the tree, so the state file and the archive live in the **primary** repo, not in the lane. Step 0 resolves `$PRIMARY` before anything else. |
+| **One deploy slot.** `npm run deploy` writes to one fixed folder in `~/Documents/Notes`. | Only one lane at a time may call it. Take `$PRIMARY/.claude/deploy.lock` atomically with `mkdir`, deploy, write `.deployed-from` with the `runId` and commit, then release. **The path is resolved against `$PRIMARY` deliberately:** a lock inside the run's own fresh lane is free by construction, so it would guard nothing while the slot it protects is still a single shared folder. A lane that cannot take it skips the deploy and says so in its report rather than waiting: the vault carries merged `main` either way, and whoever deploys last wins. |
 | **A deploy is not live until Obsidian restarts.** On 2026-09-28 two tickets were "passed" against a stale in-memory build after an in-app reload. | Finish deploys `main` so the owner's vault always has the latest merged build, and the end-of-run report tells them to **fully quit and relaunch** Obsidian. A deploy never counts as evidence that the code ran. |
 | **Base branch is `main`.** It is the only branch; `origin/HEAD` resolves correctly here. | No special casing. Still assert it rather than assuming. |
 | **Reproduced defects are listed** in `AGENTS.md` "Known state", with exact triggering inputs. | Phase 0 must not ask for a repro for one of those. It is already written down. |
-| **Worktree parallelism.** Multiple worktrees can run phases concurrently. | Each worktree uses its own `.claude/pipeline-state-local.json` for isolation. Main repo uses `.claude/pipeline-state.json`. Only one lane may deploy at a time. |
-| **One run per working tree, enforced by a lock.** On 2026-09-29 two runs both worked in the primary repo: the second reinitialised `.claude/pipeline-state.json`, destroying the first run's six ticket entries **and** the archive it had just written to `.claude/scratch/`, then rewrote `main` and dropped an unpushed commit. | Step 0 acquires `.claude/pipeline.lock` **atomically** before touching anything, and refuses to start if a live run holds it. Isolation keyed on the directory name is not enough: both of those runs were in the same directory, so both resolved to the same state file. See Step 0. |
+| **Parallel runs are supported.** Several `/run-tickets` may be in flight on this repo at once, each in its own lane, each with its own state file. | Nothing serialises a run as a whole. The two things that really are shared are guarded individually: the single deploy slot by `$PRIMARY/.claude/deploy.lock`, and `main` by git itself, where a conflict blocks one ticket and nothing else. **Give parallel runs disjoint ticket sets.** Two runs holding the same ticket is not a data-safety problem, it is duplicated work and two PRs for one fix. |
+| **Every run's state file is its own**, `$PRIMARY/.claude/pipeline-state.<stamp>.json`, sharing the lane's stamp. | This is what makes parallelism safe, and it is the fix for 2026-09-29, when two runs shared one hardcoded `pipeline-state.json`: the second reinitialised it, destroying the first run's six ticket entries **and** the archive it had just written to `.claude/scratch/`, then rewrote `main` and dropped an unpushed commit. A run now writes exactly one path that no other run can name. **Never write another run's state file**, and never "tidy" one away. |
+| **The lock binds `/run-tickets` only.** | Interactive sessions never take it, so `/start-issue`, `/ship` and `/verify` in the primary repo or in a `note-reader-local-nrl-*` worktree still run alongside a live run. What they must not do is deploy: that is what `deploy.lock` is for. |
+| **The state file lives in the primary, never in the lane.** | Step 8 removes the lane, so a state file inside it would be deleted by the run's own cleanup. Keeping it in the primary is what lets `--resume` work after a crash even though the checkout is gone: the branches live in the primary's git dir, and Step 0c recreates the lane. |
 
 `gh` is installed and authenticated as `JoshShearer`. There is no permission classifier blocking
 `gh pr merge` in this repo, and no required review, so merge automation works. Never self-approve a
@@ -28,15 +31,19 @@ PR to get around a review requirement if one is ever added; block the ticket ins
 
 ## How to launch it, per runtime
 
-"Fully autonomous" is a property of **how the run is launched**, not of this file. Three commands
+"Fully autonomous" is a property of **how the run is launched**, not of this file. Four commands
 the pipeline must run are permission-gated by default, and a gated command is a prompt, which is
 the human wait the whole design exists to avoid. Launch it wrong and it stalls at the first Ship.
 
 | Gated command | Where the pipeline runs it |
 |---|---|
 | `git push -u origin <branch>` | `ship.md:243`, every Ship phase |
-| `git branch -D <branch>` | Phase 7 and `finish.md`, every Finish phase |
-| `rm -rf "$LOCK"` | end-of-run lock release, and the `deploy.lock` release |
+| `git branch -D <branch>` | Phase 7 and `finish.md`, every Finish phase; also the run branch at Step 8 cleanup |
+| `git reset --hard origin/main` | Step 0d, resyncing the lane between tickets |
+| `rm -rf "$DEPLOY_LOCK"` | releasing the deploy slot, in Verify and in Finish |
+
+`git worktree add` and `git worktree remove` are **not** gated (`opencode.json` allows `*` by
+default and neither matches a listed rule), so lane creation and cleanup add no new prompt.
 
 `git branch -d` is not gated, but it is not the path taken: this repo squash-merges, so `-d`
 reports "not merged" for work that is fully in `main` (Phase 7 says so itself), and `-D` after a
@@ -102,11 +109,11 @@ the state file -> spawn the next. Its context grows from summaries, not transcri
 Spawn with the `Task` tool. **The subagent type name differs by runtime:** use
 `general-purpose` in Claude Code and `general` in opencode. Pick whichever your runtime exposes.
 
-Every prompt must carry the literal absolute repo root (subagents do not inherit your shell), the
-ticket id, and **the resolved `$STATE_FILE` path as a literal string**, not the rule for deriving
-it. Step 0 already computed it; a subagent that re-derives it can get a different answer, and in a
-worktree lane the wrong answer is a file that does not exist. Where a phase prompt below writes
-`<state-file>`, substitute the path.
+Every prompt must carry, as literal strings and not as rules for deriving them: **the lane's absolute
+path** as the repo root the phase works in, the ticket id, and **the resolved `$STATE_FILE` path**.
+Subagents do not inherit your shell, and a subagent that re-derives either one can get a different
+answer. The costly direction is the repo root: a phase that resolves to `$PRIMARY` commits into the
+owner's working tree instead of the lane.
 
 ## Input
 
@@ -120,127 +127,216 @@ Argument: `$ARGUMENTS`
 - `--no-merge` - stop each ticket after automated Verify with its PR open, instead of merging.
   Later tickets then branch from a `main` that lacks earlier fixes, so use it for a single ticket
   or for unrelated tickets only.
-- `--resume` - re-validate `$STATE_FILE` (Step 0 resolves which one) against Linear and git before
-  continuing. Auto-invoked if the state file has in-progress tickets and no flag was given.
-- `--force-unlock` - replace a `.claude/pipeline.lock` held by another run. For a human who knows
-  the other run is dead. It still prints the holder and archives that run's state file first, and an
-  agent must never pass it to itself to get past Step 0a.
+- `--keep-worktree` - skip Step 8's cleanup unconditionally and print the lane's path. For
+  debugging a run after the fact. The lane is then the next run's problem, not this one's.
+- `--resume [<stamp>]` - re-validate a state file against Linear and git before continuing, and
+  recreate the recorded lane if its directory is gone. With no stamp it picks the **most recently
+  modified** `$PRIMARY/.claude/pipeline-state.*.json` that still holds an in-progress ticket, prints
+  which one it chose and its `runId`, and stops rather than guessing if two are in-progress. Pass the
+  stamp to name one exactly. Unlike every other flag this is not auto-invoked: with per-run state
+  files there is no single file to detect, so a bare `/run-tickets <ids>` always starts a new run.
 
 If no argument is given, ask which tickets to run. That is the only question this command asks
 before its work starts.
 
 ## Step 0: Establish facts, every run
 
+**Resolve the primary repo first.** Every path this run records is relative to it, and the lane the
+run works in does not exist yet. Deriving `$PRIMARY` by stripping a suffix is what makes the run
+idempotent about where it was launched from: the primary, an interactive `-nrl-*` worktree, or a
+previous run's own `-run-*` lane.
+
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-cd "$REPO_ROOT"
-WORKTREE_NAME=$(basename "$REPO_ROOT")
+PRIMARY="$REPO_ROOT"
+[[ "$(basename "$PRIMARY")" =~ -nrl-[0-9].*$ ]] && PRIMARY="${PRIMARY%-nrl-*}"
+[[ "$(basename "$PRIMARY")" =~ -run-[0-9]+-[0-9]+$ ]] && PRIMARY="${PRIMARY%-run-*}"
 
-# Detect worktree context for state file isolation
-if [[ "$WORKTREE_NAME" == note-reader-local-nrl-* ]]; then
-  STATE_FILE=".claude/pipeline-state-local.json"  # Per-worktree state
-else
-  STATE_FILE=".claude/pipeline-state.json"        # Main repo state
-fi
+# One stamp for the whole run: it names the lane, the run branch and the state file, so the
+# three can always be matched up by eye and no two runs can collide on any of them.
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+STATE_FILE="$PRIMARY/.claude/pipeline-state.${STAMP}.json"
+DEPLOY_LOCK="$PRIMARY/.claude/deploy.lock"
+ARCHIVE_DIR="$PRIMARY/.claude/scratch"
 
-git status --short
-git rev-parse --abbrev-ref HEAD
+echo "primary=$PRIMARY  launched-from=$REPO_ROOT  stamp=$STAMP"
+git -C "$PRIMARY" status --short
+git -C "$PRIMARY" rev-parse --abbrev-ref HEAD
 node --version
 ```
 
-### Step 0a: Take the lock, before anything else
+Assert `$PRIMARY` is a real git repo and is the **main** working tree, not a linked one:
 
-The state-file split above isolates one **worktree** from another. It does not isolate two runs in
-the **same** working tree, which is the collision that actually happened: both runs were in the
-primary repo, so both computed the same `STATE_FILE`. The lock is what makes "one run per working
-tree" true rather than hoped for.
+```bash
+git -C "$PRIMARY" rev-parse --git-dir   # must print ".git", not a worktrees/ path
+```
 
-`.claude/` is per-working-tree, so a lock inside it is automatically keyed on the tree, which is the
-resource being contended: the checkout, the state file and `node_modules`.
+If it prints a path under `.git/worktrees/`, the suffix strip did not find the primary. Stop and
+report both paths rather than guessing; creating a lane from a linked worktree nests the
+`${PRIMARY}-*` glob that `worktrees.md` depends on.
+
+### Step 0a: Claim this run's own state file
+
+There is no run-wide lock, and that is deliberate. Every run creates its own lane, so two runs
+already share no checkout; giving each one its own state file removes the last thing they shared.
+What is left genuinely single - the deploy slot - has its own narrower lock, and `main` is guarded
+by git.
+
+`$STATE_FILE` carries `$STAMP`, so no other run can name it. Assert that, cheaply, before anything
+else writes:
 
 ```bash
 RUN_ID=$(date -u +%FT%TZ)
-LOCK=".claude/pipeline.lock"
 
-# mkdir is atomic on POSIX: it succeeds for exactly one caller. Do not replace
-# this with a -f test followed by a write, which is the race it exists to avoid.
-if mkdir "$LOCK" 2>/dev/null; then
-  cat > "$LOCK/owner" <<EOF
-runId=$RUN_ID
-pid=$$
-repo=$REPO_ROOT
-branch=$(git rev-parse --abbrev-ref HEAD)
-stateFile=$STATE_FILE
-heartbeat=$(date -u +%FT%TZ)
-EOF
-  echo "lock acquired: $RUN_ID"
-else
-  echo "LOCK HELD, this run must not start:"
-  cat "$LOCK/owner" 2>/dev/null || echo "(no owner file: malformed lock)"
+if [ -e "$STATE_FILE" ]; then
+  echo "STATE FILE ALREADY EXISTS, this run must not start: $STATE_FILE"
+  echo "A second-resolution stamp collided, which means another run started in the same second."
+  echo "Re-run; a fresh $STAMP resolves it. Do not delete or reuse the existing file."
+  exit 1
 fi
+
+printf '{"runId":"%s","stamp":"%s","primary":"%s","tickets":[]}\n' \
+  "$RUN_ID" "$STAMP" "$PRIMARY" > "$STATE_FILE"
+echo "state file claimed: $STATE_FILE"
+
+# Other runs that may be live right now. Never wait on them and never write them;
+# reading one to compare ticket sets is allowed. Named in the end-of-run report.
+ls -1 "$PRIMARY"/.claude/pipeline-state.*.json 2>/dev/null | grep -vF "$STATE_FILE" || true
 ```
 
-If the lock was **not** acquired, stop the whole run and report the holder verbatim. Do not remove
-the lock, do not work around it, and do not start in a different directory to dodge it. Two
-exceptions, both explicit:
+If another run's state file is listed, **say so in the first message and name it**, then carry on.
+The one hazard parallelism does leave is two runs holding the same ticket: not a data-safety
+problem, but duplicated work and two PRs for one fix. If you can read the other file's `tickets`
+array to check for overlap, read it - that is the single exception to not touching another run's
+state file, and it is read-only. If the ticket sets overlap, **block the overlapping tickets in
+your own run** with `blockedReason: "also held by run <their runId>"` and run the rest.
 
-- **Stale.** `heartbeat` is more than 60 minutes old, or the `owner` file is missing or unparseable.
-  Say so, name the age you measured, archive any existing state file as below, then replace the lock.
-  Measure it, do not eyeball it:
-
-  ```bash
-  HB=$(grep '^heartbeat=' "$LOCK/owner" | cut -d= -f2-)
-  AGE=$(( ( $(date -u +%s) - $(date -u -d "$HB" +%s) ) / 60 ))
-  echo "holder heartbeat is ${AGE} minutes old"
-  ```
-
-- **`--force-unlock` was passed.** Print the holder, archive its state file, then replace the lock.
-  Never pass this to yourself; it exists for a human who knows the other run is dead.
-
-Refresh `heartbeat` at every phase transition, in the same write that appends to `history`. A run
-that dies mid-phase then reads as stale within the hour instead of blocking the tree forever.
-
-Release the lock with `rm -rf "$LOCK"` when the run reaches its end-of-run report, and say in that
-report that it was released. A **blocked ticket does not release the lock** - the run continues to
-the next ticket and only the end of the run releases it.
+Refresh a `heartbeat` field at every phase transition, in the same write that appends to `history`,
+so a human reading a state file can tell a live run from a dead one. Nothing blocks on it.
 
 ### Step 0b: Never destroy another run's record
 
 Each of these was violated on 2026-09-29 and each cost real work:
 
-- **Never reinitialise a state file you did not create.** If `$STATE_FILE` exists and its `runId` is
-  not yours, you are either resuming it or archiving it. There is no third option, and "the tickets
-  look done" is not a reason: that file held a `blocked` ticket with an open PR.
-- **Archive before you write**, to `.claude/scratch/pipeline-state.<their-runId>.json`, and verify
-  the copy parses before the original is touched.
-- **Never empty `.claude/scratch/`.** It is the archive of record, it is gitignored, and it is where
-  a superseded run's only copy lives.
+- **Never write, move, archive or delete a state file you did not create.** Your own is the one
+  carrying your `$STAMP`; every other `pipeline-state.*.json` belongs to another run, live or
+  finished, and "the tickets look done" is not a reason to touch it - one such file held a
+  `blocked` ticket with an open PR. Reading another run's file to check for ticket overlap
+  (Step 0a) is the only permitted access, and it is read-only.
+- **A pre-existing `pipeline-state.json` with no stamp** is from a run that predates per-run state
+  files. Leave it alone. Do not migrate it, and do not adopt it as yours.
+- **Never empty `$ARCHIVE_DIR`** (`$PRIMARY/.claude/scratch/`). It is the archive of record, it is
+  gitignored, and it is where a superseded run's only copy lives.
 - **Never rewrite a branch you did not create**, and never amend, rebase or reset `main`. A run on
   2026-09-29 rewrote `main` and silently dropped an unpushed commit that was not its own. Merge, or
-  leave it alone.
-- **Never `git checkout` in a working tree whose lock you do not hold.** That includes the primary
-  repo while a worktree lane is running, and it is why the lock is keyed on the tree rather than on
-  the run.
+  leave it alone. The run's own `run/<stamp>` branch is the one exception: Step 0d hard-resets it,
+  and it exists solely to be reset and then deleted.
+- **Never touch the primary checkout.** The run works only inside its own lane, so it never
+  `checkout`s, `reset`s or commits in `$PRIMARY`. The only writes it makes there are to
+  `$PRIMARY/.claude/` (its own state file, the deploy lock while held, the archive) and the
+  `git worktree add` / `remove` pair, both of which leave the primary's `HEAD` and index alone.
+- **Never remove a worktree this run did not create.** Cleanup touches exactly the path recorded in
+  the state file's `worktree` field. A `note-reader-local-nrl-*` directory belongs to
+  `worktrees.md`'s interactive pool and a stray sibling may belong to treehouse.
 
 Assert before starting. These are the only conditions that stop the whole run, because nothing has
 been touched yet and continuing could destroy someone's work:
 
-- **The lock was acquired** (Step 0a). Everything below is pointless if another run is live here.
-- The working tree is clean. A dirty tree means a previous run or a manual edit is in flight: stop
-  and report what is dirty. Do not stash or discard it. This one is not negotiable just because a
-  worktree is "agent-managed": a dirty tree plus a second run is precisely how one run's edit gets
-  swept into another's `git add -A`.
-- On `main`: synced with `origin/main`, and fast-forward if only behind. In a worktree on its own
-  feature branch: record the branch and assert it is the one this run's state file names, so a
-  half-finished lane is resumed rather than silently re-based.
-- `node_modules` exists in this context (main repo or worktree). If not, `npm ci`.
-- If `$STATE_FILE` holds an in-progress run and `--resume` was not given, resume it rather than
-  overwriting it, and say so in the first message. Starting fresh would orphan an in-flight branch
-  and PR. Compare by `runId`, not by how finished the tickets look.
+- **`$STATE_FILE` was claimed** (Step 0a), i.e. it did not already exist.
+- **`$PRIMARY` has no uncommitted changes under `src/`, `tests/` or `docs/`.** Check with
+  `git -C "$PRIMARY" status --short -- src tests docs`. Those are the paths a ticket branch will
+  touch, and a human mid-edit in them is a real hazard. Stop and report if any are dirty; do not
+  stash or discard. A dirty `.claude/`, `README`, or an untracked `.deployed-from` is **not** a
+  reason to stop: the lane is cut from `origin/main` and the run never commits in the primary, so
+  the primary's working tree cannot reach a ticket branch. Say what is dirty and carry on.
+- **`origin/main` is reachable and current.** `git -C "$PRIMARY" fetch origin` succeeds. The lane
+  branches from `origin/main`, not from the primary's `HEAD`, so a primary that is behind is
+  harmless and needs no fast-forward. Assert rather than assume that `origin/HEAD` resolves.
+**What isolates what.** The lane gives the run a checkout nobody else is in. The stamped state
+file gives it a record no other run can name. Between them a run shares nothing with a sibling run
+except `main` and the deploy slot, and each of those has its own narrower guard: git, and
+`deploy.lock`. There is deliberately no lock over the run as a whole - one would serialise eight
+tickets behind another run's eight for no safety the two mechanisms above do not already give.
 
-**Two layers, and they do different jobs.** The state-file split keyed on directory name isolates
-worktree lanes from each other. The lock isolates two runs that resolve to the *same* state file,
-which the split cannot see. Keep both; neither is redundant.
+### Step 0c: Create the run's lane
+
+After Step 0a, before Phase 0. The lane is created from `origin/main` on a throwaway branch, and the
+branch exists because `main` itself is checked out in the primary and git will not check it out twice.
+`$STAMP` is the one resolved in Step 0, so the lane, the run branch and the state file all match.
+
+```bash
+RUN_WT="${PRIMARY}-run-${STAMP}"
+RUN_BRANCH="run/${STAMP}"
+
+git -C "$PRIMARY" fetch origin
+git -C "$PRIMARY" worktree add --no-track -b "$RUN_BRANCH" "$RUN_WT" origin/main
+cd "$RUN_WT"
+```
+
+**`--no-track` is load-bearing.** Without it, `worktree add -b <branch> <dir> origin/main` sets the new
+branch's upstream to `origin/main` (measured: `rev-parse --abbrev-ref @{u}` prints `origin/main`), so a
+bare `git push` from the lane would target `main` directly. Nothing in the pipeline issues one - Ship
+pushes the ticket branch with an explicit `-u origin <branch>` - but this branch is hard-reset every
+ticket and exists only to be thrown away, and an accidental push from it goes straight at the base
+branch. With `--no-track` it has no upstream at all (measured: `fatal: no upstream configured`).
+
+**The name is deliberately outside `note-reader-local-nrl-*`.** That glob is the interactive pool
+`worktrees.md` owns, and `finish.md` step 7 removes `note-reader-local-nrl-${ISSUE_NUM}` by name. A
+lane called `-nrl-<n>` would be listed as an interactive worktree and could be removed out from under
+a running ticket by its own Finish phase. `worktrees.md` lists a `-run-*` sibling as the run lane and
+refuses to remove it.
+
+Then make the lane usable, and **prove it before any ticket touches it**:
+
+```bash
+npm ci
+npm test && npm run typecheck
+```
+
+`npm ci` rather than `npm install`: `package-lock.json` is committed and `ci` reproduces it exactly.
+This is not fast - `onnxruntime-web` is large, and `ort/` does not exist until a build has run.
+
+**A gate failing here stops the whole run.** It is `origin/main` that is broken, not any ticket, and
+branching further tickets off it compounds the problem. That is the existing "main fails its gates"
+error-handling row, just detected earlier than it used to be. Check `which espeak-ng spd-say` before
+blaming the code: `tests/engine.test.ts` shells out to the real daemon.
+
+Record `worktree`, `runBranch` and `primary` at the top level of the state file. Every phase prompt
+from here on gets `$RUN_WT` as its repo root, never `$PRIMARY`.
+
+**Under `--resume`,** do not create a new lane and do not mint a new `$STAMP`. Read `worktree`,
+`runBranch` and `stamp` from the chosen state file and use them, so the run keeps writing the file
+it is resuming. If the directory is gone (a crash, or a `--keep-worktree` lane the owner deleted), the
+branches still exist in the primary's git dir, so recreate the checkout over the existing branch and
+reinstall:
+
+```bash
+git -C "$PRIMARY" worktree add "$RUN_WT" "$RUN_BRANCH"
+cd "$RUN_WT" && npm ci
+```
+
+`worktree add` without `-b`, because the branch already exists. Then check out the in-progress
+ticket's own `branch` from the state file rather than starting it over, and continue from its
+recorded `phase`. If `$RUN_BRANCH` no longer exists either, the run cannot be resumed: say so and
+stop rather than inventing a new base, because the ticket branches were cut from it.
+
+### Step 0d: Resyncing the lane between tickets
+
+`run/<stamp>` plays the role `main` played before. It is not a branch anyone reviews and nothing is
+ever pushed from it; it is the base each ticket branches off, and it is deleted at cleanup.
+
+After each ticket's Finish has merged, bring the lane forward before the next ticket's Phase 1:
+
+```bash
+git -C "$RUN_WT" checkout "$RUN_BRANCH"
+git -C "$RUN_WT" fetch origin
+git -C "$RUN_WT" reset --hard origin/main
+```
+
+`reset --hard` is safe here and only here: the lane is clean at that point (Ship committed and pushed,
+Merge squashed), and this branch is the run's own. It is permission-gated, which is why the launch
+section lists it. If `status --short` is not empty at this point, something in the previous ticket did
+not finish cleanly: block rather than resetting over it, because that reset would destroy work.
 
 Then read, in this order: `AGENTS.md` (the non-negotiables and the Known-state defect list),
 `.claude/linear.md`, and the commands this pipeline delegates to - `start-issue.md`, `ship.md`,
@@ -256,7 +352,7 @@ Progress.
 2. Spawn **one** fresh subagent for the whole batch. Read-only, no reason to isolate per ticket.
    Its prompt:
 
-   > For each of these tickets, in `<repo-root>`: fetch the full description with `get_issue`,
+   > For each of these tickets, in `<run-worktree>`: fetch the full description with `get_issue`,
    > including any "Decisions" section, which records answers the owner already gave. Grep and
    > read the files each ticket actually names; do not judge by title. Return a table with ticket
    > id, judgment (simple / complex / needs-decomposition), the `srs.md` requirement ID it closes
@@ -271,7 +367,9 @@ Progress.
    > needs hardware this machine lacks (an Android phone for R-M03, a second GPU, a non-Linux
    > desktop). Make no changes of any kind.
 
-3. Create the state file now, every in-scope ticket `pending` at phase `start`. For each question
+3. Fill in the `tickets` array now, every in-scope ticket `pending` at phase `start`. Step 0c already
+   created the file with its top-level fields, including `worktree` and `runBranch`; do not
+   reinitialise it and lose them. For each question
    with a recommendation, write it into that ticket's `clarification` with `decidedBy: "pipeline"`,
    and post it to the Linear issue with `save_comment` as "Decided by /run-tickets (owner may
    override): <question> -> <answer>, because <reason>." For each `unresolvable` ticket, set
@@ -293,32 +391,46 @@ Special cases Phase 0 must handle:
 
 | # | Phase | Delegates to | What the fresh subagent does |
 |---|---|---|---|
-| 1 | Start | `start-issue.md` | Branch off `main`, Linear to In Progress, snapshot the issue into state |
+| 1 | Start | `start-issue.md` | Branch off `origin/main` inside the lane, Linear to In Progress, snapshot the issue into state |
 | 2 | Plan | this file | Write the plan using Phase 0's decisions; genuinely new ambiguity is decided or blocks |
 | 3 | Implement | this file | Reproduce first for bugs, then fix, then run the gates itself |
 | 4 | Ship | `ship.md` | Gates, `check-constraints`, `critique`, commit, push, PR against `main` |
 | 5 | Verify | this file | Automated: gates on the PR head, bundled probes of every acceptance input, CDP smoke if reachable |
 | 6 | Merge | this file | Squash-merge once Verify recorded `pass` (skipped with `--no-merge`) |
-| 7 | Finish | `finish.md` | Cleanup, Linear to Done, `main` synced and deployed, docs corrected if a defect is gone |
+| 7 | Finish | `finish.md` | Linear to Done, lane resynced and deployed, docs corrected if a defect is gone. **Not** the lane's removal, which is Step 8 |
+
+Then Step 8 removes the lane, once, for the whole run.
 
 **Sequencing is not optional.** Tickets run one at a time, fully through phase 7, before the next
-one's phase 1. Branches come off `main`, and `main` only carries ticket N's fix once ticket N's
-Finish has pulled it. A blocked ticket stops where it is; the next ticket starts from `main`.
+one's phase 1. Branches come off `origin/main`, and `origin/main` only carries ticket N's fix once
+ticket N's Merge has landed it. A blocked ticket stops where it is; Step 0d resyncs the lane and the
+next ticket starts from the new `origin/main`.
 
 ## State file: `$STATE_FILE`
 
-Machine-local, gitignored, never committed. Step 0 resolves the path once:
-`.claude/pipeline-state.json` in the primary repo, `.claude/pipeline-state-local.json` in a
-`note-reader-local-nrl-*` worktree. Every phase must be handed that resolved path. Naming the
-main-repo file directly is a live defect in a worktree lane, because Phase 1 writes the
-`-local` one and a later phase then reads a file that is not there.
+Machine-local, gitignored, never committed. It is always
+`$PRIMARY/.claude/pipeline-state.<stamp>.json` - **one file per run, in the primary repo**, resolved
+by Step 0 from the same `$STAMP` that names the lane and the run branch. Every phase must be handed
+that resolved absolute path, and a phase that re-derives it can land on another run's file.
+
+It lives in the primary and not in the lane on purpose: the lane is removed at Step 8, and the state
+file is the run's record. A state file inside the lane would be deleted by the run's own cleanup,
+taking the blocked-ticket reasons and the decision log with it. The old
+`.claude/pipeline-state-local.json` split, keyed on the directory name, is **gone**: the lane already
+provides the isolation it existed for. `.gitignore` still lists the `-local` name, harmlessly; nothing
+writes it.
 
 ```json
 {
   "runId": "2026-09-28T14:00:00Z",
+  "primary": "/home/joshshearer/Documents/Dev/note-reader-local",
+  "worktree": "/home/joshshearer/Documents/Dev/note-reader-local-run-20260928-140000",
+  "runBranch": "run/20260928-140000",
+  "worktreeRemoved": false,
   "baseBranch": "main",
   "buildGate": false,
   "merge": true,
+  "keepWorktree": false,
   "tickets": [
     {
       "id": "NRL-19",
@@ -348,23 +460,39 @@ main-repo file directly is a live defect in a worktree lane, because Phase 1 wri
 `phase`: `start` | `plan` | `implement` | `ship` | `verify` | `merge` | `finish`.
 `verifyVerdict`: `null` | `pass` | `fail`. It records the **automated** Verify only.
 `clarification.decidedBy`: `null` | `"owner"` (from the ticket's Decisions section) | `"pipeline"`.
+`worktree`, `runBranch`, `primary`: written by Step 0c, read by Step 8 and by `--resume`. `worktree`
+is the **only** path cleanup is allowed to remove.
 
-Add both `.claude/pipeline-state.json` and `.claude/pipeline-state-local.json` to `.gitignore` if
-they are not already there (the latter is used by worktree instances). Timestamps come from
+`.gitignore` covers `.claude/pipeline-state*.json`, `.claude/deploy.lock/` and
+`.claude/scratch/`. The lane itself needs no
+ignore rule: it is a sibling directory, outside the repo's own working tree. Timestamps come from
 `date -u +%FT%TZ`, never from a guess.
 
 ## Phase subagent prompts
 
-In every prompt below, `<state-file>` is the path Step 0 resolved into `$STATE_FILE`. Substitute
-the literal path when you spawn the subagent. Do not paste the derivation rule and do not write
-`.claude/pipeline-state.json` as a constant: in a worktree lane that is the wrong file, and the
-phase will read an entry Phase 1 never wrote.
+In every prompt below, substitute the literal absolute paths Step 0 resolved:
 
-**1. Start** - "Read `.claude/commands/start-issue.md` and follow it for `<ID>` in `<repo-root>`,
+| Placeholder | Value |
+|---|---|
+| `<run-worktree>` | `$RUN_WT`, the lane. **This is the repo root every phase works in.** |
+| `<state-file>` | `$STATE_FILE`, i.e. `$PRIMARY/.claude/pipeline-state.<stamp>.json` |
+| `<run-branch>` | `$RUN_BRANCH`, the lane's throwaway base branch |
+| `<deploy-lock>` | `$DEPLOY_LOCK`, i.e. `$PRIMARY/.claude/deploy.lock` |
+
+Substitute the paths, never the rule for deriving them. A subagent does not inherit your shell and a
+re-derived path can differ: a phase handed `$PRIMARY` instead of `$RUN_WT` would commit into the
+owner's working tree, which is the whole thing the lane exists to prevent.
+
+**1. Start** - "Read `.claude/commands/start-issue.md` and follow it for `<ID>` in `<run-worktree>`,
 non-interactively; the ticket is already chosen. The state file is `<state-file>`.
 
-`git checkout main && git pull --ff-only` first (if in main repo; skip if in worktree feature branch).
-Branch from `main`. Fetch the issue and write `title`, `requirement`, `type`,
+You are in a disposable run lane, not the primary repo. `main` is checked out elsewhere and you must
+not try to check it out here; `<run-branch>` is the base and it already sits at `origin/main`.
+Confirm that (`git fetch origin && git rev-parse HEAD origin/main` agree) and branch from it.
+`start-issue.md`'s worktree step (step 5, which offers to create a worktree) does not apply: you are
+already in one. Do not create another, and do not deploy.
+
+Fetch the issue and write `title`, `requirement`, `type`,
 `descriptionSnapshot` and `branch` into this ticket's state entry. Set the Linear status to In
 Progress: call `list_issue_statuses` first and use the id whose name is exactly `In Progress`, then
 read the status back rather than trusting the write. Set `phase: \"plan\"`,
@@ -372,9 +500,10 @@ read the status back rather than trusting the write. Set `phase: \"plan\"`,
 `start-issue.md` cannot make, set `status: \"blocked\"` with `blockedReason` and stop. Do not
 guess."
 
-**2. Plan** - "Read `<ID>`'s `descriptionSnapshot`, `clarification` and `reproduction` from
-`<state-file>`. Line numbers in the ticket may be stale if earlier tickets in this
-run touched the same files: read the current code on `main`. Write a concise ordered `planNote`
+**2. Plan** - "You are in `<run-worktree>`. Read `<ID>`'s `descriptionSnapshot`, `clarification` and
+`reproduction` from `<state-file>`. Line numbers in the ticket may be stale if earlier tickets in this
+run touched the same files: read the current code in this lane, which is at `origin/main` plus this
+ticket's branch. Write a concise ordered `planNote`
 naming real functions, incorporating every recorded decision. If a genuinely new ambiguity appears
 that Phase 0 missed, decide it the way Phase 0 would (recommendation plus one line of reasoning),
 record it in `clarification` with `decidedBy: \"pipeline\"`, and post it to Linear as a
@@ -383,9 +512,9 @@ record it in `clarification` with `decidedBy: \"pipeline\"`, and post it to Line
 this ticket amends `srs.md`, the plan must include an ADR under `docs/adr/` in the existing
 `NNNN-kebab-title.md` format. Set `phase: \"implement\"`."
 
-**3. Implement** - "You are on `<branch>` in `<repo-root>`. Read `<ID>`'s `descriptionSnapshot`,
-`planNote` and `reproduction` from `<state-file>`. Do not deploy and do not touch
-`~/Documents/Notes`.
+**3. Implement** - "You are on `<branch>` in `<run-worktree>`. Read `<ID>`'s `descriptionSnapshot`,
+`planNote` and `reproduction` from `<state-file>`. Do not deploy, do not touch
+`~/Documents/Notes`, and do not touch any directory outside this lane.
 
 **If `type` is `bug`, reproduce it before changing anything.** `AGENTS.md` rule 12 requires this,
 and most defects in this codebase were invisible to the test suite and obvious the moment the real
@@ -411,14 +540,17 @@ ones. Write a 3 to 6 sentence `implementationSummary` that lists every deviation
 every known miss, set `phase: \"ship\"`. Do not commit, push, or open a PR."
 
 **4. Ship** - "Read `.claude/commands/ship.md` and follow it for the current branch in
-`<repo-root>`, skipping any deploy step. PR base is `main`. Use `implementationSummary` for the PR
+`<run-worktree>`, skipping any deploy step. PR base is `main`. Use `implementationSummary` for the PR
 body's approach section. `<--build if the run passed it, otherwise: build only if the diff touches
 the bundle>`.
 
 There is no pre-push hook, so the push is instant. `.github/workflows/ci.yml` runs on `push` and
 on `pull_request`, so the PR will pick up a check. You **may** read its conclusion once for the
 report; you **must not** wait on it, and never write a polling loop. Branch protection is out of
-scope, so a red check does not block a merge.
+scope, so a red check does not block a merge. Record whatever you saw, including "not concluded", in
+`verifyNotes` so the end-of-run report can point the owner at `/test-issue <ID>` for any PR whose
+check went red. Do not run `/test-issue` yourself: it triages by reproducing a failure locally and by
+waiting on a conclusion, and neither belongs in an unattended run.
 
 Run `/check-constraints`. A BLOCK is not overridable: set `status: \"blocked\"` with the findings
 and stop without committing. Same for a `/critique` BLOCK verdict. With no human reviewing the
@@ -432,7 +564,7 @@ using the app. Record `prNumber`, `prUrl`, `commitSha`, set `phase: \"verify\"`.
 
 **5. Verify** - automated, in a fresh subagent. It must not be the subagent that wrote the fix.
 
-"You are verifying PR `<prNumber>` for `<ID>` in `<repo-root>`, on branch `<branch>`. Read the
+"You are verifying PR `<prNumber>` for `<ID>` in `<run-worktree>`, on branch `<branch>`. Read the
 ticket's `descriptionSnapshot`, `planNote`, `implementationSummary` and `reproduction` from
 `<state-file>`. You did not
 write this code; your job is to find out whether it does what the acceptance criteria say. Do not
@@ -447,8 +579,13 @@ edit tracked files.
    `sourceIndex` lockstep on every probe: equal length to the text, and every non-space character
    maps to the same raw character.
 3. If Obsidian is reachable on `--remote-debugging-port=9222`
-   (`curl -s --max-time 2 http://127.0.0.1:9222/json/version`), deploy with `npm run deploy` and run
-   `npm run test:obsidian`, and record the result. The running plugin only picks up a deploy after
+   (`curl -s --max-time 2 http://127.0.0.1:9222/json/version`), take `<deploy-lock>` atomically with
+   `mkdir`, then deploy with `npm run deploy`, write
+   `.deployed-from` with this lane's path and commit, run `npm run test:obsidian`, record the result,
+   and release the lock. **If the deploy lock cannot be taken, skip the deploy and record
+   `CDP smoke: not run, deploy lock held by <holder>`** rather than waiting or deploying anyway: the
+   slot is one shared folder and a smoke test against another lane's build proves nothing. The
+   running plugin only picks up a deploy after
    Obsidian restarts, so a smoke test against an un-restarted instance proves nothing; say which
    build was loaded if you can tell. If the port is not reachable, record `CDP smoke: not run`. Do
    not start, stop or restart Obsidian.
@@ -481,16 +618,107 @@ a ticket whose Verify did not record a pass, and never self-approve. Record the 
 set `phase: \"finish\"`.
 
 **7. Finish** - "Read `.claude/commands/finish.md` and follow it for the merged branch `<branch>`
-in `<repo-root>`. Verify the merge by content, not just by branch state: this repo squashes, so
-`git branch -d` can claim 'not merged' for work that is fully in `main`. Grep `main` for a
+in `<run-worktree>`. Two of its steps do not apply in a run lane and must be skipped; everything else
+does.
+
+**Skip `finish.md` step 7 entirely** (worktree removal). It removes
+`note-reader-local-nrl-${ISSUE_NUM}`, which does not exist in a run lane, and the lane you are in is
+removed once for the whole run by Step 8, not per ticket. A phase that removed its own lane would
+delete the checkout the next ticket needs.
+
+**Do not check out `main`.** It is checked out in the primary repo and git will refuse. Where
+`finish.md` says to finish on an up-to-date `main`, finish on `<run-branch>` reset to `origin/main`:
+
+```bash
+git checkout <run-branch> && git fetch origin && git reset --hard origin/main
+```
+
+Verify the merge by content, not just by branch state: this repo squashes, so
+`git branch -d` can claim 'not merged' for work that is fully in `main`. Grep the resynced lane for a
 distinctive symbol the PR added before deleting, and use `-D` only once content is confirmed. Set
 the Linear status to Done by reading `list_issue_statuses` rather than a remembered id, and read
 the status back. Then check whether this ticket removed one of the defects listed in the
 `AGENTS.md` Known state section, or moved a requirement's status in `srs.md`. If so, make the doc
 edit on a `docs/<id>-finish` branch, open a PR, and squash-merge it yourself; never commit to
 `main` directly. Only move a requirement to fully met with evidence, and name that evidence.
-Finally, on an up-to-date `main`, run `npm run deploy` so the owner's vault carries the latest
-merged build. Finish on `main`, clean, synced. Set `phase: \"finish\"`, `status: \"done\"`."
+Finally, take `<deploy-lock>` atomically with `mkdir` and run `npm run deploy` from the resynced lane
+so the owner's vault carries the latest merged build, then write `.deployed-from` with this lane's
+path and commit, and release the lock. If the lock cannot be taken, skip the deploy and name the
+holder; do not wait. Leave the lane on `<run-branch>`, clean and at `origin/main`. Set
+`phase: \"finish\"`, `status: \"done\"`."
+
+## Step 8: Clean up the lane, once, at the end of the run
+
+Runs after the last ticket reaches `done` or `blocked`. Skipped
+entirely under `--keep-worktree`, which prints the path and says cleanup was skipped on purpose.
+
+**Cleanup is conditional, and the condition is that nothing would be lost.** A blocked ticket can
+leave work that never reached origin - Implement blocks after reproducing a bug and before any commit,
+and that reproduction is exactly the thing `AGENTS.md` rule 12 says is expensive to obtain. Removing
+the lane would destroy it with no record anywhere, which is the same class of loss as the 2026-09-29
+incident in the fact table.
+
+Measure all four, in the lane, and print what you measured:
+
+```bash
+cd "$RUN_WT"
+git status --short                       # must be empty
+git stash list                           # must be empty
+git worktree list --porcelain            # confirm $RUN_WT is the tree you are about to remove
+
+# For every branch this run created (the state file's ticket `branch` fields):
+for B in <ticket branches>; do
+  git rev-parse --verify "$B" >/dev/null 2>&1 || continue
+  if git rev-parse --verify "origin/$B" >/dev/null 2>&1; then
+    echo "$B unpushed=$(git rev-list --count "origin/$B..$B")"
+  else
+    echo "$B unpushed=NO-REMOTE merged=$(git merge-base --is-ancestor "$B" origin/main && echo yes || echo no)"
+  fi
+done
+```
+
+A branch with no remote is fine **only** if it is an ancestor of `origin/main`, which is the normal
+end state: Merge squash-merged it and `--delete-branch` removed the remote copy. A branch with no
+remote that is not an ancestor of `origin/main` is unpushed work. Do not use `git branch -d`'s opinion
+here for the same reason Phase 7 does not: a squash merge makes it report "not merged" for work that is
+fully in `main`.
+
+**All four clean** - `status` empty, `stash list` empty, every ticket branch either zero commits ahead
+of its remote or an ancestor of `origin/main`:
+
+```bash
+cd "$PRIMARY"
+git worktree remove "$RUN_WT"
+git branch -D "$RUN_BRANCH"
+git worktree prune
+```
+
+`worktree remove` without `--force`, deliberately: it refuses on a dirty tree, so it is a second
+independent check on the condition you just measured rather than a way past it. If it refuses after
+you measured clean, believe the refusal and keep the lane - something changed under you. `--force` is
+never correct in this step.
+
+Deleting `node_modules`, `main.js`, `kokoro-worker.js` and `ort/` with the lane is expected: all four
+are gitignored build output, and the next run rebuilds them. Set `worktreeRemoved: true`.
+
+**Anything not clean** - keep the lane, and report, per item: the lane's absolute path, the dirty
+files verbatim, the stash entries, and every branch with its unpushed commit count and subject lines.
+Say cleanup was skipped and why, in those terms. Then say what the owner can do with it:
+
+```
+Lane kept: /home/joshshearer/Documents/Dev/note-reader-local-run-20260928-140000
+  branch fix/nrl-88-... has 2 unpushed commits:
+    abc1234 fix(extract): ...
+    def5678 test(extract): ...
+Reason: NRL-88 blocked at implement; the work is not on origin.
+To inspect:  cd <lane> && git log --oneline origin/main..
+To discard:  git -C <primary> worktree remove --force <lane> && git -C <primary> branch -D run/<stamp>
+```
+
+Never run that discard command yourself. Offering it is the point; deciding is the owner's.
+
+A kept lane is not a failure of the run and does not change any ticket's status. It is one line in the
+end-of-run report.
 
 ## When something needs a human
 
@@ -509,24 +737,36 @@ the run continues with the next ticket:
 A blocked ticket keeps its branch and any open PR, so the work is not lost. Its Linear status stays
 In Progress, and the orchestrator posts a comment with the `blockedReason`.
 
+**A ticket blocked before Ship pushed anything is the case Step 8 exists for.** Its branch is local to
+the lane, so "the work is not lost" is true only because cleanup refuses to remove a lane holding
+unpushed commits or a dirty tree. Do not resolve that by pushing a blocked ticket's work to make
+cleanup unconditional: a half-finished branch on origin is a worse artifact than a lane on disk, and
+the end-of-run report names the lane either way.
+
 A decision the pipeline took on the owner's behalf is **not** a block. It is recorded in state,
 posted to Linear, and listed in the end-of-run report so it can be overridden later.
 
 ## End-of-run report
 
-When every ticket is `done` or `blocked`, print one message:
+When every ticket is `done` or `blocked` and Step 8 has run, print one message:
 
 - A table: ticket, PR, merge commit, automated verify result, one line on what changed.
+- **Any PR whose CI check went red or never concluded**, with the check name and its run URL, and the
+  line: run `/test-issue <ID>` to triage it. This run deliberately did not: it reads a conclusion at
+  most once and never waits on one. `/test-issue` measures whether the failure is this branch's, by
+  reproducing it locally and on `origin/main`, and it is a human-invoked command.
+- **The lane**: its path, and whether Step 8 removed it. If it was kept, the reason and the unpushed
+  or dirty items, verbatim. If `--keep-worktree` was passed, say that is why.
 - Every decision taken with `decidedBy: "pipeline"`, with a link to its Linear comment.
 - Every blocked ticket with its reason, branch and PR.
 - New follow-up tickets filed during the run, and known leftovers from each PR.
 - Requirement status changes, with the evidence for each.
 - The reminder: **the vault now has `main` at `<sha>`. Fully quit and relaunch Obsidian to load
   it;** an in-app reload has proven unreliable. Nothing in this run was verified in Obsidian by a
-  human, and each PR's manual test plan says what to look at. If this lane could not take
-  `.claude/deploy.lock`, say that it skipped the deploy and name the lane that holds it.
-- Confirmation that `.claude/pipeline.lock` was released, and the path of anything archived under
-  `.claude/scratch/` during the run.
+  human, and each PR's manual test plan says what to look at. If this run could not take
+  `$PRIMARY/.claude/deploy.lock`, say that it skipped the deploy and name the lane that holds it.
+- This run's state file path, left in place as the run's record, and **any other run's state file
+  that was live alongside it**, named so overlapping work is visible.
 - **Whether every Linear write actually landed.** Name any comment or status change that was
   printed instead of posted, and why (no tracker, or an operation that would not resolve). A run
   whose comments all silently failed must not close with a report that looks identical to one
@@ -558,7 +798,15 @@ One ticket, left as an open PR for the owner to read before merging.
 ```
 /run-tickets --resume
 ```
-Continues the run recorded in whichever state file Step 0 resolves for this working tree.
+Continues the most recently modified in-progress run, recreating the lane from its `worktree` and
+`runBranch` fields. Add a stamp (`--resume 20260930-143755`) to name one exactly, which is required
+when two are in progress.
+
+```
+/run-tickets NRL-88 --keep-worktree
+```
+One ticket, and the lane is left on disk afterwards to be inspected. Remember to remove it, or the
+next run leaves a second sibling beside it.
 
 ## Error handling
 
@@ -570,24 +818,31 @@ Continues the run recorded in whichever state file Step 0 resolves for this work
 | A permission prompt appears mid-run | The run was launched wrong; see "How to launch it, per runtime". Stop and report which command was gated. Never edit `opencode.json` or the Claude Code settings from inside a run to get past it. |
 | `npm test` fails at an early suite | Remember the `&&` chain hides later suites. Re-run the remaining ones individually before concluding anything about scope. |
 | `tests/engine.test.ts` fails | It shells out to real `espeak-ng` and `spd-say`. Check the binaries before assuming the code broke. |
-| `main` fails its gates at the start of a ticket | Something already merged is broken. Stop the run and report it; branching further tickets off a broken `main` compounds it. |
+| `origin/main` fails its gates in the fresh lane at Step 0c | Something already merged is broken. Stop the run and report it; branching tickets off a broken base compounds it. Check `which espeak-ng spd-say` first: `tests/engine.test.ts` needs the real daemon. |
 | `gh` auth expires mid-run | Stop the run and report which step failed. Every later ticket would fail the same way. |
 | A phase needs a decision not covered above | Decide it with a recorded default if one is defensible, otherwise block the ticket. Never wait. |
-| `.claude/pipeline.lock` is held on entry | Stop the whole run before touching anything. Print the holder's `owner` file verbatim. Only a measured heartbeat over 60 minutes old, or an explicit `--force-unlock`, may replace it. Never work around it by changing directory. |
-| `$STATE_FILE` exists with a `runId` that is not yours | Resume it, or archive it to `.claude/scratch/` and verify the copy parses first. Never reinitialise it, however finished its tickets look. |
-| The working tree changed branch under you mid-run | Another run is in this tree despite the lock. Stop, report both the branch you expected and the one you found, and do not commit: your files may already be staged into someone else's commit. |
-| An unpushed commit you did not create is on `main` | Do not amend, rebase or reset to tidy it. Push it or leave it. One was silently dropped this way on 2026-09-29. |
+| Another run's `pipeline-state.*.json` is present and in progress | Expected: runs are parallel. Name it in the first message and carry on. Read it once to compare ticket sets, and block only the tickets both runs hold. Never write it. |
+| `$STATE_FILE` already exists at Step 0a | Two runs minted the same second-resolution `$STAMP`. Stop and re-run; a fresh stamp resolves it. Never delete or adopt the existing file - it is the other run's record, and its lane and run branch carry the same colliding stamp. |
+| `$STATE_FILE` exists with a `runId` that is not yours | Resume it, or archive it to `$PRIMARY/.claude/scratch/` and verify the copy parses first. Never reinitialise it, however finished its tickets look. Check its `worktree` field before creating a lane: that run's lane may still be on disk. |
+| `git worktree add` fails because `$RUN_WT` exists | A previous run left a lane, most likely under `--keep-worktree` or a kept-because-unpushed cleanup. Do not remove it and do not reuse it. Report the path, say which state file references it, and stop; the collision is one second of clock skew away from being a name you cannot attribute. |
+| `git worktree add` fails because `$RUN_BRANCH` exists | Same cause, same response. Never `-D` a run branch you did not create in this run. |
+| The lane's `HEAD` moved under you mid-run | Something else is working in the lane. Stop, report the branch you expected and the one you found, and do not commit: your files may already be staged into someone else's commit. |
+| A `-run-*` lane on disk belongs to no live run | Report it as an orphan with its path, and the `runId` of the state file whose stamp matches. Do not remove or reuse it: a dead run may hold the only copy of a blocked ticket's reproduction, and `--resume <stamp>` can still pick it up. |
+| An unpushed commit you did not create is on `main` | Do not amend, rebase or reset to tidy it. Push it or leave it. One was silently dropped this way on 2026-09-29. `main` is never checked out in the lane, so this can only be seen in `$PRIMARY`, which the run does not touch. |
+| A PR's CI check goes red | Record it and carry on; it does not block the merge and there is no branch protection. Name it in the end-of-run report with `/test-issue <ID>` as the follow-up. **Do not run `/test-issue` from inside the run**: it waits on a conclusion and reproduces failures locally, neither of which belongs in an unattended pipeline. |
 
 ## Configuration
 
 | Setting | Value |
 |---|---|
-| **Repo root** | `git rev-parse --show-toplevel` |
-| **Base branch** | `main` (only branch; PRs target it) |
+| **Primary repo** | `git rev-parse --show-toplevel`, then strip a `-nrl-*` or `-run-*` suffix. Assert `git -C "$PRIMARY" rev-parse --git-dir` prints `.git` |
+| **Run lane** | `${PRIMARY}-run-<YYYYMMDD-HHMMSS>` on branch `run/<stamp>`, created at Step 0c from `origin/main`, removed at Step 8. Deliberately outside the `note-reader-local-nrl-*` pool `worktrees.md` owns |
+| **State, deploy lock, archive** | `$PRIMARY/.claude/{pipeline-state.<stamp>.json,deploy.lock,scratch/}`. All in the primary so they outlive the lane. No run-wide lock: runs are parallel |
+| **Base branch** | `main`. PRs target it; the lane never checks it out, since the primary has it |
 | **Remote** | `git@github.com:JoshShearer/Note-Reader-Local.git` |
 | **Tracker** | Linear workspace `note-reader-local`, MCP server `linear-nrl`, team key `NRL` |
-| **Gates** | `npm test` · `npm run typecheck` · `npm run build` when the bundle moved |
-| **CI** | `.github/workflows/ci.yml` on `push` and `pull_request`. May be read once, never waited on. No branch protection, so a red check does not block a merge. |
+| **Gates** | `npm test` · `npm run typecheck` · `npm run build` when the bundle moved. Run once in the fresh lane at Step 0c before any ticket |
+| **CI** | `.github/workflows/ci.yml`, job `gates`, on `push` (`branches: ["**"]`) and `pull_request`, so it runs twice on a PR branch. May be read once, never waited on. No branch protection, so a red check does not block a merge. `/test-issue` is the human-invoked triage |
 | **Push gate** | None. No husky, no active git hooks. |
-| **Permission gate** | Three commands the pipeline needs are `ask` in `opencode.json`. Launch headless (`opencode run --auto --command run-tickets "<ids>"`) or in a Claude Code bypass session. See "How to launch it, per runtime". |
+| **Permission gate** | Four commands the pipeline needs are `ask` in `opencode.json`. Launch headless (`opencode run --auto --command run-tickets "<ids>"`) or in a Claude Code bypass session. See "How to launch it, per runtime". |
 | **Human gate** | None. The owner tests by using the app and files new tickets for what they find. |

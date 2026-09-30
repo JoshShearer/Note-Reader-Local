@@ -13,6 +13,15 @@ This command owns the **interactive** pool only: siblings of the primary repo na
 never create a worktree here for a gnhf run. A sibling directory that does not match
 `note-reader-local-nrl-*` is left alone, listed only as "unmanaged".
 
+**`note-reader-local-run-<stamp>` is a `/run-tickets` lane, not unmanaged.** That command creates one
+per run and removes it itself at the end, so list it as `run lane` with its branch and whether it is
+dirty, and **refuse to remove it**: if a run is live, removing its checkout destroys the tickets in
+flight, and if the lane outlived its run, it is on disk precisely because cleanup found unpushed
+commits or a dirty tree there. Point at the `$PRIMARY/.claude/pipeline-state.<stamp>.json` whose stamp
+matches the lane's, and whose `worktree` field
+names the lane and whose ticket entries say why it was kept. Never take the deploy slot from a live
+run lane without saying so: `/run-tickets` Phase 7 deploys merged `main` from it.
+
 Per the global rules, a gnhf run belongs on a throwaway worktree on a scratch branch with no
 push credentials. If someone asks for that here, say no and point at treehouse.
 
@@ -50,13 +59,26 @@ without writing it. The check that does not require cooperation is a byte compar
 `main.js` is gitignored and each worktree builds its own:
 
 ```bash
-PRIMARY="$(pwd)"; [[ "$(basename "$PRIMARY")" =~ -nrl-[0-9]+$ ]] && PRIMARY="${PRIMARY%-nrl-*}"
+PRIMARY="$(pwd)"
+[[ "$(basename "$PRIMARY")" =~ -nrl-[0-9].*$ ]] && PRIMARY="${PRIMARY%-nrl-*}"
+[[ "$(basename "$PRIMARY")" =~ -run-[0-9]+-[0-9]+$ ]] && PRIMARY="${PRIMARY%-run-*}"
 SLOT="$HOME/Documents/Notes/.obsidian/plugins/local-tts-reader/main.js"
-for d in "$PRIMARY" "${PRIMARY}"-nrl-*; do
+for d in "$PRIMARY" "${PRIMARY}"-nrl-* "${PRIMARY}"-run-*; do
   [ -f "$d/main.js" ] || continue
   if cmp -s "$d/main.js" "$SLOT"; then echo "OWNS SLOT: $d"; else echo "stale:    $d"; fi
 done
 ```
+
+The `-run-*` glob is in the loop because `/run-tickets` Phase 7 deploys merged `main` from its lane,
+so a run lane is a real candidate for owning the slot. Leaving it out is how the slot ends up
+attributed to nobody: every interactive tree reads `stale` and the marker names a directory the loop
+never looked at.
+
+The `-nrl-` pattern is `-nrl-[0-9].*$` and **not** `-nrl-[0-9]+$`, which is what it used to be. A
+worktree covering several issues is named for all of them - `note-reader-local-nrl-57-58-65-72` is on
+disk now - and `+$` does not match that, so the strip silently did nothing and `$PRIMARY` stayed
+pointing at the worktree. Every glob below then expanded against the wrong parent. Measured with both
+patterns against that real directory name before the change.
 
 Report the marker and the byte comparison separately. When they disagree, the byte comparison
 wins and the marker is stale; say both.
@@ -90,7 +112,8 @@ Resolve the primary from wherever you are:
 
 ```bash
 PRIMARY="$(pwd)"
-[[ "$(basename "$PRIMARY")" =~ -nrl-[0-9]+$ ]] && PRIMARY="${PRIMARY%-nrl-*}"
+[[ "$(basename "$PRIMARY")" =~ -nrl-[0-9].*$ ]] && PRIMARY="${PRIMARY%-nrl-*}"
+[[ "$(basename "$PRIMARY")" =~ -run-[0-9]+-[0-9]+$ ]] && PRIMARY="${PRIMARY%-run-*}"
 echo "primary=$PRIMARY"
 ```
 
@@ -107,6 +130,11 @@ for dir in "${PRIMARY}"-nrl-*/; do
   AHEAD=$(git -C "$dir" rev-list --count origin/main..HEAD 2>/dev/null || echo '?')
   DEPS=$([ -d "$dir/node_modules" ] && echo installed || echo MISSING)
   echo "  branch=$BRANCH ahead=$AHEAD dirty=$DIRTY deps=$DEPS"
+done
+for dir in "${PRIMARY}"-run-*/; do
+  echo "=== run lane: $(basename "$dir") ==="
+  echo "  branch=$(git -C "$dir" branch --show-current 2>/dev/null || echo detached)" \
+       "dirty=$(git -C "$dir" status --short 2>/dev/null | wc -l | tr -d ' ')"
 done
 BRANCH=$(git -C "$PRIMARY" branch --show-current)
 [[ "$BRANCH" == feature/* || "$BRANCH" == fix/* ]] && echo "PRIMARY: $BRANCH"
@@ -322,6 +350,11 @@ printf '%s\nbranch=%s commit=%s at=%s\n' \
 
 ## Mode: Remove
 
+0. **Refuse a `note-reader-local-run-*` lane.** It belongs to `/run-tickets`. Say so, read
+   the matching `$PRIMARY/.claude/pipeline-state.<stamp>.json` for the ticket that kept it and its `blockedReason`, and
+   print the lane's unpushed commits. If the owner still wants it gone, they run the discard command
+   `/run-tickets` Step 8 printed; this command does not do it for them.
+
 1. Confirm the directory exists.
 
 2. Safety checks:
@@ -370,7 +403,8 @@ that exists nowhere else, which is why there is no symlink caveat here.
 | Linear tool absent | Do the git work, print what you would have asked Linear |
 | `gh` not authenticated | Skip the PR lookup, say it was skipped |
 | Inside the worktree being removed | Tell the user to exit; do not force |
-| A sibling directory not matching `note-reader-local-nrl-*` | List as unmanaged, touch nothing. It may belong to treehouse |
+| A sibling matching `note-reader-local-run-*` | List as `run lane`, touch nothing. It belongs to `/run-tickets`, which creates and removes its own. Refuse `remove`; read the `$PRIMARY/.claude/pipeline-state.<stamp>.json` with the matching stamp to say why it is still there |
+| A sibling directory matching neither pattern | List as unmanaged, touch nothing. It may belong to treehouse |
 
 Every worktree branch still passes `/critique` and `/check-constraints` through `/ship` before
 merge. A worktree is a place to work, not an exemption from the gates.
