@@ -181,7 +181,7 @@ hold the deployed build, and whoever deploys should say so.
 No CI, no lint script. Full detail in `AGENTS.md`; the short version:
 
 ```bash
-npm test          # 7 suites
+npm test          # suite list: package.json pretest and test scripts
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # required if the bundle, worker or esbuild config moved
 ```

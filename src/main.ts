@@ -870,7 +870,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * back, about a second after this cleaned it. Stopping first means the
 	 * stop's own save records the final position under the old path
 	 * synchronously, and the re-key below moves that exact value to the new path,
-	 * so the renamed note resumes where the user actually was.
+	 * retaining the final position in memory. Disk ordering is a separate concern.
 	 *
 	 * Retargeting the queue instead was rejected on evidence: SpeechChunk.id
 	 * hashes filePath, so rewriting it without recomputing the id would
@@ -880,17 +880,18 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * under the new name and a fresh orphan, which is worse.
 	 *
 	 * Known race, unchanged in kind from the pre-existing one between a rate
-	 * nudge and a position write: the stop's save and this one are two
-	 * saveData() calls, and nothing serialises them. The re-key is issued second
-	 * and mutates the same object, so whichever resolves last is what lands. The
-	 * window between the two is one await, and no user action happens inside it.
-	 * Not fixed here because the fix is a save queue, which is a separate change
-	 * from this ticket.
+	 * nudge and a position write: a pending stop flush can overlap this handler's
+	 * saveData() call. Nothing serialises the writes, so issuing the re-key second
+	 * does not establish which state is durable. Completion order has not been
+	 * verified in Obsidian, and a later corrective save before shutdown is not
+	 * guaranteed. A serialised save queue remains unimplemented.
 	 *
 	 * TAbstractFile, not TFile, and no branch on the type: a folder event reaches
 	 * the same handler, and an exact-key-only handler would orphan every position
-	 * under a renamed folder. The sweep is idempotent, so it does not matter
-	 * whether Obsidian also reports each descendant.
+	 * under a renamed folder. The map sweep handles the subtree, but the stop
+	 * check below matches only an exact path. A descendant queue can keep writing
+	 * its old key unless Obsidian also emits a matching file event; that event
+	 * sequencing has not been verified in a real vault.
 	 */
 	private handleVaultRename(file: TAbstractFile, oldPath: string): void {
 		const newPath = file.path;
@@ -925,8 +926,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * than tidiness. The queue is untouched by the delete, so the player keeps
 	 * reporting the deleted path and the next progress event writes that key
 	 * straight back - one save later, recreating exactly the orphan this handler
-	 * exists to remove. Stopping first makes the stop's own save land first and
-	 * the drop last.
+	 * exists to remove. Stopping first orders the in-memory mutations, not the
+	 * asynchronous disk writes; the rename handler's save-ordering caveat applies.
 	 *
 	 * Same comparison as a rename, and for the same reason: the queue still
 	 * reports the old name, which for a delete is the only name it has.
