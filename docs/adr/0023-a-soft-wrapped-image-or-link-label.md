@@ -238,7 +238,8 @@ reach it. That is what ADR 0027 closed. **Four remain** - 1, 2, 3 and 5 above,
 renumbered nowhere so the original numbering in `AGENTS.md` and in NRL-88's own
 ticket still resolves - and all of them, open or closed, are destination-only,
 fail-closed and prose-safe: an aborted confirmation leaves the line exactly as
-the pre-NRL-63 tree had it. Roots 1 and 2 are deferred rather than attempted,
+the pre-NRL-63 tree had it. Roots 1 and 2 are deferred rather than attempted and
+are tracked as **NRL-98**,
 because fixing them means widening `interruptsParagraph`, which is shared with
 `codeSpanClosesLater` and which NRL-73 and NRL-74 had just narrowed; root 3 is
 left because clause 7a's `opensMathBlock` stop exists to fix a real prose-loss
