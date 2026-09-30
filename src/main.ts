@@ -47,6 +47,7 @@ import {
 	applySentenceHighlightColour,
 } from "./ui/highlightColour";
 import { createModelStore, type VaultModelStore } from "./ui/modelStore";
+import { withLoadingNotice } from "./ui/loadingNotice";
 import { reportError, trace } from "./diagnostics";
 import { LocalTtsSettingTab } from "./ui/settingsTab";
 import { ControlBar } from "./ui/controlBar";
@@ -670,7 +671,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		}
 
 		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
-			beforeAttempt: (candidate) => this.prepareCandidate(candidate, isAutomatic, current.filePath),
+			beforeAttempt: (candidate) =>
+				this.prepareCandidate(candidate, isAutomatic, current.filePath, scope.signal),
 			onFallback: (from, to, err) => {
 				t("fallback", `${from.id} -> ${to.id}: ${errText(err)}`);
 				new Notice(
@@ -717,14 +719,22 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * so keeping them in the shared copy is safe, and it means `readSelection`
 	 * and `readFromCursor` gain the tracing `readActiveNote` already had.
 	 *
-	 * No signal parameter, deliberately: `prepare()` has none. A Stop abandons
-	 * the await in `playWithFallback`, the load runs to completion, and a
-	 * finished model is kept for the next read (docs/adr/0013).
+	 * The `signal` parameter dismisses the NOTICE, not the load. `prepare()`
+	 * still takes no signal and is not cancelled: a Stop abandons the await in
+	 * `playWithFallback`, the bytes keep arriving and a finished model is kept
+	 * for the next read (docs/adr/0013, unchanged). What NRL-65 adds is that the
+	 * `Loading X...` Notice is hidden at the Stop rather than when that
+	 * abandoned load eventually settles - it is built with duration 0, so it
+	 * never self-dismisses on its own. The signal arrives as an explicit
+	 * argument rather than being read off `this.readScope`, because that field
+	 * is reassigned by the next read and this method belongs to one particular
+	 * read; see the comment at the call to `withLoadingNotice` below.
 	 */
 	private async prepareCandidate(
 		candidate: FallbackCandidate,
 		isAutomatic: boolean,
 		filePath: string,
+		signal?: AbortSignal,
 	): Promise<void> {
 		const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
 		// Note language for voice selection (priority: frontmatter lang > app locale)
@@ -734,20 +744,35 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// Loading can take seconds. Say so, rather than announcing playback that
 		// will not start yet and leaving the silence to speak for itself.
 		if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
-			const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
-			try {
-				trace(this.app, this.manifest.dir!, "loading engine", candidate.id);
-				const started = Date.now();
-				await candidate.engine.prepare();
-				trace(
-					this.app,
-					this.manifest.dir!,
-					"engine loaded",
-					`${candidate.id} in ${Date.now() - started}ms`,
-				);
-			} finally {
-				loading.hide();
-			}
+			// Bound before the thunk: TypeScript does not carry the
+			// optional-method narrowing above across a closure boundary, so
+			// `candidate.engine.prepare()` inside the arrow would not typecheck.
+			const load = candidate.engine.prepare.bind(candidate.engine);
+			// `signal` is the argument, never `this.readScope`. That field is a
+			// MUTABLE one, reassigned at the top of all three read paths, and
+			// this method runs inside `beforeAttempt`, i.e. inside an await
+			// chain belonging to ONE read. If a second read starts while this
+			// one's candidate is still loading, the field already points at the
+			// new read's controller, so reading it here would never dismiss
+			// this read's own Notice on its own Stop, and would let a later
+			// read's abort dismiss a Notice that is not its own. That is the
+			// rule NRL-48 established; the captured `scope` local at each call
+			// site is the per-read identity.
+			await withLoadingNotice(
+				() => new Notice(`Loading ${candidate.engine.label}...`, 0),
+				async () => {
+					trace(this.app, this.manifest.dir!, "loading engine", candidate.id);
+					const started = Date.now();
+					await load();
+					trace(
+						this.app,
+						this.manifest.dir!,
+						"engine loaded",
+						`${candidate.id} in ${Date.now() - started}ms`,
+					);
+				},
+				signal,
+			);
 		}
 	}
 
@@ -829,7 +854,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		await playWithFallback(this.player, candidates, selectedChunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: (candidate: FallbackCandidate) =>
-				this.prepareCandidate(candidate, isAutomatic, current.filePath),
+				this.prepareCandidate(candidate, isAutomatic, current.filePath, scope.signal),
 		}, -1, scope.signal);
 
 		// A Stopped read must not arm a sleep timer (NRL-48).
@@ -896,7 +921,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: (candidate: FallbackCandidate) =>
-				this.prepareCandidate(candidate, isAutomatic, current.filePath),
+				this.prepareCandidate(candidate, isAutomatic, current.filePath, scope.signal),
 		}, position, scope.signal);
 
 		// A Stopped read must not arm a sleep timer (NRL-48).

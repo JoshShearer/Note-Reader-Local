@@ -107,6 +107,7 @@ src/
     ├── affordances.ts          capabilities -> which controls to offer, and why not, pure
     ├── highlight.ts            two CodeMirror StateFields (sentence, word) + highlightPlan (ADR 0020)
     ├── highlightColour.ts      highlight colour setting -> CSS variable, pure (ADR 0005)
+    ├── loadingNotice.ts        dismissal policy for the "Loading X..." Notice, obsidian-free (NRL-65)
     ├── modelStore.ts           downloads, vault file IO for model assets
     └── paths.ts                vault path resolution
 ```
