@@ -138,7 +138,7 @@ The plugin MUST ship with:
 
 Quality gates run before any release:
 - `npm run typecheck` (TypeScript must compile).
-- `npm test` (all 21 test suites must pass).
+- `npm test` (all 22 test suites must pass).
 - `npm run build` (production esbuild must succeed).
 
 `.github/workflows/release.yml` enforces these gates on tagged commits, and `.github/workflows/ci.yml` enforces them on every push and pull request. Only tagged commits that pass all gates are released to GitHub.
@@ -276,7 +276,7 @@ The exact implementation of pause/resume MAY depend on backend capabilities.
 
 Where a backend cannot pause an active utterance, the controller MAY implement pause by stopping synthesis while retaining the current segment and position.
 
-Stop MUST also cancel a read that has not begun speaking, including while an engine's model is still loading; the load itself MAY be abandoned rather than cancelled, and any already-loaded result is kept (ADR 0013).
+Stop MUST also cancel a read that has not begun speaking, including while an engine's model is still loading; the load itself MAY be abandoned rather than cancelled, and any already-loaded result is kept (ADR 0013), and any on-screen loading indication is dismissed at the Stop rather than when the abandoned load settles.
 
 Stop silences playback as far as the backend allows, which on `speechd` is not
 completely: about 800 ms of speech continues after it, and that is accepted rather

@@ -23,7 +23,7 @@ script and no git hook, so nothing runs the gates at the moment you commit: CI i
 backstop, not a substitute. Run them locally first.
 
 ```bash
-npm test          # 21 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, adrNumbers, vaultPersistence
+npm test          # 22 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, adrNumbers, vaultPersistence, loadingNotice
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -563,13 +563,52 @@ rediscover them:
   downloading and a finished model is kept for the next read, so Stop does not free work in
   flight. Evidence is **bare-Node only** - `tests/fallback.test.ts` T1-T4 plus an independent
   probe bundling the real `fallback.ts` against the real `Player`, both showing 8 FAILURE(S)
-  at the pre-fix base `d7e64df` and green at the fix. **Nothing was observed in Obsidian**,
-  and one known leftover is on-screen rather than audible: the `Loading X...` Notice is built
-  with duration 0 and hidden only in the abandoned `prepare()`'s `finally`, so after a Stop
-  during a cold Kokoro load it lingers until the load finishes on its own (measured in a
-  transcribed harness as HIDE at +352 ms for a Stop at +51 ms of a 350 ms load). NRL-65
-  tracks that. So R-M07 is **not** recorded as fully met, and the `2 of 16` MUST headline
-  count above does not move.
+  at the pre-fix base `d7e64df` and green at the fix. **Nothing was observed in Obsidian.**
+  NRL-48's one on-screen leftover **closed with NRL-65** (`src/ui/loadingNotice.ts`). The
+  `Loading X...` Notice is built with duration 0, so it never self-dismisses, and it used to
+  be hidden only in the abandoned `prepare()`'s `finally`: after a Stop during a cold Kokoro
+  load it stayed up until the load finished on its own. Reproduced again before the fix, by
+  transcribing `main.ts`'s own Notice block and driving it through the real
+  `playWithFallback`: SHOW +6 ms, Stop +58 ms, resolve null +59 ms, **HIDE +357 ms** of a
+  350 ms load. Re-run against the shipped code on the identical schedule, the hide moves to
+  **+58 ms**, the same millisecond as the Stop, with the abandoned load still settling at
+  +357 ms. `withLoadingNotice(show, work, signal)` now dismisses at whichever comes
+  first, the work settling or the signal aborting, and **`ADR 0013 is unchanged`** - the load
+  is still abandoned rather than cancelled, `prepare()` still takes no signal, `SpeechEngine`
+  is untouched, and nothing about when bytes stop arriving moved. The signal is for the
+  Notice only. Three parts are load-bearing. The signal reaches `prepareCandidate` as an
+  **explicit argument from all three call sites**, never read off `this.readScope`, because
+  that field is reassigned by the next read and this method belongs to one particular read -
+  reading the field would fail to dismiss a superseded read's own Notice and would let a
+  later read's abort dismiss one that is not its own, which is exactly the rule NRL-48
+  established. **Already aborted on entry means `show()` is not called at all** while `work()`
+  still runs exactly once, because a show-then-hide in one turn is a flash that depends on
+  host behaviour nobody has verified, and skipping construction leaves ADR 0013's load
+  behaviour byte-identical. And the dismissal is idempotent by three parts that are not
+  redundant with each other: a captured `hidden` boolean for the cross-path double call,
+  `{ once: true }`, and a `removeEventListener` so a many-candidate read does not accumulate
+  one listener per candidate on the long-lived `scope.signal`.
+  Evidence, **bare-Node only**, staged fail-first because the module *is* the fix: **6
+  failures** against a transcription of the old policy, 0 after - and only **3 of those 6 are
+  defect reproductions** (`tests/loadingNotice.test.ts` L1 and L2, plus `tests/fallback.test.ts`
+  T5(i)). L7 (1) and L8 (2) are red only because the old policy has no signal parameter at
+  all, so they are labelled new capability and new behaviour rather than counted. L9 was
+  *planned* as red and measured green on both sides, so it is relabelled a guard: the old
+  block invoked its load inside the `try`, so a synchronously throwing `prepare()` already hit
+  the `finally`. The transcription itself was checked rather than eyeballed - the verbatim
+  block and the transcription produced identical step transcripts under both the reproduction
+  schedule and a sync-throwing `prepare()` - which is what stops the count being theatre.
+  **Nothing was observed in Obsidian** for NRL-65 either; CDP port 9222 was not available.
+  The specific unverified assumption is **whether obsidian's real `Notice` behaves as this
+  rests on**: that one built with `duration 0` never self-dismisses, and that `hide()` called
+  once at an arbitrary moment removes it cleanly. That is outside what the suite can cover
+  rather than a gap in it - every check is about *when* `hide()` is called, which a fake
+  `Dismissable` observes exactly, and none is about what the host then does to the DOM. It is
+  deliberately **not** written into `srs.md`, which states the requirement rather than the
+  evidence. So R-M07 is **still not** recorded as fully met and the `2 of 16` MUST headline
+  count above does not move: rule 11 applies, `main.ts` has no runtime in the suite, and the
+  three call-site edits, the `new Notice` construction and the `show()` closure therefore have
+  no automated coverage of any kind.
 - `cleanLine` is called once per source line, but since NRL-42 that is no longer the whole
   story: an inline code span may cross a soft line break, so `Cleaned.openCode` carries the
   length of a run left open and `codeSpanClosesLater` confirms a later line closes it. The
