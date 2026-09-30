@@ -22,9 +22,13 @@
  * allocator script was written (NRL-70 decision 1); a helper nothing forces
  * anyone to run is no guarantee. It also does not descend into a subdirectory
  * of docs/adr/, so a duplicate parked in docs/adr/drafts/ is not compared
- * against the flat ones; whether to recurse is a separate open question, and
- * until it is answered a subdirectory is reported as unclassifiable rather than
- * skipped, so the choice cannot be made silently by creating one.
+ * against the flat ones. NRL-82 settled this: docs/adr/ stays FLAT, not as an
+ * open question but as a decided convention - docs/adr/ has zero subdirectories
+ * today so nothing is currently unchecked, recursing (ignoring a subdirectory,
+ * or folding it into the uniqueness map) would either reintroduce the exact
+ * silent-duplicate risk this file exists to catch or solve a problem that does
+ * not exist yet, so a subdirectory is reported as unclassifiable rather than
+ * skipped, and the choice cannot be made silently by creating one.
  *
  * Discovery is deliberately case-insensitive on the extension and deliberately
  * exhaustive over the directory. `0017-rival.MD` is a real duplicate of ADR
