@@ -33,8 +33,23 @@ import {
 	type PluginData,
 } from "./settings/data";
 import { PositionThrottle } from "./settings/positionThrottle";
-import { applyHighlight, registerHighlighting } from "./ui/highlight";
-import { WORD_HIGHLIGHT_VAR, applyWordHighlightColour } from "./ui/highlightColour";
+import {
+	applyHighlightLayers,
+	applySentenceHighlight,
+	applyWordHighlight,
+	clearHighlights,
+	clearSentenceHighlight,
+	clearWordHighlight,
+	highlightPlan,
+	registerHighlighting,
+	type HighlightLayers,
+} from "./ui/highlight";
+import {
+	WORD_HIGHLIGHT_VAR,
+	SENTENCE_HIGHLIGHT_VAR,
+	applyWordHighlightColour,
+	applySentenceHighlightColour,
+} from "./ui/highlightColour";
 import { createModelStore, type VaultModelStore } from "./ui/modelStore";
 import { reportError, trace } from "./diagnostics";
 import { LocalTtsSettingTab } from "./ui/settingsTab";
@@ -155,29 +170,41 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		);
 		this.registerEvent(this.app.vault.on("delete", (file) => this.handleVaultDelete(file)));
 
-		// Sentence-level highlighting
+		// Sentence-level highlighting. Ranges come from the chunk's source
+		// offsets, never from searching the editor (non-negotiable 8).
 		this.player.on("chunk", (chunk) => {
-			if (!this.settings.highlight.enabled || !chunk) {
-				this.clearHighlight();
+			// No chunk means playback moved off the note entirely, so both layers
+			// go. Every other branch here touches one layer only: clearing both
+			// from a per-layer handler is what coupled the two toggles together.
+			if (!chunk) {
+				this.clearBothHighlights();
 				return;
 			}
 			if (!this.activeEditor) return;
-			applyHighlight(this.activeEditor, {
-				from: chunk.sourceStart,
-				to: chunk.sourceEnd,
+			// One transaction, because both layers change together here: the new
+			// sentence has to arrive in the same update that retires the previous
+			// sentence's word mark, or a word stays lit inside the wrong sentence
+			// until the next word event - which on a slow first synthesis, or on
+			// an engine that emits no word events at all, is a long time.
+			applyHighlightLayers(this.activeEditor, {
+				sentence: this.highlightLayers().sentence
+					? { from: chunk.sourceStart, to: chunk.sourceEnd }
+					: null,
+				word: null,
 			});
 		});
 
-		// Word-level highlighting (on top of sentence)
+		// Word-level highlighting, drawn over the sentence rather than replacing
+		// it. This handler must never clear the sentence layer.
 		this.player.on("word", (payload) => {
-			if (!this.settings.highlight.enabled || !payload) {
-				this.clearHighlight();
-				return;
-			}
 			// The view can be closed mid-playback; a missing editor just means
 			// there is nothing left to highlight.
 			if (!this.activeEditor) return;
-			applyHighlight(this.activeEditor, {
+			if (!payload || !this.highlightLayers().word) {
+				clearWordHighlight(this.activeEditor);
+				return;
+			}
+			applyWordHighlight(this.activeEditor, {
 				from: payload.timing.sourceStart,
 				to: payload.timing.sourceEnd,
 			});
@@ -202,7 +229,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		});
 
 		this.player.on("state", (state) => {
-			if (state === "finished" || state === "idle") this.clearHighlight();
+			if (state === "finished" || state === "idle") this.clearBothHighlights();
 			// Every state change that ends the user's attention closes the window,
 			// which is what makes the final second survive. One place rather than
 			// patching stopReading() and the two toggle() call sites: setState is
@@ -220,13 +247,13 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		});
 
 		this.player.on("error", (err) => {
-			this.clearHighlight();
+			this.clearBothHighlights();
 			reportError(this.app, this.manifest.dir!, "playback failed", err);
 		});
 
 		this.player.on("timerExpired", () => {
 			new Notice("Sleep timer expired.");
-			this.clearHighlight();
+			this.clearBothHighlights();
 		});
 
 		this.controlBar = new ControlBar(this);
@@ -461,7 +488,11 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.positionThrottle?.dispose();
 		this.controlBar?.destroy();
 		this.player?.dispose();
+		// Both, or the sentence property outlives the plugin on document.body.
+		// highlightColour.ts's own comment promises "leaves nothing behind on
+		// unload", and ADR 0005 says the same.
 		document.body.style.removeProperty(WORD_HIGHLIGHT_VAR);
+		document.body.style.removeProperty(SENTENCE_HIGHLIGHT_VAR);
 		for (const engine of this.engines) void engine.dispose();
 	}
 
@@ -509,7 +540,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.readScope?.abort();
 		const scope = (this.readScope = new AbortController());
 
-		this.activeEditor = current.editor;
+		this.retargetHighlightEditor(current.editor);
 		registerHighlighting(current.editor);
 
 		const chunks = extractChunks(
@@ -701,7 +732,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.readScope?.abort();
 		const scope = (this.readScope = new AbortController());
 
-		this.activeEditor = current.editor;
+		this.retargetHighlightEditor(current.editor);
 		registerHighlighting(current.editor);
 
 		const chunks = extractChunks(
@@ -808,7 +839,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.readScope?.abort();
 		const scope = (this.readScope = new AbortController());
 
-		this.activeEditor = current.editor;
+		this.retargetHighlightEditor(current.editor);
 		registerHighlighting(current.editor);
 
 		const chunks = extractChunks(
@@ -1054,11 +1085,65 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.readScope?.abort();
 		this.readScope = null;
 		this.player.stop();
-		this.clearHighlight();
+		this.clearBothHighlights();
 	}
 
-	private clearHighlight(): void {
-		if (this.activeEditor) applyHighlight(this.activeEditor, null);
+	/**
+	 * Which highlight layers the current settings and engine permit.
+	 *
+	 * `hasWordTiming` is false for no resolved engine as well as for an engine
+	 * reporting `timing: "none"`; neither can produce a word range worth drawing.
+	 */
+	private highlightLayers(): HighlightLayers {
+		const engine = this.activeEngine();
+		return highlightPlan(this.settings.highlight, !!engine && engine.capabilities.timing !== "none");
+	}
+
+	/**
+	 * Point the highlight layers at a new editor, clearing the old one first.
+	 *
+	 * The clear cannot be left to the `state` handler. Every read path assigns
+	 * `activeEditor` *before* `Player.play()`, and `play()` begins with its own
+	 * `stop()`, which drives `state: "idle"` and therefore `clearBothHighlights`
+	 * - by which time `activeEditor` already names the new editor, so the old
+	 * note keeps its marks for the rest of the session. `Player` holds no
+	 * editor of its own (CONTEXT.md, "a chunk-queue player, not a reading
+	 * session"), so the only thing that knows which view was drawn into is this
+	 * field, and it has to be drained before it is overwritten.
+	 */
+	private retargetHighlightEditor(editor: EditorView): void {
+		if (this.activeEditor && this.activeEditor !== editor) {
+			clearHighlights(this.activeEditor);
+		}
+		this.activeEditor = editor;
+	}
+
+	/** Both layers. Used when a reading ends, not when a word advances. */
+	private clearBothHighlights(): void {
+		if (this.activeEditor) clearHighlights(this.activeEditor);
+	}
+
+	/**
+	 * Redraw the layers for the settings as they now stand, without waiting for
+	 * the next chunk boundary.
+	 *
+	 * The sentence effect is only dispatched from the `chunk` handler, so a
+	 * toggle flipped mid-paragraph would otherwise stay on screen until the next
+	 * sentence. On speech-dispatcher that is worse than it sounds: it emits no
+	 * word events at all, so nothing else would clear it either.
+	 */
+	private refreshHighlightLayers(): void {
+		if (!this.activeEditor) return;
+		const layers = this.highlightLayers();
+		if (!layers.sentence) clearSentenceHighlight(this.activeEditor);
+		if (!layers.word) clearWordHighlight(this.activeEditor);
+		// getIndex() is chunks.length on natural completion, so getChunk() is
+		// undefined there and nothing is redrawn. That is the wanted behaviour:
+		// a finished read has no current sentence.
+		const chunk = this.player.getChunk(this.player.getIndex());
+		if (layers.sentence && chunk) {
+			applySentenceHighlight(this.activeEditor, { from: chunk.sourceStart, to: chunk.sourceEnd });
+		}
 	}
 
 	// --- Settings plumbing --------------------------------------------------
@@ -1400,17 +1485,22 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
-	 * Write the colour to the custom property styles.css reads. On body
+	 * Write the colour to the custom properties styles.css reads. On body
 	 * because the highlight is a CodeMirror mark inside whichever editor is
 	 * reading, and every one of those sits under body.
 	 */
 	private applyHighlightColour(): void {
+		applySentenceHighlightColour(document.body.style, this.settings.highlight.color);
 		applyWordHighlightColour(document.body.style, this.settings.highlight.color);
 	}
 
 	async saveSettings(): Promise<void> {
 		this.pluginData = serialisePluginData(this.pluginData, this.settings);
 		await this.saveData(this.pluginData);
+		// A highlight toggle flipped mid-read takes effect now rather than at the
+		// next sentence boundary. Cheap, and it is the only thing that makes the
+		// toggles feel connected on an engine with no word events.
+		this.refreshHighlightLayers();
 	}
 
 	getPlayer(): Player {
