@@ -243,6 +243,52 @@ function finalSegment(path: string): { start: number; text: string } {
 }
 
 /**
+ * The comment spans inside a link target, as half-open raw ranges that include
+ * both delimiters, in order and never overlapping.
+ *
+ * A `[[wikilink]]` target is emitted raw rather than re-cleaned, so
+ * `cleanLine`'s comment branch never runs on it and a `%%...%%` or `<!-- -->`
+ * written inside the brackets used to be spoken, markers and all - a disclosure
+ * of text the author hid (NRL-67, R-M08, docs/adr/0021). This is the smallest
+ * thing that can undo that without touching the emission itself: the caller
+ * skips these ranges by advancing its own index, so every surviving character
+ * is still emitted at its own raw offset and `sourceIndex` stays in lockstep by
+ * construction rather than by a second check (AGENTS.md rule 8).
+ *
+ * Comments do not nest and the two delimiter kinds cannot close each other's
+ * spans (ADR 0006 clause 3). An UNMATCHED opener runs to `to` and no further.
+ * The result is a local array and `openComment` is never assigned from here, so
+ * a comment opened inside brackets can never consume a later source line
+ * (ADR 0006 clause 5). Silencing it at all is a deliberate divergence from
+ * clause 2's rule that an unmatched INLINE opener stays literal: what it
+ * silences here is a path fragment bounded by the closing bracket rather than
+ * prose, so the visible-text loss clause 2 weighs is bounded to one target
+ * while the disclosure it would otherwise allow is not.
+ *
+ * `from` is the start of the whole target, NOT of the segment that will be
+ * spoken, and both halves of that were measured rather than reasoned. It starts
+ * at the target because `[[a%%/%%b]]` reduces to the final segment `%%b`, so a
+ * segment-local scan would open on that CLOSING `%%`, call it unmatched and
+ * silence the visible `b`. It ends at the target rather than at the `#` because
+ * the heading fragment leaks too: `[[a/b#Section%%x%%]]` spoke `b Section%%x%%`.
+ */
+function commentSpans(raw: string, from: number, to: number): Array<{ start: number; end: number }> {
+	const spans: Array<{ start: number; end: number }> = [];
+	for (let i = from; i < to; i++) {
+		const html = raw.startsWith("<!--", i);
+		if (!html && !raw.startsWith("%%", i)) continue;
+		const closer: CommentCloser = html ? "-->" : "%%";
+		const close = raw.indexOf(closer, i + (html ? 4 : 2));
+		// A closer found past the target is no closer: the span is unmatched
+		// here and stops at the bracket, never reaching into the rest of the line.
+		const end = close === -1 || close >= to ? to : Math.min(close + closer.length, to);
+		spans.push({ start: i, end });
+		i = end - 1;
+	}
+	return spans;
+}
+
+/**
  * Start of a bare URL. One definition, shared by the bare-URL branch in prose
  * and by the URL rule for a link target, so the two cannot drift apart into
  * disagreeing about what a URL is.
@@ -458,15 +504,49 @@ function cleanLine(
 		const segStart = innerStart + seg.start;
 		const segEnd = segStart + seg.text.length;
 
+		// A comment span inside the target is hidden text and is never spoken,
+		// delimiters included (NRL-67, ADR 0021). It is scanned over the WHOLE
+		// target - see commentSpans for why not the segment, and why not just
+		// the path - and skipped from inside the emission loop below rather than
+		// by cleaning the target first, so nothing about the raw emission, and
+		// so nothing about sourceIndex, changes. Classification above stays on
+		// the RAW target on purpose (ADR 0021 decision Q4): on a stripped view
+		// `![[a/b%%x.y%%]]` would lose its dot, become a note and START
+		// speaking, and a silent-to-spoken move is the one direction ADR 0008
+		// clause 5 forbids. Keeping it raw means this can only ever remove
+		// spoken characters.
+		const hidden = commentSpans(raw, innerStart, targetEnd);
+		let nextSpan = 0;
+
+		// `#^id` is a block id, opaque and unspeakable, and it ends the label.
+		// WHERE it ends is decided on the RAW target, for the same reason
+		// isFileTarget and finalSegment are (ADR 0021 decision 5): a `#^`
+		// written inside a comment span still ends the label. Letting the span
+		// skip below hide it instead would make the tail after the span audible
+		// where the previous behaviour silenced it - `[[a/b%%x#^%%SECRET]]` said
+		// `b%%x` and would say `bSECRET` - and this exclusion must only ever be
+		// able to remove spoken characters, never to add one.
+		const blockId = raw.indexOf("#^", segStart);
+		const labelEnd = blockId !== -1 && blockId < targetEnd ? blockId : targetEnd;
+
 		// The target is a path, not prose, so it is emitted directly rather
 		// than re-cleaned: the tag branch would otherwise eat `#Section`
 		// when stripTags is on. A `#` separates note from heading and is
-		// read as a pause. `#^id` is a block id, opaque and unspeakable.
-		for (let k = segStart; k < targetEnd; k++) {
+		// read as a pause.
+		for (let k = segStart; k < labelEnd; k++) {
 			// The trailing separator run finalSegment() stepped back over.
 			if (k >= segEnd && k < pathEnd) continue;
+			// `k` only ever increases, and the spans are in order, so one
+			// forward pointer is enough to place it.
+			while (nextSpan < hidden.length && hidden[nextSpan]!.end <= k) nextSpan += 1;
+			const span = hidden[nextSpan];
+			if (span !== undefined && k >= span.start) {
+				// Nothing is emitted and no space is pushed: both call sites
+				// already pushSpace either side of the label.
+				k = span.end - 1;
+				continue;
+			}
 			const c = raw[k]!;
-			if (c === "#" && raw[k + 1] === "^") break;
 			if (c === "#" || /\s/.test(c)) pushSpace(rawStart + k);
 			else emit(c, rawStart + k);
 		}

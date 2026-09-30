@@ -1922,39 +1922,124 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 	}
 
 	/*
-	 * NRL-46 pin, a SECOND pre-existing defect this ticket did not fix, found by
-	 * the Ship critique rather than by the ticket.
+	 * NRL-67 pin, replacing NRL-46's pin of the same shape IN PLACE: a comment
+	 * span inside a wikilink or embed TARGET is now silent, delimiters and
+	 * content, and the visible text either side of it is still spoken.
 	 *
 	 * A link target is emitted raw rather than re-cleaned - deliberately, so the
-	 * tag branch cannot eat `#Section` when stripTags is on - so a comment span
-	 * written INSIDE the brackets is spoken, markers and all. That contradicts
-	 * srs.md's promise that `%%` and `<!-- -->` content is never spoken, but only
-	 * within `[[ ]]`, and it is not this change's doing: measured byte-identical
-	 * in kind on the merge base 789d3c2, which spoke the same comment with the
-	 * folder path in front of it. The final-segment reduction strictly shrinks
-	 * what is disclosed here; it does not introduce it. No content key moves it
-	 * except speakEmbeds, which decides whether the embed speaks at all.
-	 * Fixing it means re-cleaning the target, which is a different decision and
-	 * needs its own ADR, so it is pinned rather than patched.
+	 * tag branch cannot eat `#Section` when stripTags is on. Before NRL-67 that
+	 * also meant `cleanLine`'s comment branch never ran on a target, so a `%%`
+	 * or `<!-- -->` span written inside the brackets was spoken, markers and all.
+	 * NRL-46 pinned that as a pre-existing defect; NRL-67 fixes it by scanning
+	 * the target for comment spans once and skipping them from the SAME raw
+	 * emission loop, so every surviving character is still emitted at its own
+	 * raw offset and `sourceIndex` stays in lockstep (docs/adr/0021, AGENTS.md
+	 * rule 8). An unmatched opener is target-local: it silences from itself to
+	 * the closing bracket and never consumes a later source line.
+	 *
+	 * Three things here are GUARDS on behaviour that was already correct, kept
+	 * so it stops being accidental: the alias form, which has always dropped a
+	 * complete span via `cleanLine`; the paired folder-is-dropped assertion from
+	 * NRL-46; and the three embed shapes below, which stay SILENT because
+	 * `isFileTarget` and `finalSegment` still classify the RAW target and the
+	 * stripping is emission-only (ADR 0021, decision Q4). `![[a/b%%x.y%%]]` is
+	 * the case that forces that rule: on a comment-stripped view its segment is
+	 * `b`, no dot, a note, and the embed would START speaking - a silent-to-
+	 * spoken move ADR 0008 clause 5 forbids.
 	 */
 	for (const [src, want] of [
-		["Before [[pincomment/Leaf%%SECRET%%]] after.", "Before Leaf%%SECRET%% after."],
-		["Before [[pincomment/<!--SECRET-->Leaf]] after.", "Before <!--SECRET-->Leaf after."],
+		["Before [[pincomment/Leaf%%SECRET%%]] after.", "Before Leaf after."],
+		["Before [[pincomment/<!--SECRET-->Leaf]] after.", "Before Leaf after."],
+		["Before [[pincomment/Le%%SECRET%%af]] after.", "Before Leaf after."],
+		// Unmatched: visible text before the opener survives, the rest is silent.
+		["Before [[pincomment/Leaf%%SECRET]] after.", "Before Leaf after."],
+		["Before [[pincomment/%%SECRET]] after.", "Before after."],
+		["Before [[pincomment/Leaf<!--SECRET]] after.", "Before Leaf after."],
+		// The `#` fragment leaks too, so the scan spans the whole target.
+		["Before [[pincomment/Leaf#Section%%x%%]] after.", "Before Leaf Section after."],
+		["Before [[pincomment/Leaf%%x%%#Section]] after.", "Before Leaf Section after."],
+		["Before [[pincomment/Leaf%%x%%#^blk]] after.", "Before Leaf after."],
+		// A `#^blockid` ends the label, and WHERE it ends is decided on the raw
+		// target for the same reason isFileTarget and finalSegment are (ADR 0021
+		// decision 5). A `#^` written inside a comment span still ends it. On a
+		// comment-stripped view there is no `#^` left, so the tail after the span
+		// would become audible where the base silenced it - the one direction this
+		// change must never move in.
+		["Before [[pincomment/Leaf%%x#^%%SECRET]] after.", "Before Leaf after."],
+		["Before [[pincomment/Leaf<!--x#^-->SECRET]] after.", "Before Leaf after."],
+		["Before [[pincomment/Leaf%%x#^y%%]] after.", "Before Leaf after."],
+		["Before [[pincomment/Leaf#^blk%%x%%]] after.", "Before Leaf after."],
+		// The scan starts at the target start, not at the final segment: a `/`
+		// inside a comment makes finalSegment open the emission window on a
+		// CLOSING `%%`, which a segment-local scan would read as an opener and
+		// would then silence the visible `Leaf`.
+		["Before [[pincomment%%/%%Leaf]] after.", "Before Leaf after."],
+		// Q4: classification stays raw, so a wikilink to a file still speaks it
+		// and the comment goes whichever side of the dot it was written on.
+		["Before [[pincomment/Leaf%%x%%.png]] after.", "Before Leaf.png after."],
+		["Before [[pincomment/Leaf.png%%x%%]] after.", "Before Leaf.png after."],
+		// GUARD: already correct before NRL-67, via cleanLine on the alias.
+		["Before [[pincomment/Leaf|label %%SECRET%%]] after.", "Before label after."],
 	] as const) {
 		for (const speakEmbeds of [false, true]) {
 			const got = say(src, { speakEmbeds });
 			check(
-				`NRL-46 pin-comment-inside-target ${JSON.stringify(src)} (speakEmbeds ${speakEmbeds})`,
+				`NRL-67 pin-comment-inside-target ${JSON.stringify(src)} (speakEmbeds ${speakEmbeds})`,
 				got === want,
 				`got: ${JSON.stringify(got)}`,
 			);
-			// The half this change IS responsible for: the folder is gone.
+			// NRL-46's half, kept: the folder is gone.
 			check(
-				`NRL-46 pin-comment-inside-target ${JSON.stringify(src)} still drops the folder (speakEmbeds ${speakEmbeds})`,
+				`NRL-67 pin-comment-inside-target ${JSON.stringify(src)} still drops the folder (speakEmbeds ${speakEmbeds})`,
 				!got.includes("pincomment"),
 				`got: ${JSON.stringify(got)}`,
 			);
 		}
+	}
+	for (const [src, want] of [
+		["Before ![[pincomment/Leaf%%SECRET%%]] after.", "Before Leaf after."],
+		["Before ![[pincomment/<!--SECRET-->Leaf]] after.", "Before Leaf after."],
+		["Before ![[pincomment/Leaf%%SECRET]] after.", "Before Leaf after."],
+		["Before ![[pincomment%%/%%Leaf]] after.", "Before Leaf after."],
+		["Before ![[pincomment/Leaf%%x#^%%SECRET]] after.", "Before Leaf after."],
+		// GUARD, unchanged by NRL-67: a file target is a destination, so the
+		// embed is silent whichever side of the dot the comment sits, and stays
+		// silent when the comment is the only thing holding the dot.
+		["Before ![[pincomment/Leaf%%x%%.png]] after.", "Before after."],
+		["Before ![[pincomment/Leaf.png%%x%%]] after.", "Before after."],
+		["Before ![[pincomment/Leaf%%x.y%%]] after.", "Before after."],
+		// GUARD: the alias path is untouched.
+		["Before ![[pincomment/Leaf|label %%SECRET%%]] after.", "Before label after."],
+	] as const) {
+		const got = say(src, { speakEmbeds: true });
+		check(
+			`NRL-67 pin-comment-inside-target ${JSON.stringify(src)} (speakEmbeds true)`,
+			got === want,
+			`got: ${JSON.stringify(got)}`,
+		);
+		check(
+			`NRL-67 pin-comment-inside-target ${JSON.stringify(src)} still drops the folder (speakEmbeds true)`,
+			!got.includes("pincomment"),
+			`got: ${JSON.stringify(got)}`,
+		);
+		// The same source with embeds off speaks neither the label nor the comment.
+		const off = say(src, { speakEmbeds: false });
+		check(
+			`NRL-67 pin-comment-inside-target ${JSON.stringify(src)} (speakEmbeds false)`,
+			off === "Before after.",
+			`got: ${JSON.stringify(off)}`,
+		);
+	}
+	// A comment opened inside a target is target-local and must never hide the
+	// lines below it (ADR 0006 clause 5). Measured true before NRL-67 too; this
+	// pins that the scan did not change it.
+	{
+		const got = say("Before [[pincomment/Leaf%%SECRET]] after.\nNext prose line.");
+		check(
+			"NRL-67 an unmatched opener in a target does not escape to the next line",
+			got === "Before Leaf after. Next prose line.",
+			`got: ${JSON.stringify(got)}`,
+		);
 	}
 
 	// The two constructs are governed by different keys, which is the whole
