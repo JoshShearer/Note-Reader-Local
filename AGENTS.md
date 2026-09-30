@@ -260,9 +260,18 @@ rediscover them:
   utterances is in flight, which is why an abort seen on entry, a successful utterance and an
   idle `dispose()` all deliberately send nothing. `-C` (`CANCEL ALL`) stays banned: it would
   flush the other client's whole queue. `tests/engine.test.ts` pins all five cases and the
-  reasoning lives on `stopDaemon()`. What remains is the one chunk already queued behind the
-  spoken one, about 830 ms, which `-S` cannot reach; NRL-43 tracks it, and `CONTEXT.md`
-  explains why the Player runs a chunk ahead on this engine.
+  reasoning lives on `stopDaemon()`. What remains is about 800 ms of speech after a Stop, and
+  as of NRL-43 that is **accepted, not outstanding** (`docs/adr/0016`). Do not attempt to fix
+  it by reaching for a better cancel verb, because that was tried and measured: a full SSIP
+  socket client using `CANCEL self`, which the daemon acknowledges with `703 CANCELED` for the
+  queued message *and* the speaking one, leaves the tail at 810/800 ms against the same
+  810/800 ms for `-S`. A single-utterance probe had audio *starting* ~700 ms after the cancel
+  was acknowledged, and `701 BEGIN` fires 3-10 ms after queueing, so SSIP never reports when
+  sound really starts or stops. The speech is already committed to the daemon's output module
+  and PulseAudio by the time any stop arrives. Two costs therefore stand, both deliberate and
+  neither a latency problem: `-S` still cuts off another client sharing the daemon, and the
+  Player can still run a chunk ahead after a stop because `-w` is not an audio-end signal
+  (`CONTEXT.md` explains that part).
 - Stop now aborts a read that is still in its load phase, as of NRL-48 (`docs/adr/0013`).
   Before it, `main.ts` held no `AbortController` at all and `Player`'s own one is created
   inside `play()`, so during `beforeAttempt`'s `await engine.prepare()` a Stop was
