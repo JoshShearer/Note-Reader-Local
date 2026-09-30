@@ -15,6 +15,16 @@ import type { SpeechEngine, VoiceInfo } from "../src/audio/types.ts";
 import { pickLocaleVoice, resolveStoredVoice } from "../src/audio/voiceChoice.ts";
 
 let failures = 0;
+let skipped = 0;
+// NRL-69. Two regions of this file need a running speech-dispatcher daemon and
+// an audio sink: the preamble below and the real-binary block further down,
+// which speaks aloud and asserts wall-clock duration. A stock CI runner has
+// neither, so they are bypassed when NRL_SKIP_REAL_SPEECHD is exactly "1".
+// Exactly, not truthily: "0", "" or a typo must still run the real checks, so a
+// mistyped variable can never quietly delete the only real-binary coverage this
+// repo has. With the variable unset a missing binary or a dead daemon still
+// fails the suite, which is why neither region is wrapped in a try/catch.
+const SKIP_REAL_SPEECHD = process.env.NRL_SKIP_REAL_SPEECHD === "1";
 function check(name: string, cond: boolean, detail = ""): void {
 	if (cond) console.log(`  ok   ${name}`);
 	else {
@@ -22,12 +32,28 @@ function check(name: string, cond: boolean, detail = ""): void {
 		console.log(`  FAIL ${name} ${detail}`);
 	}
 }
+// A skip never touches `failures` and never prints `ok`, so a bypassed check
+// cannot be read as a passing one.
+function skip(name: string): void {
+	skipped += 1;
+	console.log(`  SKIP ${name} (NRL_SKIP_REAL_SPEECHD=1)`);
+}
 
-console.log("speech-dispatcher is usable here");
+console.log(`NRL_SKIP_REAL_SPEECHD=${process.env.NRL_SKIP_REAL_SPEECHD ?? "(unset)"}`);
+console.log(
+	SKIP_REAL_SPEECHD
+		? "speech-dispatcher real-binary checks are skipped here"
+		: "speech-dispatcher is usable here",
+);
 const runner = getProcessRunner();
 const spd = new SpeechDispatcherEngine(runner);
-check("spd-say on PATH", (await runner.which("spd-say")) !== null);
-check("reports available", (await spd.isAvailable()).available);
+if (SKIP_REAL_SPEECHD) {
+	skip("spd-say on PATH");
+	skip("reports available");
+} else {
+	check("spd-say on PATH", (await runner.which("spd-say")) !== null);
+	check("reports available", (await spd.isAvailable()).available);
+}
 
 // A trimmed copy of real `spd-say -L` output. The NAME column already
 // carries the variant, which is what the old id format got wrong.
@@ -951,7 +977,27 @@ console.log("voice ids resolve across the format change");
 }
 
 console.log("speech-dispatcher speaks a variant voice (real binary)");
-{
+if (SKIP_REAL_SPEECHD) {
+	// One SKIP line per assertion this block makes, under the same names, so a
+	// CI log lines up one-for-one against a desktop run. The five variant
+	// checks and the !-! check are nested behind finding a voice on the real
+	// daemon; with no daemon there is nothing to find, so they are named here
+	// rather than vanishing from the count.
+	skip("voices found");
+	skip("has english voices");
+	skip("real daemon: no voice ever reports local false");
+	skip("real daemon: local is true or unknown, never anything else");
+	skip("real daemon: requiresNetwork is the negation of local");
+	skip("real list: app language en picks English (America)");
+	skip("has an english variant voice");
+	skip("variant id round-trips");
+	skip("variant voice does not throw");
+	skip("returns streamed result");
+	skip("estimates a duration");
+	skip("took long enough to have spoken");
+	skip("real daemon: a !-! chunk is spoken, not run as a command");
+	skip("unknown voice throws against the real daemon");
+} else {
 	const voices = await spd.listVoices();
 	check("voices found", voices.length > 0, `got ${voices.length}`);
 	const en = voices.filter((v) => v.lang.toLowerCase().startsWith("en"));
@@ -1166,8 +1212,11 @@ console.log("NRL-47 CJK word timings");
 }
 
 console.log("");
+if (skipped > 0) console.log(`${skipped} SKIPPED (NRL_SKIP_REAL_SPEECHD=1)`);
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);
 	process.exit(1);
 }
-console.log("all engine tests passed");
+// The bare line must never print when anything was skipped: a reader grepping
+// for it would otherwise take a partial run for a full one.
+console.log(skipped > 0 ? `all engine tests passed (${skipped} skipped)` : "all engine tests passed");
