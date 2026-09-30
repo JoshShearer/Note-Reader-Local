@@ -20,7 +20,7 @@ There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The
 are local and nothing runs them for you.
 
 ```bash
-npm test          # 17 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform
+npm test          # 18 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -174,9 +174,8 @@ rediscover them:
 
 - Rename and delete handlers exist as of NRL-51: `this.app.vault.on("rename")` and
   `("delete")` in `onload`, both through `registerEvent`. One path-boundary-safe prefix
-  sweep covers files and folders with no type branch, and it is idempotent, so it does not
-  matter whether Obsidian also fires a rename per descendant (undocumented in the typings,
-  unverified without a real Obsidian). The sweep lives in `src/settings/data.ts` as
+  sweep covers stored positions for files and folders with no type branch. Repeated events
+  for an already-moved or dropped prefix are no-ops. The sweep lives in `src/settings/data.ts` as
   `moveReadingPositions` / `dropReadingPositions`, not in main.ts, because main.ts cannot
   run in the suite at all. Both handlers assign a new map to the `positions` *field*; the
   root container is never rebuilt.
@@ -187,11 +186,16 @@ rediscover them:
   therefore keeps reporting the *old* path until the next `play()`. So a handler that
   compared `newPath === player.getFilePath()` would never fire, and one that skipped the
   stop would let the next progress event write the old key back, recreating the orphan the
-  handler just cleaned. The cost is user-visible: the audio stops on rename. A rename or a
-  delete also leaves two `saveData()` calls in flight and nothing serialises them, so the
-  write that lands last is not guaranteed to be the handler's - which for a delete means the
-  orphan can reappear, since the stop's save recreates the key the drop removed. Sub-second
-  and self-healing; a save queue is a separate change.
+  handler just cleaned. The cost is user-visible: the audio stops on an exact-path match.
+  **Folder playback is a remaining limit:** the stop comparisons use exact equality, not
+  the helpers' prefix predicate. A folder-only event does not stop a descendant's queue;
+  later progress can recreate its old key. Whether Obsidian also emits descendant events
+  is unverified, so helper coverage does not establish end-to-end folder correctness.
+  A stop that flushes a pending position can also overlap the handler's `saveData()` call.
+  These writes are not serialised; their completion order and durable result have not been
+  verified in Obsidian. An older write could restore an old or deleted key on disk. There is
+  no measured bound on the race and no guaranteed later save before shutdown, so it is not
+  established as harmless or self-healing. A serialised save queue remains unimplemented.
 - Reading positions are throttled with a leading edge and a trailing flush, in
   `src/settings/positionThrottle.ts`, not in main.ts, and the window is flushed from the
   player's `state` subscription on `paused` / `idle` / `finished` rather than from
@@ -201,8 +205,10 @@ rediscover them:
   nulled the handle, so the last position of a read was simply never persisted; measured
   with a replica of it, 5 progress events produced 2 saves and index 4 was dropped. A second
   in-flight save race exists on a rate nudge and is pre-existing. The `registerEvent` wiring
-  and the state-subscription flush are **not covered by the suite** and cannot be: `obsidian`
-  has no runtime, so nothing in main.ts runs under bare Node.
+  and the state-subscription flush are **not covered by the committed suite**: `obsidian`
+  has no runtime in bare Node. Prior scratch probes used a stub, not a real vault. R-M12
+  remains unverified in Obsidian, including stop, quit, reopen and resume; this merge does
+  not raise the MUST audit floor.
 
 - `DEFAULT_SETTINGS.engine` became `"auto"` in NRL-24 (docs/adr/0010), the same shape as
   `speakImageAlt`'s default flip in NRL-21/ADR 0008: a genuinely fresh install, or any

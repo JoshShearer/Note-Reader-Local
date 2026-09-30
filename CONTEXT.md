@@ -75,6 +75,7 @@ src/
 ├── diagnostics.ts              trace() / reportError() - metadata only, never text
 ├── settings/index.ts           Settings type, defaults, normaliseSettings()
 ├── settings/data.ts            data.json container: version (v2), v0 and v1 migrations, save round trip
+├── settings/positionThrottle.ts leading/trailing position saves, injected timers and queue-path guard (NRL-51)
 ├── text/extract.ts             markdown → SpeechChunk[] with source offsets
 ├── text/segment.ts             sentence/grapheme/word boundaries, injected SegmenterSource, pure (ADR 0009)
 ├── audio/
@@ -217,10 +218,11 @@ These are design-level, not bugs, and they shape any new work:
 - `Player` is a **chunk-queue player, not a reading session**. It knows its file path
   and hands it out (`getFilePath()`, `getChunk()`), which is what lets `main.ts` record
   a position against the note it is actually reading rather than whichever note is in
-  front. What it still does not hold is a document, a revision or a vault handle, and
-  every play site still re-extracts from the active view (`src/main.ts` calls
-  `extractChunks` on `current.source` at **413**, **570** and **646**) rather than from
-  the file a position was keyed by, so R-M12 is only half bolted on.
+  front. What it still does not hold is a document, a revision or a vault handle.
+  `readActiveNote()` extracts `current.source` and looks up the saved position using
+  that same captured `current.filePath`; extracting from the active view is not itself
+  a mismatched-key defect. NRL-51 passes that offset to the player. Durable save ordering
+  and real-vault resume remain unverified (see `AGENTS.md`, Known state).
 - **A stored offset is resolved by `Player`, not by the caller.** `main.ts` passes
   `storedPosition.sourceOffset` straight through as `play()`'s `startAtSource`; it does not
   pre-resolve it to a chunk. This is not tidiness, it is the whole of R-M12's nearest-valid
@@ -235,14 +237,16 @@ These are design-level, not bugs, and they shape any new work:
 - **The `positions` map is re-keyed on vault rename and pruned on delete, in
   `settings/data.ts`, not in `main.ts`.** `moveReadingPositions` / `dropReadingPositions` are
   pure and obsidian-free, which is what keeps them in the bare-Node suite; main.ts cannot run
-  there at all. One predicate, `key === path || key.startsWith(path + "/")`, covers a file
-  (exact key only) and a folder (the subtree), with no type branch and no reliance on how
-  Obsidian sequences descendant events. Both are idempotent, and both return the input
-  *unchanged* when nothing matched, which is how the handlers skip a pointless write.
-  Renaming or deleting the note currently being read stops that reading first, and the
-  comparison is against the **old** path: the queue is not retargeted (its `id` hashes
+  there without a stub. One predicate, `key === path || key.startsWith(path + "/")`, covers
+  a file (exact key only) and a folder (the subtree), with no type branch. Both return the
+  input *unchanged* when nothing matched, so repeating an already-applied event is a no-op.
+  The handlers stop playback first only when the event's old/deleted path exactly equals
+  the queue's file path. A folder-only event does not match a descendant queue; its later
+  progress can recreate the old key unless a matching descendant event stops it. Real-vault
+  event sequencing remains unverified. The queue is not retargeted (its `id` hashes
   `filePath`), so `getFilePath()` keeps answering with the pre-rename name until the next
-  `play()`.
+  `play()`. Map mutation order also does not guarantee disk-write order; the unresolved
+  asynchronous save race is recorded in `AGENTS.md`.
 - **Capabilities are consumed for the transport controls only.** `src/ui/affordances.ts`
   gates play/pause, the rate nudges and the highlight toggle, and the settings engine list
   reports each engine's limitations. `pitch` still gates nothing (there is no pitch control
