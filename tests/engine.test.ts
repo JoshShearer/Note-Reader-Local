@@ -194,24 +194,50 @@ console.log("speechd: failures are not silent (fake runner)");
  * "unknown" rather than on a guessed `true`, because `srs.md` R-S01 forbids
  * claiming a voice is offline when the backend cannot determine it.
  */
+/**
+ * One `-O` reply, shared by both `-O` fields below.
+ *
+ * It is a named alias rather than two spelled-out unions because
+ * `attributionRunner` narrows a single `spec` variable for both calls: the two
+ * arms have to stay structurally identical or the narrowing stops compiling, and
+ * an alias makes that impossible to break by editing one of them.
+ *
+ * A name array is wrapped in the real "OUTPUT MODULES" header and answers
+ * `code: 0, signal: null`. `signal` is what the real spawn.ts reports for a
+ * child that was terminated rather than exiting, which arrives alongside
+ * `code: 0` (cases I-L). `delayMs` holds the reply back so the probe's own
+ * deadline can expire during this `-O` run, which only the CLOSING call needs
+ * today (case M5); it lives on the alias because the alias is shared, not
+ * because the opening call has a use for it.
+ */
+type OutputModulesSpec =
+	| string[]
+	| { code: number; stdout: string; delayMs?: number; signal?: NodeJS.Signals | null };
 interface AttributionScript {
+	/** `-O` reply. See {@link OutputModulesSpec}. */
+	modules?: OutputModulesSpec;
 	/**
-	 * `-O` reply. A name array is wrapped in the real "OUTPUT MODULES" header.
-	 * `signal` is what the real spawn.ts reports for a child that was terminated
-	 * rather than exiting, which arrives alongside `code: 0` (cases I-L).
-	 */
-	modules?: string[] | { code: number; stdout: string; signal?: NodeJS.Signals | null };
-	/**
-	 * Reply to the CLOSING `-O` only, i.e. NRL-71's atomicity re-read. Same union
+	 * Reply to the CLOSING `-O` only, i.e. NRL-71's atomicity re-read. Same alias
 	 * as `modules`.
 	 *
 	 * Left undefined, both `-O` calls answer with the same bytes, so every case
 	 * written before NRL-71 keeps its fixtures verbatim and becomes a free control
 	 * arm proving the re-read did not switch attribution off. That is why `modules`
 	 * was not turned into a consumed queue: a queue would have required every
-	 * existing case to grow a second entry.
+	 * existing case to grow a second entry. A, B, F, G and K are those free arms,
+	 * and the default is kept for them (NRL-87 decision).
+	 *
+	 * The side effect of that default, recorded because it silently cost coverage
+	 * once: leaving it unset also replays the case's INJECTED FAILURE onto the
+	 * closing `-O`, so a case whose failure is meant to be caught earlier can end
+	 * up being caught at the closing call instead, and the guard it was written to
+	 * pin stops discriminating. Measured by mutation (NRL-87): with case J's
+	 * `modulesAgain` unset, deleting the opening run's `modulesRun.signal !== null`
+	 * clause - or the whole opening guard - left the suite green. So a case that
+	 * injects a failure into `modules` and means it to land on the OPENING run must
+	 * set an explicit clean `modulesAgain`, as J now does.
 	 */
-	modulesAgain?: string[] | { code: number; stdout: string; signal?: NodeJS.Signals | null };
+	modulesAgain?: OutputModulesSpec;
 	/**
 	 * `-o <module> -L` replies, per module. "throw" makes run() reject,
 	 * `delayMs` holds the reply back so the probe's own deadline can expire
@@ -242,6 +268,10 @@ function attributionRunner(script: AttributionScript) {
 						stdout: Buffer.from(["OUTPUT MODULES", ...spec, ""].join("\n")),
 					};
 				}
+				// Same hold-back the `-o <m> -L` branch below applies, so a probe
+				// deadline can expire during an `-O` run rather than only during a
+				// per-module listing (case M5).
+				if (spec.delayMs) await new Promise((r) => setTimeout(r, spec.delayMs));
 				return {
 					code: spec.code,
 					signal: spec.signal ?? null,
@@ -498,6 +528,41 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	check("H: and the ambiguous name is not called local", localOf(voices, "Afrikaans") !== true, `${localOf(voices, "Afrikaans")}`);
 	check("H: nothing reports local false", neverFalse(voices));
 }
+{
+	// H2 (NRL-87). Case H above pins that a deadline fails closed, but it cannot
+	// pin the LOOP's own `controller.signal.aborted` clause: its delayed module is
+	// the last of two, so deleting that clause changes neither the verdict nor the
+	// call trace. Case H is therefore left byte-identical and this sibling carries
+	// the pin instead.
+	//
+	// Three modules with the deadline on the MIDDLE one, so the clause has
+	// somewhere to fail: the loop must stop at festival and never query openjtalk.
+	// The verdict is deliberately NOT the discriminator here - with the clause
+	// deleted the probe runs the whole loop and is then caught by the closing
+	// `-O`'s own abort check, so every voice is still "unknown". The call trace is
+	// the only observable that moves, which is why it is asserted directly.
+	const { runner, scopedCalls } = attributionRunner({
+		modules: ["espeak-ng", "festival", "openjtalk"],
+		lists: {
+			"espeak-ng": ESPEAK_LIST,
+			festival: { code: 0, stdout: FESTIVAL_LIST, delayMs: 60 },
+			openjtalk: OPENJTALK_LIST,
+		},
+		bare: spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "none"], ["Default", "ja", "none"]]),
+	});
+	const voices2 = await new SpeechDispatcherEngine(runner, 10).listVoices();
+	check(
+		"H2: a deadline inside the per-module loop attributes nothing",
+		voices2.length === 5 && voices2.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices2.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("H2: nothing reports local false", neverFalse(voices2));
+	check(
+		"H2: and the loop stops at the module the deadline expired on",
+		scopedCalls.join(",") === "espeak-ng,festival",
+		JSON.stringify(scopedCalls),
+	);
+}
 /**
  * Cases I-L: the same truncation as case H, but caused by a kill the plugin did
  * not issue. Case H's guard is `controller.signal.aborted`, which only ever sees
@@ -548,8 +613,17 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	// dropped festival, the only non-allowlisted module, so every remaining
 	// module is allowlisted and the shared NAME would be attributed local - and
 	// two modules are still listed, so the arity guard does not catch it either.
+	//
+	// NRL-87: `modulesAgain` is explicit and CLEAN, which is what makes this case
+	// pin the opening run's signal check rather than NRL-71's closing one. Left
+	// unset it defaults to `modules`, so the same SIGTERM was replayed onto the
+	// closing `-O` and deleting the opening `modulesRun.signal !== null` clause -
+	// or the whole opening guard - left the suite green (measured). With the
+	// guard intact this field is inert: the probe gives up at the opening run and
+	// the closing `-O` is never reached.
 	const { runner } = attributionRunner({
 		modules: { code: 0, stdout: ["OUTPUT MODULES", "espeak-ng", "openjtalk", ""].join("\n"), signal: "SIGTERM" },
+		modulesAgain: ["espeak-ng", "openjtalk"],
 		lists: {
 			"espeak-ng": ESPEAK_LIST,
 			openjtalk: OPENJTALK_LIST,
@@ -613,9 +687,15 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
  * the cases above that attribute today and set no `modulesAgain`, so each now
  * answers both `-O` calls with the same bytes: A, B, F, G (including its
  * `scopedCalls.length === 2` memo assertion and its two-concurrent-listVoices
- * assertion) and K. C, D, D2, D3, E, E2, H, I, J and L give up before the
+ * assertion) and K. C, D, D2, D3, E, E2, H, H2, I, J and L give up before the
  * closing `-O` is ever reached, so they are unaffected by construction rather
  * than by assertion; a reviewer should not expect them to move.
+ *
+ * J is the one exception to "unset means a free control arm" (NRL-87): it sets
+ * an explicit clean `modulesAgain` precisely so its injected SIGTERM is not
+ * replayed onto the closing call, because that replay was catching the case
+ * before the opening guard it exists to pin was reached. See the comment on
+ * `AttributionScript.modulesAgain`.
  */
 {
 	// M1. A module appears between the two `-O` calls. Only the first `-O`'s two
@@ -698,6 +778,38 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
 	);
 	check("M4: nothing reports local false", neverFalse(voices));
+}
+{
+	// M5 (NRL-87). The probe deadline expires DURING the closing `-O`, which is
+	// the one thing only that run's `controller.signal.aborted` clause can catch:
+	// the reply itself is a perfectly good one - code 0, no signal, the same two
+	// modules - so the signal check (M3), the exit-code check (M4) and the set
+	// comparison (M1, M2) all pass it. Deleting that clause attributes Afrikaans
+	// local. Before this case it was green under that deletion, i.e. unpinned.
+	//
+	// `oCount() === 2` is load-bearing rather than decoration: it is what proves
+	// the deadline fired during the CLOSING run and not earlier. Without it the
+	// case could silently degrade into being caught by the loop's abort clause -
+	// which would leave the verdict identical and the closing clause unpinned
+	// again, the exact failure NRL-87 exists to fix.
+	const { runner, oCount } = attributionRunner({
+		modules: ["espeak-ng", "openjtalk"],
+		modulesAgain: {
+			code: 0,
+			stdout: ["OUTPUT MODULES", "espeak-ng", "openjtalk", ""].join("\n"),
+			delayMs: 60,
+		},
+		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
+		bare: spdList([...ESPEAK_ROWS, ["Default", "ja", "none"]]),
+	});
+	const voices = await new SpeechDispatcherEngine(runner, 10).listVoices();
+	check(
+		"M5: a deadline that expires during the closing -O attributes nothing",
+		voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("M5: nothing reports local false", neverFalse(voices));
+	check("M5: the deadline fired on the closing -O, not before it", oCount() === 2, `${oCount()}`);
 }
 {
 	// In -e mode spd-say runs any line starting "!-!" as a raw SSIP command

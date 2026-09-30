@@ -93,9 +93,47 @@ extractor reported `English (America)` as `local: true` / `requiresNetwork:
 false` where `"unknown"` is required, from a truncated `-o festival -L` that
 dropped the shared row and equally from a truncated `-O` that dropped festival
 itself; the untruncated fixtures gave `"unknown"` correctly. Cases I-L in
-`tests/engine.test.ts` pin all of it, including a control arm proving attribution
-still happens when nothing is killed, and that a signal can only ever cost
-information, never produce `local: false`.
+`tests/engine.test.ts` cover that family, including a control arm (K) proving
+attribution still happens when nothing is killed, and that a signal can only ever
+cost information, never produce `local: false`.
+
+**Corrected by NRL-87.** An earlier revision of this paragraph said cases I-L
+"pin all of it". They do not, and the claim was the kind a later change would
+lean on when deciding a clause is safe to simplify. Measured by mutation on this
+branch - delete one clause of `probeAttribution()`, run the full suite, restore
+the file - the coverage is per clause, not per case:
+
+| Clause | Pinned by |
+| -- | -- |
+| opening `-O`: `controller.signal.aborted` | **nothing** (survives deletion) |
+| opening `-O`: `modulesRun.signal !== null` | case J, which needs an explicit clean `modulesAgain` to do it |
+| opening `-O`: `modulesRun.code !== 0` | **nothing** (survives deletion) |
+| per-module loop: `controller.signal.aborted` | case H2, by CALL TRACE, not by verdict |
+| per-module loop: `signal !== null` | cases I and L |
+| per-module loop: `code !== 0` | **nothing** (survives deletion) |
+| closing `-O`: `controller.signal.aborted` | case M5 |
+| closing `-O`: `againRun.signal !== null` | case M3 |
+| closing `-O`: `againRun.code !== 0` | case M4 |
+
+Two of those pins did not exist before NRL-87 and one was silently lost.
+NRL-71's `modulesAgain` field defaults to `modules` when unset, which buys five
+free control arms but also replays a case's injected failure onto the closing
+`-O`; case J's SIGTERM was therefore being caught at the closing call before the
+opening guard it exists to pin was reached, so deleting that opening clause -
+or the whole opening guard - left the suite green. J now sets an explicit clean
+`modulesAgain` and the default is kept for the arms that benefit from it. The
+loop's abort clause is pinned by H2 rather than by case H because H's delayed
+module is the last of two: deleting the clause there changes neither the verdict
+nor the call trace. H2 puts three modules in the loop with the deadline on the
+middle one and asserts the trace stops at it; the verdict is deliberately not the
+discriminator, because with the clause deleted the closing `-O`'s own abort check
+still gives up and every voice is still `"unknown"`.
+
+The three rows marked "nothing" are measured survivors, recorded rather than
+fixed: they are outside NRL-87's scope and no case exercises a deadline or a
+non-zero exit on the opening `-O`, or a non-zero exit on a per-module listing.
+Do not read this table as saying the clauses are dispensable - `probeAttribution()`
+is unchanged and every clause is load-bearing per the comments on it.
 
 Two details on the gate in step 4. It is not a count comparison, because two
 modules can coincidentally serve the same number of voices. It is not "all
@@ -185,8 +223,15 @@ for a kill we did not issue, and a non-zero exit). The comparison is on the
 **parsed, order-independent** module set, never on the stdout bytes: the daemon is
 not promised to list its modules in a stable order, and a reordered listing would
 otherwise cost every voice its attribution for nothing. Case M2 in
-`tests/engine.test.ts` pins that; M1 pins the divergence give-up, and M3 and M4
-pin the signal and exit-code checks on the new run specifically.
+`tests/engine.test.ts` pins that; M1 pins the divergence give-up, M3 and M4 pin
+the signal and exit-code checks on the new run specifically, and **M5 (NRL-87)**
+pins the abort check on it - the one shape where the closing reply is itself
+perfectly good (code 0, no signal, the same module set) and only the deadline
+having expired distinguishes it. M5 also asserts `oCount() === 2`, because the
+case only means anything if the deadline fired during the closing run rather than
+earlier; without that assertion it could degrade into being caught by the loop's
+abort clause with an identical verdict, leaving the closing clause unpinned again.
+Before M5 existed, deleting that clause left the whole suite green.
 
 It **narrows the window rather than closing it**, and the uncovered shapes are
 named rather than argued away. A module added and removed entirely between the
