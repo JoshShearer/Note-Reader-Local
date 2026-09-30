@@ -301,9 +301,19 @@ break exactly as it does on one line.
 **11,520 of 19,456 cells still leak a destination**, tracked as **NRL-88**. Record them as
 **five distinct roots and not one**, because earlier drafts of ADR 0023 and `srs.md:366` said
 "one mechanism" and a reader who assumes it is just containers will fix two of the five and
-believe they are done:
+believe they are done.
 
-1. `interruptsParagraph` matching on the **opener** line - 2,048 of 2,048 cells.
+**Every count in this list is a pre-NRL-74 baseline and root 1's is known to be low.** NRL-74
+made an unmatched mid-line `<!--` literal instead of opening a comment block, and that
+**unmasked 5,120 cells of root 1** which the prose-loss bug had been hiding: a container-prefixed
+soft-wrapped label carrying a mid-line `<!--` used to swallow the rest of the note, so its
+destination was never reached. Measured at NRL-74's correction against base `5009eb6`, base 0 and
+fix 512 in each of 10 shapes; the same shapes without the `<!--` already leaked 512/512 on both
+sides, which is what makes them root 1 rather than a new class. **Re-measure this list before
+reasoning from it** - see NRL-74's bullet below for the numbers and the method.
+
+1. `interruptsParagraph` matching on the **opener** line - 2,048 of 2,048 cells, **plus the
+   5,120 NRL-74 unmasked**; this row is the one the re-measure will move most.
 2. `interruptsParagraph` matching on a line **between** opener and closer - 1,792 of 2,048.
 3. `opensMathBlock`, clause 7a's separate stop - 512 of 512.
 4. **`bracketClosesLater` returns at the first later line bearing any `]`**, so a line that
@@ -428,11 +438,12 @@ opening-line leftover and NRL-63 closed the plain-paragraph half of F9, but NRL-
 `srs.md`'s "known gap" clause alive against the same requirement; NRL-45's own
 `[a]: x.png "%%"` leftover in the paragraph above is untouched; and the 2026-09-30 batch filed
 two **new** defects against R-M08 that go the opposite way, hiding text Obsidian displays.
-**NRL-73** (High) is **closed** and **NRL-74** (Medium) is **still open**; both are in the last
+**NRL-73** (High) and **NRL-74** (Medium) are **both closed**; both are in the last
 bullet of this section. Nothing in that family has been observed in Obsidian. The headline count
-stays at 2 of 16, and NRL-73 closing does not move it: NRL-88's five roots, NRL-45's
-`[a]: x.png "%%"` leftover and NRL-74 all remain open against R-M08, and nothing in NRL-73 was
-exercised in a real Obsidian either (rule 11).
+stays at 2 of 16, and neither closing moves it: NRL-88's five roots, NRL-45's
+`[a]: x.png "%%"` leftover and NRL-74's own known gap (a mid-line `<!--` whose only `-->` sits in
+a LATER paragraph, which we still hide and Obsidian displays) all remain open against R-M08, and
+nothing in either ticket was exercised in a real Obsidian (rule 11).
 
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
@@ -1018,7 +1029,8 @@ rediscover them:
   that cannot share a remedy.
 - Two new defects came out of reading that tokenizer, and both go the **opposite** way to the
   family above: they hide text Obsidian displays, which is prose loss rather than disclosure.
-  **NRL-73** (High) is **fixed**; **NRL-74** (Medium) is still open.
+  **NRL-73** (High) and **NRL-74** (Medium) are **both fixed**, NRL-73 first and NRL-74 on
+  top of it.
 
   **NRL-73**: `if (37 === a) return` means any lone `%` before the newline disqualifies the
   block in Obsidian, while we looked only for a later `%%` closer, so
@@ -1106,15 +1118,154 @@ rediscover them:
   exclusion doing its job rather than the comment predicate losing text. Pinned by
   `pin-nrl73-span-of-only-disqualified-openers` and its `-spoken` twin.
 
-  **NRL-74** (Medium, still open): an unmatched mid-line `<!--` does open a block for us
-  while `%%` correctly does not, because the line-start half of the guard at
-  `src/text/extract.ts:903` is gated on `obsidianComment`; `Plain prose <!--` / `SECRETA` /
-  `more` speaks `Plain prose`. Measured in bare Node by bundling the real extractor,
-  **NOT VERIFIED IN OBSIDIAN**. The renderer-faithful fix is to narrow `<!--`, not to widen
-  `%%`. Note that NRL-73 **replaced the expression at `:903`** that an earlier plan told NRL-74
-  to re-read: the `%%` half is now a helper call and the `<!--` half is still the bare
-  `obsidianComment` gate, which isolates the two predicates and should make NRL-74 easier rather
-  than harder.
+  **NRL-74** (Medium) is **fixed** (`docs/adr/0025`, `srs.md`'s `<!--` bullet). An unmatched
+  mid-line `<!--` opened a block for us while `%%` correctly did not, so
+  `Plain prose <!--` / `SECRETA` / `more` spoke `"Plain prose"` and now speaks
+  `"Plain prose <!-- SECRETA more"`. **The ticket's own stated fix is wrong and must not be
+  retried**: hoisting the line-start guard out from under `obsidianComment` breaks FIVE pins,
+  including `obsidian-inside-html-block` (`tests/extract.test.ts:1187`), which the ticket's
+  acceptance criteria protect - that pin's `<!--` is MID-LINE with its `-->` four lines later
+  past a fence and a `$$`.
+
+  **This is the first ticket in the family whose `<!--` rule was READ rather than reasoned.**
+  Obsidian 1.13.7's HTML block tokenizer (module 8776 of the installed `obsidian.asar`) skips
+  leading spaces **and tabs** with no three-space cap and then tests `u=/^<!--/` **anchored**,
+  closing on the **opener's own line** when a `h=/-->/` is there, otherwise on the first later
+  line matching one, otherwise at EOF. (The first draft of ADR 0025 said "the first *later*
+  line" and omitted the same-line stage; corrected at ship review by re-reading module 8776,
+  and it matters - it is what makes `<!--x--> prose <!--` a one-line block with the next line
+  displayed.) So the line-start term is the renderer's own rule, and our `.trim()` is
+  **correct** here where it is wrong for `%%` (NRL-93 is not shared). The second term is the
+  renderer's **inline** path instead (module 4839's `.T`,
+  `<!--(?:-?[^>-])(?:-?[^-])*-->`), which requires a closer - and that path is
+  **paragraph-scoped** where ours is document-scoped.
+
+  **So D-74-4's EOF scope is correct for term 1 and a KNOWN DIVERGENCE for term 2, and it must
+  not be recorded as a decision shown right.** The residual is measured at 1,024 cells and
+  identical on both sides (re-measured independently at ship review: 0 of 512 on base and 0 of
+  512 on the fix for `Before x.` / `Prose <!--` / `HIDDENP` / blank / `New paragraph -->` /
+  `Tail.`): a mid-line `<!--` whose only `-->` sits in a later paragraph is still hidden by us
+  and displayed by Obsidian. It is not fixable without re-examining pin `:1187`, whose own
+  expectation the same read makes doubtful in **both** halves - its `<!--` is mid-line so
+  Obsidian displays it, and its `%%` line is a genuine line-start `%%` opener that never
+  closes. Tracked as **NRL-95** (Bug, Medium, R-M08), filed at NRL-74's ship review. Note the
+  direction reversal it carries: widening `opensHiddenComment` back out **narrows**
+  `codeSpanClosesLater` and `bracketClosesLater`, the opposite of NRL-74, so the three D-74-9
+  destination pins and `guard-nrl74-variant-C-disclosure` must be re-measured there.
+
+  Five things are load-bearing. `opensHtmlBlock` is a **SECOND predicate**, not a widened
+  `opensObsidianBlock` - merging them imports `if (37 === a) return` into `<!--`, which D-73-4
+  forbids, and this IS the case NRL-66's "do not merge two scans" note describes where NRL-73's
+  merge was the opposite case. The lookahead is **one scalar**, `lastHtmlCloser`, computed once
+  in `extractChunks`; a per-call scan would be O(L^3). It reaches `cleanLine` as an **explicit
+  required parameter**, never ambient - a module-level flag was built first and was the fifth
+  pin failure, leaking into the recursive label call. The new literal escape gates
+  `blockComments` **POSITIVELY** where the `%%` escape negates it, which looks like a typo and
+  is what keeps a recursively cleaned label truncating locally (`local-html-state`, srs.md's
+  non-nesting bullet). And **narrowing `opensHiddenComment` with BOTH terms is mandatory, not
+  optional**: the `cleanLine`-only variant newly speaks an image/link **destination** in
+  **2,560 of 2,560** measured cells against 0 on base and 0 on the fix **for the
+  plain-paragraph shapes that corpus used**, turning an R-M08 prose-loss defect into an R-M09
+  leak, while adopting the **line-start term alone** is a measured **disclosure**
+  (`Before BT a` / `Prose <!--` / `HIDDENX` / `--> b BT after.` speaks HIDDENX, which base and
+  the fix both keep silent). Three fixtures pin the first and
+  `guard-nrl74-variant-C-disclosure` pins the second.
+
+  **That "0 on the fix" is true of the PLAIN shape only, and the full fix DOES newly speak a
+  destination in the container-prefixed class.** This is the correction Verify blocked PR #113
+  for, and the earlier wording asserted the opposite of what is measurable, so read the numbers
+  here and not that sentence's implication. A container-prefixed soft-wrapped image or link
+  label whose label carries a mid-line `<!--` - `> Before ![alt <!--x` / `> more](zdestz.png)
+  after.` - went from `"Before [alt"` on base to `"Before [alt <!--x more](zdestz.png) after."`
+  on the fix. Measured at correction by bundling both arms against base `5009eb6` with the
+  repo's own esbuild: **5,120 of 6,144 cells newly speak the destination, base 0 and fix 512 in
+  every one of 10 shapes** (blockquote / nested quote / bullet / ordered / task, x image, link,
+  x all 512 content-key combinations). The **plain** shapes are **0 -> 0**, widened at
+  correction to 8 plain shapes / **4,096 cells, 0 on base and 0 on the fix** - which is exactly
+  why the three pins above and every probe the PR ran missed it.
+
+  **It is not a new leak class, and that distinction is the whole of why the behaviour was not
+  reverted.** The identical container shapes **without** the `<!--` already leak **5,120 of
+  5,120 on base AND on the fix** (measured at correction, same arms): that is **NRL-88 root 1**,
+  `interruptsParagraph` matching a container on the opener line, so `bracketClosesLater` never
+  confirms and the construct falls through as prose. Base's 0 was the prose-loss bug *masking*
+  exactly the `<!--`-bearing members of that class - it hid the destination by swallowing the
+  rest of the note - and fixing the prose loss unmasks them. The root was **traced, not
+  guessed**: `interruptsParagraph` tests `BLOCKQUOTE` and `LIST_BULLET` directly, and a
+  **3-space indent**, which is not a container it matches, measures **0 -> 0** with the
+  destination correctly dropped. Attribute it to **root 1 and not root 2**. CommonMark parses
+  these as valid images, so the destination is an attribute and speaking it is a genuine R-M09
+  disclosure rather than renderer-faithful; keeping a prose-loss defect in order to mask it is
+  not the trade, which is why this is documented and pinned rather than reverted.
+  `pin-nrl74-container-label-still-leaks-destination` pins one shape of it, **as a tripwire and
+  not as evidence of a fix**: when NRL-88 closes root 1 that expectation must change on purpose.
+
+  Evidence, all bare-Node, four arms built side by side against base `8635ed2`, keyed on an
+  oracle **transcribed from those tokenizers** and self-tested on 21 hand-traced cases first
+  (which caught one real oracle bug: the `%%` tokenizer leaves its closer line's remainder
+  displayed, the HTML one consumes its closer line whole, and modelling both alike manufactured
+  1,536 phantom leaks). Two-class probe, 20 shapes x 512 combinations: **Class A, text the
+  renderer hides, 0 spoken on base and 0 on the fix; Class B, text it displays, lost 9,216 ->
+  2,304 of 13,312; 0 cells newly leaking and 0 newly lost**, with the residual 2,304 fully
+  accounted for (1,024 the known gap above, 1,280 content exclusions the oracle cannot see).
+  **Read that "0 newly leaking" with its scope attached**: the oracle's two classes are *text*
+  the renderer hides and *text* it displays, and an image or link **destination** is an
+  attribute rather than either, so the 5,120-cell destination move above sits **outside both
+  classes** and this probe could not have reported it. That is a scope limit of the oracle, not
+  a contradiction of its numbers.
+  Disclosure probes for **both** widened lookaheads: `codeSpanClosesLater` **8,704 cells** and
+  `bracketClosesLater` **3,072 cells**, hidden sentinel **0 on base, 0 on the fix, 768 each on
+  the forbidden line-start-only variant** - which is what makes them non-vacuous. Both
+  confirmations proven **structurally unweakened** by brace-matching each body out of base and
+  out of the branch and showing them byte-identical modulo the threaded argument. Subsumption
+  **0 widened / 114 narrowed** over 1,036 pairs, measured not asserted because the added
+  `|| closesLater` is a disjunction. **49 of 1,036** pairs changed `interruptsParagraph`'s
+  answer, on 49 distinct lines, **all 49 lines the tokenizer oracle does not call an opener**.
+  NRL-73's own two-class probe **re-run** (D-74-8): identical on both sides, 0 newly leaking,
+  0 newly lost. `sourceIndex` clean by numeric UTF-16 index over **12,032 chunks / 184,576
+  units**, non-vacuous by **four targeted mutators with every row nonzero on both sides**, and
+  the `text[i] === " "` exemption shown pre-existing (without it the fix reports 8,192 and BASE
+  reports 512). A **4,000-note fuzz**: 0 newly leaking; its 8 "lost" cells are all at
+  `skipInlineCode: true` and 0 at false, the exclusion class NRL-73's ship review already
+  recorded; and its 58 destination cells **all 58** speak the whole literal `](zdestz.png)`,
+  which the PR dismissed as "a construct with no matching opener, so literal text the renderer
+  shows". **That dismissal was wrong, and it is how the 5,120-cell class above got through.**
+  A container-prefixed soft-wrapped label has a matching `![`/`[` opener *and* a matching
+  `](...)`, so speaking the whole literal is precisely the symptom, not a reason it is benign.
+  The fuzz saw the signal and the reasoning discarded it. Which of those 58 cells are that class
+  was **not** re-measured at correction; the class itself was, at 5,120 cells, directly.
+
+  **One pre-existing fixture moved, silent -> spoken**: `tests/extract.test.ts:959` (NRL-45
+  decision Q9) went `[]` -> `["ZSECRETZ sentence here."]`, the only one in the whole suite. It
+  is renderer-faithful (mid-line `<!--` in a quoted title, no `-->` anywhere) and makes the
+  shape agree with its `%%` sibling, which already spoke on base. **Replaced in place** per the
+  NRL-66/NRL-67 convention; Q9 keeps its pin at `:960`, the same shape with a `-->` four lines
+  down, green on both sides. ADR 0018 carried two sentences this falsifies and both were
+  amended rather than left lying, as were ADR 0019's and ADR 0023's "`interruptsParagraph` is
+  not touched / not widened" claims - NRL-74 **narrows** it, the opposite direction, and gives
+  it a second parameter.
+
+  **NOTHING WAS OBSERVED IN OBSIDIAN.** No deploy happened and CDP 9222 was not attempted; the
+  renderer side rests entirely on reading `obsidian.asar`, so rule 11 applies to every number
+  above. Two other residuals, both pre-existing and neither opened here: `lastHtmlCloser` is a
+  crude text scan that counts a `-->` inside a fence, inside frontmatter or inside another
+  comment (measured: neither newly leaks nor newly loses), and a tab-indented `<!--` in a
+  fresh-block position never reaches the predicate because indented-code handling eats the line
+  first - NRL-93's shape, not shared. That second one is a **disclosure** rather than prose
+  loss, which is worth saying because every other residual on this list goes the other way:
+  `Before x.` / blank / `\t<!--` / `HIDDEN1` / `more` speaks `"Before x. HIDDEN1 more"` on
+  **base and fix alike, 512 of 512 cells each** (measured at ship review), while module 8776's
+  skip loop accepts `\t`, so Obsidian opens a block there and hides `HIDDEN1`. Narrowing the
+  `<!--` predicate would not help - the line never reaches it - so it is NRL-93's
+  indented-code question and not a second one. The oracle also surfaced a **pre-existing `%%`-in-heading
+  divergence** (`# %% off` / `ZHZ` / `%% after ZPZ.`), identical on both sides, pinned as
+  `heading-tracking`, **no ticket filed**. **`interruptsParagraph`'s answer set changed, so
+  whichever of NRL-74 and NRL-88 merges second must re-measure NRL-88's five roots**; they are
+  neither re-measured nor claimed here. **Concretely: NRL-74 UNMASKS 5,120 cells of NRL-88 root
+  1** that the prose-loss bug was hiding, so root 1's recorded `2,048 of 2,048` and the
+  `11,520 of 19,456` headline in the R-M09 section are both **pre-NRL-74 baselines** and neither
+  is current. NRL-88 runs next in this batch and must re-measure before it reasons from them.
+  R-M08 is **NOT** met and the `2 of 16` count does not move.
 - R-C02's Context table named three gaps: three of five install-time fields missing (language,
   installed size, license), and no remove action at all, so up to 573 MB across three Kokoro
   builds plus the ~31 MB ORT runtime could accumulate in a directory deliberately hidden from

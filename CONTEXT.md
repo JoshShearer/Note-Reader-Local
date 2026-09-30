@@ -79,7 +79,8 @@ src/
 ├── settings/positionThrottle.ts leading/trailing position saves, injected timers and queue-path guard (NRL-51)
 ├── settings/vaultEvents.ts     rename/delete orchestration behind a narrow port, obsidian-free (NRL-58)
 ├── settings/saveQueue.ts       single-flight coalescing saveData queue, obsidian-free (NRL-58)
-├── text/extract.ts             markdown → SpeechChunk[] with source offsets
+├── text/extract.ts             markdown → SpeechChunk[] with source offsets; two
+│                               confirmed carries plus one document scalar (ADR 0025)
 ├── text/segment.ts             sentence/grapheme/word boundaries, injected SegmenterSource, pure (ADR 0009)
 ├── audio/
 │   ├── types.ts                SpeechEngine, EngineCapabilities, SpeechChunk, VoiceInfo
@@ -128,11 +129,13 @@ character. Stripping is exactly what makes that false, so the paragraph above wa
 already true when the defect was written under it: say "read the index" rather than
 "carry offsets", because arithmetic on an offset also looks like carrying one.
 
-**Lines are scanned one at a time, with two deliberate exceptions, and the loop is a
-two-pass.** `cleanLine` sees a single source line and nothing else, which is why the same
-`%%` can be a comment on one line and literal text on another. The two exceptions are
+**Lines are scanned one at a time, with three deliberate cross-line facts, and the loop
+is a two-pass.** `cleanLine` sees a single source line and nothing else, which is why the
+same `%%` can be a comment on one line and literal text on another. Two of the three are
 constructs CommonMark lets cross a soft line break: an inline code span, and an image or
-link label.
+link label. **The third is not shaped like them and must not be filed with them**: it is a
+whole-document scalar, `lastHtmlCloser`, read once before the first pass, and it adds no
+pass (NRL-74, ADR 0025). See below.
 
 For a code span, `Cleaned.openCode` reports the length of a backtick run left open and
 `extractChunks` only carries it forward once `codeSpanClosesLater` has found a run of the
@@ -159,8 +162,25 @@ tighter, so a line opening both arms the code carry only. The label carry is a *
 fix: five distinct roots still leave a destination spoken, tracked as NRL-88 and enumerated
 in `AGENTS.md`.
 
-Anything else that needs cross-line state should follow that shape: prove the construct is
-real before trusting it, and confirm before the line's output is committed.
+The third cross-line fact is the HTML-comment block rule (NRL-74, ADR 0025), and it is
+deliberately a different shape. A `<!--` opens a block only if it begins its line **or**
+some later line carries `-->`, and the second term cannot be answered by any line about
+itself. `extractChunks` therefore computes ONE scalar, `lastHtmlCloser` - the highest index
+of a line containing `-->` - immediately after `source.split("\n")`, and `lastHtmlCloser > n`
+answers the question in O(1). It is threaded as a **required** parameter through `cleanLine`,
+`opensHiddenComment`, `interruptsParagraph`, `codeSpanClosesLater` and `bracketClosesLater`;
+required, so `tsc` names every call site rather than letting one silently keep the old
+answer. Three things follow. It is **not** a confirm-then-commit carry - it asks nothing
+about the current line, so it is known before pass 1 and is passed identically to all three
+passes; do not add a fourth. Its scan runs to **EOF**, not to the end of the paragraph,
+deliberately unlike the two carries above, because an HTML comment legitimately spans
+blocks. And `interruptsParagraph` is consequently **no longer a pure line predicate**; the
+in-file precedent for that is `opensMathBlock`, already document-aware and already called
+beside it.
+
+Anything else that needs cross-line state should follow one of those two shapes: a
+confirm-then-commit carry when the question is about this line, or a precomputed scalar
+when it is about the document. Never a lookahead callback into `cleanLine`.
 
 **The worker is a jail.** `kokoro.worker.ts` shims `fetch` to reject any cross-origin
 URL and asserts locality on the ORT paths, because both transformers.js and kokoro-js

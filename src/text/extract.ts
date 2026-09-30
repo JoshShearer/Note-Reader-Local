@@ -477,6 +477,30 @@ function wikiTargetClose(raw: string, from: number): number {
  * it twice is exactly how the two drifted: `opensHiddenComment` matched
  * `cleanLine` on the line-start half and nothing has ever kept them in step.
  */
+/**
+ * Does a `<!--` at `at` open a document-level HTML comment block, rather than
+ * being literal text?
+ *
+ * Two terms, and neither is sufficient alone. `<!--` begins its line (leading
+ * whitespace allowed), OR some later line in the note carries `-->`. Anything
+ * else - a mid-line `<!--` with no closer anywhere - is literal text that
+ * CommonMark renders and Obsidian displays, so it is spoken (NRL-74, ADR 0025).
+ *
+ * Deliberately a SECOND predicate rather than a widened opensObsidianBlock, and
+ * the two bodies show why: `%%` carries the lone-`%` disqualifier and no
+ * lookahead, `<!--` carries a lookahead and no disqualifier. Merging them would
+ * import `if (37 === a) return` into `<!--`, which D-73-4, ADR 0006 clause 2 and
+ * srs.md's `%%` bullet all forbid in as many words, and the NRL-66 precedent
+ * says not to merge two scans that answer different questions.
+ *
+ * `closesLater` is handed in, never computed here: the second term is
+ * document-scoped and this function is line-local. See ADR 0025 for why the
+ * scan runs to EOF and not to the end of the paragraph.
+ */
+function opensHtmlBlock(view: string, at: number, closesLater: boolean): boolean {
+	return view.slice(0, at).trim() === "" || closesLater;
+}
+
 function opensObsidianBlock(view: string, at: number): boolean {
 	return view.slice(0, at).trim() === "" && view.indexOf("%", at + 2) === -1;
 }
@@ -514,6 +538,16 @@ function opensObsidianBlock(view: string, at: number): boolean {
  * label carry is armed; while a label carry is live, it holds and no code carry
  * is armed inside it. Consequence, measured and recorded in ADR 0023: an image
  * whose label contains a soft-wrapped code span still speaks its destination.
+ *
+ * `htmlClosesLater` is the third scalar of this kind and the only one that is
+ * not a confirmed carry (NRL-74, ADR 0025). It says "some line AFTER this one
+ * carries `-->`", which is the document-scoped half of the HTML-comment block
+ * rule that no line can answer about itself. It mirrors `outgoingCode` and
+ * `outgoingBracket` in SHAPE - one scalar computed by extractChunks and handed
+ * in, never a lookahead callback, so cleanLine stays line-local - but not in
+ * TIMING: it asks nothing about this line, so it is known before the first pass
+ * and adds no pass. It defaults false, the fail-toward-hiding direction, which
+ * is what the recursive-label and frontmatter call sites want.
  */
 function cleanLine(
 	raw: string,
@@ -524,6 +558,7 @@ function cleanLine(
 	outgoingCode?: number,
 	incomingBracket?: BracketKind,
 	outgoingBracket?: BracketKind,
+	htmlClosesLater = false,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -932,6 +967,25 @@ function cleanLine(
 				emit("%", rawStart + i);
 				emit("%", rawStart + i + 1);
 				i += 2;
+				continue;
+			}
+			// The `<!--` twin of the escape above, and the `blockComments` gate is
+			// POSITIVE here where that one is negated. That asymmetry looks like a
+			// typo and is not: it is measured, and it is what keeps the recursive
+			// label call unaffected. A label is cleaned with blockComments false,
+			// and `local-html-state` plus srs.md's non-nesting bullet require an
+			// unmatched `<!--` inside a label to go on truncating locally rather
+			// than becoming literal. `%%` can afford the symmetric form because
+			// literal is the right answer for it in both modes; `<!--` in a label
+			// is not, and changing that is a different ticket (NRL-74, D-74-11).
+			//
+			// All four characters are emitted with their true raw offsets and `i`
+			// advances past them, mirroring the two-and-two above. Emitting only
+			// `<` would re-enter the loop at `!--` and risk another branch (the
+			// autolink or raw-HTML one) claiming it.
+			if (close === -1 && htmlComment && blockComments && !opensHtmlBlock(raw, i, htmlClosesLater)) {
+				for (let k = 0; k < 4; k++) emit(raw[i + k]!, rawStart + i + k);
+				i += 4;
 				continue;
 			}
 			if (close === -1) {
@@ -1676,10 +1730,19 @@ const LINK_REF_DEF =
  * with no `-->` after it on the line. A `%%...%%` pair or a `<!--...-->` pair
  * closes on its own line and hides nothing beyond it, so neither counts.
  *
- * The `<!--` half is deliberately NOT routed through the shared predicate: the
- * lone-`%` disqualifier is a rule of Obsidian's `%%` tokenizer specifically and
- * has no HTML-comment equivalent. The remaining `<!--` asymmetry against
- * cleanLine is NRL-74's, not this function's.
+ * The `<!--` half is routed through its own shared predicate, opensHtmlBlock,
+ * for the same reason and NOT through opensObsidianBlock: the lone-`%`
+ * disqualifier is a rule of Obsidian's `%%` tokenizer specifically and has no
+ * HTML-comment equivalent (NRL-74, ADR 0025).
+ *
+ * BOTH of opensHtmlBlock's terms are asked here, or neither. Asking only the
+ * line-start term - the one answerable from `line` alone - is a MEASURED
+ * DISCLOSURE and is forbidden (D-74-10): it would answer false for a mid-line
+ * `<!--` that a later `-->` genuinely closes, so codeSpanClosesLater would
+ * confirm a carry across a line that really does open a hidden block and the
+ * hidden text would be read aloud as code content. That is why
+ * `htmlClosesLater` is threaded down here through interruptsParagraph rather
+ * than left to the caller.
  *
  * This is a paragraph-ending condition, which is why it lives next to
  * interruptsParagraph. Obsidian 1.13.7's Reading-view parser puts `comment` in
@@ -1687,11 +1750,12 @@ const LINK_REF_DEF =
  * terminates the paragraph before any inline tokenizing happens and a code span
  * can never contain one. Read off the installed parser, not observed live.
  */
-function opensHiddenComment(line: string): boolean {
+function opensHiddenComment(line: string, htmlClosesLater: boolean): boolean {
 	const pct = line.indexOf("%%");
 	if (pct !== -1 && opensObsidianBlock(line, pct)) return true;
 	const html = line.indexOf("<!--");
-	return html !== -1 && line.indexOf("-->", html + 4) === -1;
+	if (html === -1 || line.indexOf("-->", html + 4) !== -1) return false;
+	return opensHtmlBlock(line, html, htmlClosesLater);
 }
 
 /**
@@ -1699,8 +1763,15 @@ function opensHiddenComment(line: string): boolean {
  * inside that paragraph, cannot continue across it. A blank line counts too,
  * and so does a line that opens a comment: the text it hides is not code
  * content, and treating it as such reads that text aloud.
+ *
+ * `htmlClosesLater` is NOT optional and is passed down to opensHiddenComment
+ * (NRL-74). A required parameter is deliberate: six call sites reach this
+ * predicate and a default would let one of them silently keep the old answer,
+ * which is the dead-toggle shape CONTEXT.md warns about. It also means this is
+ * no longer a pure line predicate - the in-file precedent is opensMathBlock,
+ * already document-aware and already called beside this one.
  */
-function interruptsParagraph(line: string): boolean {
+function interruptsParagraph(line: string, htmlClosesLater: boolean): boolean {
 	return (
 		line.trim() === "" ||
 		FENCE.test(line) ||
@@ -1710,7 +1781,7 @@ function interruptsParagraph(line: string): boolean {
 		TABLE_ROW.test(line) ||
 		LIST_BULLET.test(line) ||
 		BLOCKQUOTE.test(line) ||
-		opensHiddenComment(line)
+		opensHiddenComment(line, htmlClosesLater)
 	);
 }
 
@@ -1728,11 +1799,11 @@ function interruptsParagraph(line: string): boolean {
  * as every line scanned, because a table row reaches the carry site as plain
  * paragraph text when tables are spoken and a span cannot leave its own row.
  */
-function codeSpanClosesLater(lines: string[], from: number, len: number): boolean {
-	if (interruptsParagraph(lines[from]!)) return false;
+function codeSpanClosesLater(lines: string[], from: number, len: number, lastHtmlCloser: number): boolean {
+	if (interruptsParagraph(lines[from]!, lastHtmlCloser > from)) return false;
 	for (let n = from + 1; n < lines.length; n++) {
 		const line = lines[n]!;
-		if (interruptsParagraph(line)) return false;
+		if (interruptsParagraph(line, lastHtmlCloser > n)) return false;
 		if (firstRunOfLength(line, len, 0) !== -1) return true;
 	}
 	return false;
@@ -1793,11 +1864,11 @@ function opensMathBlock(lines: string[], n: number): boolean {
  * single-line branches close their labels with, so a `]` hidden in a code span
  * or a complete comment span cannot close this one either.
  */
-function bracketClosesLater(lines: string[], from: number): boolean {
-	if (interruptsParagraph(lines[from]!) || opensMathBlock(lines, from)) return false;
+function bracketClosesLater(lines: string[], from: number, lastHtmlCloser: number): boolean {
+	if (interruptsParagraph(lines[from]!, lastHtmlCloser > from) || opensMathBlock(lines, from)) return false;
 	for (let n = from + 1; n < lines.length; n++) {
 		const line = lines[n]!;
-		if (interruptsParagraph(line) || opensMathBlock(lines, n)) return false;
+		if (interruptsParagraph(line, lastHtmlCloser > n) || opensMathBlock(lines, n)) return false;
 		const close = inlineContainerClose(line, 0, "]");
 		if (close === -1) continue;
 		const next = line[close + 1];
@@ -1937,6 +2008,22 @@ export function extractChunks(
 ): SpeechChunk[] {
 	const chunks: SpeechChunk[] = [];
 	const lines = source.split("\n");
+	// The highest index of a line carrying `-->`, computed once. `lastHtmlCloser
+	// > n` is then exactly "some line after n carries a closer", which is the
+	// document-scoped half of the HTML-comment block rule (NRL-74, ADR 0025).
+	// One scalar rather than a helper that rescans `lines` per test: that would
+	// be an O(L) scan inside codeSpanClosesLater's O(L) loop inside this O(L)
+	// loop, so O(L^3) on a long note. This is O(L) once and O(1) per test.
+	// Strict `>` is deliberate - a `-->` earlier on the SAME line cannot close an
+	// opener later on it, and the caller has already ruled out one after the
+	// opener on that line.
+	let lastHtmlCloser = -1;
+	for (let k = lines.length - 1; k >= 0; k--) {
+		if (lines[k]!.includes("-->")) {
+			lastHtmlCloser = k;
+			break;
+		}
+	}
 	const segmentCtx: SegmentContext = { locale: opts.locale, src };
 	let chunkSequence = 0;
 
@@ -2045,8 +2132,18 @@ export function extractChunks(
 	};
 
 	/** Clean closing-line prose, including any further comments. */
-	const appendRemainder = (raw: string, from: number, lineStart: number): void => {
-		const cleaned = cleanLine(raw.slice(from), lineStart + from, stripOpts, true);
+	const appendRemainder = (raw: string, from: number, lineStart: number, lineNo: number): void => {
+		const cleaned = cleanLine(
+			raw.slice(from),
+			lineStart + from,
+			stripOpts,
+			true,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			lastHtmlCloser > lineNo,
+		);
 		inComment = cleaned.openComment;
 		if (cleaned.text.trim() !== "") appendToParagraph(cleaned, lineStart + from);
 	};
@@ -2112,7 +2209,7 @@ export function extractChunks(
 		if (inComment) {
 			const close = raw.indexOf(inComment);
 			if (close === -1) continue;
-			appendRemainder(raw, close + inComment.length, lineStart);
+			appendRemainder(raw, close + inComment.length, lineStart, lineNo);
 			continue;
 		}
 
@@ -2210,7 +2307,7 @@ export function extractChunks(
 				flushParagraph();
 				chunks.push(...splitSentences("equation", [open, open, open, open, open, open, open, last], open, segmentCtx, "other"));
 				lineNo = closeLine;
-				appendRemainder(lines[closeLine]!, closeAt + 2, lineStarts[closeLine]!);
+				appendRemainder(lines[closeLine]!, closeAt + 2, lineStarts[closeLine]!, closeLine);
 				continue;
 			}
 		}
@@ -2301,15 +2398,16 @@ export function extractChunks(
 		 * confirmed unmatched run, which is rare, and provably a no-op on a line
 		 * wholly inside an already-carried span.
 		 */
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket);
+		const htmlClosesLater = lastHtmlCloser > lineNo;
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
 			cleaned.openCode !== undefined &&
-			codeSpanClosesLater(lines, lineNo, cleaned.openCode)
+			codeSpanClosesLater(lines, lineNo, cleaned.openCode, lastHtmlCloser)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -2330,7 +2428,7 @@ export function extractChunks(
 			blockType === "paragraph" &&
 			confirmed === undefined &&
 			cleaned.unclosedBracket !== undefined &&
-			bracketClosesLater(lines, lineNo)
+			bracketClosesLater(lines, lineNo, lastHtmlCloser)
 		) {
 			confirmedBracket = cleaned.unclosedBracket;
 			cleaned = cleanLine(
@@ -2342,6 +2440,7 @@ export function extractChunks(
 				undefined,
 				carriedBracket,
 				confirmedBracket,
+				htmlClosesLater,
 			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the

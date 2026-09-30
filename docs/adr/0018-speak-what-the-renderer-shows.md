@@ -105,8 +105,17 @@ rather than one being an exception to the other.
    unclosed `<!--`, which opens a comment and hides the rest of the note;
    dropping the line before that was parsed would stop the hiding and make text
    the author hid audible. That is a privacy-direction regression, and it
-   outranks the cost of cleaning a line that is then discarded. `[a]: x.png
-   "<!--"` followed by a `ZSECRETZ` line speaks nothing at all, before and after.
+   outranks the cost of cleaning a line that is then discarded.
+
+   **Amended by NRL-74 (ADR 0025).** The clause is unaffected - parse before you
+   drop - but its example no longer holds. `[a]: x.png "<!--"` followed by a
+   `ZSECRETZ` line used to speak nothing at all; it now speaks the `ZSECRETZ`
+   line, because a mid-line `<!--` with no `-->` anywhere in the note opens no
+   block, so there is nothing for the ordering to preserve in that particular
+   shape. The clause keeps its pin at `tests/extract.test.ts:960`, the same shape
+   with a `-->` four lines down, where the title's `<!--` really is an opener and
+   the ordering really does matter; that fixture is green on both sides of
+   NRL-74. See also NRL-68: a mid-line opener is not an opener.
 
 10. **A definition shape inside an ATX heading is not dropped.** A link reference
     definition is a leaf block and cannot occur inside a heading, so
@@ -164,8 +173,15 @@ rather than one being an exception to the other.
   and is not caused by this ticket.
 
 - **`[a]: <!--` is not a definition** - the destination may not start with `<`
-  unless it is a closed `<...>` - so it is still spoken as `a :` and still hides
-  the rest of the note. Unchanged in both directions.
+  unless it is a closed `<...>` - so it is still spoken as `a :`. It was
+  "unchanged in both directions" when this was written and **NRL-74 changed the
+  second half**: the `<!--` is mid-line with no `-->` anywhere, so it no longer
+  hides the rest of the note and the note is spoken (measured `"a :"` ->
+  `"a : <!-- ZSECRETZ sentence here."`). The definition-recognition half is still
+  unchanged. Whether either of these shapes was ever a disclosure turns on
+  NRL-68's already-recorded finding that a mid-line opener is not an opener; after
+  NRL-74 the `<!--` and `%%` siblings agree, which is what that ticket was for.
+  See ADR 0025.
 
 - **NOT VERIFIED IN OBSIDIAN.** Every measurement above is bare Node against the
   real extractor, per the ticket's own caveat. That Obsidian's renderer hides

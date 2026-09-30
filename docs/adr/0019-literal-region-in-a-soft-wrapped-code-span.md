@@ -108,7 +108,12 @@ neither toggle position.
    passes and another parameter consumed by the same emitter.
 
 4. **`codeSpanClosesLater` keeps its mandatory confirmation, and
-   `interruptsParagraph` is not touched.** The confirmation now carries more
+   `interruptsParagraph` is not touched.** (Amended by NRL-74: that predicate is
+   now **narrowed** - the opposite direction to the widening this clause and ADR
+   0023 warn against - and gains a second, document-scoped parameter. This
+   clause's conclusion is unchanged, and `codeSpanClosesLater`'s body was proven
+   byte-identical to base modulo the threaded argument; see ADR 0025.) The
+   confirmation now carries more
    weight, not less: before this change, arming the carry without it would have
    read hidden text aloud; after it, the same mistake would also silence visible
    prose. `opensHiddenComment` tests the raw line and models no structural

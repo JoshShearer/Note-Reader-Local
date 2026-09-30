@@ -135,7 +135,15 @@ not a block, is not consumed, and carries correctly - stopping there would give 
 a destination for nothing. `interruptsParagraph` is **not** widened to cover this,
 because it is shared with `codeSpanClosesLater` and widening it would move
 NRL-64's just-landed carry; the identical gap exists for that carry, is
-pre-existing, and is neither opened nor closed here. And this was found by the
+pre-existing, and is neither opened nor closed here. (Amended by NRL-74: that
+predicate has since been **narrowed** - the opposite direction to the widening
+this paragraph refuses - and given a second, document-scoped parameter, so a
+reader checking "not widened" against the code will find a changed signature.
+This paragraph's conclusion is unchanged and `opensMathBlock` is untouched;
+`bracketClosesLater`'s body was proven byte-identical to base modulo the threaded
+argument. NRL-74 also changed `interruptsParagraph`'s answer set, so whichever of
+NRL-74 and NRL-88 merges second must re-measure the five roots below. See ADR
+0025.) And this was found by the
 adversarial review of this branch rather than by the fixtures, which is why the
 guard is pinned by its own check with the invariant that actually applies: the
 table's fixture harness asserts `src[sourceIndex[i]] === text[i]`, and the
