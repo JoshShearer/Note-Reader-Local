@@ -320,10 +320,14 @@ fixed: **512/512 leaking cells fell to 0/512** for each, and the wrapped form is
 byte-identical to the single-line form, so `speakImageAlt` governs the alt text across the
 break exactly as it does on one line.
 
-**11,520 of 19,456 cells still leak a destination**, tracked as **NRL-88**. Record them as
-**five distinct roots and not one**, because earlier drafts of ADR 0023 and `srs.md:366` said
-"one mechanism" and a reader who assumes it is just containers will fix two of the five and
-believe they are done.
+**A destination is still spoken**, tracked as **NRL-88**. Record it as **five distinct roots
+and not one**, because earlier drafts of ADR 0023 and `srs.md` said "one mechanism" and a
+reader who assumes it is just containers will fix two of the five and believe they are done.
+**Root 4 is CLOSED as of NRL-88** (`docs/adr/0027`); **four remain** and root 4 leaves
+named residual shapes of its own. The numbering is kept as it was so every existing citation still
+resolves. The `11,520 of 19,456` headline this paragraph used to carry is **deleted rather
+than updated**: it was a pre-NRL-74 baseline on a corpus nobody can reconstruct, and NRL-88
+re-measured its own (below) rather than trying to reconcile it.
 
 **Every count in this list is a pre-NRL-74 baseline and root 1's is known to be low.** NRL-74
 made an unmatched mid-line `<!--` literal instead of opening a comment block, and that
@@ -338,21 +342,64 @@ reasoning from it** - see NRL-74's bullet below for the numbers and the method.
    5,120 NRL-74 unmasked**; this row is the one the re-measure will move most.
 2. `interruptsParagraph` matching on a line **between** opener and closer - 1,792 of 2,048.
 3. `opensMathBlock`, clause 7a's separate stop - 512 of 512.
-4. **`bracketClosesLater` returns at the first later line bearing any `]`**, so a line that
-   does *not* end the paragraph but carries a non-closing bracket aborts the confirmation.
-   Measured on seven such lines - `[bracket]` in prose, `[^1]`, `[[wk]]`, `[x]`, a link
-   reference definition, `![[embed]]` and a bare `]` - each leaking 512 of 512 where the same
-   shape without the stray bracket leaks 0 of 512. **3,584 cells.** **This one is not a
-   container problem at all**, and it is why "just handle blockquotes and lists" would not
-   finish the ticket.
+4. **CLOSED as of NRL-88** (`docs/adr/0027`). `bracketClosesLater` returned at the first later
+   line bearing any `]` and tested only that one, so a line that does *not* end the paragraph
+   but carries a non-closing bracket aborted the confirmation. **The recorded 3,584 was wrong
+   by half**: it counts the **image** form only, and the link twin is another 3,584 through the
+   same code, so root 4's real size is **7,168** on a corpus counting both kinds, and more once
+   shapes the ticket's seven lines miss are added (a stray and the closer on one line,
+   `[a][b]`, two pairs, a nested pair). Re-measured at `df12262` over an 11-shape x 2-kind x
+   512 corpus: **11,264 cells, all 11,264 leaking -> 1,024**, so **10,240 closed and 0 newly
+   leaking**. This one was never a container problem at all, which is why "just handle
+   blockquotes and lists" would not have finished the ticket.
+   **Three things a later reader would otherwise redo, all measured rather than reasoned.**
+   (a) **Both call sites must change together.** Fixing the confirmation alone is not a safe
+   subset, it is strictly worse than changing nothing: the consumption site in `cleanLine`
+   closed a carried label at the first `]` unconditionally, so it ended the label at the stray
+   and let the real `](dest)` fall out as prose - all 7,168 cells still leaked **and** the alt
+   text was silenced. One shared helper, `labelClose`.
+   (b) **It is bracket DEPTH, not "skip any `]` not followed by `(`"**, which is how the ticket
+   worded it. The naive skip loses real prose: `A ![shortcut` / `more] text` /
+   `and [link](dest) here` became `"A here"`, because skipping a shortcut label's own closer
+   lets the scan adopt an unrelated later `](`. `guard-nrl88-shortcut-not-confirmed` is the
+   only thing in the suite that catches a regression to it.
+   (c) **`labelClose`'s early return at "no `]` left on this line" is load-bearing and must not
+   be "completed".** It leaves a trailing unmatched `[` uncounted, which looks like an
+   oversight. Completing it newly leaked in **10 of 4,000** fuzz notes and moved
+   `guard-nrl63-nested-label`, because our carry takes the **first** unmatched opener where
+   CommonMark takes the **last**.
+   **Two residual shapes remain, both deliberate and both pinned.** A **bare unmatched `]`** on
+   an interior line keeps its destination spoken and that is CORRECT: CommonMark ends a label
+   there, so the construct is a shortcut reference with no definition and `](dest)` is literal
+   text the renderer shows (read from the CommonMark spec TEXT, not run against a reference
+   implementation, not seen in Obsidian). So the ticket's "seven such lines" is **six defects
+   and one correct behaviour**. And clause (c)'s uncounted bracket, which is **one
+   mechanism in THREE positions and not one shape** - corrected at NRL-88's ship review,
+   where the first draft said one and pinned one. A trailing unmatched `[` on the **opener**
+   line, an unbalanced `[` on an **interior** line (there the `[` IS counted, and the
+   label's real closer is then eaten as the inner pair's), and a pair **straddling** the
+   break. Each measures 1,024 of 1,024 cells in both kinds and each is **identical on base
+   and on the fix**; all three are now pinned, and they come off together when the
+   first-versus-last-opener conflict is settled, never one at a time.
 5. Clause 6 and 7 precedence - a line opening both a label and a soft-wrapped code span arms
    the code carry only, and a code span opening on a later line inside a live label is not
    recognised - 1,024 of 1,024.
 
 All five are **destination-only, fail-closed and prose-safe**: an aborted confirmation leaves
-the line exactly as the pre-NRL-63 tree had it, so none of them can lose prose. Part of the
-11,520 is also not a defect and must not be "fixed": an ATX heading is a single line and cannot
-soft-wrap, and a setext heading is in fact already carried.
+the line exactly as the pre-NRL-63 tree had it, so none of them can lose prose. Some of the
+remainder is also not a defect and must not be "fixed": an ATX heading is a single line and
+cannot soft-wrap, and a setext heading is already carried. **That second half is narrower than
+it reads**, measured at NRL-88: what is carried is an underline sitting *after* the label has
+closed (0 of 1,024 leaking, both sides). An underline *between* opener and closer is
+`SETEXT.test` and therefore `interruptsParagraph`, so it is **root 2** and it leaks 1,024 of
+1,024 on both sides. The ATX form leaks 1,024 of 1,024 on both sides and is correct.
+
+**Roots 1 and 2 were deferred, not attempted**, and the reason is a standing rule rather than
+time: fixing them means widening `interruptsParagraph`, which is shared with
+`codeSpanClosesLater` and which NRL-73 and NRL-74 had just narrowed in the same run. Root 3 is
+left because clause 7a's `opensMathBlock` stop exists to fix a real prose-loss defect, and
+removing it trades prose for a destination - the trade ADR 0007 clause 6 refuses. Root 5 is
+clause 6's own recorded precedence rule.
 
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
@@ -363,16 +410,73 @@ commit: a `$$` display-math block between a label's opener and closer silenced t
 later-closer search; `interruptsParagraph` was deliberately **not** widened, because it is
 shared with `codeSpanClosesLater` and widening it would move NRL-64. Verify then enumerated
 **all 20 skip-paths** between the carry read and the carry arm and found the rest fail-closed:
-31,744 cells, 0 prose loss. **Re-run that enumeration** before touching the lookahead.
+31,744 cells, 0 prose loss. **Re-run that enumeration** before touching the lookahead - and
+do not reuse the number, because the region has moved. **Three different numbers have been
+claimed for this one enumeration and the arithmetic below is the settled one**, re-counted at
+NRL-88's ship review by stripping comments and attributing every `continue` to its owning loop
+by brace depth. The per-line loop body holds **20** control-flow exits, all of them `continue`
+and all of them the outer `lineNo` loop's: **16** between the carry read and the confirmation
+call, **2** between that call and the carry write-back, and **2** after the write-back, which
+therefore cannot drop the carry. So **18 can bypass the arm**. NRL-88's own **plan said 18 and
+was RIGHT**; NRL-88's implement and the first draft of `docs/adr/0027` said 16 exits / 12
+pre-arm / 14 bypass and were **low by four**, and the cause is identified rather than guessed:
+that count matched `^\s*continue;$` and missed the four inline `if (...) continue` forms
+(the frontmatter blank/`#` line, `inComment` with no closer on the line, `inIndentedCode` with
+a blank line, and `inFence` under `skipCodeBlocks`). NRL-63's recorded **20** equals this
+total-exits figure, but its prose called it the read-to-arm window, which is 16. Over 15
+mid-line shapes x 2 kinds x 512 = **15,360 cells: 0 newly leaking, 0 prose sentinels lost**,
+and the four paths the miscount had omitted were then probed in their own right, in both the
+"after the label closes" and "between opener and closer" positions, over **4,096 further
+cells: 0 newly leaking and 0 prose words lost at `speakImageAlt: true`**. So the miscount hid
+no unexamined defect, which is the only reason it is a corrected record rather than a blocker.
+**Fourteen of the eighteen are unreachable with a live carry** because `interruptsParagraph`
+or `opensMathBlock` already matches the line, which is fail-closed by construction - that
+covers the fence, the indented-code and the `inComment` paths, since a line opening any of
+them aborts the confirmation. The rest need their own argument and have one: the two
+frontmatter exits `continue` before the arm so never arm a carry, and the `LINK_REF_DEF` drop
+additionally requires `paraText === "" && !wasPara`, which a live carry makes false.
 
 Two pre-existing image shapes are **not** NRL-88 and remain open against the same requirement,
 in **both** positions of `speakImageAlt`: a label holding another bracket construct
 (`![a [[N|l]] b](dest.png)`), and `![alt](dest(1).png)`, which speaks a fragment of the
-destination, `.png)`. Neither was opened by NRL-21. **Do not record R-M09 as met until NRL-88
-and those two close**, and the headline count stays at 2 of 16: NRL-46, NRL-44, NRL-66, NRL-67
-and NRL-63 each closed a leftover, not the requirement. **Nothing in any of it was observed in
+destination, `.png)`. Neither was opened by NRL-21. **Do not record R-M09 as met until roots 1,
+2, 3 and 5, root 4's named residuals (clause 4's bare `]`, plus clause 3's uncounted
+bracket in all three of its positions), and those two shapes all close**, and the headline
+count stays at 2 of 16: NRL-46, NRL-44, NRL-66, NRL-67, NRL-63 and NRL-88 each closed a
+leftover, not the requirement. **Nothing in any of it was observed in
 Obsidian** - CDP port 9222 was unreachable at every attempt, so rule 11 applies to every number
 in this section.
+
+NRL-88's own evidence, all bare-Node against base `df12262` with the repo's own esbuild, and
+kept here because the shapes are worth knowing. **0 of 39,936 non-root-4 cells changed a single
+output byte**, so roots 1, 2, 3 and 5 are unmoved cell for cell rather than merely equal in
+leak count, and eight function bodies (`interruptsParagraph`, `codeSpanClosesLater`,
+`opensMathBlock`, `opensHiddenComment`, `opensObsidianBlock`, `opensHtmlBlock`,
+`inlineContainerClose`, `wikiTargetClose`) were proven byte-identical by hashing them out of
+both trees. **Prose loss** over 18 shortcut/never-closes/bracket-only shapes x 512 = 9,216
+cells, **0 losing a prose word**, with one class run down rather than waved at: 512 cells stop
+speaking `ref` on `A ![sc` / `[b] more][ref]`, and `ref` is a reference NAME the single-line
+branch has always consumed, confirmed by the stray form on the fix being byte-identical to the
+stray-free form on base. **Non-interference with all three carries** - NRL-64's `outgoingCode`,
+NRL-63's own paragraph carry and NRL-74's `lastHtmlCloser` - over 19 shapes x 512 = 9,728
+cells, of which **15 shapes are byte-identical on both sides** including "code+label same
+line" (root 5), "all three live" and both hidden-block shapes; the 4 that moved are root-4
+fixes with 0 newly leaking and 0 prose sentinels lost over 2,048 cells. **Disclosure**, since
+this diff WIDENS `bracketClosesLater` and NRL-74 required the later ticket to re-measure: a
+genuine hidden comment block beside a newly-armed carry, **12,288 cells per side, 0 spoken on
+base, 0 on the fix, 0 newly spoken**, with ADR 0019's deliberately-literal class kept separate
+at **1,024 on both sides** and the probe shown non-vacuous by a NRL-73-disqualified `%%`
+opener. `sourceIndex` clean by numeric UTF-16 index over **40,448 chunks / 870,144 units** with
+all four mutators firing (drop 39,936 length; shift 32,768 bounds + 667,648 identity; swap
+78,848 monotonic + 77,824 identity; zero 672,768 identity), and **both exemptions shown
+mandatory AND pre-existing** by removing each from a correct tree: without `text[i] === " "`
+the fix reports 45,696 and BASE reports 52,224, and without ADR 0004's `equation` allow both
+arms report 8,192. A **4,000-note fuzz** x 4 option sets: **0 newly leaking, 0 prose sentinels
+lost, 44 leaks closed**, demonstrably able to fail since the same fuzz found the 10 newly-leaking
+notes that killed the full-depth arm. And the acceptance oracle is deliberately **not** NRL-63's
+wrapped-equals-single-line, which agrees in **0 of 7,168 cells on base and on the fix alike**
+because the single-line form hits the out-of-scope nested-bracket defect and mis-parses on its
+own - inheriting it would make a correct fix unfalsifiable in both directions.
 
 R-M10 (speech segmentation) did not move the count either, and the reason is different
 from R-M09's. Its acceptance criteria are met on the automated evidence and the evidence
@@ -1012,9 +1116,13 @@ rediscover them:
   **Nothing was observed in Obsidian.** The other shape NRL-44 left open, **NRL-63** (F9 - a
   soft-wrapped image was not recognised across the break at all), closed **partially** with
   `0e44050` / `docs/adr/0023`: `bracketClosesLater` now carries a label across the break, the
-  plain-paragraph image and link cases went 512/512 leaking to 0/512, and **11,520 of 19,456
-  cells still leak a destination through five distinct roots**, tracked as **NRL-88** and
-  enumerated in the R-M09 section above. Nothing in that fix was observed in Obsidian either.
+  plain-paragraph image and link cases went 512/512 leaking to 0/512, and **a destination is
+  still spoken through five distinct roots**, tracked as **NRL-88** and
+  enumerated in the R-M09 section above. **Root 4 of the five closed with NRL-88**
+  (`docs/adr/0027`); four remain, plus root 4's own named residuals. The
+  `11,520 of 19,456` figure that used to sit in this sentence is deleted rather than updated:
+  it was a pre-NRL-74 baseline on an unreconstructable corpus, and NRL-88 measured its own.
+  Nothing in either fix was observed in Obsidian.
   Two things NRL-44 did **not** weaken, and must not be: `codeSpanClosesLater`'s
   confirmation, which now prevents silencing visible prose as well as disclosing hidden
   text, and `interruptsParagraph`, which NRL-45 also depends on.
@@ -1292,7 +1400,11 @@ rediscover them:
   neither re-measured nor claimed here. **Concretely: NRL-74 UNMASKS 5,120 cells of NRL-88 root
   1** that the prose-loss bug was hiding, so root 1's recorded `2,048 of 2,048` and the
   `11,520 of 19,456` headline in the R-M09 section are both **pre-NRL-74 baselines** and neither
-  is current. NRL-88 runs next in this batch and must re-measure before it reasons from them.
+  is current. **NRL-88 merged second and did re-measure**, for root 4 only, which is the one it
+  scoped: root 4 had **not** moved, and that was traced rather than assumed - its shapes carry
+  no `%%` and no `<!--` on either the opener or the stray line, so the narrowing never fires
+  inside them, and the unmasking landed on root 1. Roots 1, 2, 3 and 5 are **still
+  un-re-measured** and their recorded counts are still pre-NRL-74 baselines.
   R-M08 is **NOT** met and the `2 of 16` count does not move.
 - R-C02's Context table named three gaps: three of five install-time fields missing (language,
   installed size, license), and no remove action at all, so up to 573 MB across three Kokoro

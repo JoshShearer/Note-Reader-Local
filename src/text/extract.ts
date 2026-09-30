@@ -65,6 +65,14 @@ interface Cleaned {
 	 * re-cleaned label.
 	 */
 	unclosedBracket?: BracketKind;
+	/**
+	 * How many inner `[` opened inside a CONFIRMED carried label are still
+	 * waiting for their `]` at the end of this line. Handed on beside
+	 * `openBracket` so the next line's scan resumes where this one stopped,
+	 * which is what lets a bracket pair straddle a soft line break (NRL-88).
+	 * 0 unless one does.
+	 */
+	openBracketDepth?: number;
 }
 
 /**
@@ -559,6 +567,7 @@ function cleanLine(
 	incomingBracket?: BracketKind,
 	outgoingBracket?: BracketKind,
 	htmlClosesLater = false,
+	incomingBracketDepth = 0,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -782,6 +791,9 @@ function cleanLine(
 	// has already confirmed - so extractChunks can hand it on without re-asking.
 	// `unclosedBracket` is the unconfirmed discovery pass 1 exists to make.
 	let openBracket: BracketKind | undefined;
+	// Only ever non-zero on the carried-label path below, where a bracket pair
+	// opened inside the label straddles this line's end (NRL-88).
+	let openBracketDepth = 0;
 	let unclosedBracket: BracketKind | undefined;
 	let i = 0;
 
@@ -826,16 +838,30 @@ function cleanLine(
 	 * one carry for a line (see cleanLine's header), so `incomingCode` and
 	 * `incomingBracket` are mutually exclusive. The block is placed after the
 	 * code region anyway, so the ordering is stated rather than implied.
+	 *
+	 * `labelClose` and not a bare `inlineContainerClose` here, and the two sites
+	 * that call it must change together (NRL-88, D-88-10). This site used to
+	 * close the carry at the FIRST `]` on the line, unconditionally, while
+	 * bracketClosesLater tested that same `]` for a `](`/`][` tail. Teaching
+	 * only the confirmation to walk past an inner bracket pair was built and
+	 * measured and is strictly WORSE than leaving both alone: the confirmation
+	 * says yes, this site then ends the label at the stray `]` anyway, and the
+	 * real `](dest)` falls out as prose - the destination still leaked and the
+	 * alt text was silenced on top of it. One question, one helper, one answer.
 	 */
 	if (incomingBracket !== undefined) {
-		const close = inlineContainerClose(raw, 0, "]");
+		const found = labelClose(raw, 0, incomingBracketDepth);
+		const close = found.close;
 		if (close === -1) {
 			// The label has not closed yet, so the whole line is label content and
 			// the carry continues. Confirmation was made where the label opened and
 			// is monotone - the closing line is still ahead and no interrupting line
-			// can have appeared between - so it is not re-asked here.
+			// can have appeared between - so it is not re-asked here. The residual
+			// bracket depth goes out with the carry, so the next line resumes this
+			// scan rather than restarting it.
 			emitLabelRegion(0, raw.length, incomingBracket);
 			openBracket = incomingBracket;
+			openBracketDepth = found.depth;
 			i = raw.length;
 		} else {
 			emitLabelRegion(0, close, incomingBracket);
@@ -1293,7 +1319,7 @@ function cleanLine(
 		i += 1;
 	}
 
-	return { text: chars.join(""), index, openComment, openCode, openBracket, unclosedBracket };
+	return { text: chars.join(""), index, openComment, openCode, openBracket, openBracketDepth, unclosedBracket };
 }
 
 interface StripOptions {
@@ -1841,6 +1867,65 @@ function opensMathBlock(lines: string[], n: number): boolean {
 }
 
 /**
+ * Where a soft-wrapped label closes on this line, given `depth` inner `[`
+ * already outstanding from earlier lines, and the depth left outstanding if it
+ * does not close here.
+ *
+ * The one rule is CommonMark's own: a bracket may appear inside a link or image
+ * label only as a matched pair. So a `]` is walked past ONLY while an inner `[`
+ * opened after our own opener is still waiting for it, which makes a skipped
+ * `]` provably not ours. A `]` reached at depth 0 IS ours and is returned, for
+ * the caller to accept or reject on its own terms.
+ *
+ * That distinction is the whole of NRL-88 and it is not "skip any `]` that is
+ * not followed by `(`". The naive skip was built and measured: it fixes the
+ * leak and loses real prose, because a shortcut label's own closer gets skipped
+ * and the scan runs on to adopt an unrelated later `](`, swallowing every word
+ * between. `A ![shortcut` / `more] text` / `and [link](dest) here` became
+ * `"A here"`. With depth, that `]` is at depth 0, the caller's `](`/`][` test
+ * fails, and the confirmation returns false - the same fail-closed outcome
+ * ADR 0023 clause 3 takes everywhere else.
+ *
+ * THE EARLY RETURN AT `shut === -1` IS DELIBERATE AND MUST NOT BE "COMPLETED".
+ * It looks like an oversight: a line holding a trailing `[` and no further `]`
+ * leaves that opener uncounted. Counting it was built and measured as its own
+ * arm, and it is wrong here. It newly leaked a destination in 10 of 4,000 fuzz
+ * notes and moved the pinned fixture guard-nrl63-nested-label, because this
+ * codebase's carry takes the FIRST unmatched opener on a line (see the image
+ * and link branches above) where CommonMark's inline parser takes the LAST.
+ * Full accounting binds the outer opener and then refuses the closer the inner
+ * opener owns. Conservative depth agrees with the first-opener convention
+ * instead: 0 new leaks and 0 fixtures moved. The cost is one named residual,
+ * pinned by guard-nrl88-unbalanced-open-residual.
+ *
+ * Two inlineContainerClose calls per step rather than a second scanner of its
+ * own, so the escape, code-span and complete-comment-span skipping is byte for
+ * byte what the single-line branches already do. A `[` or `]` hidden inside a
+ * code span or a comment cannot move the depth.
+ */
+function labelClose(line: string, from: number, depth: number): { close: number; depth: number } {
+	let d = depth;
+	let i = from;
+	while (i < line.length) {
+		const open = inlineContainerClose(line, i, "[");
+		const shut = inlineContainerClose(line, i, "]");
+		if (shut === -1) return { close: -1, depth: d };
+		if (open !== -1 && open < shut) {
+			d += 1;
+			i = open + 1;
+			continue;
+		}
+		if (d > 0) {
+			d -= 1;
+			i = shut + 1;
+			continue;
+		}
+		return { close: shut, depth: d };
+	}
+	return { close: -1, depth: d };
+}
+
+/**
  * Does an `![` or `[` left unmatched on line `from` have its `]` on a later line
  * of the same paragraph, followed by a destination or a reference tail?
  *
@@ -1858,20 +1943,29 @@ function opensMathBlock(lines: string[], n: number): boolean {
  * no carry and nothing changes, which is also what a label that never closes
  * gets: it cannot swallow the rest of the note because it is never recognised.
  *
- * Only the FIRST `]` on the first line that has one is tested, because that is
- * where the label would close; a later `]` on the same line is inside the
- * destination or past it. inlineContainerClose is the same helper the
- * single-line branches close their labels with, so a `]` hidden in a code span
- * or a complete comment span cannot close this one either.
+ * Where the label closes is decided by `labelClose`, the SAME helper the
+ * consumption site in cleanLine uses, so the two can never disagree about which
+ * `]` is the label's own (NRL-88, D-88-10).
  */
 function bracketClosesLater(lines: string[], from: number, lastHtmlCloser: number): boolean {
 	if (interruptsParagraph(lines[from]!, lastHtmlCloser > from) || opensMathBlock(lines, from)) return false;
+	// Starts at 0 rather than at a depth read off the opener line, and that is
+	// provable rather than an approximation: the carry is armed only when
+	// `inlineContainerClose(raw, openerAt, "]")` is -1, so there is no `]` after
+	// the opener at all, so `labelClose` seeded there would return on its first
+	// step with the depth it was given. Threading an openerAt argument through
+	// five sites to compute a constant 0 would be dead weight a later reader has
+	// to re-derive.
+	let depth = 0;
 	for (let n = from + 1; n < lines.length; n++) {
 		const line = lines[n]!;
 		if (interruptsParagraph(line, lastHtmlCloser > n) || opensMathBlock(lines, n)) return false;
-		const close = inlineContainerClose(line, 0, "]");
-		if (close === -1) continue;
-		const next = line[close + 1];
+		const found = labelClose(line, 0, depth);
+		if (found.close === -1) {
+			depth = found.depth;
+			continue;
+		}
+		const next = line[found.close + 1];
 		return next === "(" || next === "[";
 	}
 	return false;
@@ -2046,6 +2140,9 @@ export function extractChunks(
 	// and cleared by the same paths as openCode (NRL-63). Only one of the two is
 	// ever armed for a given line; see cleanLine's header for which wins.
 	let openBracket: BracketKind | undefined;
+	// Travels with openBracket and is cleared by exactly the same paths, being
+	// part of the same carry rather than state of its own (NRL-88).
+	let openBracketDepth = 0;
 	let inIndentedCode = false;
 	// Inside a list item, an indented line is item content or a nested item,
 	// never code. Kept across blank lines, since loose lists have them.
@@ -2162,6 +2259,8 @@ export function extractChunks(
 		// the same reason: a label cannot outlive its paragraph either.
 		const carriedBracket = openBracket;
 		openBracket = undefined;
+		const carriedBracketDepth = openBracketDepth;
+		openBracketDepth = 0;
 
 		// This deliberately diverges from Obsidian, which only honours a `---`
 		// on line 1. A note that starts with blank lines and then a `key: value`
@@ -2399,7 +2498,7 @@ export function extractChunks(
 		 * wholly inside an already-carried span.
 		 */
 		const htmlClosesLater = lastHtmlCloser > lineNo;
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater);
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
@@ -2407,7 +2506,7 @@ export function extractChunks(
 			codeSpanClosesLater(lines, lineNo, cleaned.openCode, lastHtmlCloser)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -2441,6 +2540,7 @@ export function extractChunks(
 				carriedBracket,
 				confirmedBracket,
 				htmlClosesLater,
+				carriedBracketDepth,
 			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the
@@ -2494,6 +2594,7 @@ export function extractChunks(
 		// label already live holds the carry, because it opened first and the run
 		// inside it is part of its content. Only one of the two is ever set.
 		openBracket = cleaned.openBracket;
+		openBracketDepth = cleaned.openBracketDepth ?? 0;
 		if (confirmed !== undefined && openBracket === undefined) openCode = confirmed;
 
 		if (cleaned.text.trim() === "") {
