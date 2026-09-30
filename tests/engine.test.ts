@@ -213,6 +213,24 @@ console.log("speechd: failures are not silent (fake runner)");
 type OutputModulesSpec =
 	| string[]
 	| { code: number; stdout: string; delayMs?: number; signal?: NodeJS.Signals | null };
+/**
+ * One `attributionRunner()` handle serves exactly ONE `probeAttribution()`, i.e.
+ * exactly one `SpeechDispatcherEngine` instance. Attribution is memoised per
+ * instance, so case G's two sequential `listVoices()` calls and its two
+ * concurrent ones are still one probe and still obey this.
+ *
+ * NRL-83, why the constraint exists: `oCalls` lives on the runner, not on the
+ * probe, so "call 1 is the opener, call 2 is NRL-71's closer" only holds while
+ * one runner serves one probe. A third `-O` makes `modulesAgain` answer a second
+ * probe's OPENING call, so that probe takes the divergent module set as its
+ * BASELINE, sees no divergence and attributes - the opposite of what such a case
+ * would be written to express, and a pass for the wrong reason.
+ *
+ * Breaking it is recorded on the handle's `violations` array rather than thrown,
+ * and every block below asserts that array empty via `noReuse()`. Case M6 is the
+ * one deliberate exception: it reuses a runner on purpose to measure exactly this
+ * divergence, so it carries no `noReuse()` guard.
+ */
 interface AttributionScript {
 	/** `-O` reply. See {@link OutputModulesSpec}. */
 	modules?: OutputModulesSpec;
@@ -254,11 +272,20 @@ interface AttributionScript {
 }
 function attributionRunner(script: AttributionScript) {
 	const scopedCalls: string[] = [];
+	const violations: string[] = [];
 	let oCalls = 0;
 	const runner: ProcessRunner = {
 		async run(_cmd, args): Promise<RunResult> {
 			if (args[0] === "-O") {
 				oCalls += 1;
+				// NRL-83. Recorded, never thrown: probeAttribution() ends in a bare
+				// `catch { return null; }`, so a throw here would be laundered into
+				// exactly the silent give-up this cap exists to make loud. `<= 2`
+				// rather than `=== 2` because a future path may legitimately skip
+				// the closing `-O`; what is forbidden is a THIRD call, i.e. a second
+				// probe on the same runner. See the contract on AttributionScript.
+				if (oCalls > 2)
+					violations.push(`-O call ${oCalls}: one runner served more than one probe`);
 				const spec = (oCalls > 1 ? script.modulesAgain : undefined) ?? script.modules ?? [];
 				if (Array.isArray(spec)) {
 					return {
@@ -309,8 +336,11 @@ function attributionRunner(script: AttributionScript) {
 		},
 	};
 	// oCount is a function, not a number: `oCalls` is captured by value at return
-	// time, so a plain property would read 0 in every assertion.
-	return { runner, scopedCalls, oCount: () => oCalls };
+	// time, so a plain property would read 0 in every assertion. `violations` is
+	// deliberately NOT a function for the mirror-image reason: an array is
+	// captured by reference and mutated in place, so it already reads correctly
+	// at assertion time.
+	return { runner, scopedCalls, oCount: () => oCalls, violations };
 }
 
 /** Build a `spd-say -L` listing from rows, column widths as spd-say prints them. */
@@ -331,6 +361,17 @@ const ESPEAK_LIST = spdList(ESPEAK_ROWS);
 const OPENJTALK_LIST = spdList([["Default", "ja", "none"]]);
 const FESTIVAL_LIST = spdList([["Festival Voice", "en-US", "none"]]);
 
+/**
+ * NRL-83. Every block but M6 obeys the one-runner-one-probe contract documented
+ * on {@link AttributionScript}, so its handle must come back with no recorded
+ * violations. These are GUARDS - green before and after the cap was added - not
+ * pins on a defect: they exist so a later edit that quietly reuses a runner
+ * fails loudly instead of passing for the wrong reason.
+ */
+function noReuse(tag: string, h: { violations: string[] }): void {
+	check(`${tag}: the harness made at most two -O calls`, h.violations.length === 0, JSON.stringify(h.violations));
+}
+
 /** local must never be false, on any path: the engine can only ever say true or unknown. */
 function neverFalse(voices: VoiceInfo[]): boolean {
 	return voices.every((v) => v.local !== false && v.requiresNetwork !== true);
@@ -346,7 +387,7 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 {
 	// A. Two allowlisted modules with genuinely different row sets, which is
 	// what this machine really looks like (espeak-ng + openjtalk).
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
 		bare: spdList([...ESPEAK_ROWS, ["Default", "ja", "none"], ["Ghost", "xx", "none"]]),
@@ -360,11 +401,12 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	// A name in the bare listing that no module claimed cannot be attributed.
 	check("A: an unattributed name stays unknown", localOf(voices, "Ghost") === "unknown", `${localOf(voices, "Ghost")}`);
 	check("A: nothing reports local false", neverFalse(voices));
+	noReuse("A", { violations });
 }
 {
 	// B. A module that is not on the allowlist. Its voices stay unknown even
 	// though the differential proved scoping works.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: ["espeak-ng", "festival"],
 		lists: { "espeak-ng": ESPEAK_LIST, festival: FESTIVAL_LIST },
 		bare: spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "none"]]),
@@ -374,6 +416,7 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	check("B: non-allowlisted module's voice stays unknown", localOf(voices, "Festival Voice") === "unknown", `${localOf(voices, "Festival Voice")}`);
 	check("B: and its requiresNetwork stays unknown", networkOf(voices, "Festival Voice") === "unknown", `${networkOf(voices, "Festival Voice")}`);
 	check("B: nothing reports local false", neverFalse(voices));
+	noReuse("B", { violations });
 }
 {
 	// C. The measured hazard, and the reason for the whole differential gate.
@@ -381,7 +424,7 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	// full 13363-line default list, so a build that ignores -o hands every
 	// module the same listing. A naive allowlist would then call 13,362
 	// espeak-ng voices local on a build where -o means nothing.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: ESPEAK_LIST },
 		bare: ESPEAK_LIST,
@@ -392,21 +435,23 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 		voices.length > 0 && voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
 		JSON.stringify(voices.map((v) => v.local)),
 	);
+	noReuse("C", { violations });
 }
 {
 	// D. A scoped listing that fails. Not a partial attribution: the module we
 	// could not read might be exactly the one that made a name ambiguous.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: { code: 1 } },
 		bare: ESPEAK_LIST,
 	});
 	const voices = await new SpeechDispatcherEngine(runner).listVoices();
 	check("D: a non-zero -o listing leaves everything unknown", voices.length === 3 && voices.every((v) => v.local === "unknown"), JSON.stringify(voices.map((v) => v.local)));
+	noReuse("D", { violations });
 }
 {
 	// D2. Same, but run() rejects rather than exiting non-zero.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: "throw" },
 		bare: ESPEAK_LIST,
@@ -420,21 +465,23 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	}
 	check("D2: a throwing -o listing does not escape listVoices", escaped === null, `${(escaped as Error | null)?.message}`);
 	check("D2: and leaves the voices listed and unknown", voices.length === 3 && voices.every((v) => v.local === "unknown"), JSON.stringify(voices.map((v) => v.local)));
+	noReuse("D2", { violations });
 }
 {
 	// D3. An unparseable scoped listing. Zero rows must not be treated as a
 	// module that "differs" from the others: that would falsely prove scoping.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: "some unrelated output\n" },
 		bare: ESPEAK_LIST,
 	});
 	const voices = await new SpeechDispatcherEngine(runner).listVoices();
 	check("D3: an unparseable -o listing leaves everything unknown", voices.length === 3 && voices.every((v) => v.local === "unknown"), JSON.stringify(voices.map((v) => v.local)));
+	noReuse("D3", { violations });
 }
 {
 	// E. One module only: nothing to compare, so no differential is possible.
-	const { runner, scopedCalls } = attributionRunner({
+	const { violations, runner, scopedCalls } = attributionRunner({
 		modules: ["espeak-ng"],
 		lists: { "espeak-ng": ESPEAK_LIST },
 		bare: ESPEAK_LIST,
@@ -442,6 +489,7 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	const voices = await new SpeechDispatcherEngine(runner).listVoices();
 	check("E: a single output module leaves everything unknown", voices.length === 3 && voices.every((v) => v.local === "unknown"), JSON.stringify(voices.map((v) => v.local)));
 	check("E: and no scoped listing is even attempted", scopedCalls.length === 0, JSON.stringify(scopedCalls));
+	noReuse("E", { violations });
 }
 {
 	// E2. -O itself fails, and -O without its header.
@@ -451,11 +499,13 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	const headerless = attributionRunner({ modules: { code: 0, stdout: "espeak-ng\nopenjtalk\n" }, bare: ESPEAK_LIST });
 	const v2 = await new SpeechDispatcherEngine(headerless.runner).listVoices();
 	check("E2: -O with no OUTPUT MODULES header leaves everything unknown", v2.every((v) => v.local === "unknown"), JSON.stringify(v2.map((v) => v.local)));
+	noReuse("E2 (failing)", failing);
+	noReuse("E2 (headerless)", headerless);
 }
 {
 	// F. Ambiguity. A NAME served by both an allowlisted and a non-allowlisted
 	// module cannot be called local: we do not know which one would speak it.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: ["espeak-ng", "festival"],
 		lists: {
 			"espeak-ng": ESPEAK_LIST,
@@ -467,12 +517,13 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	check("F: a name served by two modules, one not allowlisted, stays unknown", localOf(voices, "Afrikaans") === "unknown", `${localOf(voices, "Afrikaans")}`);
 	check("F: an unambiguous allowlisted name is still local", localOf(voices, "Afrikaans+Adam") === true, `${localOf(voices, "Afrikaans+Adam")}`);
 	check("F: nothing reports local false", neverFalse(voices));
+	noReuse("F", { violations });
 }
 {
 	// G. The probe costs a full listing per module (0.387s for espeak-ng on
 	// this machine), and listVoices() runs on every settings-tab render, so it
 	// must be paid once per engine instance.
-	const { runner, scopedCalls } = attributionRunner({
+	const { violations, runner, scopedCalls } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
 		bare: ESPEAK_LIST,
@@ -490,6 +541,8 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	const [a, b] = await Promise.all([spd3.listVoices(), spd3.listVoices()]);
 	check("G: two concurrent listVoices share one probe", concurrent.scopedCalls.length === 2, JSON.stringify(concurrent.scopedCalls));
 	check("G: and both get the attribution", localOf(a!, "Afrikaans") === true && localOf(b!, "Afrikaans") === true);
+	noReuse("G (sequential)", { violations });
+	noReuse("G (concurrent)", concurrent);
 }
 {
 	// H. The probe deadline has to fail closed, and the exit code cannot tell it
@@ -507,7 +560,7 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	// `srs.md` R-S01 forbids. The same truncation makes two otherwise identical
 	// listings differ, so it can also carry the differential gate on a build
 	// that ignores `-o` altogether.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: ["espeak-ng", "festival"],
 		lists: {
 			"espeak-ng": ESPEAK_LIST,
@@ -527,6 +580,7 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	);
 	check("H: and the ambiguous name is not called local", localOf(voices, "Afrikaans") !== true, `${localOf(voices, "Afrikaans")}`);
 	check("H: nothing reports local false", neverFalse(voices));
+	noReuse("H", { violations });
 }
 {
 	// H2 (NRL-87). Case H above pins that a deadline fails closed, but it cannot
@@ -541,7 +595,7 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	// deleted the probe runs the whole loop and is then caught by the closing
 	// `-O`'s own abort check, so every voice is still "unknown". The call trace is
 	// the only observable that moves, which is why it is asserted directly.
-	const { runner, scopedCalls } = attributionRunner({
+	const { violations, runner, scopedCalls } = attributionRunner({
 		modules: ["espeak-ng", "festival", "openjtalk"],
 		lists: {
 			"espeak-ng": ESPEAK_LIST,
@@ -562,6 +616,7 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 		scopedCalls.join(",") === "espeak-ng,festival",
 		JSON.stringify(scopedCalls),
 	);
+	noReuse("H2", { violations });
 }
 /**
  * Cases I-L: the same truncation as case H, but caused by a kill the plugin did
@@ -589,7 +644,7 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	// well as espeak-ng, so that NAME is ambiguous and must stay unknown (case F).
 	// Its listing arrives truncated past the shared row, as `code: 0` plus a
 	// SIGTERM, and the lost row takes the ambiguity with it.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: THREE_MODULES,
 		lists: {
 			"espeak-ng": ESPEAK_LIST,
@@ -607,6 +662,7 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	check("I: the shared name is not called local", localOf(voices, "English (America)") === "unknown", `${localOf(voices, "English (America)")}`);
 	check("I: and its requiresNetwork is not false", networkOf(voices, "English (America)") === "unknown", `${networkOf(voices, "English (America)")}`);
 	check("I: nothing reports local false", neverFalse(voices));
+	noReuse("I", { violations });
 }
 {
 	// J. The same kill on the `-O` run instead. The truncated module list has
@@ -621,7 +677,7 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	// or the whole opening guard - left the suite green (measured). With the
 	// guard intact this field is inert: the probe gives up at the opening run and
 	// the closing `-O` is never reached.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: { code: 0, stdout: ["OUTPUT MODULES", "espeak-ng", "openjtalk", ""].join("\n"), signal: "SIGTERM" },
 		modulesAgain: ["espeak-ng", "openjtalk"],
 		lists: {
@@ -638,13 +694,14 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
 	);
 	check("J: nothing reports local false", neverFalse(voices));
+	noReuse("J", { violations });
 }
 {
 	// K. The control arm. Identical fixtures to I and J with every child exiting
 	// normally: attribution must still happen, or the fix has simply switched the
 	// probe off. Afrikaans is served by espeak-ng alone, English (America) by
 	// espeak-ng and festival.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: THREE_MODULES,
 		lists: {
 			"espeak-ng": ESPEAK_LIST,
@@ -658,11 +715,12 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	check("K: control: the variant is local too", localOf(voices, "Afrikaans+Adam") === true, `${localOf(voices, "Afrikaans+Adam")}`);
 	check("K: control: the shared name stays unknown", localOf(voices, "English (America)") === "unknown", `${localOf(voices, "English (America)")}`);
 	check("K: control: nothing reports local false", neverFalse(voices));
+	noReuse("K", { violations });
 }
 {
 	// L. A signal can only ever cost information, never invert it: even when the
 	// killed module is the allowlisted one, no voice may come back local: false.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: THREE_MODULES,
 		lists: {
 			"espeak-ng": { code: 0, stdout: spdList([["Afrikaans", "af", "none"]]), signal: "SIGKILL" },
@@ -674,6 +732,7 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	const voices = await new SpeechDispatcherEngine(runner).listVoices();
 	check("L: a signal on the allowlisted module's listing yields only unknown", voices.every((v) => v.local === "unknown"), JSON.stringify(voices.map((v) => String(v.local))));
 	check("L: and never local false", neverFalse(voices));
+	noReuse("L", { violations });
 }
 
 /**
@@ -702,7 +761,7 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	// modules are ever queried, so festival deliberately gets no `lists` entry:
 	// an unscripted module throws, which would make the case pass for the wrong
 	// reason. Pre-NRL-71 this fixture attributes (Afrikaans === true).
-	const { runner, oCount } = attributionRunner({
+	const { violations, runner, oCount } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		modulesAgain: THREE_MODULES,
 		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
@@ -716,13 +775,14 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	);
 	check("M1: nothing reports local false", neverFalse(voices));
 	check("M1: the closing -O really ran", oCount() === 2, `${oCount()}`);
+	noReuse("M1", { violations });
 }
 {
 	// M2. The same set in reversed order. The daemon is not promised a stable
 	// module order, so this is the case that pins "compare the parsed set, not the
 	// stdout bytes": a byte comparison gives up here and costs every voice its
 	// attribution for nothing.
-	const { runner, oCount } = attributionRunner({
+	const { violations, runner, oCount } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		modulesAgain: ["openjtalk", "espeak-ng"],
 		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
@@ -733,12 +793,13 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	check("M2: and the other module's voice too", localOf(voices, "Default") === true, `${localOf(voices, "Default")}`);
 	check("M2: nothing reports local false", neverFalse(voices));
 	check("M2: the closing -O really ran", oCount() === 2, `${oCount()}`);
+	noReuse("M2", { violations });
 }
 {
 	// M3. The closing `-O` is signal-terminated while reporting the same module
 	// set, so only the signal check can catch it. Without this case the closing
 	// run's `RunResult.signal` check is only established by reading the code.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		modulesAgain: {
 			code: 0,
@@ -755,6 +816,7 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
 	);
 	check("M3: nothing reports local false", neverFalse(voices));
+	noReuse("M3", { violations });
 }
 {
 	// M4. The closing `-O` exits non-zero while reporting the SAME module set, so
@@ -762,7 +824,7 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	// mean anything: with an empty or truncated stdout the set comparison catches
 	// it instead, M1 already pins that comparison, and deleting the `code !== 0`
 	// clause then leaves the whole suite green. Mutation-checked both ways.
-	const { runner } = attributionRunner({
+	const { violations, runner } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		modulesAgain: {
 			code: 1,
@@ -778,6 +840,7 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
 	);
 	check("M4: nothing reports local false", neverFalse(voices));
+	noReuse("M4", { violations });
 }
 {
 	// M5 (NRL-87). The probe deadline expires DURING the closing `-O`, which is
@@ -792,7 +855,7 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	// case could silently degrade into being caught by the loop's abort clause -
 	// which would leave the verdict identical and the closing clause unpinned
 	// again, the exact failure NRL-87 exists to fix.
-	const { runner, oCount } = attributionRunner({
+	const { violations, runner, oCount } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		modulesAgain: {
 			code: 0,
@@ -810,6 +873,55 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	);
 	check("M5: nothing reports local false", neverFalse(voices));
 	check("M5: the deadline fired on the closing -O, not before it", oCount() === 2, `${oCount()}`);
+	noReuse("M5", { violations });
+}
+{
+	// M6 (NRL-83). The one deliberate violation of the one-runner-one-probe
+	// contract documented on `AttributionScript`, and the case the cap inside
+	// `attributionRunner` exists for. ONE runner serves TWO probes - two engine
+	// instances, because attribution is memoised per instance, so two instances
+	// is what makes two probes - which is four `-O` calls through one counter.
+	//
+	// `oCalls` lives on the runner, so calls 3 and 4 are probe 2's OPENING and
+	// CLOSING calls and BOTH are answered with `modulesAgain`. Probe 2 therefore
+	// takes the divergent three-module set as its baseline, sees no divergence
+	// and attributes, while probe 1 sees calls 1 and 2, spots the change and
+	// correctly gives up. One script, two probes, opposite verdicts.
+	//
+	// festival gets a `lists` entry here, unlike M1, precisely so probe 2 runs to
+	// completion and attributes instead of dying on "unscripted module": the
+	// divergence has to be reachable for this case to show it.
+	//
+	// This block must NOT get the `noReuse` guard every other block carries. It
+	// is the deliberate violator, so guarding it would assert the opposite of
+	// what it measures.
+	const { runner, violations, oCount } = attributionRunner({
+		modules: ["espeak-ng", "openjtalk"],
+		modulesAgain: THREE_MODULES,
+		lists: {
+			"espeak-ng": ESPEAK_LIST,
+			openjtalk: OPENJTALK_LIST,
+			festival: FESTIVAL_LIST,
+		},
+		bare: THREE_MODULE_BARE,
+	});
+	const probe1 = await new SpeechDispatcherEngine(runner).listVoices();
+	const probe2 = await new SpeechDispatcherEngine(runner).listVoices();
+	check(
+		"M6: reusing one runner across two probes is recorded, not swallowed",
+		violations.length === 2,
+		`${violations.length}: ${JSON.stringify(violations)}`,
+	);
+	// Guards, green on both sides of the cap. They establish that the reuse the
+	// violation names really happened, and that the hazard it warns about is
+	// real. (c) is deliberately phrased as "the two probes disagree" rather than
+	// "probe 2 says true", so nothing here pins the wrong verdict as expected.
+	check("M6: guard: the shared runner really made four -O calls", oCount() === 4, `${oCount()}`);
+	check(
+		"M6: guard: the two probes disagree although the script is one script",
+		localOf(probe1, "Afrikaans") !== localOf(probe2, "Afrikaans"),
+		`probe1=${String(localOf(probe1, "Afrikaans"))} probe2=${String(localOf(probe2, "Afrikaans"))}`,
+	);
 }
 {
 	// In -e mode spd-say runs any line starting "!-!" as a raw SSIP command
