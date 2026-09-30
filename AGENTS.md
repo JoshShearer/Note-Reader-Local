@@ -165,11 +165,13 @@ only change deliberately.
 The **image** half has not moved. `srs.md:365` promises that an image's "destination and any
 quoted title are never spoken", and two shapes still speak one, in **both** positions of
 `speakImageAlt`: a label holding another bracket construct (`![a [[N|l]] b](dest.png)`) and an
-alt text crossing a soft line break (NRL-44 F9, also filed on its own as **NRL-63** because it
-is the privacy item). A third speaks a fragment of one, `![alt](dest(1).png)` saying `.png)`.
+alt text crossing a soft line break (NRL-44 F9, which **survived NRL-44** and is now tracked
+on its own as **NRL-63**, because the fix made the confirmed region verbatim and did not make
+the scanner recognise a construct across a break at all). A third speaks a fragment of one,
+`![alt](dest(1).png)` saying `.png)`.
 All three are pre-existing, all are tracked, and none was opened by NRL-21. **Do not record
-R-M09 as met until they close**, and the headline count stays at 2 of 16: NRL-46 closed a
-leftover, not the requirement.
+R-M09 as met until they close**, and the headline count stays at 2 of 16: NRL-46 and NRL-44
+each closed a leftover, not the requirement.
 
 R-M10 (speech segmentation) did not move the count either, and the reason is different
 from R-M09's. Its acceptance criteria are met on the automated evidence and the evidence
@@ -379,9 +381,19 @@ rediscover them:
   skipped. Do not "simplify" that back into per-branch `i >= literalCodeEnd` guards: the
   three branches that were already correct were correct by accident of which ticket touched
   them, and the set of branches is not closed. Post-fix the same probe reports 0 of 21.
-  N2, F4 and F7 closed with it; F5 closed as an invariant test instead of a code change
+  N2, F4 and F7 closed with it, and so did the **15 other constructs nobody had
+  enumerated** - the three named shapes were a sample of the family, not the family. F5
+  closed as an invariant test instead of a code change
   (`HEADING`, `BLOCKQUOTE`, `LIST_BULLET`, `TABLE_ROW` must each stop a carry, mutation-
-  checked). Two shapes stay open and are pinned so they change deliberately: **NRL-64**
+  checked). The rest of the evidence, all bare-Node, all measured on both sides of the
+  diff: the disclosure probe's **two-class oracle** held **HIDING 0 to 0 and LITERAL 1,536
+  to 1,536** over **25,600 extractions per side**, plus **36,864 per side** across the 18
+  constructs; `sourceIndex` was clean over **12,288 adversarial combinations**, checked
+  numerically by UTF-16 code-unit index; **28 fixtures were red pre-fix**; and a
+  **4,000-note fuzz** found **0 new disclosures and 0 prose loss**. Keeping the oracle's
+  two classes apart is load-bearing rather than tidy: collapsing them scores NRL-42's
+  designed literal `%%` as a leak and invents failures that are not there.
+  **Nothing was observed in Obsidian.** Two shapes stay open and are pinned so they change deliberately: **NRL-64**
   (N1 - on the span's *opening* line the tail after the unmatched run is still spoken as
   prose, because `cleanLine` runs there before `codeSpanClosesLater` has confirmed the span,
   and silencing it without the confirmation would delete visible prose) and **NRL-63** (F9 -
@@ -404,6 +416,25 @@ rediscover them:
   `` `![alt](d.png)` `` speaks `![alt](d.png)` with `speakImageAlt: false`). The disclosure
   probe separates it as its own class for this reason: hiding sentinels stayed at 0 across
   73,728 extractions, the destination class moved 0 to 4,608, all at `skipInlineCode: false`.
+  This is the intended reading of the requirement, not a deviation from it: both ADR 0019
+  and `srs.md` R-M08 say so in as many words, so do not "fix" it back.
+- **NRL-68** (High, open): a trailing mid-line `%%` fails to open a block comment, and the
+  hidden text under it is spoken. `Plain prose %%` / `HIDEME` / `%%` says `HIDEME`. Filed
+  out of NRL-44's verify phase because that is where the disclosure direction was probed
+  hardest, but it is **not** NRL-44's defect and **not** a code-span defect: it is
+  byte-identical on both sides of the diff at **9,216 leaking cells each**, and it
+  reproduces with no backticks anywhere in the note. It is a direct violation of the
+  `%%...%%` promise R-M08 makes and NRL-38 was written to keep, through a shape NRL-38 did
+  not cover, since the opener sits at the end of a prose line rather than at the start of
+  one. This is now the **third distinct `%%` gap** open, and they have three different
+  roots, which is why they are tracked apart rather than merged: NRL-68 is a mid-line
+  trailing opener that never opens; **NRL-67** is a `%%` inside a wikilink target, spoken
+  because the label takes a raw-emission path that never runs comment stripping; and
+  **NRL-45's leftover** is `[a]: x.png "%%"` followed by a secret line, where the `%%` in a
+  quoted title is an unmatched inline opener (ADR 0006). NOT VERIFIED IN OBSIDIAN, and for
+  NRL-68 that caveat has teeth in both directions: if Obsidian does not treat a trailing
+  mid-line `%%` as an opener either, the current speech is right and the spec sentence is
+  what needs amending.
 
 ## Style
 
