@@ -139,6 +139,44 @@ never-emit-`false` rule keeps the failure to over-claiming locality rather than
 also inventing network dependence. This is stated rather than argued away: the
 design is a calculated narrowing of an honest `"unknown"`, not a proof.
 
+Two further shapes were characterised during verification. They are named here
+with their measurements so that neither is read as covered by the general
+statement above.
+
+**A short read that exits `code 0` with no signal at all.** Step 6 closes
+truncation by signal. It cannot see a listing that ends early while the child
+exits cleanly, and neither can any other check in the probe: a short listing and
+a short module is the same observation. Two of the three routes to it were
+measured shut this session. Through the runner itself, 40 runs of a
+200,000-line producer through `NodeProcessRunner.run` produced 0 short reads, so
+the runner does not lose the tail of a large stdout on its own. Through EPIPE, a
+real `spd-say -L | head -3` exits 141 and a directly spawned producer dies by
+SIGPIPE, so both are caught, one by the exit code and one by step 6. The route
+that remains is `spd-say` itself printing a partial listing and exiting 0, on an
+internal error it does not surface as a non-zero status. No observable available
+to the probe can detect that, so it is accepted rather than mitigated. The
+allowlist and the never-emit-`false` rule still bound its consequence to an
+over-claim of locality.
+
+**The probe is not atomic.** It is `-O` followed by N separate
+`spd-say -o <module> -L` runs, and the daemon's configured module set can change
+between them. Module **removal** fails closed, and that was measured: a module
+that disappears after `-O` makes `spd-say -o <gone> -L` fall back to the default
+module's full listing, and that fallback makes every name the gone module shared
+with another one ambiguous, so those names stay `"unknown"`. Module **addition**
+is the direction that can produce a wrong `local: true`: a non-allowlisted
+module configured in after `-O` has been read serves names the probe never
+observes it serving, and those names can then be attributed to an allowlisted
+module alone. It requires the daemon to be reconfigured inside the probe's own
+window, measured at 778 ms on this machine, and no `spd-say` call reads the
+module list and the per-module listings as one atomic operation, so the sequence
+cannot be made a single observation. A cheap partial mitigation was deliberately
+not taken: re-running `-O` at the end of the probe and requiring the module set
+to be unchanged. It would narrow the window rather than close it, since a module
+could still be added and removed inside it and the per-module listings are still
+read at N different instants, and it costs one more daemon round trip on every
+`listVoices()` that misses the memo. NRL-71 tracks it.
+
 ## Consequences
 
 - On this machine, live against the running daemon after the change: all 13231
