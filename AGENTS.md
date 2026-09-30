@@ -23,13 +23,17 @@ script and no git hook, so nothing runs the gates at the moment you commit: CI i
 backstop, not a substitute. Run them locally first.
 
 ```bash
-npm test          # 23 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, modelStore, adrNumbers, vaultPersistence, loadingNotice
+npm test          # 24 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, modelStore, adrNumbers, vaultPersistence, loadingNotice, suiteRegistry
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
 
 Both must pass before any commit. `npm run build` before anything that touches the
 bundle, the worker, or the esbuild config.
+
+That `npm test` line's count and its name list are asserted against `package.json`'s
+`pretest` by `tests/suiteRegistry.test.ts`, so a new suite is added by editing the script
+and the prose follows, rather than the two drifting apart on a clean merge (NRL-85).
 
 ```bash
 npm run deploy         # build + copy into ~/Documents/Notes/.obsidian/plugins/
