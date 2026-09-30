@@ -145,7 +145,17 @@ build where the self-check fails, and on every machine with fewer than two
 output modules. R-S01 is therefore narrowed rather than closed and its text
 stands.
 
-R-S04 is deliberately not claimed. ADR 0001 clause 6, as amended by ADR 0008,
-keeps `offlinePreferred` the one reserved settings key with no toggle by design,
-so the SHOULD-expose control R-S04 describes does not exist and this ticket does
-not create it.
+R-S04 is deliberately not claimed, and the reason recorded during triage turned
+out to be stale, so it is corrected here rather than repeated. The premise was
+that `offlinePreferred` is a reserved key with no toggle by design. It is not:
+`src/ui/settingsTab.ts:359-371` renders "Prefer voices that do not require
+network access" and `src/main.ts:1038` feeds it to `pickLocaleVoice`, both since
+NRL-26 (`8a54319`). The comment at `src/settings/index.ts:39` still calls the key
+reserved and unread, which is drift left by that ticket and is not touched here.
+
+R-S04 is not claimed because this change does not move it. `pickLocaleVoice`
+penalises only `local === false` (`src/audio/voiceChoice.ts:70`), so a voice
+going from `"unknown"` to `true` does not change automatic selection at all.
+The one user-visible effect is the voice dropdown's suffix
+(`voiceNetworkMarker`, `src/ui/settingsTab.ts:788`): a speechd voice that read
+" - network status unknown" now reads with no suffix.
