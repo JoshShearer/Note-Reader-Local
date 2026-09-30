@@ -222,6 +222,38 @@ per run - they write no spaces either, and they were out of scope, not overlooke
 extraction measured 1.82x slower, 10.2 ms to 18.7 ms over 9,200 units, which is the per-syllable
 grapheme cut doing its work.
 
+R-M08 moved partway with NRL-45 (`docs/adr/0018-speak-what-the-renderer-shows.md`,
+`srs.md` R-M08's excluded-syntax list). A CommonMark link reference definition renders as
+nothing, so it is now dropped whole - label, colon, destination and any quoted title - by
+`LINK_REF_DEF` in `src/text/extract.ts` and its one call site. Three parts of that are
+load-bearing and must not be "simplified". Recognition needs the **full** CommonMark shape
+on one line **and** an empty paragraph buffer (`blockType !== "heading" && paraText === ""
+&& !wasPara && !wasContainer`), because a definition may not interrupt a paragraph and a
+near-miss is preferred spoken over a sentence swallowed (ADR 0007 clause 6). The branch
+sits **after** `cleanLine` and after `inComment = cleaned.openComment`, and that placement
+is the whole of decision Q9: output exclusions do not exclude parsing, so dropping the line
+before `cleanLine` ran would stop an unclosed `<!--` inside a title from hiding the rest of
+the note and make text the author hid audible. Footnote definitions are deliberately **not**
+covered, and that is the same rule rather than an exception - a footnote body is displayed
+and a link reference definition displays nothing, so only the `[^1]:` marker goes.
+`interruptsParagraph` and `codeSpanClosesLater` were deliberately left untouched, which is
+what keeps NRL-45 and NRL-44 independent. Evidence, all bare-Node: **0 prose sentinels
+swallowed and 0 hidden sentinels made audible across 22,528 probe cells**, `sourceIndex`
+clean over **456,960 UTF-16 units** checked numerically, and 13 pre-fix failures
+re-established independently. **Nothing was observed in Obsidian.**
+
+Three leftovers from it, recorded so the paragraph above is not read as finishing R-M08.
+`[a]: x.png "%%"` followed by a secret line still speaks the secret; that is pre-existing,
+not opened here, and the mechanism was not run down. The second of two consecutive
+definitions inside a blockquote stays spoken (decision Q8): the first line sets
+`wasContainer`, so the second fails the empty-buffer half of the guard, and blocking it is
+deliberate - it keeps that half honest at the cost of leaked markup, which ADR 0007 clause 6
+prefers to a swallowed sentence. And a multi-line definition,
+with the destination on the following line, is out of scope (decision Q7) - it has the same
+per-line-scanner root as NRL-44's whole family. **Do not record R-M08 as fully met.** NRL-44
+is still open against it and NRL-64 keeps `srs.md`'s "known gap tracked separately" clause
+alive. The headline count stays at 2 of 16.
+
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
 
