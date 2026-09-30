@@ -60,21 +60,21 @@ export const KOKORO_WEIGHTS: Record<"gpu" | "fast" | "small", WeightsVariant> = 
 		sizeMb: 326,
 		label: "GPU (fp32)",
 		description:
-			"Roughly ten times faster than playback on a discrete GPU, and useless without one.",
+			"~326 MB, highest quality, roughly ten times faster than playback on a discrete GPU. Requires WebGPU support and a compatible graphics card.",
 	},
 	fast: {
 		path: "onnx/model_q4f16.onnx",
 		dtype: "q4f16",
 		sizeMb: 155,
 		label: "Fast (q4f16)",
-		description: "About real-time on a desktop CPU. The right choice unless space is tight.",
+		description: "~155 MB, moderate quality, about real-time synthesis on a desktop CPU. Best balance of quality and speed.",
 	},
 	small: {
 		path: "onnx/model_quantized.onnx",
 		dtype: "q8",
 		sizeMb: 92,
 		label: "Small (q8)",
-		description: "Smaller download, noticeably slower to synthesise. Meant for phones.",
+		description: "~92 MB, lower quality, smaller download. Noticeably slower synthesis, meant for phones and bandwidth-constrained devices.",
 	},
 };
 
