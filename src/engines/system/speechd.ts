@@ -7,7 +7,7 @@ import type {
 	SynthResult,
 	VoiceInfo,
 } from "../../audio/types";
-import type { ProcessRunner } from "./spawn";
+import type { ProcessRunner, RunResult } from "./spawn";
 
 /**
  * speech-dispatcher via `spd-say`.
@@ -83,14 +83,42 @@ const CHARS_PER_SECOND = 14;
 const CANCEL_TIMEOUT_MS = 500;
 
 /**
- * Cap on the whole module-attribution probe (NRL-55).
+ * Cap on the probe up to and including the last per-module listing (NRL-55).
  *
  * `spd-say -o espeak-ng -L` measured 0.387 s on this machine at spd-say
  * 0.12.0-rc2, and the probe is one such listing per module, so this is roughly
  * an order of magnitude of headroom. It exists so a wedged daemon degrades to
  * "every voice reports unknown" rather than to "the settings tab never opens".
+ *
+ * NRL-84: this is no longer a cap on the WHOLE probe. NRL-71's closing `-O`
+ * runs under CLOSING_PROBE_TIMEOUT_MS instead, so the probe's worst case is
+ * `probeTimeoutMs + closingTimeoutMs`, 5500 ms by default. Still bounded and
+ * still deterministic; and this one still bounds the part that grows without
+ * limit, which is the one listing per configured module.
  */
 const PROBE_TIMEOUT_MS = 5000;
+
+/**
+ * Cap on NRL-71's closing `spd-say -O` alone (NRL-84).
+ *
+ * The closing `-O` used to share PROBE_TIMEOUT_MS with the listings that run
+ * before it, so N slow modules could spend the whole budget and leave it
+ * nothing. It would then abort with a perfectly good reply in hand, the probe
+ * would return null, and - the give-up being memoised with no retry - every
+ * voice would report "unknown" for the life of the plugin instance.
+ *
+ * Measured this session on this machine (spd-say 0.12.0-rc2, two output
+ * modules, read-only calls, daemon untouched): `spd-say -O` over n=15 ran a
+ * median of 4.4 ms, min 3.0, max 7.2. 500 ms is ~69x that max and 10% of the
+ * outer deadline, so it is headroom for a wedged daemon rather than a budget
+ * the call can realistically reach.
+ *
+ * Deliberately NOT chained to the outer signal: the starvation case IS the
+ * outer timer firing mid-closing-run, so forwarding the outer abort into this
+ * scope would leave the behaviour exactly as it was. The outer deadline still
+ * bounds everything before this run, which is where the unbounded growth lives.
+ */
+const CLOSING_PROBE_TIMEOUT_MS = 500;
 
 interface SpdVoiceRow {
 	name: string;
@@ -197,6 +225,11 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 		 * exercise the deadline. Production always takes the default.
 		 */
 		private readonly probeTimeoutMs: number = PROBE_TIMEOUT_MS,
+		/**
+		 * Overridden only by tests, which cannot sit out CLOSING_PROBE_TIMEOUT_MS
+		 * to exercise the closing deadline. Production always takes the default.
+		 */
+		private readonly closingTimeoutMs: number = CLOSING_PROBE_TIMEOUT_MS,
 	) {}
 
 	async isAvailable(): Promise<EngineAvailability> {
@@ -350,10 +383,33 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 			// Compared as a parsed, order-independent set rather than as stdout bytes:
 			// the daemon is not promised to list modules in a stable order, and a
 			// reordered listing would otherwise cost every voice its attribution for
-			// nothing. Same controller, so it stays inside the one probe deadline, and
-			// the same three checks as every other run here.
-			const againRun = await this.runner.run("spd-say", ["-O"], undefined, controller.signal);
-			if (controller.signal.aborted || againRun.signal !== null || againRun.code !== 0) {
+			// nothing. The same three checks as every other run here.
+			//
+			// NRL-84: its OWN controller and its OWN budget, not the outer probe's.
+			// Sharing them meant the listings above could spend the whole deadline
+			// and leave this run none, so an `-O` that answered cleanly - code 0, no
+			// signal, the identical module set - was discarded solely because the
+			// outer timer had fired while it was in flight, and every voice reported
+			// "unknown" until the plugin reloaded. The outer abort is deliberately
+			// NOT forwarded here: an outer deadline that expires BEFORE this run is
+			// already caught by the loop's own abort check, so the only case left is
+			// the one this scope exists to survive.
+			//
+			// Hence exactly ONE abort clause below, reading the signal this run was
+			// actually given. Keeping `controller.signal.aborted ||` alongside it
+			// would restore the old behaviour and, worse, make the pair untestable:
+			// a fixture that expires the outer deadline sets both flags, so either
+			// clause alone would survive deletion while the guard only looked pinned.
+			// Cases M5 and M7 in tests/engine.test.ts hold the two halves apart.
+			const closingScope = new AbortController();
+			const closingTimer = setTimeout(() => closingScope.abort(), this.closingTimeoutMs);
+			let againRun: RunResult;
+			try {
+				againRun = await this.runner.run("spd-say", ["-O"], undefined, closingScope.signal);
+			} finally {
+				clearTimeout(closingTimer);
+			}
+			if (closingScope.signal.aborted || againRun.signal !== null || againRun.code !== 0) {
 				return null;
 			}
 			if (moduleSetKey(parseOutputModules(againRun.stdout.toString())) !== moduleSetKey(modules)) {

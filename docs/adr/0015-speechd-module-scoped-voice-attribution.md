@@ -61,7 +61,9 @@ whenever the proof does not land:
 
 Everything else stays `"unknown"`. The engine can never emit `local: false`.
 
-The whole probe runs under one 5 s deadline, and the deadline is checked on the
+The probe up to and including the last per-module listing runs under one 5 s
+deadline (NRL-84 gave the closing `-O` its own 500 ms one; see Residual risk),
+and every deadline here is checked on the
 `AbortSignal` after every run rather than through the exit code. That is not
 defensive tidiness. Aborting a run SIGKILLs the child, a SIGKILLed child closes
 with a null exit code, and `NodeProcessRunner.run` resolves `code ?? 0`, so a
@@ -108,11 +110,13 @@ the file - the coverage is per clause, not per case:
 | opening `-O`: `controller.signal.aborted` | **nothing** (survives deletion) |
 | opening `-O`: `modulesRun.signal !== null` | case J, which needs an explicit clean `modulesAgain` to do it |
 | opening `-O`: `modulesRun.code !== 0` | **nothing** (survives deletion) |
-| per-module loop: `controller.signal.aborted` | case H2, by CALL TRACE, not by verdict |
+| per-module loop: `controller.signal.aborted` | cases H and H2, by verdict AND call trace (NRL-84; was H2 by call trace only) |
 | per-module loop: `signal !== null` | cases I and L |
 | per-module loop: `code !== 0` | **nothing** (survives deletion) |
-| closing `-O`: `controller.signal.aborted` | case M5 |
+| closing `-O`: `closingScope.signal.aborted` | case M5, re-fixtured onto the closing budget (NRL-84) |
 | closing `-O`: `againRun.signal !== null` | case M3 |
+| closing `-O`: runs under `closingScope.signal`, not the outer one | case M7 (NRL-84) |
+| closing `-O`: the outer abort clause is ABSENT | case M7 (NRL-84) |
 | closing `-O`: `againRun.code !== 0` | case M4 |
 
 Two of those pins did not exist before NRL-87 and one was silently lost.
@@ -122,12 +126,23 @@ free control arms but also replays a case's injected failure onto the closing
 opening guard it exists to pin was reached, so deleting that opening clause -
 or the whole opening guard - left the suite green. J now sets an explicit clean
 `modulesAgain` and the default is kept for the arms that benefit from it. The
-loop's abort clause is pinned by H2 rather than by case H because H's delayed
-module is the last of two: deleting the clause there changes neither the verdict
+loop's abort clause was pinned by H2 rather than by case H because H's delayed
+module is the last of two: deleting the clause there changed neither the verdict
 nor the call trace. H2 puts three modules in the loop with the deadline on the
-middle one and asserts the trace stops at it; the verdict is deliberately not the
-discriminator, because with the clause deleted the closing `-O`'s own abort check
-still gives up and every voice is still `"unknown"`.
+middle one and asserts the trace stops at it.
+
+**Corrected by NRL-84.** The sentence that used to follow - that H2's verdict is
+deliberately not the discriminator, "because with the clause deleted the closing
+`-O`'s own abort check still gives up and every voice is still `"unknown"`" - was
+true only while the closing `-O` shared the outer controller. It no longer does.
+Re-measured on this branch with the same mutation (delete the loop's
+`controller.signal.aborted ||`, full engine suite, restore, re-assert the
+sha256): the probe now runs the whole loop, the closing `-O` answers cleanly
+under its own 500 ms budget and the probe ATTRIBUTES, so **four** checks go red
+where one did - both of H2's, and both of case H's, H having become a
+discriminator for this clause without being edited. The call trace is kept as a
+check in its own right because it is the only observable that says *where* the
+loop stopped, but it is no longer the only one that moves.
 
 The three rows marked "nothing" are measured survivors, recorded rather than
 fixed: they are outside NRL-87's scope and no case exercises a deadline or a
@@ -216,18 +231,19 @@ cannot be made a single observation. The 778 ms is NRL-55's measurement of
 NRL-55's probe, taken before the step below existed.
 
 The cheap partial mitigation this section originally declined **was taken, in
-NRL-71**: step 7 above. `-O` runs again as the probe's last step, under the same
-`AbortController` and therefore inside the same 5 s deadline, and subject to the
-same three checks as every other run here (our own abort flag, `RunResult.signal`
+NRL-71**: step 7 above. `-O` runs again as the probe's last step, under its own
+`AbortController` and its own 500 ms deadline since NRL-84 (see below), and
+subject to the same three checks as every other run here (our own abort flag, `RunResult.signal`
 for a kill we did not issue, and a non-zero exit). The comparison is on the
 **parsed, order-independent** module set, never on the stdout bytes: the daemon is
 not promised to list its modules in a stable order, and a reordered listing would
 otherwise cost every voice its attribution for nothing. Case M2 in
 `tests/engine.test.ts` pins that; M1 pins the divergence give-up, M3 and M4 pin
-the signal and exit-code checks on the new run specifically, and **M5 (NRL-87)**
-pins the abort check on it - the one shape where the closing reply is itself
-perfectly good (code 0, no signal, the same module set) and only the deadline
-having expired distinguishes it. M5 also asserts `oCount() === 2`, because the
+the signal and exit-code checks on the new run specifically, and **M5 (NRL-87, re-fixtured
+by NRL-84)** pins the abort check on it - the one shape where the closing reply
+is itself perfectly good (code 0, no signal, the same module set) and only the
+deadline having expired distinguishes it - and **M7 (NRL-84)** pins the opposite
+half, that the OUTER deadline expiring during such a reply must not discard it. M5 also asserts `oCount() === 2`, because the
 case only means anything if the deadline fired during the closing run rather than
 earlier; without that assertion it could degrade into being caught by the loop's
 abort clause with an identical verdict, leaving the closing clause unpinned again.
@@ -242,6 +258,43 @@ module list and the per-module listings as one observation, so closing the windo
 needs a different interface to the daemon - a direct SSIP client, which NRL-43
 built and measured for an unrelated purpose - rather than a better sequence of
 `spd-say` calls. That is deliberately out of scope.
+
+**The closing `-O` has its own deadline (NRL-84).** NRL-71 put it under the same
+`AbortController` and therefore the same 5 s budget as everything before it,
+which was the right default - it keeps the total from drifting - but it made the
+closing run the last thing in line for a budget the probe does not bound. The
+probe runs one `spd-say -o <module> -L` per configured module and nothing caps
+the module count, so N slow modules can spend the deadline and leave the closing
+`-O` nothing. It then aborts holding a perfectly good reply, the probe returns
+null, and - the give-up being memoised with no retry - **every** voice reports
+`"unknown"` for the life of the plugin instance. Latent rather than observed:
+measured this session on this machine (spd-say 0.12.0-rc2, two output modules,
+read-only calls, the daemon untouched), `spd-say -O` ran a median of 4.4 ms over
+n=15, min 3.0, max 7.2, against `spd-say -o espeak-ng -L` at a median 357.1 ms
+and `-o openjtalk -L` at 6.2 ms, so the closing call is well under a percent of
+the budget on a two-module desktop.
+
+It now runs under a second `AbortController` with `CLOSING_PROBE_TIMEOUT_MS`,
+500 ms, which is ~69x that measured max and 10% of the outer deadline. Three
+consequences, all deliberate. The outer abort is **not** forwarded into that
+scope: the starvation case *is* the outer timer firing mid-closing-run, and an
+outer deadline that expires *before* the closing run is already caught by the
+per-module loop's own abort check, so propagating it would have made the change
+a no-op. The guard on the closing run therefore carries **exactly one** abort
+clause, reading the signal that run was actually handed; keeping the outer
+clause alongside it would both restore the old behaviour and make the pair
+untestable, since a fixture expiring the outer deadline sets both flags and each
+clause alone would survive deletion while the guard only looked pinned. And the
+probe's worst case becomes `probeTimeoutMs + closingTimeoutMs`, 5500 ms rather
+than 5000 ms - still bounded, still deterministic, and the outer budget still
+bounds the one part that grows with the module count. `PROBE_TIMEOUT_MS`'s doc
+comment was rewritten rather than left saying "the whole probe". Cases M5 and M7
+in `tests/engine.test.ts` hold the two halves apart: M5 was re-fixtured onto the
+closing budget and still pins the abort clause (mutation-checked both ways - with
+the fix in place and M5 left on the OLD outer-budget fixture it fails against the
+*unmutated* file, because it was pinning exactly the behaviour NRL-84 removes),
+and M7 pins that an outer deadline expiring during a clean closing `-O` does
+**not** discard it. Nothing was observed in Obsidian.
 
 The give-up is memoised exactly like every other probe failure, and no retry was
 added. So a daemon reconfigured inside the probe's window leaves **every** voice

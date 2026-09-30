@@ -273,9 +273,10 @@ interface AttributionScript {
 function attributionRunner(script: AttributionScript) {
 	const scopedCalls: string[] = [];
 	const violations: string[] = [];
+	const oAborted: boolean[] = [];
 	let oCalls = 0;
 	const runner: ProcessRunner = {
-		async run(_cmd, args): Promise<RunResult> {
+		async run(_cmd, args, _stdin, signal): Promise<RunResult> {
 			if (args[0] === "-O") {
 				oCalls += 1;
 				// NRL-83. Recorded, never thrown: probeAttribution() ends in a bare
@@ -288,6 +289,7 @@ function attributionRunner(script: AttributionScript) {
 					violations.push(`-O call ${oCalls}: one runner served more than one probe`);
 				const spec = (oCalls > 1 ? script.modulesAgain : undefined) ?? script.modules ?? [];
 				if (Array.isArray(spec)) {
+					oAborted.push(signal?.aborted === true);
 					return {
 						code: 0,
 						signal: null,
@@ -299,6 +301,20 @@ function attributionRunner(script: AttributionScript) {
 				// deadline can expire during an `-O` run rather than only during a
 				// per-module listing (case M5).
 				if (spec.delayMs) await new Promise((r) => setTimeout(r, spec.delayMs));
+				// NRL-84. Record WHICH signal this run was handed, by the only
+				// property that distinguishes them here: whether it had already
+				// aborted when the reply was produced. Nothing else in this fake
+				// reads the signal at all, so without this a change that passed the
+				// OUTER controller to the closing run instead of its own scope
+				// would be invisible to every case in the file (measured: that
+				// mutation left the whole suite green before this was added).
+				//
+				// Deliberately an OBSERVATION and not a behaviour: the real runner
+				// SIGKILLs an aborted child, and modelling that here would make the
+				// closing run's `againRun.signal !== null` clause catch M5's
+				// expired closing budget instead of its abort clause, which would
+				// cost M5 its pin on exactly the clause it exists to pin.
+				oAborted.push(signal?.aborted === true);
 				return {
 					code: spec.code,
 					signal: spec.signal ?? null,
@@ -340,7 +356,9 @@ function attributionRunner(script: AttributionScript) {
 	// deliberately NOT a function for the mirror-image reason: an array is
 	// captured by reference and mutated in place, so it already reads correctly
 	// at assertion time.
-	return { runner, scopedCalls, oCount: () => oCalls, violations };
+	// oAborted is an array mutated in place, so it reads correctly at assertion
+	// time for the same reason `violations` does; see the note above.
+	return { runner, scopedCalls, oCount: () => oCalls, violations, oAborted };
 }
 
 /** Build a `spd-say -L` listing from rows, column widths as spd-say prints them. */
@@ -583,18 +601,32 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	noReuse("H", { violations });
 }
 {
-	// H2 (NRL-87). Case H above pins that a deadline fails closed, but it cannot
-	// pin the LOOP's own `controller.signal.aborted` clause: its delayed module is
-	// the last of two, so deleting that clause changes neither the verdict nor the
-	// call trace. Case H is therefore left byte-identical and this sibling carries
-	// the pin instead.
+	// H2 (NRL-87). Case H above pins that a deadline fails closed. When this case
+	// was written H could not also pin the LOOP's own `controller.signal.aborted`
+	// clause: its delayed module is the last of two, so deleting that clause left
+	// H's verdict and call trace alike. Case H was therefore left byte-identical
+	// and this sibling took the pin.
+	//
+	// NRL-84 changed that, and H is still left byte-identical. With the closing
+	// `-O` on its own controller, H's expired OUTER deadline no longer reaches
+	// that run, so deleting the loop clause makes H attribute and H goes red too.
+	// Re-measured: mutation P1 now turns four checks red across H and H2, where
+	// it turned one.
 	//
 	// Three modules with the deadline on the MIDDLE one, so the clause has
 	// somewhere to fail: the loop must stop at festival and never query openjtalk.
-	// The verdict is deliberately NOT the discriminator here - with the clause
-	// deleted the probe runs the whole loop and is then caught by the closing
-	// `-O`'s own abort check, so every voice is still "unknown". The call trace is
-	// the only observable that moves, which is why it is asserted directly.
+	//
+	// CORRECTED BY NRL-84. This comment used to say the verdict was deliberately
+	// not the discriminator, because "with the clause deleted the probe runs the
+	// whole loop and is then caught by the closing `-O`'s own abort check, so
+	// every voice is still unknown". That stopped being true when the closing
+	// `-O` got its own controller: the outer deadline no longer reaches it, so
+	// with the loop clause deleted the closing run answers cleanly under its own
+	// budget and the probe ATTRIBUTES. Re-measured after the fix, deleting the
+	// loop's abort clause turns BOTH checks below red, not only the call trace.
+	// The call trace is kept as a check in its own right - it is the only thing
+	// that says WHERE the loop stopped, and it was the sole discriminator for
+	// the whole of NRL-87 - but it is no longer the only observable that moves.
 	const { violations, runner, scopedCalls } = attributionRunner({
 		modules: ["espeak-ng", "festival", "openjtalk"],
 		lists: {
@@ -843,18 +875,33 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	noReuse("M4", { violations });
 }
 {
-	// M5 (NRL-87). The probe deadline expires DURING the closing `-O`, which is
-	// the one thing only that run's `controller.signal.aborted` clause can catch:
-	// the reply itself is a perfectly good one - code 0, no signal, the same two
-	// modules - so the signal check (M3), the exit-code check (M4) and the set
-	// comparison (M1, M2) all pass it. Deleting that clause attributes Afrikaans
-	// local. Before this case it was green under that deletion, i.e. unpinned.
+	// M5 (NRL-87). A deadline expires DURING the closing `-O`, which is the one
+	// thing only that run's own abort clause can catch: the reply itself is a
+	// perfectly good one - code 0, no signal, the same two modules - so the
+	// signal check (M3), the exit-code check (M4) and the set comparison (M1, M2)
+	// all pass it. Deleting that clause attributes Afrikaans local. Before this
+	// case it was green under that deletion, i.e. unpinned.
+	//
+	// RE-FIXTURED BY NRL-84, and the move is deliberate rather than cosmetic.
+	// The deadline this case expires is now the CLOSING one - a generous outer
+	// budget and a tiny closing one - because NRL-84 gave the closing `-O` its
+	// own controller precisely so the OUTER deadline can no longer discard a
+	// clean reply. Left on the outer budget this case would have pinned the
+	// behaviour the fix removes, and the clause it exists to pin would have gone
+	// unpinned again. M5 and M7 now hold the two opposite halves of that guard:
+	// M5 says the closing budget MUST discard, M7 says the outer one must NOT.
 	//
 	// `oCount() === 2` is load-bearing rather than decoration: it is what proves
 	// the deadline fired during the CLOSING run and not earlier. Without it the
 	// case could silently degrade into being caught by the loop's abort clause -
 	// which would leave the verdict identical and the closing clause unpinned
 	// again, the exact failure NRL-87 exists to fix.
+	//
+	// Margins, measured this session: the 60 ms held-back reply against a 10 ms
+	// closing budget is the file's existing 6x convention (case H), and the
+	// 5,000 ms outer budget is ~80x the ~60 ms the whole case takes, so the
+	// outer timer cannot fire at all. A slipped margin makes this case RED, not
+	// silently green.
 	const { violations, runner, oCount } = attributionRunner({
 		modules: ["espeak-ng", "openjtalk"],
 		modulesAgain: {
@@ -865,15 +912,73 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
 		bare: spdList([...ESPEAK_ROWS, ["Default", "ja", "none"]]),
 	});
-	const voices = await new SpeechDispatcherEngine(runner, 10).listVoices();
+	const voices = await new SpeechDispatcherEngine(runner, 5000, 10).listVoices();
 	check(
 		"M5: a deadline that expires during the closing -O attributes nothing",
 		voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
 		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
 	);
 	check("M5: nothing reports local false", neverFalse(voices));
-	check("M5: the deadline fired on the closing -O, not before it", oCount() === 2, `${oCount()}`);
+	check("M5: the closing budget fired on the closing -O, not before it", oCount() === 2, `${oCount()}`);
 	noReuse("M5", { violations });
+}
+{
+	// M7 (NRL-84). The mirror image of M5, and the case the ticket is about. The
+	// OUTER probe deadline expires while the closing `-O` is in flight, and that
+	// run answers cleanly anyway - code 0, no signal, the identical module set.
+	// It must be believed, not discarded.
+	//
+	// Before NRL-84 the closing run shared the outer controller, so this fixture
+	// gave up and every voice reported "unknown" for the life of the engine
+	// instance (the give-up is memoised with no retry). Reproduced against the
+	// unmodified file before the fix: this check failed with all four voices
+	// "unknown" while `oCount() === 2` passed, i.e. the closing `-O` really ran
+	// and really answered. Deleting `controller.signal.aborted ||` from the
+	// closing guard was the single edit that flipped it green, which is what
+	// identifies the outer abort as the sole cause.
+	//
+	// So M7 pins the ABSENCE of the outer clause from that guard while M5 pins
+	// the PRESENCE of the inner one. They must stay opposite: a guard carrying
+	// both clauses would set both flags on M5's fixture, and each clause alone
+	// would then survive deletion while the pair only looked pinned.
+	//
+	// Margins, measured this session over 12 runs with the real module bundled:
+	// everything before the closing run finished at worst +2 ms against the
+	// 200 ms outer budget (100x), and the closing reply cannot arrive before
+	// +400 ms because `setTimeout` is never early, so it is always still in
+	// flight when the outer timer fires at +200 ms. The closing budget is 5,000
+	// ms, 12x the 400 ms reply. A slipped margin means the loop overran the outer
+	// budget, the loop's own abort clause gives up, and this case goes RED - it
+	// cannot slip into being silently green.
+	const { violations, runner, oCount, oAborted } = attributionRunner({
+		modules: ["espeak-ng", "openjtalk"],
+		modulesAgain: {
+			code: 0,
+			stdout: ["OUTPUT MODULES", "espeak-ng", "openjtalk", ""].join("\n"),
+			delayMs: 400,
+		},
+		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
+		bare: spdList([...ESPEAK_ROWS, ["Default", "ja", "none"]]),
+	});
+	const voices = await new SpeechDispatcherEngine(runner, 200, 5000).listVoices();
+	check(
+		"M7: a clean closing -O is not discarded by the OUTER deadline",
+		localOf(voices, "Afrikaans") === true,
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("M7: nothing reports local false", neverFalse(voices));
+	check("M7: the closing -O really ran", oCount() === 2, `${oCount()}`);
+	// The outer signal HAS aborted by now (the timer fired at +200 ms and the
+	// reply lands at +400 ms), so a closing run handed the outer controller
+	// would record true here. Recording false is what says it was handed its own
+	// scope. Without this check, passing `controller.signal` to that run instead
+	// of `closingScope.signal` left the whole suite green (measured, NRL-84).
+	check(
+		"M7: and it did not run under the outer probe signal",
+		oAborted[1] === false,
+		JSON.stringify(oAborted),
+	);
+	noReuse("M7", { violations });
 }
 {
 	// M6 (NRL-83). The one deliberate violation of the one-runner-one-probe
