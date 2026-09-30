@@ -1,15 +1,30 @@
-/* Sentence highlight for Local TTS Reader. */
+/*
+ * Two highlight layers for Local TTS Reader. The word mark is drawn over the
+ * sentence mark, so they have to stay tellable apart.
+ *
+ * Colour cannot be what separates them. Both custom properties fall back to the
+ * same `--text-highlight-bg`, and main.ts feeds both from the one stored
+ * `highlight.color`, so at the default and at every custom colour the two vars
+ * hold the same value. The first attempt at NRL-54 gave the two classes
+ * identical rule bodies on top of that, which made the word mark invisible
+ * against the sentence it sat on: the feature shipped and could not be seen.
+ *
+ * So the difference is the treatment, not the hue. The sentence is an underline
+ * and the word is the filled mark. That also keeps the word looking exactly as
+ * it did before this ticket, which is the part users already recognise.
+ *
+ * No color-mix() or relative colour syntax here, however tempting for a tinted
+ * band: Obsidian's Android WebView is Chrome/88 (AGENTS.md, SPIKE-ANDROID-001),
+ * and an unsupported colour function computes to nothing rather than degrading.
+ */
 
 .local-tts-reader-sentence {
-	background-color: var(--local-tts-reader-sentence-highlight, var(--text-highlight-bg));
-	color: var(--text-normal);
-	border-radius: 3px;
-	box-shadow: 0 0 0 1px var(--local-tts-reader-sentence-highlight, var(--text-highlight-bg));
-	padding: 1px 0;
-	transition: background-color 90ms linear;
+	border-bottom: 2px solid var(--local-tts-reader-sentence-highlight, var(--text-highlight-bg));
+	/* Keeps the rule clear of descenders without shifting the line box. */
+	padding-bottom: 1px;
 }
 
-/* Word highlight for Local TTS Reader (applied on top of sentence). */
+/* Drawn over the sentence rule above. */
 
 .local-tts-reader-word {
 	background-color: var(--local-tts-reader-word-highlight, var(--text-highlight-bg));

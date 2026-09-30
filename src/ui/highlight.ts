@@ -5,17 +5,62 @@ import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
 /**
  * Sentence and word highlighting as CodeMirror 6 decorations.
  *
- * Two separate StateEffects and fields so sentence and word can be toggled
- * independently and styled with distinct CSS classes. A decoration rather than
- * a selection change, so it cannot disturb the cursor, the undo history, or the
- * user's place in the document. The effect is dispatched on every chunk/word
- * change during playback, which is why the state field does as little as
- * possible: one range in, one mark out.
+ * Two separate StateEffects and two separate fields, so the word mark is drawn
+ * over the sentence mark instead of replacing it. One field with one effect
+ * cannot express that: assigning the decoration set is what made the word
+ * highlight erase the sentence within a frame, which is the defect NRL-54 was
+ * opened for. A decoration rather than a selection change, so it cannot disturb
+ * the cursor, the undo history, or the user's place in the document. The effect
+ * is dispatched on every chunk and every word change during playback, which is
+ * why each field does as little as possible: one range in, one mark out.
+ *
+ * Two layers means two ways to clear, and they are not interchangeable. Ending
+ * playback clears both; moving to the next word clears only the word. A single
+ * clear that dispatched one effect is how the first attempt at this ticket left
+ * the last sentence highlighted forever after Stop, so the three clears below
+ * are deliberately separate and none of them is an alias for another.
  */
 
 export interface HighlightRange {
 	from: number;
 	to: number;
+}
+
+/** The highlight half of `Settings`, as much of it as the drawing rules need. */
+export interface HighlightToggles {
+	enabled: boolean;
+	sentence: boolean;
+	word: boolean;
+}
+
+/** Which layers may be drawn for a given settings and engine combination. */
+export interface HighlightLayers {
+	sentence: boolean;
+	word: boolean;
+}
+
+/**
+ * Which layers to draw, given the user's toggles and whether the active engine
+ * can report word timings.
+ *
+ * Pure, and separate from the player event handlers, because the rule is the
+ * part worth testing and `main.ts` cannot run in the bare-Node suite. The first
+ * attempt at NRL-54 left this decision inline in two event handlers and said in
+ * a test docstring that it was "verified during E2E testing", which nothing had
+ * done.
+ *
+ * `hasWordTiming` is false both for an engine reporting `timing: "none"` and for
+ * no resolved engine at all. The distinction does not matter here: neither can
+ * produce a trustworthy word range.
+ *
+ * Note what does **not** gate the sentence: word timing. speech-dispatcher
+ * reports no timings and never emits a word event, and the sentence highlight is
+ * the only layer it can ever show, so letting a word-timing fact suppress the
+ * sentence would blank the one engine that most needs it.
+ */
+export function highlightPlan(toggles: HighlightToggles, hasWordTiming: boolean): HighlightLayers {
+	if (!toggles.enabled) return { sentence: false, word: false };
+	return { sentence: toggles.sentence, word: toggles.word && hasWordTiming };
 }
 
 export const setSentenceHighlight = StateEffect.define<HighlightRange | null>();
@@ -108,5 +153,30 @@ export function applyWordHighlight(editor: EditorView, range: HighlightRange | n
 	}
 }
 
-// Backwards compatibility: applyHighlight now applies word highlight
-export const applyHighlight = applyWordHighlight;
+/** Drop the word mark and leave the sentence alone. Use when the word advances. */
+export function clearWordHighlight(editor: EditorView): void {
+	applyWordHighlight(editor, null);
+}
+
+/** Drop the sentence mark and leave the word alone. */
+export function clearSentenceHighlight(editor: EditorView): void {
+	applySentenceHighlight(editor, null);
+}
+
+/**
+ * Drop both marks, in one transaction.
+ *
+ * This is what the end of a reading needs, and it must stay separate from
+ * `clearWordHighlight`. An `applyHighlight` alias pointing at the word clear
+ * used to serve both jobs, so every Stop, error, sleep-timer expiry and natural
+ * finish left the last sentence highlighted in the document: the sentence field
+ * ignores a word effect, by design. One transaction rather than two so the two
+ * layers never disagree for a frame.
+ */
+export function clearHighlights(editor: EditorView): void {
+	try {
+		editor.dispatch({ effects: [setSentenceHighlight.of(null), setWordHighlight.of(null)] });
+	} catch {
+		// Same reason as above: a torn-down editor is not worth an exception.
+	}
+}

@@ -584,54 +584,60 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	private renderHighlightSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName("Highlighting").setHeading();
 
-		// On an engine that reports no timings there is nothing to highlight, so
-		// the toggle is disabled and says why. The stored preference is left
-		// alone on purpose, the same as "Look ahead" above: switching to
-		// speech-dispatcher and back must not silently turn highlighting off.
+		// `highlightToggle` is the WORD gate and nothing more: its own limitation
+		// text is "no word highlighting" and its reason names word timings. So it
+		// gates the word row below and **only** that row.
+		//
+		// It used to disable this master toggle as well, which on
+		// speech-dispatcher - the one engine where the sentence highlight is the
+		// only layer that can ever work - meant a stored `false` left the note
+		// with no highlight and no reachable control to bring it back. That is the
+		// bug NRL-54 names. Do not re-apply a word-timing gate to anything but
+		// the word row. The stored preference is left alone on purpose, the same
+		// as "Look ahead" above: switching engine must not rewrite settings.
 		const active = this.plugin.activeEngine();
-		const highlightToggle = controlAffordances(
+		const wordToggleAffordance = controlAffordances(
 			active?.capabilities ?? null,
 			active?.label ?? "This engine",
 		).highlightToggle;
 
-		const highlightSetting = new Setting(containerEl)
-			.setName("Highlight enabled")
-			.setDesc("Enable highlighting during playback.")
+		new Setting(containerEl)
+			.setName("Highlight while reading")
+			.setDesc("Master switch. Turn off to read with no marks at all.")
 			.addToggle((toggle) => {
 				toggle.setValue(this.plugin.settings.highlight.enabled).onChange(async (value) => {
 					this.plugin.settings.highlight.enabled = value;
 					await this.plugin.saveSettings();
+					// The two rows below only mean anything while this is on.
+					this.display();
 				});
-				if (!highlightToggle.enabled) toggle.setDisabled(true);
 			});
-		if (!highlightToggle.enabled) {
-			highlightSetting.descEl.createDiv({ text: highlightToggle.reason });
-		}
 
 		new Setting(containerEl)
 			.setName("Highlight sentences")
-			.setDesc("Mark the sentence currently being spoken.")
+			.setDesc("Mark the sentence currently being spoken. Works on every engine.")
 			.addToggle((toggle) => {
 				toggle.setValue(this.plugin.settings.highlight.sentence).onChange(async (value) => {
 					this.plugin.settings.highlight.sentence = value;
 					await this.plugin.saveSettings();
 				});
+				if (!this.plugin.settings.highlight.enabled) toggle.setDisabled(true);
 			});
 
-		new Setting(containerEl)
+		const wordSetting = new Setting(containerEl)
 			.setName("Highlight words")
-			.setDesc("Mark the word currently being spoken.")
+			.setDesc("Mark the word currently being spoken, over the sentence mark.")
 			.addToggle((toggle) => {
 				toggle.setValue(this.plugin.settings.highlight.word).onChange(async (value) => {
 					this.plugin.settings.highlight.word = value;
 					await this.plugin.saveSettings();
 				});
-				if (!highlightToggle.enabled) toggle.setDisabled(true);
+				if (!wordToggleAffordance.enabled || !this.plugin.settings.highlight.enabled) {
+					toggle.setDisabled(true);
+				}
 			});
-		if (!highlightToggle.enabled) {
-			new Setting(containerEl)
-				.setDesc("Your engine does not provide word timings.")
-				.descEl.createDiv({ text: highlightToggle.reason });
+		if (!wordToggleAffordance.enabled) {
+			wordSetting.descEl.createDiv({ text: wordToggleAffordance.reason });
 		}
 
 		// A free-text field alone would accept "not a colour" and quietly

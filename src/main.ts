@@ -33,7 +33,16 @@ import {
 	type PluginData,
 } from "./settings/data";
 import { PositionThrottle } from "./settings/positionThrottle";
-import { applyHighlight, applySentenceHighlight, applyWordHighlight, registerHighlighting } from "./ui/highlight";
+import {
+	applySentenceHighlight,
+	applyWordHighlight,
+	clearHighlights,
+	clearSentenceHighlight,
+	clearWordHighlight,
+	highlightPlan,
+	registerHighlighting,
+	type HighlightLayers,
+} from "./ui/highlight";
 import {
 	WORD_HIGHLIGHT_VAR,
 	SENTENCE_HIGHLIGHT_VAR,
@@ -160,31 +169,41 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		);
 		this.registerEvent(this.app.vault.on("delete", (file) => this.handleVaultDelete(file)));
 
-		// Sentence-level highlighting
+		// Sentence-level highlighting. Ranges come from the chunk's source
+		// offsets, never from searching the editor (non-negotiable 8).
 		this.player.on("chunk", (chunk) => {
-			if (!this.settings.highlight.enabled || !this.settings.highlight.sentence || !chunk) {
-				this.clearHighlight();
+			// No chunk means playback moved off the note entirely, so both layers
+			// go. Every other branch here touches one layer only: clearing both
+			// from a per-layer handler is what coupled the two toggles together.
+			if (!chunk) {
+				this.clearHighlights();
 				return;
 			}
 			if (!this.activeEditor) return;
+			// A new sentence invalidates the previous sentence's word mark. Drop
+			// it now rather than waiting for the next word event, which on a slow
+			// first synthesis would leave a word lit inside the wrong sentence.
+			clearWordHighlight(this.activeEditor);
+			if (!this.highlightLayers().sentence) {
+				clearSentenceHighlight(this.activeEditor);
+				return;
+			}
 			applySentenceHighlight(this.activeEditor, {
 				from: chunk.sourceStart,
 				to: chunk.sourceEnd,
 			});
 		});
 
-		// Word-level highlighting (on top of sentence)
+		// Word-level highlighting, drawn over the sentence rather than replacing
+		// it. This handler must never clear the sentence layer.
 		this.player.on("word", (payload) => {
-			if (!this.settings.highlight.enabled || !this.settings.highlight.word || !payload) {
-				this.clearHighlight();
-				return;
-			}
 			// The view can be closed mid-playback; a missing editor just means
 			// there is nothing left to highlight.
 			if (!this.activeEditor) return;
-			// Only apply word highlight if the engine supports word timing
-			const engine = this.activeEngine();
-			if (!engine || engine.capabilities.timing === "none") return;
+			if (!payload || !this.highlightLayers().word) {
+				clearWordHighlight(this.activeEditor);
+				return;
+			}
 			applyWordHighlight(this.activeEditor, {
 				from: payload.timing.sourceStart,
 				to: payload.timing.sourceEnd,
@@ -210,7 +229,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		});
 
 		this.player.on("state", (state) => {
-			if (state === "finished" || state === "idle") this.clearHighlight();
+			if (state === "finished" || state === "idle") this.clearHighlights();
 			// Every state change that ends the user's attention closes the window,
 			// which is what makes the final second survive. One place rather than
 			// patching stopReading() and the two toggle() call sites: setState is
@@ -228,13 +247,13 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		});
 
 		this.player.on("error", (err) => {
-			this.clearHighlight();
+			this.clearHighlights();
 			reportError(this.app, this.manifest.dir!, "playback failed", err);
 		});
 
 		this.player.on("timerExpired", () => {
 			new Notice("Sleep timer expired.");
-			this.clearHighlight();
+			this.clearHighlights();
 		});
 
 		this.controlBar = new ControlBar(this);
@@ -1062,11 +1081,23 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.readScope?.abort();
 		this.readScope = null;
 		this.player.stop();
-		this.clearHighlight();
+		this.clearHighlights();
 	}
 
-	private clearHighlight(): void {
-		if (this.activeEditor) applyHighlight(this.activeEditor, null);
+	/**
+	 * Which highlight layers the current settings and engine permit.
+	 *
+	 * `hasWordTiming` is false for no resolved engine as well as for an engine
+	 * reporting `timing: "none"`; neither can produce a word range worth drawing.
+	 */
+	private highlightLayers(): HighlightLayers {
+		const engine = this.activeEngine();
+		return highlightPlan(this.settings.highlight, !!engine && engine.capabilities.timing !== "none");
+	}
+
+	/** Both layers. Used when a reading ends, not when a word advances. */
+	private clearHighlights(): void {
+		if (this.activeEditor) clearHighlights(this.activeEditor);
 	}
 
 	// --- Settings plumbing --------------------------------------------------
