@@ -68,6 +68,56 @@ test("Build succeeds with production mode", () => {
 	assertFileExists(MAIN_JS, "main.js not found after build");
 });
 
+// --- Kokoro Worker Inlining (NRL-60)
+//
+// esbuild's "cjs" output format wraps the whole bundle in a module function,
+// so a bare top-level `var` is scoped to that wrapper, never to the real
+// global object - the same reason a `var` at the top of any Node CommonJS
+// file never becomes a property of `global`. kokoro.ts's getWorkerBlobUrl()
+// reads the inlined worker off `globalThis.KOKORO_WORKER_CODE`, so the
+// inject step must assign to globalThis, not declare `var`. A regression
+// here silently breaks Kokoro on every platform: it falls through to a
+// file-based fallback path reading a `kokoro-worker.js` this same build step
+// deletes, so the failure is "File does not exist" with no working fallback.
+
+test("Inlined worker code is assigned to globalThis, not a bare var", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	assertMatch(
+		content,
+		/globalThis\.KOKORO_WORKER_CODE\s*=/,
+		"main.js must assign globalThis.KOKORO_WORKER_CODE; a bare `var` is " +
+			"scoped to esbuild's cjs module wrapper and never reaches the real " +
+			"global object, which kokoro.ts reads from",
+	);
+	assert(
+		!/(?<!globalThis\.)\bvar\s+KOKORO_WORKER_CODE\s*=/.test(content),
+		"KOKORO_WORKER_CODE must not be declared with a bare `var`",
+	);
+});
+
+// --- ORT Checksum Validation Reads Binary, Not Text (NRL-60)
+//
+// validateOrtChecksums() in main.ts used to read these binary .wasm/.mjs
+// files with the text-mode adapter.read(), then re-encode the (already
+// UTF-8-decoded, lossy) string back to bytes with TextEncoder before
+// hashing. That round-trip corrupts real binary data - invalid UTF-8 byte
+// sequences collapse to U+FFFD - so it hashed its own mangled copy, never
+// the file, and reported a mismatch unconditionally regardless of whether
+// the file on disk was actually correct. TextEncoder has exactly one call
+// site in the whole source tree (this one), so its absence from the bundle
+// is an unambiguous signal the buggy read+re-encode path is gone.
+
+test("ORT checksum validation does not round-trip binary data through text", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	assert(
+		!content.includes("TextEncoder"),
+		"TextEncoder should not appear in main.js - it was only ever used to " +
+			"re-encode a lossy UTF-8 decode of binary ORT files before hashing " +
+			"them, which made checksum validation always fail regardless of " +
+			"whether the file was correct",
+	);
+});
+
 test("main.js contains ORT checksums", () => {
 	const content = fs.readFileSync(MAIN_JS, "utf-8");
 	assertMatch(content, /ort-wasm-simd-threaded\.mjs/, "main.js missing ORT .mjs checksum");
