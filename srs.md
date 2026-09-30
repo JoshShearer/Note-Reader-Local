@@ -376,7 +376,7 @@ Amended by ADR 0009 (NRL-28):
 - The segmenter locale is Obsidian's UI language, from `appLocale()`. Nothing inspects the note to detect a language and nothing selects a voice from it. A malformed locale tag costs the locale, never the segmentation.
 - All offsets remain UTF-16 code-unit indices, as R-M11 requires.
 
-Not met by this requirement and tracked separately as NRL-47, against R-S03: word-level granularity inside a run of Han. `findWords` has no separator there, so a whole CJK sentence is one word span and the highlight covers it for its full duration. Measured at `c29e7af`: one span per Chinese sentence against fifteen for an English sentence of comparable spoken length.
+Not met by this requirement, and closed separately by NRL-47 / ADR 0013 against R-S03: word-level granularity inside a run of Han. `findWords` had no separator there, so a whole CJK sentence was one word span and the highlight covered it for its full duration. Measured at `c29e7af`: one span per Chinese sentence against fifteen for an English sentence of comparable spoken length. Measured after NRL-47 at `d7e64df` + this change, same fixtures and the same bare-Node bundle: `这是第一句。这是第二句。第三句结束了。` gives 4, 4 and 4 spans across its three chunks where it gave 1, 1 and 1, and the English fixture is unchanged at 15. R-M10's own status is not affected either way; this note stays here as a cross-reference.
 
 ---
 
@@ -683,6 +683,18 @@ The segment currently being spoken SHOULD be visually highlighted in the note.
 The highlight SHOULD follow playback as segments advance.
 
 The implementation SHOULD prefer segment/source mapping over trying to search the editor for generated speech text.
+
+Amended by ADR 0013 (NRL-47):
+
+- The word layer follows playback **inside** a CJK sentence. `extractChunks` precomputes `SpeechChunk.wordSpans` for a chunk holding Han, Kana or Hangul, and `allocateWordTimings` prefers it over the regex.
+- `Intl.Segmenter` **subdivides** regex spans, it does not replace them. Only a span containing a Han, Kana or Hangul code point is subdivided, so Latin, Cyrillic, Greek and Arabic spans are unchanged by construction. Replacing the regex was rejected on measurement: on node v24.21.0 ICU segments `well-known U.S.A. e.g. dont’t over.` into well/-/known/U.S.A/./e.g/./dont’t/over/. against the regex's well-known/U.S.A./e.g./dont’t/over., so its word-like set is neither a superset nor a subset of the regex's.
+- A Hangul run is **additionally** cut at grapheme-cluster boundaries, one span per syllable block, because V8's ICU ships no Korean word dictionary: measured, `안녕하세요세계반갑습니다` is one word segment under `ko`, `en` and `und` alike. Grapheme boundaries and not code points, so a syllable written with conjoining jamo stays whole. Spaced Korean moves to per-syllable spans too, since the rule is applied uniformly.
+- A cut that would open a sub-span holding no letter or digit is dropped and the piece stays attached to the syllable before it, so a trailing full stop does not become a span of its own.
+- Where `Intl.Segmenter` is absent the word layer degrades to one span per sentence, which is the pre-NRL-47 **span** behaviour. R-S03 is a SHOULD, and there is no useful offline word rule for a script that writes no spaces, so that degradation stays in spec. The **durations** are not pre-NRL-47 in that position, because the weighting below changed unconditionally: in a chunk mixing Latin with CJK the Latin words get a smaller share than they used to. Measured with `noSegmenters` on `ABC 中文中文中文中文 DEF end.` at 3000ms: the four spans are identical, and `ABC` goes from 698ms to 344ms while the Han span goes from 826ms to 1887ms. A pure-ASCII chunk is byte-identical in both positions.
+- Word duration weighting gains one syllable per Han, Kana or Hangul code point. ASCII is byte-identical, and Cyrillic, Greek and Arabic are too, since the vowel-group rule was already ASCII-only.
+- All offsets remain UTF-16 code-unit indices into the chunk text, as R-M11 requires, and `WordTiming.sourceStart`/`.sourceEnd` are still read out of `SpeechChunk.sourceIndex` rather than computed.
+
+Not verified in Obsidian. Every number above comes from bare Node with `Intl.Segmenter` present. Whether Obsidian's WebView has a word segmenter at all is the same open question R-M10 carries, and nobody has watched a CJK note highlight in a real editor.
 
 ---
 

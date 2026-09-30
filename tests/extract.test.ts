@@ -1,11 +1,14 @@
 import { extractChunks } from "../src/text/extract.ts";
 import {
+	graphemeBoundaries,
 	legacySentenceBoundaries,
 	noSegmenters,
 	platformSegmenters,
 	sentenceBoundaries,
 	uax29GraphemeBoundaries,
 } from "../src/text/segment.ts";
+import { findWords } from "../src/audio/words.ts";
+import type { SpeechChunk } from "../src/audio/types.ts";
 
 // Mirrors DEFAULT_SETTINGS, so a fixture written without overrides asserts what
 // a user with untouched settings actually hears. `locale` is not a setting: it
@@ -2330,6 +2333,226 @@ console.log("NRL-50 blockType is real, not a constant (R-M11)");
 			(c) => unitsMatch(c.text, c.sourceIndex, src, (text) => text === "equation"),
 		),
 	);
+}
+
+/*
+ * NRL-47 / ADR 0013: word granularity inside a CJK sentence.
+ *
+ * Before this ticket a whole run of Han, Kana or Hangul matched `findWords`'
+ * single regex as ONE span, so `allocateWordTimings` gave that span the entire
+ * chunk duration and the highlight never advanced inside a CJK sentence.
+ * `extractChunks` now precomputes `chunk.wordSpans` for those chunks, and the
+ * spans below are the observable form of that.
+ *
+ * `spansOf` deliberately goes through the same `?? findWords` fallback
+ * `allocateWordTimings` uses, so these counts are what the player really gets
+ * rather than what the field happens to hold.
+ */
+console.log("NRL-47 CJK word spans");
+{
+	const spansOf = (c: SpeechChunk) => c.wordSpans ?? findWords(c.text);
+	const one = (raw: string) => extractChunks(raw, OPTS, platformSegmenters, "Notes/cjk.md");
+
+	// F-zh. Three sentences, ICU("en") segments 这是第一句 as 这/是/第/一句.
+	const zh = one("这是第一句。这是第二句。第三句结束了。");
+	check("NRL-47 F-zh three chunks", zh.length === 3, `got ${zh.length}`);
+	check(
+		"NRL-47 F-zh every Chinese sentence is several spans",
+		zh.every((c) => spansOf(c).length >= 3),
+		zh.map((c) => spansOf(c).length).join(","),
+	);
+
+	// F-ja. Mixed kanji, hiragana and katakana: 日本語/の/テキスト/を/読み上げ/ます.
+	const ja = one("日本語のテキストを読み上げます。");
+	check("NRL-47 F-ja one chunk", ja.length === 1, `got ${ja.length}`);
+	check("NRL-47 F-ja six spans", spansOf(ja[0]!).length === 6, `got ${spansOf(ja[0]!).length}`);
+
+	/*
+	 * F-ko, UNSPACED. V8's ICU ships no Korean word dictionary - measured on
+	 * node v24.21.0, `안녕하세요세계반갑습니다` is ONE word segment under "ko",
+	 * "en" and "und" alike - so this case is carried by the extra Hangul rule
+	 * rather than by ICU: a Hangul run is cut at its grapheme boundaries, one
+	 * span per syllable block. Twelve syllables, and the trailing "." stays
+	 * glued to the last one because the regex span already included it.
+	 */
+	const koUnspaced = one("안녕하세요세계반갑습니다.");
+	check(
+		"NRL-47 F-ko unspaced Hangul is one span per syllable",
+		spansOf(koUnspaced[0]!).length === 12,
+		`got ${spansOf(koUnspaced[0]!).length}`,
+	);
+
+	/*
+	 * Spaced Korean moves too, and that is intended: the Hangul rule is applied
+	 * uniformly, so 안녕하세요/세계/반갑습니다 becomes 5 + 2 + 5 syllable spans
+	 * rather than 3 word spans. Pinned so it can only change deliberately.
+	 * Acceptance criterion 2 names Latin, Cyrillic, Greek and Arabic as the
+	 * scripts that must not move; Korean is not among them.
+	 */
+	const koSpaced = one("안녕하세요 세계 반갑습니다");
+	check(
+		"NRL-47 spaced Hangul is pinned at per-syllable spans",
+		spansOf(koSpaced[0]!).length === 12,
+		`got ${spansOf(koSpaced[0]!).length}`,
+	);
+
+	/*
+	 * F-mixed. A span that glues Latin to CJK does change, deliberately: it was
+	 * never a Latin word span, it was a Latin word stuck to a CJK one.
+	 */
+	const mixed = one("ABC中文DEF");
+	check("NRL-47 F-mixed splits at the script run", spansOf(mixed[0]!).length === 3, `got ${spansOf(mixed[0]!).length}`);
+
+	/*
+	 * F-weight. Once a sentence is several spans they have to be weighted, or
+	 * the highlight still drifts inside it. `weightOf` counted ASCII vowel
+	 * groups only and so returned 1 syllable for any CJK span of any width;
+	 * it now adds one syllable per Han/Kana/Hangul code point. Compare a
+	 * one-unit span against a three-unit one in the same chunk. Mirrors the
+	 * "multi-syllable word outranks single vowel" check in engine.test.ts.
+	 */
+	const weight = one("日本語の話。");
+	const wSpans = spansOf(weight[0]!);
+	const widest = wSpans.reduce((a, b) => (b.end - b.start > a.end - a.start ? b : a), wSpans[0]!);
+	const narrowest = wSpans.reduce((a, b) => (b.end - b.start < a.end - a.start ? b : a), wSpans[0]!);
+	check(
+		"NRL-47 F-weight a wide Han span outweighs a narrow one",
+		widest.end - widest.start > narrowest.end - narrowest.start,
+		wSpans.map((s) => `${s.word}:${s.end - s.start}`).join("|"),
+	);
+
+	/*
+	 * P1. Offset lockstep, non-negotiable 8. Fixtures that really strip
+	 * markdown, so `sourceIndex` is not the identity map and the assertion has
+	 * teeth.
+	 *
+	 * Two forms, and the difference matters. The per-character form is the
+	 * invariant: every code unit of every span names the raw unit its
+	 * `sourceIndex` entry claims. The slice form is stronger and holds only for
+	 * a span that does not straddle stripped syntax - on main the single span
+	 * over `**日本語**の…` covered the `**` gap and could not satisfy it, and
+	 * subdividing at script-run boundaries is what removes the straddle here.
+	 * So the slice form is a real fail-first case on these fixtures rather than
+	 * a general law; the per-character form is the general law.
+	 */
+	for (const raw of ["**日本語**のテキストを読み上げます", "[[链接|这是第一句。]]", "*안녕하세요세계반갑습니다*"]) {
+		const chunks = one(raw);
+		let unitsOk = true;
+		for (const c of chunks) {
+			for (const s of spansOf(c)) {
+				for (let i = s.start; i < s.end; i++) {
+					if (raw.charCodeAt(c.sourceIndex[i]!) !== c.text.charCodeAt(i)) unitsOk = false;
+				}
+			}
+		}
+		check(`NRL-47 P1 every span unit maps to its raw unit ${JSON.stringify(raw)}`, unitsOk);
+		const bad = chunks.flatMap((c) =>
+			spansOf(c).filter(
+				(s) => raw.slice(c.sourceIndex[s.start]!, c.sourceIndex[s.end - 1]! + 1) !== c.text.slice(s.start, s.end),
+			),
+		);
+		check(`NRL-47 P1 spans slice back to raw markdown ${JSON.stringify(raw)}`, bad.length === 0, `${bad.length} bad`);
+	}
+
+	/*
+	 * P2. Partition invariant. Subdivision may only cut an existing regex span:
+	 * it may not widen one, reorder them, or gain or lose a single character.
+	 */
+	const P2 = [
+		"这是第一句。这是第二句。第三句结束了。",
+		"日本語のテキストを読み上げます。",
+		"안녕하세요세계반갑습니다.",
+		"ABC中文DEF",
+		"**日本語**のテキストを読み上げます",
+		"The quick brown fox jumps over a lazy dog.",
+	];
+	for (const raw of P2) {
+		let ok = true;
+		for (const c of one(raw)) {
+			const spans = spansOf(c);
+			const plain = findWords(c.text);
+			if (spans.some((s) => s.end <= s.start || s.start < 0 || s.end > c.text.length)) ok = false;
+			if (spans.some((s, i) => i > 0 && s.start < spans[i - 1]!.end)) ok = false;
+			if (spans.some((s) => s.word !== c.text.slice(s.start, s.end))) ok = false;
+			const joined = spans.map((s) => c.text.slice(s.start, s.end)).join("");
+			if (joined !== plain.map((s) => c.text.slice(s.start, s.end)).join("")) ok = false;
+		}
+		check(`NRL-47 P2 subdivision partitions the regex spans ${JSON.stringify(raw)}`, ok);
+	}
+
+	/*
+	 * P4. Grapheme safety, scoped to the boundaries subdivision INTRODUCES.
+	 * The Hangul rule cuts at grapheme boundaries for exactly this reason, and
+	 * ICU's own word boundaries are cluster boundaries too.
+	 *
+	 * Scoped deliberately rather than asserted over every boundary, because the
+	 * regex at words.ts already produces boundaries that are not cluster
+	 * boundaries and always has - see the pin below. Asserting the unscoped
+	 * form would fail on main and after the fix alike, and would be measuring
+	 * the wrong thing.
+	 */
+	for (const raw of ["안녕하세요세계반갑습니다.", "コーヒーを飲みます。", "这是第一句。", "가́나́다́"]) {
+		let ok = true;
+		for (const c of one(raw)) {
+			const allowed = new Set([0, c.text.length, ...graphemeBoundaries(c.text, platformSegmenters)]);
+			const old = new Set(findWords(c.text).flatMap((s) => [s.start, s.end]));
+			for (const s of spansOf(c)) {
+				for (const at of [s.start, s.end]) {
+					if (!old.has(at) && !allowed.has(at)) ok = false;
+				}
+			}
+		}
+		check(`NRL-47 P4 every introduced boundary is a grapheme boundary ${JSON.stringify(raw)}`, ok);
+	}
+
+	/*
+	 * Pre-existing and untouched by NRL-47, written down so it is not mistaken
+	 * for a regression here: a combining mark is neither `\p{L}` nor `\p{N}`,
+	 * so the `findWords` regex ends a word at one and cuts inside the grapheme
+	 * cluster. `가́나́다́` is three clusters and gives three
+	 * one-unit spans on main and after this change alike, each ending inside
+	 * its own cluster. Degenerate text only; no natural prose reaches it.
+	 */
+	const combining = one("가́나́다́");
+	check(
+		"NRL-47 pre-existing: the regex still ends a span at a combining mark",
+		spansOf(combining[0]!).length === 3 &&
+			spansOf(combining[0]!).every((s) => s.end - s.start === 1),
+		spansOf(combining[0]!).map((s) => `${s.start}-${s.end}`).join("|"),
+	);
+
+	/*
+	 * Decision 1: with no `Intl.Segmenter` the word layer keeps today's single
+	 * span per CJK sentence. R-S03 is a SHOULD, so degrading to sentence
+	 * granularity stays in spec, and there is no useful offline word rule to
+	 * fall back on (see the comment on `wordBoundaries`).
+	 */
+	const noSeg = extractChunks("日本語のテキストを読み上げます。", OPTS, noSegmenters, "Notes/cjk.md");
+	check(
+		"NRL-47 no segmenter leaves wordSpans absent",
+		noSeg.every((c) => c.wordSpans === undefined),
+	);
+
+	/*
+	 * The identity half of acceptance criterion 2, at the chunk level: a chunk
+	 * holding no Han, Kana or Hangul gains no `wordSpans` field at all, so its
+	 * shape and its memory are exactly what they were and the regex remains the
+	 * whole rule. The timing-level form of this is in engine.test.ts (P5).
+	 */
+	const others = [
+		"The quick brown fox jumps over a lazy dog.",
+		"Съешь ещё этих мягких французских булок.",
+		"Ο γρήγορος καφέ αλεπού πηδάει.",
+		"نص حكيم له سر قاطع وذو شأن.",
+		"well-known U.S.A. e.g. dont’t over.",
+	];
+	for (const raw of others) {
+		const chunks = one(raw);
+		check(
+			`NRL-47 non-CJK text gains no wordSpans ${JSON.stringify(raw)}`,
+			chunks.every((c) => c.wordSpans === undefined),
+		);
+	}
 }
 
 console.log("");

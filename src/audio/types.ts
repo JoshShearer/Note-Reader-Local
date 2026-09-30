@@ -139,6 +139,22 @@ export interface WordTiming {
 	durationMs: number;
 }
 
+/**
+ * One word located in a chunk's spoken text.
+ *
+ * `start`/`end` are UTF-16 code-unit indices into `SpeechChunk.text`, the same
+ * units as `SpeechChunk.sourceIndex`, so `allocateWordTimings` can read a raw
+ * offset straight out of that array (non-negotiable 8).
+ *
+ * It lives here rather than in words.ts because `SpeechChunk` carries it, and a
+ * chunk must not have to import the timing code to describe itself.
+ */
+export interface WordSpan {
+	word: string;
+	start: number;
+	end: number;
+}
+
 export type BlockType = "heading" | "paragraph" | "list" | "quote" | "other";
 
 /** A unit of text handed to an engine as a single utterance. */
@@ -163,6 +179,16 @@ export interface SpeechChunk {
 	sourceStart: number;
 	/** End offset (exclusive) within the note's raw markdown. */
 	sourceEnd: number;
+	/**
+	 * Word spans already computed with a segmenter. Absent means the regex in
+	 * `findWords` is the whole rule for this chunk, which is the case for every
+	 * chunk holding no Han, Kana or Hangul and for every chunk at all when the
+	 * platform has no `Intl.Segmenter` (ADR 0013).
+	 *
+	 * Anything that re-slices `text` must re-slice this too or drop it, or the
+	 * spans index into text that no longer exists - see `clipWordSpans`.
+	 */
+	wordSpans?: WordSpan[];
 }
 
 export interface SynthRequest {

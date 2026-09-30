@@ -11,6 +11,7 @@
 
 import { extractChunks } from "../src/text/extract.ts";
 import { platformSegmenters } from "../src/text/segment.ts";
+import { allocateWordTimings, clipWordSpans, findWords } from "../src/audio/words.ts";
 import type { SpeechChunk } from "../src/audio/types.ts";
 
 let failures = 0;
@@ -54,6 +55,11 @@ function clipChunksToSelection(selectedChunks: SpeechChunk[], from: number, to: 
 			sourceIndex: newSourceIndex,
 			sourceStart: newSourceStart,
 			sourceEnd: newSourceEnd,
+			// Mirrors main.ts. NRL-47 added wordSpans to SpeechChunk, and the
+			// spread would carry them through still indexing the unclipped
+			// text. `clipWordSpans` is imported from the real module rather
+			// than copied, so this half at least cannot drift.
+			wordSpans: chunk.wordSpans && clipWordSpans(chunk.wordSpans, chunk.text, textStart, textEnd),
 		};
 	});
 }
@@ -234,6 +240,89 @@ function clipChunksToSelection(selectedChunks: SpeechChunk[], from: number, to: 
 	const clipped = clipChunksToSelection(selectedChunks, from, to);
 	const clippedText = clipped.map((c) => c.text).join("");
 	check("point selection: clipping produces empty text", clippedText === "", `got "${clippedText}"`);
+}
+
+/*
+ * NRL-47. `clipWordSpans` is the guard that keeps a precomputed word span from
+ * surviving the clip above while still indexing the unclipped text. It is
+ * exercised directly here, and through the mirrored clip helper, because this
+ * suite holds its own copy of main.ts's clipping logic rather than importing
+ * main.ts, so a bug in the real call site would otherwise be invisible.
+ */
+console.log("NRL-47 clipWordSpans");
+{
+	const spans = findWords("abc def ghi");
+	check("unclipped spans are unchanged", JSON.stringify(clipWordSpans(spans, "abc def ghi", 0, 11)) === JSON.stringify(spans));
+
+	// Clipping from 4 drops "abc" and rebases the rest onto the new text.
+	const from4 = clipWordSpans(spans, "abc def ghi", 4, 11);
+	check(
+		"spans are rebased by textStart",
+		JSON.stringify(from4) === JSON.stringify([
+			{ word: "def", start: 0, end: 3 },
+			{ word: "ghi", start: 4, end: 7 },
+		]),
+		JSON.stringify(from4),
+	);
+
+	// A span straddling the clip point is truncated, not dropped, and `word`
+	// is re-sliced so it still matches the text the span now names.
+	const mid = clipWordSpans(spans, "abc def ghi", 0, 5);
+	check(
+		"a straddling span is clamped and re-sliced",
+		JSON.stringify(mid) === JSON.stringify([
+			{ word: "abc", start: 0, end: 3 },
+			{ word: "d", start: 4, end: 5 },
+		]),
+		JSON.stringify(mid),
+	);
+
+	check("an empty window yields nothing", clipWordSpans(spans, "abc def ghi", 5, 5).length === 0);
+
+	/*
+	 * End to end, on the shape that actually matters: a CJK note has real
+	 * precomputed spans, so clipping a selection out of it must leave every
+	 * timing still naming the raw markdown it names in the clipped text. This
+	 * is the non-negotiable 8 assertion for the read-selection path.
+	 */
+	const raw = "这是第一句。这是第二句。第三句结束了。";
+	const chunks = extractChunks(
+		raw,
+		{
+			stripTags: true,
+			speakUrls: false,
+			skipCodeBlocks: true,
+			skipInlineCode: true,
+			skipTables: true,
+			skipHeadings: false,
+			skipFrontmatter: true,
+			speakImageAlt: true,
+			speakEmbeds: false,
+			locale: "en",
+		},
+		platformSegmenters,
+		"Notes/cjk.md",
+	);
+	check("CJK chunks carry precomputed spans", chunks.some((c) => c.wordSpans !== undefined));
+
+	// A selection starting two units into the first chunk and ending two units
+	// before the end of the last.
+	const from = 2;
+	const to = raw.length - 2;
+	const selected = chunks.filter((c) => c.sourceEnd > from && c.sourceStart < to);
+	const clipped = clipChunksToSelection(selected, from, to);
+	let bad = 0;
+	let total = 0;
+	for (const c of clipped) {
+		for (const s of c.wordSpans ?? []) {
+			if (s.word !== c.text.slice(s.start, s.end)) bad += 1;
+		}
+		for (const w of allocateWordTimings(c, 3000, 1)) {
+			total += 1;
+			if (raw.slice(w.sourceStart, w.sourceEnd) !== c.text.slice(w.start, w.end)) bad += 1;
+		}
+	}
+	check("clipped CJK timings still name their raw markdown", bad === 0 && total > clipped.length, `${bad} bad of ${total}`);
 }
 
 console.log("");

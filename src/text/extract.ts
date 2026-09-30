@@ -1,4 +1,7 @@
 import type { BlockType, SpeechChunk } from "../audio/types";
+// words.ts imports nothing but its own types, so this edge adds no node builtin
+// and no new entry to main.js's require() list (non-negotiable 7).
+import { findWords, hasCjkScript } from "../audio/words";
 import {
 	type SegmenterSource,
 	graphemeBoundaries,
@@ -937,6 +940,65 @@ function sourceOffsetOfSpace(afterPrev: number, firstOfNext: number): number {
 }
 
 /**
+ * Every offset inside `text` where a word may begin, for the word-highlight
+ * layer rather than for chunking (NRL-47, ADR 0013).
+ *
+ * The policy lives here, next to the rest of the segmentation policy, and
+ * `findWords` receives a plain sorted number[] so that words.ts keeps importing
+ * nothing but its own types.
+ *
+ * Two rules, and the second is not redundant. ICU supplies the Han and Kana
+ * boundaries. It supplies no Korean ones at all: measured on node v24.21.0,
+ * `안녕하세요세계반갑습니다` comes back as ONE word segment under "ko", "en" and
+ * "und" alike, because V8's ICU ships no Korean word dictionary. So a Hangul
+ * run is additionally cut at its own grapheme boundaries, one span per syllable
+ * block, which is both a real syllable and the same granularity ICU already
+ * gives Han. Grapheme boundaries and not code points, so a syllable written
+ * with conjoining jamo (U+1100 U+1161 U+11A8, verified one cluster) is never
+ * split.
+ *
+ * Presence of a segmenter is tested as `src.word(locale) !== undefined` and
+ * must stay that way. An empty boundary list does NOT mean there is no
+ * segmenter - unspaced Hangul returns exactly that from a working one - so
+ * reading the list as the test would silently disable the Hangul rule for the
+ * one case it exists for.
+ *
+ * The locale is passed through for consistency with `sentenceBoundaries` and
+ * `splitOversized`, but nothing here depends on it: measured, `这是第一句`,
+ * `日本語のテキストを読み上げます` and `안녕하세요세계반갑습니다` segment
+ * identically under "zh"/"ja"/"ko", "en" and "und" on this V8.
+ */
+const HANGUL_RUN = /\p{scx=Hangul}+/gu;
+
+function wordCutPoints(text: string, ctx: SegmentContext): number[] {
+	// Nothing outside these scripts can gain a span, because `findWords` only
+	// subdivides a span holding one of their code points. Checking first keeps
+	// an English note from segmenting every chunk to produce cuts that are then
+	// all discarded.
+	if (!hasCjkScript(text)) return [];
+	if (ctx.src.word(ctx.locale) === undefined) return [];
+
+	const cuts = new Set(wordBoundaries(text, ctx.locale, ctx.src));
+
+	HANGUL_RUN.lastIndex = 0;
+	let run: RegExpExecArray | null;
+	let graphemes: number[] | undefined;
+	while ((run = HANGUL_RUN.exec(text)) !== null) {
+		const from = run.index;
+		const to = from + run[0].length;
+		if (to - from <= 1) continue;
+		// Computed once and only when a multi-unit Hangul run exists, since a
+		// note in any other script would pay for nothing.
+		graphemes ??= graphemeBoundaries(text, ctx.src);
+		for (const at of graphemes) {
+			if (at > from && at < to) cuts.add(at);
+		}
+	}
+
+	return [...cuts].sort((a, b) => a - b);
+}
+
+/**
  * Hard-split anything past the engine's comfort zone, at a word boundary.
  *
  * MAX_CHUNK_CHARS is a target, not a guarantee, and it has to be: a single
@@ -1670,6 +1732,23 @@ export function extractChunks(
 		chunk.id = `${hash(filePath + i + chunk.sourceStart)}`;
 		chunk.sequence = i;
 		chunk.filePath = filePath;
+		/*
+		 * Word spans for the highlight layer (NRL-47). This post-pass is the
+		 * only correct place for them: `mergeShort` mutates `prev.text` and
+		 * `prev.sourceIndex` in place and `splitOversized` re-slices both, so a
+		 * span computed any earlier would index text that no longer exists. By
+		 * here every chunk's `text` is final.
+		 *
+		 * Set only when subdivision actually changed something, so an English
+		 * note gains neither the field nor the array and the `?? findWords(...)`
+		 * fallback in `allocateWordTimings` stays the default path rather than
+		 * becoming dead code.
+		 */
+		const cuts = wordCutPoints(chunk.text, segmentCtx);
+		if (cuts.length > 0) {
+			const spans = findWords(chunk.text, cuts);
+			if (spans.length !== findWords(chunk.text).length) chunk.wordSpans = spans;
+		}
 		// blockType is deliberately not set here. It is decided by the block scan
 		// and labelled in the SpeechChunk literal inside splitSentences, so it
 		// is already real by the time this post-pass runs. Overwriting it here
