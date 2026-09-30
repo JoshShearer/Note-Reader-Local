@@ -14,23 +14,37 @@
  * same file, so there is nothing for it to conflict on. Each was caught by a
  * human re-deriving the count by hand. This test derives it instead.
  *
- * Why `pretest` is the registry and not the `test` chain. `pretest` is the list
+ * Why `pretest` is the registry and not the `test` script. `pretest` is the list
  * of TypeScript entry points handed to build-tests.mjs, so it is the one place
- * a suite must be named to be built at all. `test` is a shell chain today, and
- * NRL-80 is about to rewrite it so the first failing suite stops hiding the
- * rest - very likely into a runner invocation that names no individual suite.
- * So `test` is checked AGAINST the registry rather than used as one, and that
- * check may assume only two things: that the script exists, and that any
- * `tests/.build/<name>.test.mjs` substring in it denotes a registered suite at
- * that textual position. It deliberately does NOT look for `&&`, for a `node `
- * prefix, for one command per suite, for quoting, or for line structure. If the
- * script names no suite path at all, the agreement check prints one counted
- * SKIP rather than a pass or a failure (the NRL_SKIP_REAL_SPEECHD precedent in
- * tests/engine.test.ts): NRL-80 landing must not turn this red for no defect,
- * and must not turn it into a silent `ok` either. Naming SOME but not all stays
- * a hard failure, because a partly-rewritten chain is the drift shape itself.
- * The registry half cannot go vacuous by the same route: a `pretest` naming
- * zero suites is its own named failure (check 1).
+ * a suite must be named to be built at all. `test` no longer names any suite:
+ * NRL-80 replaced its 24-deep `&&` chain, whose short-circuit let the first
+ * failing suite hide every later one, with `node run-tests.mjs`. The runner
+ * DERIVES its list from `pretest` rather than holding a second copy, because a
+ * second copy is exactly the drift this file exists to catch.
+ *
+ * So checks 5 and 6 no longer parse the `test` script for suite paths - it
+ * holds none, and looking for them would only ever reach the SKIP that used to
+ * stand here. They import the runner's own pure `suitePathsFromPretest` and
+ * assert what actually matters now: the runner derives the same suites as
+ * `pretest`, in the same order, with no duplicate, every derived path shaped
+ * `tests/.build/<name>.test.mjs`, and `scripts.test` invoking the runner at all.
+ * That last one is a NAMED FAILURE rather than a skip: if `test` stops calling
+ * run-tests.mjs, nothing else in the tree would notice.
+ *
+ * HOW A SKIPPED SUITE FAILS, the two doors, because one test cannot hold both.
+ * A suite dropped from the DERIVATION makes check 5 red and describeList names
+ * it. A suite dropped from the runner's EXECUTION LOOP with the derivation
+ * intact is invisible here, because this file runs INSIDE that loop - so the
+ * runner reconciles itself, recording one result per planned path and exiting
+ * non-zero with `runner planned M suites and produced N results; not run: ...`
+ * when they differ. That is the only place in the tree that can observe the
+ * whole run.
+ *
+ * HONEST LIMIT, unchanged from the chain and not widened by it: replacing
+ * `test` with a command that never invokes the runner at all (NRL-85 measured
+ * `"test": "true"`) still cannot be caught from inside a suite that `test` is
+ * what invokes. Check 5''' catches the specific shape of `test` still running
+ * something else; it cannot catch `test` running nothing.
  *
  * Why tests/nrl-15-inline-worker.test.ts is allowlisted rather than counted. It
  * is registered under the separate `test:inline-worker` script, needs a real
@@ -52,6 +66,13 @@
  *     nothing is exactly the vacuous pass this file exists to prevent, so
  *     finding zero anchors, or more than one, both fail by name.
  *
+ * Section 13 is about the runner rather than the registry, and lives here for
+ * one reason: this file is where a check about run-tests.mjs can go without
+ * adding a 25th suite, which would move all four count sites at once. It pins
+ * NRL-80 F1 - that a failing run's last lines, `FAILING SUITES:` above all,
+ * reach a reader that is slow to drain the pipe - and, just as hard, that the
+ * exit code is still 1 on failure and 0 on success.
+ *
  * The checks in section 8 are permanent mutation guards, not scaffolding. They
  * run the same parsers and the same comparators over synthetic strings and
  * assert that a wrong count, a dropped name, a reordered name list and a
@@ -61,8 +82,15 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+// The runner's own derivation, not a copy of it. Importing the real function is
+// the whole point: a reimplementation here could agree with `pretest` while the
+// runner ran something else. run-tests.d.mts declares it; see that file for why
+// the sidecar exists rather than a tsconfig change.
+import { suitePathsFromPretest } from "../run-tests.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,11 +115,15 @@ function check(name: string, cond: boolean, detail = ""): void {
 	}
 }
 // A skip never touches `failures` and never prints `ok`, so a bypassed check
-// cannot be read as a passing one.
+// cannot be read as a passing one. Nothing in this file skips today - NRL-80
+// replaced the two calls that did with hard checks - but the helper and the
+// `skipped > 0` guard on the final line stay, so a future conditional check
+// cannot be added without the bare all-passed line being suppressed for it.
 function skip(name: string, reason: string): void {
 	skipped += 1;
 	console.log(`  SKIP ${name} (${reason})`);
 }
+void skip;
 
 // --- Parsers ---------------------------------------------------------------
 // Every parser takes a string and returns data. None of them touches the
@@ -256,32 +288,65 @@ const onDisk = fs
 	}
 }
 
-console.log("package.json test agrees with pretest");
+console.log("run-tests.mjs agrees with pretest");
 
-// --- 5 and 6. The `test` script against the registry -----------------------
-// NRL-80 rewrites this script one ticket from now. See the header for exactly
-// what may and may not be assumed about it.
+// --- 5 and 6. The runner's derivation against the registry -----------------
+// NRL-80 replaced the `&&` chain with `node run-tests.mjs`, so `test` names no
+// suite at all and there is nothing in it left to compare. What is compared is
+// the runner's own derivation, imported rather than reimplemented. See the
+// header for the two doors a skipped suite can come in by, and for the one
+// shape this cannot catch.
 {
-	const chain = parseTestChain(testScript);
-	if (chain.length === 0) {
-		skip(
-			"test script names the same suites as pretest, in the same order",
-			"test names no tests/.build/*.test.mjs paths; it likely delegates to a runner - NRL-80",
-		);
-		skip("test script names no suite twice", "same reason");
-	} else {
+	const derived = suitePathsFromPretest(pretestScript);
+	const derivedNames = derived.map((p) =>
+		path.basename(p).replace(/\.test\.mjs$/, ""),
+	);
+
+	// 5'. Same count, same set, same textual order.
+	check(
+		`run-tests.mjs derives the same suites as pretest, in the same order (${derived.length} entries)`,
+		listsEqual(registry, derivedNames),
+		describeList(registry, derivedNames),
+	);
+
+	// 6'. No suite run twice. A duplicate would double-count its checks in the
+	// runner's aggregate and make the skip arithmetic stop closing.
+	{
+		const dupes = duplicates(derivedNames);
 		check(
-			`test script names the same suites as pretest, in the same order (${chain.length} entries)`,
-			listsEqual(registry, chain),
-			describeList(registry, chain),
-		);
-		const dupes = duplicates(chain);
-		check(
-			"test script names no suite twice",
+			"run-tests.mjs derives no suite twice",
 			dupes.length === 0,
 			`duplicated: ${dupes.join(", ")}`,
 		);
 	}
+
+	// 5''. Every derived path is literally a built bundle under tests/.build.
+	// Driven through parseTestChain as well as a per-path shape test, so the
+	// names round-trip: a derivation that emitted the right shape with the wrong
+	// name would pass the shape half alone.
+	{
+		const badShape = derived.filter(
+			(p, i) => p !== `tests/.build/${derivedNames[i] ?? ""}.test.mjs`,
+		);
+		const roundTrip = parseTestChain(derived.join(" "));
+		check(
+			"every run-tests.mjs path is tests/.build/<name>.test.mjs and round-trips to its name",
+			badShape.length === 0 && listsEqual(registry, roundTrip),
+			`bad shape [${badShape.join(", ")}]; round-trip ${describeList(registry, roundTrip)}`,
+		);
+	}
+
+	// 5'''. `test` actually invokes the runner. A NAMED FAILURE and not a skip:
+	// if this stops holding, nothing else in the tree notices, and every check
+	// above becomes a statement about a file nobody runs. It cannot catch `test`
+	// running NOTHING - see the header's honest limit.
+	check(
+		"package.json scripts.test invokes run-tests.mjs",
+		/\brun-tests\.mjs\b/.test(testScript),
+		`scripts.test is ${
+			pkg.scripts?.test === undefined ? "absent" : JSON.stringify(testScript)
+		}`,
+	);
 }
 
 console.log("AGENTS.md gate line");
@@ -469,9 +534,272 @@ console.log("anti-vacuity mutation guards");
 			`${JSON.stringify(parseTestChain(dropped))}, ${JSON.stringify(parseTestChain(reordered))}`,
 		);
 		check(
-			"guard: a test chain naming no suite paths parses to 0, reaching the SKIP",
+			"guard: a script naming no suite paths parses to 0, so check 5'' cannot pass vacuously",
 			parseTestChain("node --test tests/.build/").length === 0,
 			JSON.stringify(parseTestChain("node --test tests/.build/")),
+		);
+	}
+
+	// G7. The runner's REAL suitePathsFromPretest, over synthetic pretest
+	// strings. These are what stop check 5' passing because the derivation
+	// always returns the same thing the registry parser returns - both are
+	// driven here from inputs neither of them can have agreed on in advance.
+	{
+		const pre =
+			"node build-tests.mjs tests/alpha.test.ts tests/beta.test.ts tests/gamma.test.ts tests/delta.test.ts";
+		const expected = fakeRegistry.map((n) => `tests/.build/${n}.test.mjs`);
+
+		// G7a. Positive control. Without it G7b and G7c could both pass because
+		// the derivation returns nothing for every input.
+		{
+			const got = suitePathsFromPretest(pre);
+			check(
+				"guard: the runner derives the right built paths from a correct pretest",
+				listsEqual(expected, got),
+				describeList(expected, got),
+			);
+		}
+
+		// G7b. A suite dropped from pretest is a different derivation - door one
+		// of the two in the header.
+		{
+			const got = suitePathsFromPretest(pre.replace(" tests/gamma.test.ts", ""));
+			check(
+				"guard: the runner dropping a suite from its derivation is detected",
+				!listsEqual(expected, got) && got.length === fakeRegistry.length - 1,
+				JSON.stringify(got),
+			);
+		}
+
+		// G7c. Same set, wrong order. Proves check 5' is ordered, so a later
+		// switch to a set comparison cannot pass this file.
+		{
+			const got = suitePathsFromPretest(
+				"node build-tests.mjs tests/alpha.test.ts tests/gamma.test.ts tests/beta.test.ts tests/delta.test.ts",
+			);
+			check(
+				"guard: the runner reordering its derivation is detected",
+				!listsEqual(expected, got) &&
+					got.length === expected.length &&
+					expected.every((p) => got.includes(p)),
+				JSON.stringify(got),
+			);
+		}
+
+		// G7d. An empty pretest derives nothing. This is what makes check 5'
+		// non-vacuous from the other side: if both parsers returned [] for the
+		// real script, 5' would compare [] with [] and pass.
+		{
+			check(
+				"guard: an empty pretest derives 0 suites, so check 5' cannot pass over two empty lists",
+				suitePathsFromPretest("").length === 0 && parsePretest("").length === 0,
+				`${suitePathsFromPretest("").length} derived, ${parsePretest("").length} registered`,
+			);
+		}
+	}
+}
+
+console.log("run-tests.mjs flushes its output under a stalled reader");
+
+// --- 13. The failure path must not lose its last lines (NRL-80 F1) ---------
+// `process.exit()` tears the process down without flushing writes that are
+// still queued in userspace, and stdout to a PIPE is asynchronous, so a reader
+// that is slow to drain loses whatever had not reached the OS pipe buffer yet.
+// That is every CI log viewer, every `| tee`, every `| head`. Measured on the
+// real 24-suite run with one failure injected: a file redirect delivered 5,097
+// lines, and `node run-tests.mjs 2>&1 | { sleep 25; cat; }` delivered 915 and
+// LOST the `FAILING SUITES:` line - the one line this whole file exists to put
+// at the end of a failing log.
+//
+// Driven against a COPY of the real run-tests.mjs in a temp sandbox with a
+// synthetic package.json, not against the live tree: this suite runs INSIDE
+// run-tests.mjs, so spawning the real one here would recurse through all 24
+// suites, itself included.
+//
+// The failure sandbox names suites whose build outputs do not exist, so the
+// runner takes its named-failure branch without spawning a single child. It is
+// fast and it has no dependency on any suite's real behaviour.
+//
+// THE PASS CASE IS THE POSITIVE CONTROL AND IS NOT DECORATION. The success
+// path has no `process.exit` and never did, so it must survive the identical
+// stall. Without it, a harness that simply could not carry a large payload
+// would make the failure-path checks pass for the wrong reason, and the fix
+// would be unfalsifiable. Both payloads are comfortably over the 64 KiB pipe
+// buffer, which is what makes the stall bite at all.
+{
+	const STALL_SECONDS = 1;
+	// ~230 KB of runner output, ~3.5x the 64 KiB pipe buffer.
+	const MISSING_SUITES = 1200;
+	// ~840 KB from one synthetic suite, ~13x the buffer.
+	const PASS_LINES = 12000;
+
+	interface RunnerRun {
+		readonly out: string;
+		readonly code: number;
+		readonly error: string;
+	}
+
+	function makeSandbox(kind: "fail" | "pass"): string {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nrl80-flush-"));
+		fs.copyFileSync(path.join(ROOT, "run-tests.mjs"), path.join(dir, "run-tests.mjs"));
+		fs.mkdirSync(path.join(dir, "tests", ".build"), { recursive: true });
+		let names: string[];
+		if (kind === "fail") {
+			names = Array.from({ length: MISSING_SUITES }, (_, i) => `tests/s${i}.test.ts`);
+		} else {
+			names = ["tests/s0.test.ts"];
+			const body = Array.from(
+				{ length: PASS_LINES },
+				(_, i) => `console.log("  ok   synthetic check ${i}, padded so the payload clears the pipe buffer");`,
+			).join("\n");
+			fs.writeFileSync(path.join(dir, "tests", ".build", "s0.test.mjs"), `${body}\n`);
+		}
+		fs.writeFileSync(
+			path.join(dir, "package.json"),
+			JSON.stringify({ scripts: { pretest: `node build-tests.mjs ${names.join(" ")}` } }),
+		);
+		return dir;
+	}
+
+	/**
+	 * Run the sandboxed runner with its stdout on a pipe whose reader sleeps
+	 * `stallSeconds` before draining. `sleep 0` is the unstalled baseline, run
+	 * through the identical shell so the two differ in the stall and nothing
+	 * else.
+	 *
+	 * The runner's own exit code goes to a file rather than out of the shell:
+	 * a pipeline's status is its LAST command's, and `pipefail` is not portable
+	 * to every /bin/sh.
+	 */
+	function runStalled(dir: string, stallSeconds: number): RunnerRun {
+		const codeFile = path.join(dir, "code.txt");
+		fs.rmSync(codeFile, { force: true });
+		const script =
+			`{ "${process.execPath}" run-tests.mjs 2>&1; echo $? > code.txt; } | ` +
+			`{ sleep ${stallSeconds}; cat; }`;
+		const r = spawnSync("/bin/sh", ["-c", script], {
+			cwd: dir,
+			encoding: "utf8",
+			maxBuffer: 64 * 1024 * 1024,
+		});
+		if (r.error !== undefined && r.error !== null) {
+			return { out: "", code: Number.NaN, error: String(r.error) };
+		}
+		let code = Number.NaN;
+		try {
+			code = Number(fs.readFileSync(codeFile, "utf8").trim());
+		} catch (e) {
+			return { out: r.stdout ?? "", code: Number.NaN, error: `no exit code recorded: ${String(e)}` };
+		}
+		return { out: r.stdout ?? "", code, error: "" };
+	}
+
+	function tailOf(out: string): string {
+		const lines = out.trimEnd().split("\n");
+		return lines[lines.length - 1] ?? "";
+	}
+
+	// --- 13a-13d. The failure path.
+	{
+		const dir = makeSandbox("fail");
+		try {
+			const base = runStalled(dir, 0);
+			const stalled = runStalled(dir, STALL_SECONDS);
+
+			// 13a. Non-vacuity: the baseline must actually be large enough for the
+			// stall to mean anything, and must carry the line under test.
+			check(
+				"run-tests.mjs failure output clears the pipe buffer and ends in FAILING SUITES",
+				base.error === "" &&
+					base.out.length > 64 * 1024 &&
+					/\nFAILING SUITES: /.test(base.out),
+				`error ${JSON.stringify(base.error)}, ${base.out.length} bytes, tail ${JSON.stringify(tailOf(base.out))}`,
+			);
+
+			// 13b. THE DEFECT. Pre-fix this is red: the tail is lost.
+			check(
+				`the FAILING SUITES line survives a ${STALL_SECONDS}s stalled reader`,
+				/\nFAILING SUITES: /.test(stalled.out),
+				`stalled delivered ${stalled.out.length} of ${base.out.length} bytes (${
+					stalled.out.split("\n").length
+				} of ${base.out.split("\n").length} lines); last line ${JSON.stringify(tailOf(stalled.out))}`,
+			);
+
+			// 13c. Nothing else is lost either. Byte-identical, so this cannot be
+			// satisfied by flushing the summary and dropping the middle.
+			check(
+				"a stalled reader receives byte-identical output to an unstalled one",
+				stalled.out === base.out,
+				`${stalled.out.length} bytes stalled vs ${base.out.length} unstalled`,
+			);
+
+			// 13d. THE CONTRACT. A fix that flushes but loses the non-zero exit
+			// would be worse than the bug: CI would go green on a failing run.
+			check(
+				"a failing run still exits 1, stalled and unstalled",
+				base.code === 1 && stalled.code === 1,
+				`unstalled ${base.code}, stalled ${stalled.code}`,
+			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	// --- 13e-13f. The pass path, positive control.
+	{
+		const dir = makeSandbox("pass");
+		try {
+			const base = runStalled(dir, 0);
+			const stalled = runStalled(dir, STALL_SECONDS);
+
+			// 13e. The harness itself carries a payload of this size through a
+			// stalled pipe without loss. This is what makes 13b attributable to
+			// `process.exit` rather than to the test.
+			check(
+				"positive control: the success path survives the same stall intact",
+				base.error === "" &&
+					stalled.error === "" &&
+					base.out.length > 64 * 1024 &&
+					stalled.out === base.out &&
+					/all 1 suites passed/.test(stalled.out),
+				`unstalled ${base.out.length} bytes, stalled ${stalled.out.length} bytes, tail ${JSON.stringify(tailOf(stalled.out))}`,
+			);
+
+			// 13f. And exits 0, stalled and unstalled.
+			check(
+				"a passing run still exits 0, stalled and unstalled",
+				base.code === 0 && stalled.code === 0,
+				`unstalled ${base.code}, stalled ${stalled.code}`,
+			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	// --- 13g. Source guard, for the exits this harness cannot drive.
+	// run-tests.mjs has two other `process.exit(1)` sites - an empty `pretest`
+	// and the planned-vs-produced reconciliation - and both write their reason
+	// to the console immediately before exiting, so both carry the identical
+	// hazard. Driving them would need a third and fourth sandbox for two lines
+	// of output each, which a stalled pipe would deliver anyway; asserting the
+	// call is simply absent covers them and any site added later.
+	{
+		const runnerSrc = fs.readFileSync(path.join(ROOT, "run-tests.mjs"), "utf8");
+		const codeOnly = runnerSrc
+			.replace(/\/\*[\s\S]*?\*\//g, "")
+			.replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+		const calls = [...codeOnly.matchAll(/\bprocess\.exit\s*\(/g)];
+		check(
+			"run-tests.mjs calls process.exit() nowhere; it sets process.exitCode instead",
+			calls.length === 0,
+			`${calls.length} call(s) remain; process.exit does not flush a pending async stdout write`,
+		);
+		// Non-vacuity for 13g: the same scan finds a call when one is there.
+		check(
+			"guard: the process.exit scan detects a call, so 13g cannot pass over a broken regex",
+			[...'if (x) process.exit(1);'.matchAll(/\bprocess\.exit\s*\(/g)].length === 1 &&
+				[...'// process.exit(1)\n'.replace(/(^|[^:])\/\/[^\n]*/g, "$1").matchAll(/\bprocess\.exit\s*\(/g)].length === 0,
+			"the scan or the comment-stripper is not doing what 13g assumes",
 		);
 	}
 }
