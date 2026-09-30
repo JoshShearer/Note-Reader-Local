@@ -1257,6 +1257,30 @@ const TABLE_ROW = /^\s*\|/;
  * body is "- -", and the dashes would be spoken.
  */
 const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
+/**
+ * A CommonMark link reference definition, the whole construct on one line.
+ * It renders as nothing at all, so nothing in it is spoken (docs/adr/0018).
+ *
+ * Every half is there to stop a false positive, because a miss here swallows a
+ * sentence and ADR 0007 clause 6 prefers leaked markup to a lost word:
+ *
+ * - `^ {0,3}` - four spaces is indented code, which never reaches this point.
+ * - `(?!\^)` - `[^1]:` is a footnote definition, whose body IS displayed, so
+ *   it keeps cleanLine's own branch that drops only the marker.
+ * - `(?:[^\[\]\\]|\\.)+` - a non-empty label with no unescaped bracket in it,
+ *   so `[a [b] c]: x.png` is prose.
+ * - a destination is REQUIRED, either `<...>` or a run of non-space
+ *   characters. `[theref]:` alone is not a definition.
+ * - the optional title must be the last thing on the line. That is what keeps
+ *   `[see also]: not a definition, just a sentence` spoken: its destination
+ *   ends at the first space and the rest is neither a title nor nothing.
+ *
+ * A definition whose destination sits on the following line is out of scope -
+ * this scanner is per-line, and picking that up means the same refactor the
+ * whole soft-wrap family needs.
+ */
+const LINK_REF_DEF =
+	/^ {0,3}\[(?!\^)(?:[^\[\]\\]|\\.)+\]:[ \t]*(?:<(?:[^<>\\\n]|\\.)*>|[^\s<][^\s]*)(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
 
 /**
  * Does this line leave a comment open, so that the lines after it are hidden?
@@ -1781,6 +1805,30 @@ export function extractChunks(
 
 		const cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode);
 		inComment = cleaned.openComment;
+		// A link reference definition renders as nothing, so the whole line goes
+		// (docs/adr/0018). Deliberately AFTER cleanLine and after `inComment` is
+		// assigned, for the same reason the skipTables branch below is: a title
+		// or destination can carry an unclosed `<!--`, and dropping the line
+		// before that was parsed would stop the comment opening and make text
+		// the author hid audible.
+		//
+		// Tested on `body`, post-prefix-peel, so a definition on the first line
+		// of a quote or list item is caught too - it renders as nothing there
+		// as well. The rest of the guard is what CommonMark's "may not
+		// interrupt a paragraph" needs from a per-line scanner: an empty
+		// paragraph buffer, no paragraph line before it, and no container line
+		// before it either, since a lazy continuation inside a quote or list
+		// reaches here with the global buffer still empty. A heading is
+		// excluded because a leaf block cannot sit inside one, so `# [a]: x.png`
+		// is inline content the renderer shows.
+		//
+		// No flushParagraph: `paraText === ""` is a precondition, so it would
+		// provably be a no-op. And when `carriedCode` is live the previous line
+		// was a buffered paragraph line, so `paraText !== ""` and this branch
+		// cannot fire - a soft-wrapped code span can never be cut short here.
+		if (blockType !== "heading" && paraText === "" && !wasPara && !wasContainer && LINK_REF_DEF.test(body)) {
+			continue;
+		}
 		// Output exclusions do not exclude parsing: an HTML or Obsidian comment
 		// opened in a skipped heading/table must still hide its following lines.
 		if ((opts.skipTables && TABLE_ROW.test(raw)) || (opts.skipHeadings && m)) {

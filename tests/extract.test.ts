@@ -883,6 +883,120 @@ console.log("block markup (NRL-8)");
 	}
 }
 
+console.log("NRL-45 link reference definitions (R-M08)");
+{
+	/*
+	 * A CommonMark link reference definition renders as nothing, so none of it
+	 * is spoken - label, colon, destination and any quoted title all go. A
+	 * footnote definition is the deliberate contrast a few sections up: its
+	 * body IS displayed at the foot of the note, so only the `[^1]:` marker is
+	 * dropped. The rule both follow is "speak what the renderer shows" (ADR
+	 * 0018).
+	 *
+	 * No content key governs this: it is unconditional syntax removal, like the
+	 * footnote marker and the comment delimiters. The ticket's "both positions
+	 * of any toggle chosen to govern it" is therefore satisfied by the
+	 * 512-combination sweep below rather than by a tenth content key - the two
+	 * `link-ref-def` corpus rows run every fixture here through all 512 masks.
+	 */
+	const texts = (src: string, opts = OPTS): string[] => extractChunks(src, opts).map((c) => c.text);
+	const expect = (src: string, want: string[], opts = OPTS): void => {
+		const got = texts(src, opts);
+		check(
+			`${JSON.stringify(src)} -> ${JSON.stringify(want)}`,
+			JSON.stringify(got) === JSON.stringify(want),
+			`got: ${JSON.stringify(got)}`,
+		);
+	};
+
+	// Dropped whole (decision Q1). Ten shapes, each spoken in full before NRL-45.
+	expect('[theref]: zdestz.png "ZTITLEZ"', []);
+	expect("[theref]: zdestz.png 'ZTITLEZ'", []);
+	expect("[theref]: zdestz.png (ZTITLEZ)", []);
+	expect('[theref]: <zdestz one.png> "ZTITLEZ"', []);
+	expect("[theref]: zdestz.png", []);
+	expect('   [theref]: zdestz.png "ZTITLEZ"', []);
+	// Recognised after the prefix peel, so a quoted or listed definition goes
+	// too - it renders as nothing inside a container as well (decision Q6).
+	expect('> [theref]: zdestz.png "ZTITLEZ"', []);
+	expect('- [theref]: zdestz.png "ZTITLEZ"', []);
+	// A used reference still speaks its label; only the definition disappears.
+	expect('Before [label][theref] after.\n\n[theref]: zdestz.png "ZTITLEZ"', ["Before label after."]);
+	expect('ZBEFOREZ para.\n\n[theref]: zdestz.png "ZTITLEZ"\n\nZAFTERZ para.', ["ZBEFOREZ para.", "ZAFTERZ para."]);
+
+	/*
+	 * pin-link-ref-def: unchanged by NRL-45, and pinned so they can only change
+	 * deliberately. Recognition demands the complete one-line CommonMark shape
+	 * at the start of a block; anything short of that stays spoken, because
+	 * leaked markup is preferred to a swallowed sentence (ADR 0007 clause 6).
+	 */
+	expect("[see also]: not a definition, just a sentence", ["see also : not a definition, just a sentence"]);
+	expect("[a [b] c]: x.png", ["a [b c]: x.png"]);
+	expect("[]: x.png", [": x.png"]);
+	expect("[theref]:", ["theref :"]);
+	expect("[theref]:   ", ["theref :"]);
+	// A definition may not interrupt a paragraph, so a def-shaped line directly
+	// under a prose line is a paragraph continuation and stays spoken.
+	expect('ZPROSEZ line here.\n[theref]: zdestz.png "ZTITLEZ"', ['ZPROSEZ line here. theref : zdestz.png "ZTITLEZ"']);
+	expect("ZPROSEZ line here.\n[see also]: not a definition", ["ZPROSEZ line here. see also : not a definition"]);
+	// Second line of a container: the per-line scanner keeps no per-container
+	// paragraph buffer, so the lazy-continuation case is excluded by
+	// !wasContainer and stays spoken (decision Q8).
+	expect('> ZPROSEZ sentence.\n> [theref]: zdestz.png "ZTITLEZ"', ["ZPROSEZ sentence.", 'theref : zdestz.png "ZTITLEZ"']);
+	// A leaf block cannot sit inside a heading, so this is inline content the
+	// renderer shows (decision Q10).
+	expect("# [theref]: x.png", ["theref : x.png"]);
+	// Footnote definitions keep their own branch and their own rule (decision
+	// Q2); the pins in the NRL-9 section above cover the marker itself.
+	expect("[^note]: ZFOOTZ body text here.", ["ZFOOTZ body text here."]);
+
+	/*
+	 * Decision Q9, the disclosure direction. The branch sits AFTER cleanLine and
+	 * after `inComment` is assigned, so a title carrying an unclosed `<!--`
+	 * still opens the comment that hides the rest of the note. Dropping the line
+	 * earlier would make text the author hid audible.
+	 */
+	expect('[a]: x.png "<!--"\n\nZSECRETZ sentence here.', []);
+	expect('[a]: x.png "<!--"\n\nZSECRETZ sentence here.\n\n-->\n\nZAFTERZ here.', ["ZAFTERZ here."]);
+
+	/*
+	 * sourceIndex across a dropped line (AGENTS.md rule 8). The drop is
+	 * block-level - the branch continues before appendToParagraph - so the line
+	 * contributes zero index entries, and offsets must stay monotonic ACROSS the
+	 * chunk boundary that now spans it. mergeShort's gap space derives from the
+	 * previous chunk's sourceEnd, which sits before the dropped line while the
+	 * next chunk's first offset sits after it.
+	 */
+	{
+		const keys = [
+			"skipFrontmatter", "skipCodeBlocks", "skipInlineCode", "speakUrls", "speakImageAlt",
+			"speakEmbeds", "stripTags", "skipTables", "skipHeadings",
+		] as const;
+		const src = 'ZBEFOREZ para.\n\n[theref]: zdestz.png "ZTITLEZ"\n\nZAFTERZ para.';
+		const defStart = src.indexOf("[theref]:");
+		const defEnd = defStart + '[theref]: zdestz.png "ZTITLEZ"'.length;
+		let bad = "";
+		let runs = 0;
+		for (let mask = 0; mask < 512; mask++) {
+			const over: Partial<typeof OPTS> = {};
+			for (let b = 0; b < keys.length; b++) over[keys[b]!] = (mask & (1 << b)) !== 0;
+			runs += 1;
+			let prevEnd = -1;
+			for (const c of extractChunks(src, { ...OPTS, ...over })) {
+				if (c.sourceIndex.length !== c.text.length && bad === "") bad = `mask=${mask} length`;
+				if (c.sourceStart < prevEnd && bad === "") bad = `mask=${mask} chunk order`;
+				prevEnd = c.sourceEnd;
+				for (let i = 0; i < c.text.length; i++) {
+					const at = c.sourceIndex[i]!;
+					if (at >= defStart && at < defEnd && bad === "") bad = `mask=${mask} offset ${at} inside the dropped line`;
+					if (i > 0 && at < c.sourceIndex[i - 1]! && bad === "") bad = `mask=${mask} non-monotonic at ${i}`;
+				}
+			}
+		}
+		check("NRL-45 no offset lands inside the dropped definition line, over 512 combinations", bad === "" && runs === 512, `${bad} runs=${runs}`);
+	}
+}
+
 console.log("angle-bracket autolinks (NRL-39)");
 {
 	const urlsOn = { ...OPTS, speakUrls: true };
@@ -1769,6 +1883,10 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		// offsets are the shape most likely to drift out of lockstep.
 		["link-folder-targets", "Go to [[private/folder/Secret Note]] and ![[a/b/Deep Note]] and [[/Leading Slash]] and [[folder/]] now."],
 		["link-odd-targets", "See [[https://user:pw@example.com/a/b]] and [[C:\\Users\\me\\Secret Note]] and ![[C:\\v1.2\\Note]] now."],
+		// NRL-45: a dropped definition line emits nothing at all, so the chunks
+		// either side of it must still hold monotonic offsets across the gap.
+		["link-ref-defs", 'ZBEFOREZ para here.\n\n[theref]: zdestz.png "ZTITLEZ"\n\nUses [label][theref] and [theref] here.\n\n> [qref]: <q dest.png> \'QT\'\n\nZAFTERZ para here.'],
+		["link-ref-def-negatives", '[see also]: not a definition, just a sentence\n\nZPROSEZ line here.\n[theref]: zdestz.png "ZTITLEZ"\n\n[a [b] c]: x.png\n\n[^1]: ZFOOTZ body here.'],
 	];
 	let sweepRuns = 0;
 	let sweepBad = "";
@@ -1800,8 +1918,9 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 	// The product is spelled out deliberately: it is the did-the-sweep-really-run
 	// pin, so a corpus row added or lost must edit this literal rather than
 	// silently change what "every combination" means. 16 rows at NRL-21, plus
-	// the two NRL-46 link-target rows.
-	check("NRL-21 sweep really ran every combination", sweepRuns === corpus.length * (1 << keys.length) && sweepRuns === 18 * 512, String(sweepRuns));
+	// the two NRL-46 link-target rows, plus the two NRL-45
+	// link-reference-definition rows.
+	check("NRL-21 sweep really ran every combination", sweepRuns === corpus.length * (1 << keys.length) && sweepRuns === 20 * 512, String(sweepRuns));
 }
 
 console.log("NRL-28 Unicode sentence segmentation and grapheme-safe splitting (R-M10)");
