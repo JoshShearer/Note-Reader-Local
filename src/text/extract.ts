@@ -384,6 +384,53 @@ function inlineContainerClose(raw: string, from: number, delimiter: string): num
 }
 
 /**
+ * Where a `[[wikilink]]` or `![[embed]]` target closes, or -1 if it does not
+ * close on this line.
+ *
+ * A near-copy of inlineContainerClose, and the one difference is the whole
+ * reason it exists: this does NOT honour `\` as an escape. A target ending in a
+ * backslash puts `\]]` on the line; the shared helper ate the `\]`, never found
+ * a `]]`, and the construct fell through to prose with its vault path intact -
+ * so `[[private/folder/Note\]]` read the folder segments aloud, which is the
+ * one thing R-M09 and ADR 0017 promise it will not (NRL-66). Recognising it
+ * instead needs no new reduction code at all: `finalSegment` already steps back
+ * over a trailing separator and the emission loop already drops it.
+ *
+ * Inside a wikilink target a backslash is a path separator far more often than
+ * an escape - isFileTarget and finalSegment both already split on it - so this
+ * is not a parameter on the shared helper but a separate function, deliberately
+ * local to these two branches. For a markdown image, link or highlight, `\]`
+ * failing to close the label is CommonMark-correct, and their destination sits
+ * after the `]` and is already dropped, so changing them would diverge from the
+ * renderer for no privacy gain.
+ *
+ * Code spans and complete comment spans are skipped exactly as
+ * inlineContainerClose skips them: a `]]` that is hidden or literal cannot end
+ * the target.
+ */
+function wikiTargetClose(raw: string, from: number): number {
+	let i = from;
+	while (i < raw.length) {
+		if (raw[i] === "`") {
+			i = inlineCodeBounds(raw, i).end;
+			continue;
+		}
+		const html = raw.startsWith("<!--", i);
+		if (html || raw.startsWith("%%", i)) {
+			const closer = html ? "-->" : "%%";
+			const close = raw.indexOf(closer, i + (html ? 4 : 2));
+			if (close !== -1) {
+				i = close + closer.length;
+				continue;
+			}
+		}
+		if (raw.startsWith("]]", i)) return i;
+		i += 1;
+	}
+	return -1;
+}
+
+/**
  * Strip inline markdown from a single line, recording source offsets.
  *
  * `incomingCode` is the length of a backtick run opened on an earlier line
@@ -768,7 +815,7 @@ function cleanLine(
 		// only this note's source, and sourceIndex is an offset into it, so text
 		// from another file has nowhere to map back to.
 		if (ch === "!" && raw[i + 1] === "[" && raw[i + 2] === "[") {
-			const close = inlineContainerClose(raw, i + 3, "]]");
+			const close = wikiTargetClose(raw, i + 3);
 			if (close !== -1) {
 				if (opts.speakEmbeds) {
 					pushSpace(rawStart + i);
@@ -787,7 +834,7 @@ function cleanLine(
 		// Only a double bracket lands here, so a single `[` (including callouts
 		// like `[!note]`) still reaches the link branch below.
 		if (ch === "[" && raw[i + 1] === "[") {
-			const close = inlineContainerClose(raw, i + 2, "]]");
+			const close = wikiTargetClose(raw, i + 2);
 			if (close === -1) {
 				// No closer on this line (wikilinks never span lines). Drop just the
 				// brackets so the rest of the line is still read as prose.
