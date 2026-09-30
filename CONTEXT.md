@@ -213,9 +213,10 @@ Five consequences worth knowing before touching any of it:
   provides the only `pause()`/`resume()` in `src/engines/` and it owns playback - and it was
   inherited rather than introduced by the resume guard above, identical on `b04d8fa` and
   `4a9ecd0`. The trailing `return "restart"` is now a literal rather than a ternary so the
-  invariant is visible where it is relied on; an early return inserted between the
-  `!ownsPlayback` guard and it would silently send a buffer engine down the chunk-tearing
-  `restart` route.
+  invariant is visible where it is relied on, and the edit to refuse is weakening, narrowing or
+  moving the guard itself - not inserting a return between it and that line, which no buffer
+  engine could reach anyway, since the guard returns for every one of them. A buffer engine that
+  did reach `restart` would have its chunk torn down and re-read instead of paused.
 
 `EngineCapabilities.pause` therefore answers "can the player stop this engine's sound and
 come back to it", not "does the engine have a pause API". All four engines now say yes, so
