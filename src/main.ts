@@ -7,7 +7,7 @@ import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
 import { platformSegmenters } from "./text/segment";
 import { resolveStoredVoice } from "./audio/voiceChoice";
-import { clipWordSpans } from "./audio/words";
+import { clipChunksToSelection } from "./audio/clip";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
 import {
 	KokoroEngine,
@@ -25,17 +25,35 @@ import {
 	type RankedCandidate,
 } from "./engines/selection";
 import { DEFAULT_SETTINGS, type Settings } from "./settings";
-import {
-	loadPluginData,
-	serialisePluginData,
-	dropReadingPositions,
-	moveReadingPositions,
-	type PluginData,
-} from "./settings/data";
+import { loadPluginData, serialisePluginData, type PluginData } from "./settings/data";
 import { PositionThrottle } from "./settings/positionThrottle";
-import { applyHighlight, registerHighlighting } from "./ui/highlight";
-import { WORD_HIGHLIGHT_VAR, applyWordHighlightColour } from "./ui/highlightColour";
-import { createModelStore, type VaultModelStore } from "./ui/modelStore";
+import { SaveQueue } from "./settings/saveQueue";
+import { applyVaultDelete, applyVaultRename, type VaultEventPort } from "./settings/vaultEvents";
+import {
+	applyHighlightLayers,
+	applySentenceHighlight,
+	applyWordHighlight,
+	clearHighlights,
+	clearSentenceHighlight,
+	clearWordHighlight,
+	highlightPlan,
+	registerHighlighting,
+	scrollTargetForChunk,
+	type HighlightLayers,
+} from "./ui/highlight";
+import {
+	WORD_HIGHLIGHT_VAR,
+	SENTENCE_HIGHLIGHT_VAR,
+	applyWordHighlightColour,
+	applySentenceHighlightColour,
+} from "./ui/highlightColour";
+import {
+	createModelStore,
+	checkOrtStatus,
+	worstOrtStatus,
+	type VaultModelStore,
+} from "./ui/modelStore";
+import { withLoadingNotice } from "./ui/loadingNotice";
 import { reportError, trace } from "./diagnostics";
 import { LocalTtsSettingTab } from "./ui/settingsTab";
 import { ControlBar } from "./ui/controlBar";
@@ -81,6 +99,18 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 */
 	private positionThrottle!: PositionThrottle;
 	/**
+	 * The single funnel for every durable write. One write in flight, one pending
+	 * payload, newest wins; see src/settings/saveQueue.ts for why ordering the
+	 * writes is the whole point.
+	 */
+	private saveQueue!: SaveQueue;
+	/**
+	 * Everything the vault rename/delete orchestration needs from obsidian. The
+	 * orchestration itself lives in src/settings/vaultEvents.ts so it is reachable
+	 * from the suite; this object is the only part that cannot be.
+	 */
+	private vaultEvents!: VaultEventPort;
+	/**
 	 * The last automatic resolution computed, so `activeEngine()` has a sync
 	 * answer for UI call sites that cannot await (checkCallback, the control
 	 * bar). Only meaningful when `settings.engine === "auto"`; refreshed by
@@ -92,10 +122,36 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	override async onload(): Promise<void> {
 		trace(this.app, this.manifest.dir!, "plugin loaded");
 
-		// Validate ORT runtime checksums on load if present (production builds only).
-		// Non-negotiable: ensures integrity of published artifact files without
-		// triggering downloads. No automatic fallback on failure; user is told
-		// to re-install the plugin (report the error with manifest.dir).
+		this.pluginData = loadPluginData(await this.loadData());
+		this.settings = this.pluginData.settings;
+		// Immediately after the container and before anything else in onload, not
+		// beside the PositionThrottle below: saveSettings() now routes through this
+		// and nothing in onload may save before it exists. Nothing between here and
+		// there saves today, so this is a guard against a later insertion rather
+		// than a fix for a present ordering bug.
+		this.saveQueue = new SaveQueue({
+			write: (payload) => this.saveData(payload),
+			onError: (err) => {
+				reportError(this.app, this.manifest.dir!, "save failed", err);
+			},
+		});
+		this.applyHighlightColour();
+
+		this.modelStore = createModelStore(
+			this.app,
+			this.manifest.dir!,
+			this.settings.kokoroModelPath,
+		);
+
+		// Validate ORT runtime checksums on load if present (production builds
+		// only). Non-negotiable: ensures integrity of already-downloaded
+		// runtime files without triggering a download itself. Moved to after
+		// modelStore creation (NRL-37): the files now live in the vault-
+		// adjacent model directory, not the plugin folder, so resolving where
+		// to look needs settings.kokoroModelPath, which is not known until
+		// after loadPluginData() above. No automatic fallback on failure;
+		// user is told to re-install the plugin (report the error with
+		// manifest.dir).
 		if (__ORT_CHECKSUMS__) {
 			try {
 				await this.validateOrtChecksums();
@@ -109,15 +165,6 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			}
 		}
 
-		this.pluginData = loadPluginData(await this.loadData());
-		this.settings = this.pluginData.settings;
-		this.applyHighlightColour();
-
-		this.modelStore = createModelStore(
-			this.app,
-			this.manifest.dir!,
-			this.settings.kokoroModelPath,
-		);
 		this.engines = createEngines(this.modelStore, this.kokoroOptions());
 
 		// Which backend the engine settled on, and why the faster ones were
@@ -147,6 +194,28 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			},
 		});
 
+		// After the player, because the port reads the queue's file path off it.
+		this.vaultEvents = {
+			currentFilePath: () => this.player.getFilePath(),
+			stop: () => this.stopReading(),
+			positions: () => this.pluginData.positions,
+			setPositions: (next) => {
+				// The FIELD, never the container: a rebuilt root would take every
+				// key this build does not know about with it (non-negotiable 10).
+				this.pluginData.positions = next;
+			},
+			save: () => {
+				void this.saveSettings().catch(() => {
+					// Deliberately swallowed, and it is not a lost error. The
+					// SaveQueue's onError above reports every rejected write exactly
+					// once, so reporting here as well would show the user two notices
+					// for one failure; and the trace line the orchestration emits
+					// immediately before this names which event it was.
+				});
+			},
+			trace: (step, detail) => trace(this.app, this.manifest.dir!, step, detail),
+		};
+
 		// After the loadPluginData() call above and not before: a vault event
 		// arriving first would hit a `!`-initialised field. Registered through
 		// registerEvent, so both are torn down with the plugin.
@@ -155,29 +224,64 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		);
 		this.registerEvent(this.app.vault.on("delete", (file) => this.handleVaultDelete(file)));
 
-		// Sentence-level highlighting
+		// Sentence-level highlighting. Ranges come from the chunk's source
+		// offsets, never from searching the editor (non-negotiable 8).
 		this.player.on("chunk", (chunk) => {
-			if (!this.settings.highlight.enabled || !chunk) {
-				this.clearHighlight();
+			// No chunk means playback moved off the note entirely, so both layers
+			// go. Every other branch here touches one layer only: clearing both
+			// from a per-layer handler is what coupled the two toggles together.
+			if (!chunk) {
+				this.clearBothHighlights();
 				return;
 			}
 			if (!this.activeEditor) return;
-			applyHighlight(this.activeEditor, {
-				from: chunk.sourceStart,
-				to: chunk.sourceEnd,
-			});
+			// One transaction, because both layers change together here: the new
+			// sentence has to arrive in the same update that retires the previous
+			// sentence's word mark, or a word stays lit inside the wrong sentence
+			// until the next word event - which on a slow first synthesis, or on
+			// an engine that emits no word events at all, is a long time. The
+			// viewport scroll rides in that same transaction for the same
+			// reason (NRL-72, docs/adr/0022).
+			//
+			// The scroll target is `chunk.sourceStart` and NOT the sentence
+			// range's `from`: that range is null when the sentence layer is off,
+			// and the viewport should still follow playback then, because the
+			// word layer may be the only one visible. Which offset to use is
+			// decided here; highlight.ts only knows how to build the effect.
+			//
+			// `scrollTargetForChunk` is the gate, and it returns null when
+			// neither layer is drawn. It lives in highlight.ts rather than
+			// inline here because main.ts has no runtime in the suite, which is
+			// exactly how this shipped ungated in the first place: the offset
+			// was passed unconditionally, so with highlighting switched off the
+			// dispatch below drew zero ranges and still moved the viewport.
+			//
+			// One `highlightLayers()` call, not two, so the sentence range and
+			// the scroll decision cannot be computed from different plans.
+			const layers = this.highlightLayers();
+			applyHighlightLayers(
+				this.activeEditor,
+				{
+					sentence: layers.sentence
+						? { from: chunk.sourceStart, to: chunk.sourceEnd }
+						: null,
+					word: null,
+				},
+				scrollTargetForChunk(layers, chunk.sourceStart),
+			);
 		});
 
-		// Word-level highlighting (on top of sentence)
+		// Word-level highlighting, drawn over the sentence rather than replacing
+		// it. This handler must never clear the sentence layer.
 		this.player.on("word", (payload) => {
-			if (!this.settings.highlight.enabled || !payload) {
-				this.clearHighlight();
-				return;
-			}
 			// The view can be closed mid-playback; a missing editor just means
 			// there is nothing left to highlight.
 			if (!this.activeEditor) return;
-			applyHighlight(this.activeEditor, {
+			if (!payload || !this.highlightLayers().word) {
+				clearWordHighlight(this.activeEditor);
+				return;
+			}
+			applyWordHighlight(this.activeEditor, {
 				from: payload.timing.sourceStart,
 				to: payload.timing.sourceEnd,
 			});
@@ -202,7 +306,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		});
 
 		this.player.on("state", (state) => {
-			if (state === "finished" || state === "idle") this.clearHighlight();
+			if (state === "finished" || state === "idle") this.clearBothHighlights();
 			// Every state change that ends the user's attention closes the window,
 			// which is what makes the final second survive. One place rather than
 			// patching stopReading() and the two toggle() call sites: setState is
@@ -220,13 +324,13 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		});
 
 		this.player.on("error", (err) => {
-			this.clearHighlight();
+			this.clearBothHighlights();
 			reportError(this.app, this.manifest.dir!, "playback failed", err);
 		});
 
 		this.player.on("timerExpired", () => {
 			new Notice("Sleep timer expired.");
-			this.clearHighlight();
+			this.clearBothHighlights();
 		});
 
 		this.controlBar = new ControlBar(this);
@@ -461,7 +565,11 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.positionThrottle?.dispose();
 		this.controlBar?.destroy();
 		this.player?.dispose();
+		// Both, or the sentence property outlives the plugin on document.body.
+		// highlightColour.ts's own comment promises "leaves nothing behind on
+		// unload", and ADR 0005 says the same.
 		document.body.style.removeProperty(WORD_HIGHLIGHT_VAR);
+		document.body.style.removeProperty(SENTENCE_HIGHLIGHT_VAR);
 		for (const engine of this.engines) void engine.dispose();
 	}
 
@@ -509,7 +617,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.readScope?.abort();
 		const scope = (this.readScope = new AbortController());
 
-		this.activeEditor = current.editor;
+		this.retargetHighlightEditor(current.editor);
 		registerHighlighting(current.editor);
 
 		const chunks = extractChunks(
@@ -598,7 +706,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		}
 
 		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
-			beforeAttempt: (candidate) => this.prepareCandidate(candidate, isAutomatic, current.filePath),
+			beforeAttempt: (candidate) =>
+				this.prepareCandidate(candidate, isAutomatic, current.filePath, scope.signal),
 			onFallback: (from, to, err) => {
 				t("fallback", `${from.id} -> ${to.id}: ${errText(err)}`);
 				new Notice(
@@ -645,14 +754,22 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * so keeping them in the shared copy is safe, and it means `readSelection`
 	 * and `readFromCursor` gain the tracing `readActiveNote` already had.
 	 *
-	 * No signal parameter, deliberately: `prepare()` has none. A Stop abandons
-	 * the await in `playWithFallback`, the load runs to completion, and a
-	 * finished model is kept for the next read (docs/adr/0013).
+	 * The `signal` parameter dismisses the NOTICE, not the load. `prepare()`
+	 * still takes no signal and is not cancelled: a Stop abandons the await in
+	 * `playWithFallback`, the bytes keep arriving and a finished model is kept
+	 * for the next read (docs/adr/0013, unchanged). What NRL-65 adds is that the
+	 * `Loading X...` Notice is hidden at the Stop rather than when that
+	 * abandoned load eventually settles - it is built with duration 0, so it
+	 * never self-dismisses on its own. The signal arrives as an explicit
+	 * argument rather than being read off `this.readScope`, because that field
+	 * is reassigned by the next read and this method belongs to one particular
+	 * read; see the comment at the call to `withLoadingNotice` below.
 	 */
 	private async prepareCandidate(
 		candidate: FallbackCandidate,
 		isAutomatic: boolean,
 		filePath: string,
+		signal?: AbortSignal,
 	): Promise<void> {
 		const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
 		// Note language for voice selection (priority: frontmatter lang > app locale)
@@ -662,20 +779,35 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// Loading can take seconds. Say so, rather than announcing playback that
 		// will not start yet and leaving the silence to speak for itself.
 		if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
-			const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
-			try {
-				trace(this.app, this.manifest.dir!, "loading engine", candidate.id);
-				const started = Date.now();
-				await candidate.engine.prepare();
-				trace(
-					this.app,
-					this.manifest.dir!,
-					"engine loaded",
-					`${candidate.id} in ${Date.now() - started}ms`,
-				);
-			} finally {
-				loading.hide();
-			}
+			// Bound before the thunk: TypeScript does not carry the
+			// optional-method narrowing above across a closure boundary, so
+			// `candidate.engine.prepare()` inside the arrow would not typecheck.
+			const load = candidate.engine.prepare.bind(candidate.engine);
+			// `signal` is the argument, never `this.readScope`. That field is a
+			// MUTABLE one, reassigned at the top of all three read paths, and
+			// this method runs inside `beforeAttempt`, i.e. inside an await
+			// chain belonging to ONE read. If a second read starts while this
+			// one's candidate is still loading, the field already points at the
+			// new read's controller, so reading it here would never dismiss
+			// this read's own Notice on its own Stop, and would let a later
+			// read's abort dismiss a Notice that is not its own. That is the
+			// rule NRL-48 established; the captured `scope` local at each call
+			// site is the per-read identity.
+			await withLoadingNotice(
+				() => new Notice(`Loading ${candidate.engine.label}...`, 0),
+				async () => {
+					trace(this.app, this.manifest.dir!, "loading engine", candidate.id);
+					const started = Date.now();
+					await load();
+					trace(
+						this.app,
+						this.manifest.dir!,
+						"engine loaded",
+						`${candidate.id} in ${Date.now() - started}ms`,
+					);
+				},
+				signal,
+			);
 		}
 	}
 
@@ -701,7 +833,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.readScope?.abort();
 		const scope = (this.readScope = new AbortController());
 
-		this.activeEditor = current.editor;
+		this.retargetHighlightEditor(current.editor);
 		registerHighlighting(current.editor);
 
 		const chunks = extractChunks(
@@ -722,50 +854,20 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			current.filePath,
 		);
 
-		// Filter chunks to only those within the selection range
-		let selectedChunks = chunks.filter((chunk) => chunk.sourceEnd > from && chunk.sourceStart < to);
+		// Each chunk's slice is derived from its own sourceIndex, never from
+		// raw-offset arithmetic: markdown stripping breaks the
+		// one-raw-character-to-one-spoken-character assumption that
+		// `from - chunk.sourceStart` needed (non-negotiable 8, NRL-57).
+		const selectedChunks = clipChunksToSelection(chunks, from, to);
 
+		// Zero speakable content. This now also covers a selection that DID
+		// overlap chunks but contributed no spoken character, because it held
+		// only content extraction excludes - a selection of just `%%hidden%%`
+		// speaks nothing rather than speaking the words after it.
 		if (selectedChunks.length === 0) {
 			new Notice("No text in selection.");
 			return;
 		}
-
-		// Clip chunks to selection boundaries, maintaining sourceIndex synchronization
-		selectedChunks = selectedChunks.map((chunk, idx, arr) => {
-			const isFirst = idx === 0;
-			const isLast = idx === arr.length - 1;
-
-			let textStart = 0;
-			let textEnd = chunk.text.length;
-
-			// Clip first chunk: remove text before selection start
-			if (isFirst && chunk.sourceStart < from) {
-				textStart = from - chunk.sourceStart;
-			}
-
-			// Clip last chunk: remove text after selection end
-			if (isLast && chunk.sourceEnd > to) {
-				textEnd = to - chunk.sourceStart;
-			}
-
-			const newText = chunk.text.slice(textStart, textEnd);
-			const newSourceIndex = chunk.sourceIndex.slice(textStart, textEnd);
-			const newSourceStart = newSourceIndex[0] ?? chunk.sourceStart;
-			const newSourceEnd = (newSourceIndex[newSourceIndex.length - 1] ?? chunk.sourceEnd - 1) + 1;
-
-			return {
-				...chunk,
-				text: newText,
-				sourceIndex: newSourceIndex,
-				sourceStart: newSourceStart,
-				sourceEnd: newSourceEnd,
-				// The spread would carry wordSpans through unchanged, still
-				// indexing the UNCLIPPED text, so every span past the clip
-				// point would be off by textStart and the highlight would land
-				// on the wrong characters (non-negotiable 8).
-				wordSpans: chunk.wordSpans && clipWordSpans(chunk.wordSpans, chunk.text, textStart, textEnd),
-			};
-		});
 
 		const selection = this.settings.engine;
 		const isAutomatic = selection === "auto";
@@ -787,7 +889,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		await playWithFallback(this.player, candidates, selectedChunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: (candidate: FallbackCandidate) =>
-				this.prepareCandidate(candidate, isAutomatic, current.filePath),
+				this.prepareCandidate(candidate, isAutomatic, current.filePath, scope.signal),
 		}, -1, scope.signal);
 
 		// A Stopped read must not arm a sleep timer (NRL-48).
@@ -808,7 +910,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.readScope?.abort();
 		const scope = (this.readScope = new AbortController());
 
-		this.activeEditor = current.editor;
+		this.retargetHighlightEditor(current.editor);
 		registerHighlighting(current.editor);
 
 		const chunks = extractChunks(
@@ -854,7 +956,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: (candidate: FallbackCandidate) =>
-				this.prepareCandidate(candidate, isAutomatic, current.filePath),
+				this.prepareCandidate(candidate, isAutomatic, current.filePath, scope.signal),
 		}, position, scope.signal);
 
 		// A Stopped read must not arm a sleep timer (NRL-48).
@@ -910,94 +1012,21 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
-	 * A vault rename carries every stored position under the old prefix.
-	 *
-	 * The order is load bearing. Stopping first is not tidiness: the queue's
-	 * chunks still carry the old filePath, so Player.getFilePath() keeps
-	 * reporting it and the next progress event would write the old key straight
-	 * back, about a second after this cleaned it. Stopping first means the
-	 * stop's own save records the final position under the old path
-	 * synchronously, and the re-key below moves that exact value to the new path,
-	 * retaining the final position in memory. Disk ordering is a separate concern.
-	 *
-	 * Retargeting the queue instead was rejected on evidence: SpeechChunk.id
-	 * hashes filePath, so rewriting it without recomputing the id would
-	 * desynchronise the field from its own definition.
-	 *
-	 * The cost is visible: the audio stops. An alternative is a stale position
-	 * under the new name and a fresh orphan, which is worse.
-	 *
-	 * Known race, unchanged in kind from the pre-existing one between a rate
-	 * nudge and a position write: a pending stop flush can overlap this handler's
-	 * saveData() call. Nothing serialises the writes, so issuing the re-key second
-	 * does not establish which state is durable. Completion order has not been
-	 * verified in Obsidian, and a later corrective save before shutdown is not
-	 * guaranteed. A serialised save queue remains unimplemented.
+	 * Unwrap Obsidian's event argument and hand the orchestration two strings.
 	 *
 	 * TAbstractFile, not TFile, and no branch on the type: a folder event reaches
-	 * the same handler, and an exact-key-only handler would orphan every position
-	 * under a renamed folder. The map sweep handles the subtree, but the stop
-	 * check below matches only an exact path. A descendant queue can keep writing
-	 * its old key unless Obsidian also emits a matching file event; that event
-	 * sequencing has not been verified in a real vault.
+	 * the same handler, and since NRL-58 one `covers` relation serves both the map
+	 * sweep and the playback stop, so a folder needs no special case anywhere.
+	 * Everything that decides anything lives in src/settings/vaultEvents.ts,
+	 * because main.ts has no runtime in the bare-Node suite and these two bodies
+	 * shipped in NRL-51 with no automated coverage at all.
 	 */
 	private handleVaultRename(file: TAbstractFile, oldPath: string): void {
-		const newPath = file.path;
-		// Also the guard on a double-fired folder event.
-		if (oldPath === newPath) return;
-		// oldPath, not newPath. The queue still carries the old filePath on every
-		// chunk, so getFilePath() reports the pre-rename path until the next
-		// play(); comparing against newPath would never match a read that is
-		// actually in progress. This is the observable consequence, not a
-		// theoretical one: stopReading() leaves the queue in place by design, so
-		// the accessor keeps answering with the old name for as long as the
-		// player lives.
-		if (oldPath === this.player.getFilePath()) this.stopReading();
-
-		const before = this.pluginData.positions;
-		const after = moveReadingPositions(before, oldPath, newPath);
-		// Identity, not equality: nothing matched, so there is nothing to write.
-		if (after === before) return;
-
-		this.pluginData.positions = after;
-		trace(this.app, this.manifest.dir!, "position keys renamed", `${oldPath} -> ${newPath}`);
-		void this.saveSettings().catch((err: unknown) => {
-			reportError(this.app, this.manifest.dir!, "save after rename failed", err);
-		});
+		applyVaultRename(this.vaultEvents, oldPath, file.path);
 	}
 
-	/**
-	 * A vault delete drops every stored position under the deleted path, so
-	 * entries cannot outlive the notes they describe.
-	 *
-	 * It does stop a read of the deleted note, and that is load-bearing rather
-	 * than tidiness. The queue is untouched by the delete, so the player keeps
-	 * reporting the deleted path and the next progress event writes that key
-	 * straight back - one save later, recreating exactly the orphan this handler
-	 * exists to remove. Stopping first orders the in-memory mutations, not the
-	 * asynchronous disk writes; the rename handler's save-ordering caveat applies.
-	 *
-	 * Same comparison as a rename, and for the same reason: the queue still
-	 * reports the old name, which for a delete is the only name it has.
-	 */
 	private handleVaultDelete(file: TAbstractFile): void {
-		const path = file.path;
-		if (path === this.player.getFilePath()) this.stopReading();
-
-		const before = this.pluginData.positions;
-		const after = dropReadingPositions(before, path);
-		if (after === before) return;
-
-		this.pluginData.positions = after;
-		trace(
-			this.app,
-			this.manifest.dir!,
-			"position keys dropped",
-			`${path} (${Object.keys(before).length - Object.keys(after).length})`,
-		);
-		void this.saveSettings().catch((err: unknown) => {
-			reportError(this.app, this.manifest.dir!, "save after delete failed", err);
-		});
+		applyVaultDelete(this.vaultEvents, file.path);
 	}
 
 	private async voicesForSelection(engine: SpeechEngine, isAutomatic: boolean): Promise<VoiceInfo[]> {
@@ -1054,11 +1083,65 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.readScope?.abort();
 		this.readScope = null;
 		this.player.stop();
-		this.clearHighlight();
+		this.clearBothHighlights();
 	}
 
-	private clearHighlight(): void {
-		if (this.activeEditor) applyHighlight(this.activeEditor, null);
+	/**
+	 * Which highlight layers the current settings and engine permit.
+	 *
+	 * `hasWordTiming` is false for no resolved engine as well as for an engine
+	 * reporting `timing: "none"`; neither can produce a word range worth drawing.
+	 */
+	private highlightLayers(): HighlightLayers {
+		const engine = this.activeEngine();
+		return highlightPlan(this.settings.highlight, !!engine && engine.capabilities.timing !== "none");
+	}
+
+	/**
+	 * Point the highlight layers at a new editor, clearing the old one first.
+	 *
+	 * The clear cannot be left to the `state` handler. Every read path assigns
+	 * `activeEditor` *before* `Player.play()`, and `play()` begins with its own
+	 * `stop()`, which drives `state: "idle"` and therefore `clearBothHighlights`
+	 * - by which time `activeEditor` already names the new editor, so the old
+	 * note keeps its marks for the rest of the session. `Player` holds no
+	 * editor of its own (CONTEXT.md, "a chunk-queue player, not a reading
+	 * session"), so the only thing that knows which view was drawn into is this
+	 * field, and it has to be drained before it is overwritten.
+	 */
+	private retargetHighlightEditor(editor: EditorView): void {
+		if (this.activeEditor && this.activeEditor !== editor) {
+			clearHighlights(this.activeEditor);
+		}
+		this.activeEditor = editor;
+	}
+
+	/** Both layers. Used when a reading ends, not when a word advances. */
+	private clearBothHighlights(): void {
+		if (this.activeEditor) clearHighlights(this.activeEditor);
+	}
+
+	/**
+	 * Redraw the layers for the settings as they now stand, without waiting for
+	 * the next chunk boundary.
+	 *
+	 * The sentence effect is only dispatched from the `chunk` handler, so a
+	 * toggle flipped mid-paragraph would otherwise stay on screen until the next
+	 * sentence. On speech-dispatcher that is worse than it sounds: it emits no
+	 * word events at all, so nothing else would clear it either.
+	 */
+	private refreshHighlightLayers(): void {
+		if (!this.activeEditor) return;
+		const layers = this.highlightLayers();
+		if (!layers.sentence) clearSentenceHighlight(this.activeEditor);
+		if (!layers.word) clearWordHighlight(this.activeEditor);
+		// getIndex() is chunks.length on natural completion, so getChunk() is
+		// undefined there and nothing is redrawn. That is the wanted behaviour:
+		// a finished read has no current sentence.
+		const chunk = this.player.getChunk(this.player.getIndex());
+		if (layers.sentence && chunk) {
+			applySentenceHighlight(this.activeEditor, { from: chunk.sourceStart, to: chunk.sourceEnd });
+		}
 	}
 
 	// --- Settings plumbing --------------------------------------------------
@@ -1241,51 +1324,59 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
+	 * The build-time-compiled ORT checksums, or undefined outside a
+	 * production build. Exposed for settingsTab.ts, which needs the same map
+	 * both to show download-status UI and to hand to `downloadOrtRuntime()`
+	 * as the digest every downloaded byte is verified against.
+	 */
+	getOrtChecksums(): Record<string, string> | undefined {
+		return __ORT_CHECKSUMS__;
+	}
+
+	/**
 	 * Validate ORT runtime file checksums against expected values.
 	 * Non-negotiable: no silent failure or automatic fallback.
 	 * Only runs in production builds where __ORT_CHECKSUMS__ is defined.
-	 * Failures are traced but do not block plugin load (user sees error).
+	 *
+	 * `missing` (NRL-37) is the expected state before the user has ever
+	 * clicked Download - a directory install has no `ort/` bundled with it
+	 * at all (that is the whole point of the on-demand move), so treating an
+	 * absent file as a failure here would trace and alarm on every ordinary
+	 * fresh install. Only `mismatch` - a file that exists but does not hash
+	 * to its compiled-in digest, meaning real corruption or tampering after
+	 * a successful download - is traced AND surfaced as a Notice. Before
+	 * NRL-37 both cases were folded into one silent trace() call, which is
+	 * not "visible actionable failure on mismatch" (the ticket's acceptance
+	 * criterion): trace() only reaches a diagnostics log nobody opens
+	 * unprompted.
 	 */
 	private async validateOrtChecksums(): Promise<void> {
 		if (!__ORT_CHECKSUMS__) return;
 
 		const expectedChecksums = __ORT_CHECKSUMS__;
 		const pluginDir = this.manifest.dir!;
+		const files = Object.keys(expectedChecksums);
 
-		// Checksums are compiled at build time; if any file is missing,
-		// the user's plugin install is corrupted. Report it and continue
-		// so the user gets immediate visibility rather than silent failure.
-		for (const [file, expectedHash] of Object.entries(expectedChecksums)) {
-			const filePath = `${pluginDir}/ort/${file}`;
-			try {
-				// These are binary .wasm/.mjs files: readBinary(), not read().
-				// adapter.read() decodes as UTF-8 text, and these bytes are not
-				// valid UTF-8, so that round-trip is lossy (invalid sequences
-				// collapse to U+FFFD) and re-encoding the mangled string never
-				// reproduces the original bytes. That made this check hash its
-				// own corrupted copy rather than the file, so it reported a
-				// mismatch unconditionally, on every platform, regardless of
-				// whether the file on disk was actually correct - confirmed by
-				// pushing a known-good file to a device, verifying its SHA-256
-				// on-device against the real bytes (matched), and watching this
-				// check report a mismatch anyway with the exact same wrong hash
-				// (NRL-60).
-				const buffer = await this.app.vault.adapter.readBinary(filePath);
-				const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
-				const hashArray = Array.from(new Uint8Array(hashBuffer));
-				const actualHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+		const statuses = await checkOrtStatus(
+			this.app.vault.adapter,
+			this.modelStore.dir,
+			files,
+			expectedChecksums,
+		);
+		const worst = worstOrtStatus(statuses);
 
-				if (actualHash !== expectedHash) {
-					trace(
-						this.app,
-						pluginDir,
-						"checksum mismatch",
-						`${file}: expected ${expectedHash}, got ${actualHash}`,
-					);
-				}
-			} catch (err) {
-				trace(this.app, pluginDir, "checksum read failed", `${file}: ${err}`);
-			}
+		if (worst === "missing") return;
+
+		if (worst === "mismatch") {
+			const mismatched = Object.entries(statuses)
+				.filter(([, status]) => status === "mismatch")
+				.map(([file]) => file)
+				.join(", ");
+			trace(this.app, pluginDir, "ORT checksum mismatch", mismatched);
+			new Notice(
+				"ONNX Runtime files are corrupted. Open Settings and re-download the runtime to fix speech synthesis.",
+				0,
+			);
 		}
 	}
 
@@ -1400,17 +1491,28 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
-	 * Write the colour to the custom property styles.css reads. On body
+	 * Write the colour to the custom properties styles.css reads. On body
 	 * because the highlight is a CodeMirror mark inside whichever editor is
 	 * reading, and every one of those sits under body.
 	 */
 	private applyHighlightColour(): void {
+		applySentenceHighlightColour(document.body.style, this.settings.highlight.color);
 		applyWordHighlightColour(document.body.style, this.settings.highlight.color);
 	}
 
 	async saveSettings(): Promise<void> {
 		this.pluginData = serialisePluginData(this.pluginData, this.settings);
-		await this.saveData(this.pluginData);
+		// A highlight toggle flipped mid-read takes effect now rather than at the
+		// next sentence boundary. Cheap, and it is the only thing that makes the
+		// toggles feel connected on an engine with no word events.
+		//
+		// BEFORE the await, not after, since NRL-58 put a queue behind the write:
+		// after it, a mid-read toggle would wait behind an unrelated queued save
+		// before the highlight moved, which is exactly the promise above.
+		this.refreshHighlightLayers();
+		// The queue, not saveData directly. This is the plugin's only saveData
+		// call site, so ordering it here orders every persistence path.
+		await this.saveQueue.enqueue(this.pluginData);
 	}
 
 	getPlayer(): Player {

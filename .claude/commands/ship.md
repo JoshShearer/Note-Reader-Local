@@ -5,15 +5,19 @@ description: Run the gates, take an adversarial pass over the diff, commit, push
 Conventions: `.claude/linear.md`. Rules and gates: `AGENTS.md`. Architecture: `CONTEXT.md`.
 Spec: `srs.md`.
 
-There is no CI in this repo. No `.github/`, no workflow, no lint script. The gates below are
-the only automated checks that will ever run against this change, and nothing runs them for
-you.
+`.github/workflows/ci.yml` runs the gates on `push` and `pull_request`, and
+`.github/workflows/release.yml` runs on tags. There is still no lint script and no git hook,
+so nothing runs the gates for you at the moment you commit. Run the gates below yourself. You
+**may** read a check conclusion once and report it; you **must not** wait on it. Branch
+protection is deliberately out of scope, so a red check does not block a merge.
 
 ## Linear tool names
 
-Operations used here: `get_issue`, `save_issue`, `create_comment`, `list_issue_statuses`.
+Operations used here: `get_issue`, `save_issue`, `save_comment`, `list_issue_statuses`.
 **Do not hardcode a tool prefix.** Resolve the real names for the `linear-nrl` server from your
-available tool list. Linear being unreachable never blocks a commit: do the git work and print
+available tool list. Resolving the prefix is not enough: Linear folded its create/update pairs
+into `save_*`, so posting a comment is `save_comment` and there is no `create_comment` (see
+`.claude/linear.md`). Linear being unreachable never blocks a commit: do the git work and print
 what you would have sent.
 
 ## Hard refusals
@@ -38,7 +42,7 @@ git status --short
 git config branch."$(git branch --show-current)".base-branch 2>/dev/null || echo "base=main"
 ```
 
-**STOP if on `main`.** This repo has no release workflow and no branch protection yet, which
+**STOP if on `main`.** This repo has no branch protection, which
 makes a direct push to `main` easy and wrong. Ask for a `feature/nrl-N-*` or `fix/nrl-N-*`
 branch, or offer to move the work onto one.
 
@@ -337,7 +341,7 @@ not exist fails, so check rather than assume.
 2. Exists → `save_issue` with `state: "In Review"`.
 3. Does not exist → leave the issue **In Progress**. The open PR is the review signal. Do not
    invent a status, and do not move it to Done: it is not done.
-4. Either way, `create_comment` with the PR link and the implementation summary. When there is
+4. Either way, `save_comment` with the PR link and the implementation summary. When there is
    no `In Review` status, that comment is what carries the review state.
 5. Attach the PR URL to the issue links if the MCP supports it.
 
@@ -364,7 +368,8 @@ Adversarial pass: <verdict, concerns listed in the PR>
 
 Linear NRL-12: In Review {or: In Progress, no In Review status on this team, PR is the signal}
 
-No CI exists in this repo. The gates above are all that ran.
+CI: `.github/workflows/ci.yml` will run the same gates on this push and on the PR. Its
+conclusion may be read once, never waited on, and it does not block a merge.
 
 Next:
 1. Review the PR

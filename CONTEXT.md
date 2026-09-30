@@ -62,7 +62,8 @@ Player ──────────────► orchestrates: synthesise ah
       │
       ├─► words.ts ────────────► WordTiming[]  offsets + ms, apportioned by syllables
       │
-      └─► emits "word" ────────► main.ts ──► highlight.ts ──► CodeMirror decoration
+      ├─► emits "chunk" ───────► main.ts ──► highlight.ts ──► sentence decoration + viewport scroll
+      └─► emits "word" ────────► main.ts ──► highlight.ts ──► word decoration, over it
 ```
 
 ---
@@ -76,12 +77,15 @@ src/
 ├── settings/index.ts           Settings type, defaults, normaliseSettings()
 ├── settings/data.ts            data.json container: version (v2), v0 and v1 migrations, save round trip
 ├── settings/positionThrottle.ts leading/trailing position saves, injected timers and queue-path guard (NRL-51)
+├── settings/vaultEvents.ts     rename/delete orchestration behind a narrow port, obsidian-free (NRL-58)
+├── settings/saveQueue.ts       single-flight coalescing saveData queue, obsidian-free (NRL-58)
 ├── text/extract.ts             markdown → SpeechChunk[] with source offsets
 ├── text/segment.ts             sentence/grapheme/word boundaries, injected SegmenterSource, pure (ADR 0009)
 ├── audio/
 │   ├── types.ts                SpeechEngine, EngineCapabilities, SpeechChunk, VoiceInfo
 │   ├── player.ts               the single playback controller
 │   ├── fallback.ts             playWithFallback(): tries the next engine on a load/first-chunk failure (ADR 0010)
+│   ├── clip.ts                 clipChunksToSelection(): narrows a queue to a selection by scanning sourceIndex (NRL-57)
 │   ├── words.ts                word spans and timing apportionment
 │   ├── wav.ts                  WAV parsing / duration
 │   └── emitter.ts              tiny typed event emitter, isolates listener throws
@@ -101,8 +105,9 @@ src/
     ├── settingsTab.ts          all settings rendering
     ├── controlBar.ts           transport controls
     ├── affordances.ts          capabilities -> which controls to offer, and why not, pure
-    ├── highlight.ts            CodeMirror StateField + decoration
+    ├── highlight.ts            two CodeMirror StateFields (sentence, word) + highlightPlan (ADR 0020) + viewport scroll on the chunk event (ADR 0022)
     ├── highlightColour.ts      highlight colour setting -> CSS variable, pure (ADR 0005)
+    ├── loadingNotice.ts        dismissal policy for the "Loading X..." Notice, obsidian-free (NRL-65)
     ├── modelStore.ts           downloads, vault file IO for model assets
     └── paths.ts                vault path resolution
 ```
@@ -114,23 +119,61 @@ src/
 **Offsets, not search.** Highlighting never looks for the spoken string in the editor.
 It carries raw-markdown offsets end to end. This is why `extract.ts` pushes an index
 entry for every dropped span, and why a stripping change that forgets to is a silent
-corruption rather than a crash.
+corruption rather than a crash. Three consumers turn a raw offset into a position in
+spoken text, not one: the highlight, the stored-position resume, and since NRL-57 the
+selection clip in `audio/clip.ts`. All three must **read** `sourceIndex` to find that
+position. The clip is the one that got it wrong, by subtracting `chunk.sourceStart`
+from the selection's `from`, which assumes one raw character produced one spoken
+character. Stripping is exactly what makes that false, so the paragraph above was
+already true when the defect was written under it: say "read the index" rather than
+"carry offsets", because arithmetic on an offset also looks like carrying one.
 
-**Lines are scanned one at a time, with one deliberate exception.** `cleanLine` sees a
-single source line and nothing else, which is why the same `%%` can be a comment on one
-line and literal text on another. The exception is an inline code span, which CommonMark
-lets cross a soft line break: `Cleaned.openCode` reports the length of a backtick run left
-open, and `extractChunks` only carries it forward once `codeSpanClosesLater` has found a
-run of the same length on a later line of the same paragraph. The confirmation is not an
-optimisation. An unmatched run is literal text, so carrying it blindly would stop the next
-line's `%%` being recognised as a block opener and would speak text the author hid, which
-is the one direction ADR 0006 exists to prevent. Anything else that needs cross-line state
-should follow that shape: prove the span is real before trusting it.
+**Lines are scanned one at a time, with two deliberate exceptions, and the loop is a
+two-pass.** `cleanLine` sees a single source line and nothing else, which is why the same
+`%%` can be a comment on one line and literal text on another. The two exceptions are
+constructs CommonMark lets cross a soft line break: an inline code span, and an image or
+link label.
+
+For a code span, `Cleaned.openCode` reports the length of a backtick run left open and
+`extractChunks` only carries it forward once `codeSpanClosesLater` has found a run of the
+same length on a later line of the same paragraph. The confirmation is not an optimisation.
+An unmatched run is literal text, so carrying it blindly would stop the next line's `%%`
+being recognised as a block opener and would speak text the author hid, which is the one
+direction ADR 0006 exists to prevent.
+
+**The per-line loop cleans a paragraph line twice** (NRL-64, ADR 0006 clause 4 and ADR 0019
+clause 3 as amended). The first pass exists only to learn the unmatched run length;
+`codeSpanClosesLater` is then called with the identical arguments; and only then is the line
+cleaned again, with `cleanLine`'s 6th parameter `outgoingCode` set, so the tail after the
+opener goes through the **same region emitter** as a carried-in span. Confirming before
+committing the line's output is the whole point: it is what makes the opening line's tail
+literal too, and it is why `codeSpanClosesLater` and `interruptsParagraph` could stay
+byte-identical while the behaviour changed.
+
+A soft-wrapped image or link label uses the same shape through `bracketClosesLater`
+(NRL-63, ADR 0023), which mirrors `codeSpanClosesLater` including its `interruptsParagraph`
+stops and adds one requirement of its own: the closing line's first `]` must be followed by
+`(` or `[`, so a shortcut label with no destination is never confirmed and no visible prose
+is silenced. The two carries are mutually exclusive on any one line and a code span binds
+tighter, so a line opening both arms the code carry only. The label carry is a **partial**
+fix: five distinct roots still leave a destination spoken, tracked as NRL-88 and enumerated
+in `AGENTS.md`.
+
+Anything else that needs cross-line state should follow that shape: prove the construct is
+real before trusting it, and confirm before the line's output is committed.
 
 **The worker is a jail.** `kokoro.worker.ts` shims `fetch` to reject any cross-origin
 URL and asserts locality on the ORT paths, because both transformers.js and kokoro-js
-default to CDN URLs. The ONNX runtime is vendored at build time by `esbuild.config.mjs`
-for the same reason.
+default to CDN URLs. `esbuild.config.mjs` still computes the ORT files' SHA-256 checksums
+at build time and compiles them into `main.js`, but as of NRL-37 (ADR 0024) the runtime
+files themselves are no longer vendored into the shipped plugin bundle: Obsidian's
+community-plugin installer only ever fetches `main.js`, `manifest.json` and `styles.css`,
+so a real directory install never had the old build-output `ort/` folder in the first
+place. The runtime is instead fetched on explicit user action from this plugin's own
+tagged GitHub Release, into the vault-adjacent model directory, and verified against
+those same compiled-in digests before use - the download is the one place this jail's
+network ban is deliberately not absolute, and it stays narrow: pinned version, this
+plugin's own release, nothing executed before the checksum matches.
 
 **Blob URLs for local code.** Obsidian serves the plugin folder from `app://`, which
 cannot be used as a worker origin, so `kokoro.ts` reads its own worker and ORT files out
@@ -138,7 +181,9 @@ of the vault and re-wraps them as same-origin blobs.
 
 **Weights live outside the plugin folder** (`.obsidian/local-tts/kokoro`) so a plugin
 update does not discard hundreds of megabytes, and out of the file tree so they do not
-clutter the vault.
+clutter the vault. The ORT runtime files live in the same directory, under `ort/`, for
+the identical reason (NRL-37): a plugin update must not force a 31 MB re-download any
+more than it should for the weights.
 
 **One setting key, one option field, no negation.** Each row in the settings tab's
 "Content" group writes exactly one `Settings` key, `main.ts` hands that key to the
@@ -253,18 +298,55 @@ These are design-level, not bugs, and they shape any new work:
   there without a stub. One predicate, `key === path || key.startsWith(path + "/")`, covers
   a file (exact key only) and a folder (the subtree), with no type branch. Both return the
   input *unchanged* when nothing matched, so repeating an already-applied event is a no-op.
-  The handlers stop playback first only when the event's old/deleted path exactly equals
-  the queue's file path. A folder-only event does not match a descendant queue; its later
-  progress can recreate the old key unless a matching descendant event stops it. Real-vault
-  event sequencing remains unverified. The queue is not retargeted (its `id` hashes
-  `filePath`), so `getFilePath()` keeps answering with the pre-rename name until the next
-  `play()`. Map mutation order also does not guarantee disk-write order; the unresolved
-  asynchronous save race is recorded in `AGENTS.md`.
+  That predicate is `covers`, and since NRL-58 it is **exported and serves two callers**: the
+  sweeps here and the playback stop in `settings/vaultEvents.ts`, which is the whole of
+  "the same path-boundary-safe relation". The orchestration - stop, then sweep, then save -
+  lives in `settings/vaultEvents.ts` behind a narrow port, not in main.ts, for the same
+  reason the sweeps live here. `covers(candidate, eventPath)` is **not symmetric and the
+  argument order is load-bearing**: the queue's file path is the candidate and the event's
+  path is the prefix, so a folder event covers a descendant read while a file event covers
+  neither its folder nor a sibling. Reversed, renaming one note would stop a read of every
+  sibling under its parent. The stop sits **ahead** of the identity early-out, so a folder
+  holding no stored position still stops a descendant read. The queue is not retargeted (its
+  `id` hashes `filePath`), so `getFilePath()` keeps answering with the pre-rename name until
+  the next `play()` - which is why the comparison is against `oldPath` and why a repeated
+  descendant event matches again and calls `stop()` a second time. That is harmless rather
+  than merely tolerated: `Player.stop()` ends in `setState("idle")`, which early-returns on
+  an unchanged state, and the module is stateless by design so there is nowhere to dedupe.
+  **Write ordering is no longer unresolved.** Every durable write goes through
+  `settings/saveQueue.ts`, which `saveSettings()` now enqueues instead of calling `saveData`
+  directly: single-flight with coalescing, newest wins, one write in flight and one payload
+  pending, a replaced payload never written, a rejection reported exactly once and never
+  wedging the queue, and no retry of the failed payload. The reversal is not corrected so
+  much as made unexpressible, since the second write is not issued until the first settles.
+  In-memory container mutation is deliberately **not** serialised, only the write:
+  `savePosition` relies on its synchronous mutation so a Stop has recorded its position
+  before returning. The residual is `onunload`, which is synchronous and cannot await
+  `drain()`, so an unload mid-flight can lose the newest snapshot - unchanged in kind from
+  the pre-existing un-awaited `void this.saveSettings()`. Real-vault event sequencing and
+  durable resume are still unverified; nothing here was observed in Obsidian.
 - **Capabilities are consumed for the transport controls only.** `src/ui/affordances.ts`
   gates play/pause, the rate nudges and the highlight toggle, and the settings engine list
   reports each engine's limitations. `pitch` still gates nothing (there is no pitch control
   in the UI at all), and no engine declares `sentenceBoundary`, so the sentence-level
   features the spec imagines have nothing to switch on yet.
+- **The viewport follows the sentence, and `highlight.ts` is no longer decoration-only**
+  (NRL-72, ADR 0022). `applyHighlightLayers` takes a third optional `scrollTo` offset and
+  pushes `EditorView.scrollIntoView` onto the effects array it already dispatches, so the
+  scroll rides in the **same transaction** as the two decoration effects. A second dispatch
+  would reintroduce exactly the one-frame disagreement ADR 0020 exists to prevent. The
+  scroll is per **sentence**, not per word: `main.ts`'s `chunk` handler passes
+  `chunk.sourceStart` and the word handler passes nothing, so a manual mid-read scroll is
+  overridden at most once a sentence. Neither the three clears nor `applySentenceHighlight`
+  takes an offset, so ending a reading and flipping a settings toggle both leave the
+  viewport alone. "No jump when already visible" is CodeMirror's `y: "nearest"` default and
+  not arithmetic of ours; a `coordsAtPos` visibility test must not be added, because it
+  needs a DOM the bare-Node suite cannot build and duplicates what `nearest` does. What
+  survives of the old decoration-only guarantee is the cursor, the text selection, the
+  focused element and the undo history. What does not is the user's scroll position, by
+  design. **Nothing was observed in Obsidian:** whether Obsidian's own editor extensions
+  intercept the scroll effect, and whether Live Preview's folds put `sourceStart` at the
+  screen position a plain-text offset implies, are both unknown.
 - **Segmentation is `Intl.Segmenter` unioned with the old regex, not either alone**
   (NRL-28, ADR 0009). `src/text/segment.ts` owns it, pure and dependency-free, and the
   segmenters arrive through an injected `SegmenterSource` so the no-segmenter path is

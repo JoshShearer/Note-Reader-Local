@@ -22,6 +22,10 @@ export interface Settings {
 
 	highlight: {
 		enabled: boolean;
+		/** Highlight sentence boundaries. */
+		sentence: boolean;
+		/** Highlight individual words. */
+		word: boolean;
 		/**
 		 * Hex colour for the active word, or "" to follow the theme
 		 * (--text-highlight-bg). See docs/adr/0005.
@@ -103,6 +107,8 @@ export const DEFAULT_SETTINGS: Settings = {
 	timerPreset: "off",
 	highlight: {
 		enabled: true,
+		sentence: true,
+		word: true,
 		// Follow the theme: one fixed hex cannot suit light and dark themes.
 		color: "",
 	},
@@ -203,6 +209,8 @@ export function normaliseSettings(raw: unknown): Settings {
 		highlight: {
 			...highlight,
 			enabled: bool(highlight.enabled, DEFAULT_SETTINGS.highlight.enabled),
+			sentence: bool(highlight.sentence, DEFAULT_SETTINGS.highlight.sentence),
+			word: bool(highlight.word, DEFAULT_SETTINGS.highlight.word),
 			color: isStorableColour(highlight.color) ? highlight.color : DEFAULT_SETTINGS.highlight.color,
 		},
 		skipCodeBlocks: bool(data.skipCodeBlocks, DEFAULT_SETTINGS.skipCodeBlocks),

@@ -193,8 +193,9 @@ Issue: NRL-{N} (<status>) | Branch: <branch> | Worktree: <path>
 ## Optional: leave a trail in Linear
 
 If there is an issue and a Linear tool is connected, offer to post the Objective, Done,
-Blocked and Next action sections as a comment via `create_comment`. Resolve the real
-prefixed tool name from your available tool list; do not hardcode a prefix. Do not post the
+Blocked and Next action sections as a comment via `save_comment`. Resolve the real
+prefixed tool name from your available tool list; do not hardcode a prefix, and note that
+the operation is `save_comment` rather than `create_comment`, which does not exist. Do not post the
 whole handoff; the scratch file is the long form.
 
 If no Linear tool is connected, say so and write the file anyway.

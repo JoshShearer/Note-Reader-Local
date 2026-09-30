@@ -23,7 +23,13 @@ try {
 // it also contains user settings and may contain diagnostic logs or models.
 await mkdir(dest, { recursive: true });
 
-for (const item of ["main.js", "manifest.json", "styles.css", "ort"]) {
+// "ort" is deliberately absent (NRL-37): the ONNX runtime is now fetched by
+// the user via the Settings tab's Download button, not bundled with the
+// plugin. Including it here would silently hide the directory-install bug
+// this ticket fixes - AGENTS.md's verification rule 11 and this ticket's
+// own Verification section both call that out - since a real Obsidian
+// install only ever fetches main.js, manifest.json and styles.css.
+for (const item of ["main.js", "manifest.json", "styles.css"]) {
 	await cp(item, path.join(dest, item), { recursive: true });
 	console.log(`  ${item}`);
 }

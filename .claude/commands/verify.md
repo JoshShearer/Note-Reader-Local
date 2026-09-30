@@ -2,8 +2,12 @@
 description: Run the local gates, deploy into real Obsidian, walk a manual test plan, and post what was actually observed to the Linear issue.
 ---
 
-Verify a change. There is no CI in this repo, so nothing has already run the gates. This
-command runs them, then does the part the gates cannot do.
+Verify a change. `.github/workflows/ci.yml` runs the gates on `push` and `pull_request` and
+`.github/workflows/release.yml` runs on tags, but there is still no lint script and no git
+hook, and the check is a backstop rather than the source of truth. This command runs the
+gates itself, then does the part the gates cannot do. You **may** read a check conclusion
+once and report it; you **must not** wait on it. Branch protection is deliberately out of
+scope, so a red check does not block a merge.
 
 Conventions: `.claude/linear.md`.
 
@@ -30,7 +34,9 @@ driven, the verdict is `GATES GREEN, NOT VERIFIED` and the comment says so in th
 ## Linear tool naming
 
 Do not hardcode an MCP tool prefix. Operations used here: `get_issue`, `list_issues`,
-`create_comment`. Resolve the real prefixed names from your available tool list. If no
+`save_comment`. Resolve the real prefixed names from your available tool list. Resolving the
+prefix is not enough: Linear folded its create/update pairs into `save_*`, so posting a
+comment is `save_comment` and there is no `create_comment` (see `.claude/linear.md`). If no
 Linear tool is present, print the comment body instead of posting it.
 
 ## Step 1: Resolve the issue
@@ -217,7 +223,7 @@ Verdict: VERIFIED IN OBSIDIAN (espeak only)
 
 ## Step 7: Post to Linear
 
-`create_comment` on the issue with the Step 6 summary verbatim.
+`save_comment` on the issue with the Step 6 summary verbatim.
 
 The comment **must** contain an explicit sentence separating the two claims, for example:
 
