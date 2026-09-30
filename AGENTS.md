@@ -20,7 +20,7 @@ There is **no CI** in this repo. No `.github/`, no workflow, no lint script. The
 are local and nothing runs them for you.
 
 ```bash
-npm test          # 18 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection
+npm test          # 19 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -260,6 +260,41 @@ family has been observed in Obsidian. The headline count stays at 2 of 16.
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
 
+- The sentence and word highlights are two layers as of NRL-54 (`docs/adr/0020`,
+  `srs.md` R-M13). Two `StateEffect`s and two `StateField`s, because one field that
+  *assigns* its decoration set is what let the word mark erase the sentence within a
+  frame; the word is drawn over the sentence, not instead of it. Four parts are
+  load-bearing. **Colour cannot be what distinguishes the two layers**: both custom
+  properties are written from the one `highlight.color` and both fall back to
+  `--text-highlight-bg`, so they always hold the same value (measured `identical=true`
+  at the default `""` and at `#ff0000`). The sentence is therefore an underline and the
+  word the filled mark, and `tests/highlight.test.ts` block 11 pins that the two rules
+  cannot declare the same property set - without it a later tidy-up merging them
+  reproduces the original defect with a green suite, which is how it arrived the first
+  time. **No `color-mix()`** in those rules: Chrome/88 computes it to nothing rather
+  than degrading, so it would blank a layer on mobile only. **There are three clears
+  and none is an alias for another** - ending a reading clears both in one transaction,
+  advancing a word clears only the word - because `applyHighlight = applyWordHighlight`
+  serving both jobs is what left the last sentence marked after every Stop, error,
+  sleep-timer expiry and natural finish. And **an engine capability may gate only the
+  layer it names**: `capabilities.timing` reports word timings, so it disables the word
+  row and must never touch the master switch or the sentence row, or speech-dispatcher -
+  the one engine where the sentence is the only possible layer - is left with no
+  highlight and no reachable control.
+  **Nothing was observed in Obsidian**, and here that caveat bites harder than usual,
+  because the two claims that matter most are the two bare Node cannot judge: whether an
+  underline plus a filled mark reads as two layers on a real theme, and whether the
+  settings rows disable the way the code says. `settingsTab.ts` imports `obsidian` and
+  cannot run in the suite at all, `main.ts` likewise, so the two event handlers, all
+  three clear paths, `retargetHighlightEditor` and `refreshHighlightLayers` have no
+  automated coverage of any kind. CDP port 9222 was refused for the whole of the work.
+  Two things are shipped knowingly. `highlightPlan()` reads the *settings-selected*
+  engine rather than the speaking one, so changing the dropdown mid-read can suppress a
+  word mark whose timings are still arriving. And the sentence underline spans source
+  that was deliberately not spoken - a skipped inline-code span, or a folder-qualified
+  wikilink NRL-46 works to avoid saying - which is inherent to a span-based mark and has
+  no privacy consequence, since nothing is logged or spoken and the text is already on
+  screen, but the mark does assert "I am reading this" over a skipped span.
 - Rename and delete handlers exist as of NRL-51: `this.app.vault.on("rename")` and
   `("delete")` in `onload`, both through `registerEvent`. One path-boundary-safe prefix
   sweep covers stored positions for files and folders with no type branch. Repeated events
