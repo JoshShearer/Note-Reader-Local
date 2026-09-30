@@ -736,6 +736,32 @@ rediscover them:
   before going green after. **Nothing was observed in Obsidian**, and that caveat is unusually
   toothless here because the change has no user-visible surface to observe. R-S01 is a SHOULD
   and stays narrowed, not closed; the `2 of 16` MUST headline count does not move.
+  **NRL-83 added the harness contract those tests now rest on, and is likewise test-only** -
+  `git diff origin/main...HEAD -- src/` was empty, so no product behaviour changed and no
+  requirement became met. `attributionRunner`'s `oCalls` counter lives on the **runner, not on
+  the probe**, so NRL-71's "call 1 is the opener, call 2 is the closer" holds only while **one
+  runner serves exactly one `probeAttribution()`** - i.e. one `SpeechDispatcherEngine`
+  instance, attribution being memoised per instance. A third `-O` makes `modulesAgain` answer
+  a *second* probe's OPENING call, so that probe takes the divergent module set as its
+  baseline, sees no divergence and attributes: a pass for the wrong reason. Three parts are
+  load-bearing and must not be "tidied". A violation is **recorded on the returned handle's
+  `violations` array and never thrown**, because `probeAttribution()` ends in a bare
+  `catch { return null; }` that would launder a throw into exactly the silent give-up this
+  closes. The cap is `> 2` and not `=== 2`, so a later path that legitimately skips the
+  closing `-O` (NRL-84) is not pre-broken - what is forbidden is a third call. And **`M6`
+  asserts only that the two probes *disagree*, never that probe 2 says `true`**, so no wrong
+  verdict is pinned as expected behaviour. `noReuse()` is asserted in all 23 conforming
+  blocks; M6 deliberately carries none, being the violator, and the reply expression
+  `(oCalls > 1 ? script.modulesAgain : undefined) ?? script.modules ?? []` is byte-identical,
+  so no existing case moved. One caveat the PR understates, measured during Verify: the
+  fixture sensitivity affects **`M6(a)`, the contract check, not only `M6(c)`** - perturbing
+  the `festival` `lists` entry kills probe 2 after three `-O` calls when it is removed or
+  emptied, so all three checks fail, and fails (c) alone when it points at a list containing
+  Afrikaans. **Every perturbation tried failed loudly and none produced a spurious green.**
+  Evidence is **bare-Node**: deleting the cap from the compiled suite gives exactly one red,
+  M6's contract check. **Nothing was observed in Obsidian**, which here is not applicable
+  rather than skipped, nothing under `src/` having changed. R-S01 stays narrowed and the
+  `2 of 16` MUST headline count does not move.
 - Stop now aborts a read that is still in its load phase, as of NRL-48 (`docs/adr/0013`).
   Before it, `main.ts` held no `AbortController` at all and `Player`'s own one is created
   inside `play()`, so during `beforeAttempt`'s `await engine.prepare()` a Stop was
