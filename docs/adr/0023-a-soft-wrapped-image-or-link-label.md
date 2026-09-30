@@ -1,4 +1,4 @@
-# 0022. A soft-wrapped image or link label
+# 0023. A soft-wrapped image or link label
 
 - Status: accepted
 - Date: 2026-09-30
@@ -188,9 +188,32 @@ continuation, a nested blockquote, a list item, an ordered list, a lazy list
 continuation and an ATX heading - **and also** in a table row, a single-cell table
 row, across a setext underline, across a 4-space indented code block, with the
 closer inside a fence, with the opener inside a fence, in frontmatter, and across
-a `$$` math block. It is one mechanism, not several: anything
-`interruptsParagraph` stops at, plus clause 7a's math block. The narrower phrase
-is wrong and is corrected here rather than left standing. A **setext** heading is
+a `$$` math block. The narrower phrase is wrong and is corrected here rather than
+left standing.
+
+An earlier draft of this section said the remainder "is one mechanism, not
+several". **That was also wrong**, and the independent verification of this
+branch measured **five** distinct roots over a 38-shape x 512 matrix (11,520
+leaking of 19,456 on the fix against 16,384 on base; the absolute is
+matrix-dependent and is not comparable to the 36-shape figure above):
+
+1. `interruptsParagraph` matching on the **opener** line, 2,048 of 2,048 cells;
+2. `interruptsParagraph` matching on a line **between** opener and closer, 1,792
+   of 2,048;
+3. `opensMathBlock`, clause 7a's separate stop, 512 of 512;
+4. **a root neither this ADR nor `srs.md` named before now:** `bracketClosesLater`
+   returns at the **first line bearing any `]`**, so a line that does not
+   interrupt the paragraph but carries a non-closing `]` aborts the confirmation.
+   Measured on seven such lines - `[bracket]` prose, `[^1]`, `[[wk]]`, `[x]`, a
+   link reference definition, `![[embed]]` and a bare `]` - each leaking 512 of
+   512 where the same shape without the stray bracket leaks 0 of 512, so 3,584
+   cells;
+5. clause 6 and 7's precedence rules, 1,024 of 1,024.
+
+Root 4 is the one worth carrying forward, because it is not a container problem
+at all and no amount of teaching the lookahead about container prefixes would
+reach it. All five are destination-only, fail-closed and prose-safe: an aborted
+confirmation leaves the line exactly as the pre-NRL-63 tree had it. A **setext** heading is
 the one member that is in fact carried, so clause 2's "not carried inside a
 heading" is true of the ATX form only; that direction silences the destination and
 is safe.

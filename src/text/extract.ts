@@ -484,7 +484,7 @@ function wikiTargetClose(raw: string, from: number): number {
  * "whichever opened first keeps the carry". A code span binds tighter than a
  * label in CommonMark, so when both open on one line the code carry wins and no
  * label carry is armed; while a label carry is live, it holds and no code carry
- * is armed inside it. Consequence, measured and recorded in ADR 0022: an image
+ * is armed inside it. Consequence, measured and recorded in ADR 0023: an image
  * whose label contains a soft-wrapped code span still speaks its destination.
  */
 function cleanLine(
@@ -1716,7 +1716,7 @@ function codeSpanClosesLater(lines: string[], from: number, len: number): boolea
  * worse than either recognising the label or not recognising it. So the
  * lookahead refuses to confirm across one and the label is left exactly as it
  * was before NRL-63, which is the same fail-closed direction clause 3 of ADR
- * 0022 takes everywhere else.
+ * 0023 takes everywhere else.
  *
  * The closer search is part of the test and not an optimisation: with no `$$`
  * anywhere later the line is not a block, extractChunks does not consume it, and
@@ -2289,7 +2289,7 @@ export function extractChunks(
 		 * code span binds tighter than a label in CommonMark, so when a line opens
 		 * both the code carry takes it and the label is not recognised - which
 		 * leaves NRL-64's path untouched and leaves the mixed shape exactly as it
-		 * was rather than half-changed. ADR 0022 records the residual.
+		 * was rather than half-changed. ADR 0023 records the residual.
 		 */
 		let confirmedBracket: BracketKind | undefined;
 		if (

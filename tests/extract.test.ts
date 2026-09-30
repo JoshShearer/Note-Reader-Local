@@ -1503,14 +1503,14 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		["guard-nrl63-opening-line-is-list", "- A ![alt\n  words](zdestz.png) B", "A [alt words](zdestz.png) B"],
 		// A shortcut `![alt\nwords]` carries no destination and renders literally
 		// when nothing defines the reference, so the carry deliberately requires
-		// `](` or `][` on the closing line and this stays spoken (ADR 0022).
+		// `](` or `][` on the closing line and this stays spoken (ADR 0023).
 		["guard-nrl63-shortcut-no-tail", "A ![alt\nwords] B", "A [alt words] B", { speakImageAlt: false }],
 		// Both carries live on one line, in both directions. First: a code span
 		// carried in closes, then an image opens and carries out.
 		["nrl63-code-carry-then-image", "A `x\ny` z ![alt\nwords](zdestz.png) B", "A x y z alt words B", { skipInlineCode: false }],
 		// Second: both open on the same line, where the code carry wins because a
 		// code span binds tighter than a label. Both rows are byte-identical to
-		// the pre-NRL-63 tree and pin the residual ADR 0022 records - the
+		// the pre-NRL-63 tree and pin the residual ADR 0023 records - the
 		// destination is still spoken here.
 		["guard-nrl63-code-wins-inside-label", "A ![alt `x\ny` words](zdestz.png) B", "A [alt x y words](zdestz.png) B", { skipInlineCode: false }],
 		["guard-nrl63-code-wins-inside-label-skipped", "A ![alt `x\ny` words](zdestz.png) B", "A [alt words](zdestz.png) B"],
@@ -1581,7 +1581,7 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 	 * carry site, so a carry armed on the line before it is read into
 	 * carriedBracket and then dropped. Left unguarded that silences the label's
 	 * words AND still speaks the destination - strictly worse than either
-	 * recognising the label or not recognising it, and the one direction ADR 0022
+	 * recognising the label or not recognising it, and the one direction ADR 0023
 	 * clause 3 exists to foreclose. bracketClosesLater therefore refuses to
 	 * confirm across one, so this is byte-identical to the pre-NRL-63 tree in
 	 * BOTH speakImageAlt positions.
