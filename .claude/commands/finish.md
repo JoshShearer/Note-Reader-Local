@@ -9,9 +9,12 @@ The unbreakable rule: every branch this command touches leaves both local **and*
 
 ## Linear tool names
 
-Operations used here: `get_issue`, `save_issue`, `create_comment`. **Do not hardcode a tool
-prefix.** Resolve the real names for the `linear-nrl` server from your available tool list. If
-Linear is unreachable, do the git work and print the status change for manual entry.
+Operations used here: `get_issue`, `save_issue`, `save_comment`. **Do not hardcode a tool
+prefix.** Resolve the real names for the `linear-nrl` server from your available tool list.
+Resolving the prefix is not enough: Linear folded its create/update pairs into `save_*`, so
+posting a comment is `save_comment` and there is no `create_comment` (see
+`.claude/linear.md`). If Linear is unreachable, do the git work and print the status change
+for manual entry.
 
 ## Input
 
@@ -189,7 +192,7 @@ close a Linear issue: that is a GitHub issue-closing keyword. Linear closes issu
 and PR names through its GitHub integration, which is **not connected** to this repo. Nothing
 else will move the issue.
 
-Post a `create_comment` with the merged PR link and the merge date if the PR was not already
+Post a `save_comment` with the merged PR link and the merge date if the PR was not already
 commented by `/ship`.
 
 ## Step 10: Does the spec or the known-state need updating?

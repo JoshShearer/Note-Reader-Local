@@ -30,7 +30,9 @@ driven, the verdict is `GATES GREEN, NOT VERIFIED` and the comment says so in th
 ## Linear tool naming
 
 Do not hardcode an MCP tool prefix. Operations used here: `get_issue`, `list_issues`,
-`create_comment`. Resolve the real prefixed names from your available tool list. If no
+`save_comment`. Resolve the real prefixed names from your available tool list. Resolving the
+prefix is not enough: Linear folded its create/update pairs into `save_*`, so posting a
+comment is `save_comment` and there is no `create_comment` (see `.claude/linear.md`). If no
 Linear tool is present, print the comment body instead of posting it.
 
 ## Step 1: Resolve the issue
@@ -217,7 +219,7 @@ Verdict: VERIFIED IN OBSIDIAN (espeak only)
 
 ## Step 7: Post to Linear
 
-`create_comment` on the issue with the Step 6 summary verbatim.
+`save_comment` on the issue with the Step 6 summary verbatim.
 
 The comment **must** contain an explicit sentence separating the two claims, for example:
 

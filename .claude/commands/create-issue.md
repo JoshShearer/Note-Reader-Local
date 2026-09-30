@@ -11,7 +11,7 @@ Argument: `$ARGUMENTS` (optional) - one of `bug`, `feature`, `tech-debt`, `spec-
 ## Linear tool naming
 
 Do not hardcode an MCP tool prefix. The operations are `get_issue`, `list_issues`,
-`save_issue`, `create_comment`, `list_teams`, `list_issue_statuses`, `list_issue_labels`,
+`save_issue`, `save_comment`, `list_teams`, `list_issue_statuses`, `list_issue_labels`,
 `get_workspace`. Find the real prefixed names in your available tool list and call those.
 If no Linear tool is present, skip to the Degradation section at the bottom and print the
 issue instead of creating it.
