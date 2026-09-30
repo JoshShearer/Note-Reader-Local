@@ -1,4 +1,4 @@
-# 0014. The Final Path Segment as a Link Label
+# 0017. The Final Path Segment as a Link Label
 
 - Status: accepted
 - Date: 2026-09-30

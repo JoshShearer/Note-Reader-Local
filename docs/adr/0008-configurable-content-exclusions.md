@@ -123,10 +123,10 @@ and `skipInlineCode`, even though extraction had read them separately since NRL-
      `[[wikilink]]` branch, byte-identical on the merge base and default-on
      through that branch. Narrowing it would be a change to wikilink speech,
      which is a different promise and a different ticket.~~
-     **SUPERSEDED by docs/adr/0014 (NRL-46).** The reasoning above is kept
+     **SUPERSEDED by docs/adr/0017 (NRL-46).** The reasoning above is kept
      because it is the record of why the case was deferred, and the deferral was
      correct at the time: narrowing it *is* a change to default-on wikilink
-     speech and it needed its own decision. That decision was taken in ADR 0014,
+     speech and it needed its own decision. That decision was taken in ADR 0017,
      which is the ticket this paragraph asked for. The label is now the target's
      **final path segment only**, on either `/` or `\`, in both branches
      together, so `A ![[private/folder/Secret Note]] B` reads `A Secret Note B`

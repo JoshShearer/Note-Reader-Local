@@ -185,7 +185,7 @@ const EMBED_SIZING_ALIAS = /^\d+(?:[xX]\d+)?$/;
  * brackets cannot turn `![[Some Note.md ]]` into a file.
  *
  * The final segment ends at the last separator of EITHER kind, `/` or `\`, so a
- * Windows-style target is split the same way a vault-relative one is (ADR 0014).
+ * Windows-style target is split the same way a vault-relative one is (ADR 0017).
  * That moves one shape in the DISCLOSING direction, which is the direction ADR
  * 0008 clause 5 says this must not fail in, so it is recorded here rather than
  * left to be discovered: `![[C:\v1.2\Note]]` used to have `C:\v1.2\Note` as its
@@ -432,7 +432,7 @@ function cleanLine(
 		// setting - the reduction is what keeps the path and the userinfo out of
 		// the speech, and gating it would put them back. Any `#fragment` is
 		// suppressed rather than read as a pause: a fragment is destination-
-		// shaped for the same reason the path is (ADR 0014).
+		// shaped for the same reason the path is (ADR 0017).
 		const lead = path.length - path.trimStart().length;
 		const trimmedPath = path.trim();
 		if (BARE_URL_START.test(trimmedPath)) {
@@ -445,7 +445,7 @@ function cleanLine(
 
 		// Otherwise the label is the final path segment only: the segments above
 		// it are vault folder structure, which is a destination and must never be
-		// read aloud (R-M09, ADR 0014). The same finalSegment() the embed guard
+		// read aloud (R-M09, ADR 0017). The same finalSegment() the embed guard
 		// classified with, so the two can never disagree about which part of the
 		// target is a name. The dropped prefix needs no space of its own - both
 		// call sites pushSpace before the label, so the words either side are

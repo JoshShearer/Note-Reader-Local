@@ -1516,7 +1516,7 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		["no-extension-dockerfile", "Before ![[Dockerfile]] after.", "Before after.", "Before Dockerfile after."],
 		["no-extension-licence", "Before ![[LICENSE]] after.", "Before after.", "Before LICENSE after."],
 		/*
-		 * NRL-46 / ADR 0014: the label is the target's FINAL path segment, on
+		 * NRL-46 / ADR 0017: the label is the target's FINAL path segment, on
 		 * either separator, so the folder segments above it are never read
 		 * aloud. Every row below spoke its whole path before the change; the
 		 * sentinel rows exist so a regression fails by name rather than by
@@ -1585,7 +1585,7 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 	}
 
 	/*
-	 * NRL-46 / ADR 0014: a link label is the target's FINAL path segment.
+	 * NRL-46 / ADR 0017: a link label is the target's FINAL path segment.
 	 *
 	 * The table drives BOTH constructs from one target so the parity srs.md
 	 * promises is asserted rather than assumed: emitWikiLabel is shared, and a
