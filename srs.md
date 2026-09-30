@@ -276,6 +276,8 @@ The exact implementation of pause/resume MAY depend on backend capabilities.
 
 Where a backend cannot pause an active utterance, the controller MAY implement pause by stopping synthesis while retaining the current segment and position.
 
+Stop MUST also cancel a read that has not begun speaking, including while an engine's model is still loading; the load itself MAY be abandoned rather than cancelled, and any already-loaded result is kept (ADR 0013).
+
 ---
 
 ### R-M08 — Markdown Processing

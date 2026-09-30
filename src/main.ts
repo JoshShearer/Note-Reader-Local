@@ -61,6 +61,17 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	private player!: Player;
 	private modelStore!: VaultModelStore;
 	private activeEditor: EditorView | null = null;
+	/**
+	 * The current read's cancellation scope (NRL-48).
+	 *
+	 * Not the Player's: `Player` creates its own controller inside `play()`, so
+	 * for the whole time a read is resolving voices and loading an engine model
+	 * there is nothing on the Player to abort, and `Player.stop()` during that
+	 * window is a no-op. This controller covers exactly that earlier phase, is
+	 * aborted by `stopReading()` (and by unload), and is superseded whenever a
+	 * new read starts.
+	 */
+	private readScope: AbortController | null = null;
 	private controlBar!: ControlBar;
 	/**
 	 * Throttled reading-position writes. Its own module because main.ts cannot be
@@ -438,6 +449,11 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	override onunload(): void {
+		// This path calls player.dispose() rather than stopReading(), so it has
+		// to abort the read scope itself or an in-flight engine load would go on
+		// to start speaking through a disposed plugin.
+		this.readScope?.abort();
+		this.readScope = null;
 		// Before the player, and unconditionally: a trailing flush that fired
 		// after dispose would call savePosition on an unloaded plugin. Nothing
 		// cleared the window handle before this - it leaked on every path.
@@ -485,6 +501,12 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			return;
 		}
 		t("editor found", `${current.source.length} chars`);
+
+		// A new read supersedes the previous one, and holds its own local handle
+		// so a later read aborting this.readScope cannot be mistaken for a Stop
+		// of this read (NRL-48).
+		this.readScope?.abort();
+		const scope = (this.readScope = new AbortController());
 
 		this.activeEditor = current.editor;
 		registerHighlighting(current.editor);
@@ -575,27 +597,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		}
 
 		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
-			beforeAttempt: async (candidate) => {
-				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
-				// Extract note language for voice selection (priority: frontmatter lang > app locale)
-				const noteLang = this.extractNoteLanguage(current.filePath);
-				await this.selectVoiceIfNeeded(candidate.engine, voices, noteLang);
-
-				// Loading can take seconds. Say so, rather than announcing
-				// playback that will not start yet and leaving the silence to
-				// speak for itself.
-				if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
-					const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
-					try {
-						t("loading engine", candidate.id);
-						const started = Date.now();
-						await candidate.engine.prepare();
-						t("engine loaded", `${candidate.id} in ${Date.now() - started}ms`);
-					} finally {
-						loading.hide();
-					}
-				}
-			},
+			beforeAttempt: (candidate) => this.prepareCandidate(candidate, isAutomatic, current.filePath),
 			onFallback: (from, to, err) => {
 				t("fallback", `${from.id} -> ${to.id}: ${errText(err)}`);
 				new Notice(
@@ -603,7 +605,15 @@ export default class LocalTtsReaderPlugin extends Plugin {
 					6000,
 				);
 			},
-		}, startAtSource);
+		}, startAtSource, scope.signal);
+
+		// A null result means either "every candidate failed" or "the user
+		// pressed Stop". Only the controller can tell them apart, and blaming
+		// the engines for a Stop would be a lie (NRL-48).
+		if (scope.signal.aborted) {
+			t("read cancelled during load", candidates.map((c) => c.id).join(","));
+			return;
+		}
 
 		if (!result) {
 			t("no candidate succeeded", candidates.map((c) => c.id).join(","));
@@ -625,6 +635,50 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
+	 * One candidate's pre-synthesis work: resolve its voice, then load its model
+	 * behind a "Loading X..." Notice.
+	 *
+	 * Factored out of the three read paths (NRL-48) because it was triplicated
+	 * and the abort handling that now wraps it should exist once. The trace
+	 * calls carry an engine id and a millisecond count only - never note text -
+	 * so keeping them in the shared copy is safe, and it means `readSelection`
+	 * and `readFromCursor` gain the tracing `readActiveNote` already had.
+	 *
+	 * No signal parameter, deliberately: `prepare()` has none. A Stop abandons
+	 * the await in `playWithFallback`, the load runs to completion, and a
+	 * finished model is kept for the next read (docs/adr/0013).
+	 */
+	private async prepareCandidate(
+		candidate: FallbackCandidate,
+		isAutomatic: boolean,
+		filePath: string,
+	): Promise<void> {
+		const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
+		// Note language for voice selection (priority: frontmatter lang > app locale)
+		const noteLang = this.extractNoteLanguage(filePath);
+		await this.selectVoiceIfNeeded(candidate.engine, voices, noteLang);
+
+		// Loading can take seconds. Say so, rather than announcing playback that
+		// will not start yet and leaving the silence to speak for itself.
+		if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
+			const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
+			try {
+				trace(this.app, this.manifest.dir!, "loading engine", candidate.id);
+				const started = Date.now();
+				await candidate.engine.prepare();
+				trace(
+					this.app,
+					this.manifest.dir!,
+					"engine loaded",
+					`${candidate.id} in ${Date.now() - started}ms`,
+				);
+			} finally {
+				loading.hide();
+			}
+		}
+	}
+
+	/**
 	 * Voices `selectVoiceIfNeeded` is allowed to substitute from.
 	 *
 	 * In automatic mode, Web Speech is only ever offered voices
@@ -642,6 +696,9 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			new Notice("Open a note first.");
 			return;
 		}
+
+		this.readScope?.abort();
+		const scope = (this.readScope = new AbortController());
 
 		this.activeEditor = current.editor;
 		registerHighlighting(current.editor);
@@ -723,21 +780,12 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		}
 
 		await playWithFallback(this.player, candidates, selectedChunks, this.settings.rate, this.settings.pitch, {
-			beforeAttempt: async (candidate: FallbackCandidate) => {
-				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
-				// Extract note language for voice selection (priority: frontmatter lang > app locale)
-				const noteLang = this.extractNoteLanguage(current.filePath);
-				await this.selectVoiceIfNeeded(candidate.engine, voices, noteLang);
-				if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
-					const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
-					try {
-						await candidate.engine.prepare();
-					} finally {
-						loading.hide();
-					}
-				}
-			},
-		});
+			beforeAttempt: (candidate: FallbackCandidate) =>
+				this.prepareCandidate(candidate, isAutomatic, current.filePath),
+		}, -1, scope.signal);
+
+		// A Stopped read must not arm a sleep timer (NRL-48).
+		if (scope.signal.aborted) return;
 
 		// Initialize sleep timer if preset is not "off"
 		const timerMs = this.presetToMs(this.settings.timerPreset);
@@ -750,6 +798,9 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			new Notice("Open a note first.");
 			return;
 		}
+
+		this.readScope?.abort();
+		const scope = (this.readScope = new AbortController());
 
 		this.activeEditor = current.editor;
 		registerHighlighting(current.editor);
@@ -796,21 +847,12 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		}
 
 		await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
-			beforeAttempt: async (candidate: FallbackCandidate) => {
-				const voices = await this.voicesForSelection(candidate.engine, isAutomatic);
-				// Extract note language for voice selection (priority: frontmatter lang > app locale)
-				const noteLang = this.extractNoteLanguage(current.filePath);
-				await this.selectVoiceIfNeeded(candidate.engine, voices, noteLang);
-				if (candidate.engine.prepare && candidate.engine.isPrepared?.() === false) {
-					const loading = new Notice(`Loading ${candidate.engine.label}...`, 0);
-					try {
-						await candidate.engine.prepare();
-					} finally {
-						loading.hide();
-					}
-				}
-			},
-		}, position);
+			beforeAttempt: (candidate: FallbackCandidate) =>
+				this.prepareCandidate(candidate, isAutomatic, current.filePath),
+		}, position, scope.signal);
+
+		// A Stopped read must not arm a sleep timer (NRL-48).
+		if (scope.signal.aborted) return;
 
 		// Initialize sleep timer if preset is not "off"
 		const timerMs = this.presetToMs(this.settings.timerPreset);
@@ -998,6 +1040,13 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	stopReading(): void {
+		// Before player.stop(), and the half that actually does something when a
+		// read is still loading its engine: the Player has no run to abort yet at
+		// that point (NRL-48). Every other caller of stopReading() - the rename
+		// and delete handlers, and the three Kokoro reconfiguration paths - gets
+		// this for free.
+		this.readScope?.abort();
+		this.readScope = null;
 		this.player.stop();
 		this.clearHighlight();
 	}
