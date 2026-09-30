@@ -398,8 +398,12 @@ test("Provenance job references SLSA generator", () => {
 // checks pass while the workflow behaved differently in production - worse
 // than the bug. So `matchesFilterPattern` is validated against GitHub's own
 // published example table (the check named "...reproduces GitHub's documented
-// example table"), never against itself, and every construct it does not
-// understand throws instead of passing through.
+// example table"), never against itself, and malformed or unsupported syntax
+// reports rather than being handed to the RegExp engine. That last clause is
+// narrower than it once read: it used to say "every construct it does not
+// understand throws", which was false and is why the guard named
+// "filter-pattern literals stay literal and malformed syntax reports" now
+// pins where the real line sits. See `filterPatternToRegExp`.
 //
 // Source, read verbatim during this ticket, github/docs@main
 // content/actions/reference/workflows-and-actions/workflow-syntax.md:
@@ -470,10 +474,28 @@ function parseOnPushTags(content: string): string[] {
  * `v[12].[0-9]+.[0-9]+` row requires, and the table check below is what pins it.
  * Anchored, because a filter pattern matches the whole ref name.
  *
- * Anything undocumented throws. Handing an unrecognised construct straight to
- * the RegExp engine would silently give it JavaScript's meaning (`[\w]`, `[^a]`,
- * a bare `.` as any-character) rather than GitHub's, and the check that depends
- * on it would then pass for the wrong reason.
+ * `\` escapes the next character, which the docs require: "If a name contains
+ * any of these characters and you want a literal match, you need to escape each
+ * of these special characters with `\`" (workflow-syntax.md:87, and the same
+ * sentence in the tags reusable). A trailing lone `\` has nothing to escape and
+ * no documented meaning, so it throws rather than degrading to a literal
+ * backslash. `\` before a character with no special meaning yields that
+ * character, which is glob convention rather than a documented rule - the docs
+ * define the escape only for their own special set.
+ *
+ * WHAT THROWS AND WHAT DOES NOT, stated precisely because an earlier draft of
+ * this comment claimed "anything undocumented throws" and that was FALSE.
+ * Malformed or unsupported SYNTAX throws: a bracket class outside the
+ * alphanumeric / `a-z`,`A-Z`,`0-9`-range set (`[^0-9]`, `[\d]`, `[]`), an
+ * unclosed `[`, a `]` with no opener, a quantifier with nothing before it
+ * (`+abc`, `?abc`, `[0-9]++`, `[0-9]+?`), a leading `!` (list-level, see
+ * `refMatchesPatterns`), an empty pattern, and a trailing `\`. A CHARACTER with
+ * no special meaning in a filter pattern does NOT throw: `(`, `)`, `|`, `{`,
+ * `}`, `^`, `$` and `.` are ordinary characters in a ref name, so they are
+ * regex-escaped and matched literally. That is GitHub's semantics rather than a
+ * gap - throwing on them would make this oracle stricter than the thing it is
+ * an oracle for. The escaping is what stops JavaScript's meaning (`[\w]`,
+ * `[^a]`, a bare `.` as any-character) leaking in.
  */
 function filterPatternToRegExp(pattern: string): RegExp {
 	if (pattern.length === 0) throw new Error("filter pattern is empty");
@@ -530,6 +552,25 @@ function filterPatternToRegExp(pattern: string): RegExp {
 		}
 		if (ch === "]") {
 			throw new Error(`filter pattern "${pattern}": ']' at index ${i} with no opening '['`);
+		}
+		if (ch === "\\") {
+			// Documented escape (workflow-syntax.md:87). The escaped character becomes a
+			// LITERAL and the escape consumes both, so the pattern `v1\*` matches the tag
+			// `v1*` and nothing else. Emitting the backslash as a literal and leaving the
+			// next character live - which this used to do - is the one way to be silently
+			// wrong here: `v1\*` became the regex /^v1\\[^\/]*$/, false for the tag `v1*`
+			// and true for `v1\anything`.
+			const next = pattern[i + 1];
+			if (next === undefined) {
+				throw new Error(
+					`filter pattern "${pattern}": trailing '\\' at index ${i} with nothing to escape`,
+				);
+			}
+			const escaped = next.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+			out += escaped;
+			last = escaped;
+			i += 2;
+			continue;
 		}
 		// Everything else is a literal. Escaped, so a regex metacharacter in a tag
 		// name - the `.` in `0.1.0` - cannot silently widen the pattern.
@@ -615,6 +656,118 @@ test("filter-pattern matcher reproduces GitHub's cheat-sheet examples", () => {
 	assert(matchesFilterPattern("*.jsx?", "page.js"), "`*.jsx?` should match `page.js`");
 	assert(matchesFilterPattern("*.jsx?", "page.jsx"), "`*.jsx?` should match `page.jsx`");
 	assert(!matchesFilterPattern("*.jsx?", "page.jsxx"), "`*.jsx?` should not match `page.jsxx`");
+});
+
+// NRL-75 VERIFY FINDING 2 (defect reproduction). `\` is a DOCUMENTED filter-pattern
+// construct - workflow-syntax.md:87, "If a name contains any of these characters and
+// you want a literal match, you need to escape each of these special characters with
+// `\`" - and the matcher used to get it silently wrong: `v1\*` translated to
+// `^v1\\[^/]*$`, a literal backslash followed by a live wildcard, so it returned false
+// for the tag `v1*` it is supposed to match and true for `v1\anything`. Blast radius
+// was zero (the shipped pattern list is backslash-free), but this helper's entire
+// justification is fidelity to documented semantics, so a wrong answer here is worse
+// than no helper.
+test("filter-pattern matcher honours the documented `\\` escape (NRL-75)", () => {
+	const wrong: string[] = [];
+	const shouldMatch: Array<[string, string]> = [
+		["v1\\*", "v1*"],
+		["v1\\?", "v1?"],
+		["v1\\+", "v1+"],
+		["v1\\[", "v1["],
+		["v1\\]", "v1]"],
+		["\\!v1", "!v1"],
+		["v1\\\\", "v1\\"],
+		// `.` is not in the documented special set, so escaping it is redundant - but a
+		// redundant escape must still name its own character, not a backslash plus a
+		// live construct. This is the shape a future `[0-9]+\.[0-9]+\.[0-9]+` would take.
+		["v1\\.0", "v1.0"],
+		// `\` before a character with no special meaning yields that character. The docs
+		// define the escape only for their special set, so this half is glob convention
+		// (fnmatch, minimatch) rather than a documented rule; it is pinned so the choice
+		// is deliberate rather than incidental.
+		["\\d", "d"],
+		// A quantifier attaches to an escaped literal as it does to any other token.
+		["v1\\*+", "v1*"],
+		["v1\\*+", "v1**"],
+	];
+	for (const [pattern, ref] of shouldMatch) {
+		let got: string;
+		try {
+			got = String(matchesFilterPattern(pattern, ref));
+		} catch (err: unknown) {
+			got = `THREW: ${err instanceof Error ? err.message : String(err)}`;
+		}
+		if (got !== "true") wrong.push(`"${pattern}" should match "${ref}" (got ${got})`);
+	}
+	const shouldNotMatch: Array<[string, string]> = [
+		// The whole defect: the escaped `*` must not stay a wildcard.
+		["v1\\*", "v1zzz"],
+		["v1\\*", "v1"],
+		// And the backslash itself must not survive into the ref.
+		["v1\\*", "v1\\*"],
+		["\\d", "\\d"],
+		["v1\\+", "v1++"],
+	];
+	for (const [pattern, ref] of shouldNotMatch) {
+		let got: string;
+		try {
+			got = String(matchesFilterPattern(pattern, ref));
+		} catch (err: unknown) {
+			got = `THREW: ${err instanceof Error ? err.message : String(err)}`;
+		}
+		if (got !== "false") wrong.push(`"${pattern}" should NOT match "${ref}" (got ${got})`);
+	}
+	// A trailing lone `\` has nothing to escape and no documented meaning, so it
+	// reports rather than degrading to a literal backslash. Stated choice, not an
+	// accident: the alternative silently makes a truncated pattern look valid.
+	let trailing = "";
+	try {
+		matchesFilterPattern("v1\\", "v1\\");
+		trailing = "(did not throw)";
+	} catch (err: unknown) {
+		trailing = err instanceof Error ? err.message : String(err);
+	}
+	if (!/trailing '\\'/.test(trailing)) {
+		wrong.push(`a trailing lone backslash should report; got ${JSON.stringify(trailing)}`);
+	}
+	assert(wrong.length === 0, `\\ escape mistranslated: ${wrong.join("; ")}`);
+});
+
+// GUARD (green on both sides of the NRL-75 verify fix), and it exists because an
+// earlier draft of `filterPatternToRegExp`'s doc comment claimed "anything
+// undocumented throws", which was FALSE. A character with no special meaning in a
+// filter pattern is regex-escaped and treated as a literal, and that is GitHub's
+// semantics, not a gap: `(`, `|`, `)`, `{`, `}`, `^` and `$` are ordinary characters
+// in a ref name. The escaping is what stops JavaScript's meaning leaking in. What
+// DOES throw is malformed or unsupported syntax, listed below. Pinning both halves
+// stops the comment drifting away from the code again in either direction.
+test("guard: filter-pattern literals stay literal and malformed syntax reports", () => {
+	const wrong: string[] = [];
+	// Each of these is matched by itself and by nothing its regex meaning would match.
+	const literals: Array<[string, string[]]> = [
+		["(a|b)", ["a", "b", "ab"]],
+		["a{2,3}", ["aa", "aaa"]],
+		["^main$", ["main"]],
+		["v1.0", ["v1x0"]],
+	];
+	for (const [pattern, notRefs] of literals) {
+		if (!matchesFilterPattern(pattern, pattern)) wrong.push(`"${pattern}" should match itself`);
+		for (const ref of notRefs) {
+			if (matchesFilterPattern(pattern, ref)) wrong.push(`"${pattern}" should NOT match "${ref}"`);
+		}
+	}
+	// Malformed or outside the documented set. These are the loud half.
+	const reporters = ["[^0-9]", "[\\d]", "[]", "[0-9", "]abc", "+abc", "?abc", "[0-9]++", "[0-9]+?", "!v*", ""];
+	for (const pattern of reporters) {
+		let threw = false;
+		try {
+			filterPatternToRegExp(pattern);
+		} catch {
+			threw = true;
+		}
+		if (!threw) wrong.push(`"${pattern}" should report instead of translating`);
+	}
+	assert(wrong.length === 0, `matcher literal/report split moved: ${wrong.join("; ")}`);
 });
 
 // GUARD (green on both sides). The parser must FAIL LOUDLY, never return `[]`.
