@@ -115,6 +115,28 @@ export function scrollTargetForChunk(layers: HighlightLayers, sourceStart: numbe
 	return sourceStart;
 }
 
+/**
+ * Whether a leaf that just became active should receive the playback
+ * highlight and scroll (NRL-89).
+ *
+ * `readingInFlight` is passed in rather than computed here from a
+ * `PlayerState` so this stays free of any dependency on audio/player.ts,
+ * matching how `highlightLayers()` in main.ts already reduces engine
+ * capabilities to a single boolean (`hasWordTiming`) before calling
+ * `highlightPlan`. `readingFilePath` alone cannot answer this: Player.
+ * getFilePath() is deliberately not cleared by stop() (player.ts:147-171),
+ * so a finished or stopped read still names its note by path long after
+ * nothing is in flight - without the `readingInFlight` gate, switching
+ * back to a note whose reading already ended would re-arm its highlight.
+ */
+export function shouldHighlightLeaf(
+	activeFilePath: string | null,
+	readingFilePath: string,
+	readingInFlight: boolean,
+): boolean {
+	return readingInFlight && readingFilePath !== "" && activeFilePath === readingFilePath;
+}
+
 export const setSentenceHighlight = StateEffect.define<HighlightRange | null>();
 export const setWordHighlight = StateEffect.define<HighlightRange | null>();
 

@@ -1,8 +1,17 @@
-import { MarkdownView, Notice, Plugin, TFile, type TAbstractFile, getLanguage, moment } from "obsidian";
+import {
+	MarkdownView,
+	Notice,
+	Plugin,
+	TFile,
+	type TAbstractFile,
+	type WorkspaceLeaf,
+	getLanguage,
+	moment,
+} from "obsidian";
 import { EditorView } from "@codemirror/view";
 
 import { Player } from "./audio/player";
-import { describeUnavailable, type SpeechEngine, type VoiceInfo } from "./audio/types";
+import { describeUnavailable, type SpeechChunk, type SpeechEngine, type VoiceInfo } from "./audio/types";
 import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
 import { platformSegmenters } from "./text/segment";
@@ -39,6 +48,7 @@ import {
 	highlightPlan,
 	registerHighlighting,
 	scrollTargetForChunk,
+	shouldHighlightLeaf,
 	type HighlightLayers,
 } from "./ui/highlight";
 import {
@@ -223,53 +233,17 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			this.app.vault.on("rename", (file, oldPath) => this.handleVaultRename(file, oldPath)),
 		);
 		this.registerEvent(this.app.vault.on("delete", (file) => this.handleVaultDelete(file)));
+		// NRL-89: nothing previously watched a leaf change, so switching notes
+		// mid-read left the chunk/word handlers' existing `!this.activeEditor`
+		// guards pointed at whichever editor `retargetHighlightEditor` last
+		// touched - the note the read STARTED on, not the one now in front.
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", (leaf) => this.handleActiveLeafChange(leaf)),
+		);
 
 		// Sentence-level highlighting. Ranges come from the chunk's source
 		// offsets, never from searching the editor (non-negotiable 8).
-		this.player.on("chunk", (chunk) => {
-			// No chunk means playback moved off the note entirely, so both layers
-			// go. Every other branch here touches one layer only: clearing both
-			// from a per-layer handler is what coupled the two toggles together.
-			if (!chunk) {
-				this.clearBothHighlights();
-				return;
-			}
-			if (!this.activeEditor) return;
-			// One transaction, because both layers change together here: the new
-			// sentence has to arrive in the same update that retires the previous
-			// sentence's word mark, or a word stays lit inside the wrong sentence
-			// until the next word event - which on a slow first synthesis, or on
-			// an engine that emits no word events at all, is a long time. The
-			// viewport scroll rides in that same transaction for the same
-			// reason (NRL-72, docs/adr/0022).
-			//
-			// The scroll target is `chunk.sourceStart` and NOT the sentence
-			// range's `from`: that range is null when the sentence layer is off,
-			// and the viewport should still follow playback then, because the
-			// word layer may be the only one visible. Which offset to use is
-			// decided here; highlight.ts only knows how to build the effect.
-			//
-			// `scrollTargetForChunk` is the gate, and it returns null when
-			// neither layer is drawn. It lives in highlight.ts rather than
-			// inline here because main.ts has no runtime in the suite, which is
-			// exactly how this shipped ungated in the first place: the offset
-			// was passed unconditionally, so with highlighting switched off the
-			// dispatch below drew zero ranges and still moved the viewport.
-			//
-			// One `highlightLayers()` call, not two, so the sentence range and
-			// the scroll decision cannot be computed from different plans.
-			const layers = this.highlightLayers();
-			applyHighlightLayers(
-				this.activeEditor,
-				{
-					sentence: layers.sentence
-						? { from: chunk.sourceStart, to: chunk.sourceEnd }
-						: null,
-					word: null,
-				},
-				scrollTargetForChunk(layers, chunk.sourceStart),
-			);
-		});
+		this.player.on("chunk", (chunk) => this.renderChunkHighlight(chunk));
 
 		// Word-level highlighting, drawn over the sentence rather than replacing
 		// it. This handler must never clear the sentence layer.
@@ -1119,6 +1093,122 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	/** Both layers. Used when a reading ends, not when a word advances. */
 	private clearBothHighlights(): void {
 		if (this.activeEditor) clearHighlights(this.activeEditor);
+	}
+
+	/**
+	 * NRL-89: leaving the note a read is in flight on. Clears both layers on
+	 * the editor they were drawn into (not the one now in front - there may
+	 * not even be one, if the user closed the pane) and drops `activeEditor`
+	 * so the chunk/word handlers' existing `if (!this.activeEditor) return;`
+	 * guards do the suppressing, unchanged, for as long as the mismatch lasts.
+	 */
+	private suspendHighlightEditor(): void {
+		this.clearBothHighlights();
+		this.activeEditor = null;
+	}
+
+	/**
+	 * Draw the sentence layer (and the matching scroll) for one chunk, or
+	 * clear both layers for `null`.
+	 *
+	 * Extracted verbatim from the body that used to live inline in the
+	 * `player.on("chunk", ...)` registration, so the normal chunk-advance path
+	 * and NRL-89's reattach-on-leaf-change path share one implementation and
+	 * cannot drift apart. `handleActiveLeafChange`'s match branch calls this
+	 * directly with `player.getChunk(player.getIndex())` so criterion 3
+	 * ("resumes decorating and scrolling") does not have to wait for the next
+	 * chunk event, which could be seconds away.
+	 */
+	private renderChunkHighlight(chunk: SpeechChunk | null): void {
+		// No chunk means playback moved off the note entirely, so both layers
+		// go. Every other branch here touches one layer only: clearing both
+		// from a per-layer handler is what coupled the two toggles together.
+		if (!chunk) {
+			this.clearBothHighlights();
+			return;
+		}
+		if (!this.activeEditor) return;
+		// One transaction, because both layers change together here: the new
+		// sentence has to arrive in the same update that retires the previous
+		// sentence's word mark, or a word stays lit inside the wrong sentence
+		// until the next word event - which on a slow first synthesis, or on
+		// an engine that emits no word events at all, is a long time. The
+		// viewport scroll rides in that same transaction for the same
+		// reason (NRL-72, docs/adr/0022).
+		//
+		// The scroll target is `chunk.sourceStart` and NOT the sentence
+		// range's `from`: that range is null when the sentence layer is off,
+		// and the viewport should still follow playback then, because the
+		// word layer may be the only one visible. Which offset to use is
+		// decided here; highlight.ts only knows how to build the effect.
+		//
+		// `scrollTargetForChunk` is the gate, and it returns null when
+		// neither layer is drawn. It lives in highlight.ts rather than
+		// inline here because main.ts has no runtime in the suite, which is
+		// exactly how this shipped ungated in the first place: the offset
+		// was passed unconditionally, so with highlighting switched off the
+		// dispatch below drew zero ranges and still moved the viewport.
+		//
+		// One `highlightLayers()` call, not two, so the sentence range and
+		// the scroll decision cannot be computed from different plans.
+		const layers = this.highlightLayers();
+		applyHighlightLayers(
+			this.activeEditor,
+			{
+				sentence: layers.sentence
+					? { from: chunk.sourceStart, to: chunk.sourceEnd }
+					: null,
+				word: null,
+			},
+			scrollTargetForChunk(layers, chunk.sourceStart),
+		);
+	}
+
+	/**
+	 * NRL-89: the active-leaf-change handler. Decides, via the pure
+	 * `shouldHighlightLeaf`, whether the leaf that just became active is the
+	 * note an in-flight read is on - and either resumes decorating/scrolling
+	 * it (match) or suspends the layers (no match, read still in flight).
+	 *
+	 * `activeFilePath` is resolved the same way `currentEditor()` already
+	 * does: only a loaded `MarkdownView` has a `file` to read, and decoration
+	 * only ever makes sense for a markdown editor, so there is nothing for a
+	 * non-MarkdownView leaf to match even if a path were resolved for it. A
+	 * leaf that is still a deferred (unloaded) view also narrows to `null`
+	 * here, which fails closed - under-highlighting rather than drawing into
+	 * a view that has not finished loading.
+	 *
+	 * `inFlight` is derived from `Player.getState()`, not from `getFilePath()`
+	 * alone: `getFilePath()` is deliberately not cleared by `stop()`
+	 * (player.ts:147-171), so a finished or stopped read still names its note
+	 * by path - `shouldHighlightLeaf`'s own doc comment explains why that
+	 * alone would re-arm a dead reading's highlight on a return visit.
+	 *
+	 * Word-level highlighting is deliberately NOT replayed on reattach:
+	 * `Player` holds no queryable "current word" field, and
+	 * `refreshHighlightLayers()` already sets this same precedent elsewhere -
+	 * redrawing the sentence layer only. The word mark catches up on the next
+	 * natural word event, exactly as it does after any settings toggle flip.
+	 */
+	private handleActiveLeafChange(leaf: WorkspaceLeaf | null): void {
+		const state = this.player.getState();
+		const inFlight = state === "preparing" || state === "playing" || state === "paused";
+		const activeFilePath =
+			leaf?.view instanceof MarkdownView ? (leaf.view.file?.path ?? null) : null;
+
+		if (shouldHighlightLeaf(activeFilePath, this.player.getFilePath(), inFlight)) {
+			const current = this.currentEditor();
+			if (!current) return; // defensive; a MarkdownView match implies currentEditor() succeeds
+			this.retargetHighlightEditor(current.editor);
+			registerHighlighting(current.editor);
+			this.renderChunkHighlight(this.player.getChunk(this.player.getIndex()) ?? null);
+			return;
+		}
+
+		if (inFlight) this.suspendHighlightEditor();
+		// Not in flight and no match: nothing is being read, so activeEditor
+		// (if stale from a finished read) is left alone rather than touched on
+		// every leaf change with no read in progress.
 	}
 
 	/**
