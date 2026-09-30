@@ -418,12 +418,16 @@ closed (0 of 1,024 leaking, both sides). An underline *between* opener and close
 `SETEXT.test` and therefore `interruptsParagraph`, so it is **root 2** and it leaks 1,024 of
 1,024 on both sides. The ATX form leaks 1,024 of 1,024 on both sides and is correct.
 
-**Roots 1 and 2 were deferred, not attempted**, and the reason is a standing rule rather than
-time: fixing them means widening `interruptsParagraph`, which is shared with
-`codeSpanClosesLater` and which NRL-73 and NRL-74 had just narrowed in the same run. Root 3 is
+**Roots 1 and 2 were deferred, not attempted, and are tracked as NRL-98**, and the reason is a
+standing rule rather than time: fixing them means widening `interruptsParagraph`, which is
+shared with `codeSpanClosesLater` and which NRL-73 and NRL-74 had just narrowed in the same run.
+NRL-98 carries the reproductions, the pre-NRL-74 baselines with the instruction to re-measure
+before quoting them, and the setext correction below. Root 3 is
 left because clause 7a's `opensMathBlock` stop exists to fix a real prose-loss defect, and
 removing it trades prose for a destination - the trade ADR 0007 clause 6 refuses. Root 5 is
-clause 6's own recorded precedence rule.
+clause 6's own recorded precedence rule. Neither root 3 nor root 5 has a ticket, deliberately:
+each is a recorded decision rather than an open defect, so reopening either means arguing with
+the reason and not just picking up a number.
 
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
@@ -463,11 +467,11 @@ additionally requires `paraText === "" && !wasPara`, which a live carry makes fa
 Two pre-existing image shapes are **not** NRL-88 and remain open against the same requirement,
 in **both** positions of `speakImageAlt`: a label holding another bracket construct
 (`![a [[N|l]] b](dest.png)`), and `![alt](dest(1).png)`, which speaks a fragment of the
-destination, `.png)`. Neither was opened by NRL-21. **Do not record R-M09 as met until roots 1,
-2, 3 and 5, root 4's named residuals (clause 4's bare `]`, plus clause 3's uncounted
-bracket in all three of its positions), and those two shapes all close**, and the headline
-count stays at 2 of 16: NRL-46, NRL-44, NRL-66, NRL-67, NRL-63 and NRL-88 each closed a
-leftover, not the requirement. **Nothing in any of it was observed in
+destination, `.png)`. Neither was opened by NRL-21. **Do not record R-M09 as met until roots 1
+and 2 (NRL-98), roots 3 and 5, root 4's named residuals (clause 4's bare `]`, plus clause 3's
+uncounted bracket in all three of its positions), and those two shapes all close**, and the
+headline count stays at 2 of 16: NRL-46, NRL-44, NRL-66, NRL-67, NRL-63 and NRL-88 each closed a
+leftover, not the requirement. **R-M09 is NOT met.** **Nothing in any of it was observed in
 Obsidian** - CDP port 9222 was unreachable at every attempt, so rule 11 applies to every number
 in this section.
 
@@ -481,7 +485,9 @@ both trees. **Prose loss** over 18 shortcut/never-closes/bracket-only shapes x 5
 cells, **0 losing a prose word**, with one class run down rather than waved at: 512 cells stop
 speaking `ref` on `A ![sc` / `[b] more][ref]`, and `ref` is a reference NAME the single-line
 branch has always consumed, confirmed by the stray form on the fix being byte-identical to the
-stray-free form on base. **Non-interference with all three carries** - NRL-64's `outgoingCode`,
+stray-free form on base. **That `ref` class is 512 here and 256 in NRL-88's PR, and both are
+right**: 256 is the `speakImageAlt: true` half, 512 is the full sweep over both positions. If
+the two numbers ever read as a contradiction, it is this and not a measurement dispute. **Non-interference with all three carries** - NRL-64's `outgoingCode`,
 NRL-63's own paragraph carry and NRL-74's `lastHtmlCloser` - over 19 shapes x 512 = 9,728
 cells, of which **15 shapes are byte-identical on both sides** including "code+label same
 line" (root 5), "all three live" and both hidden-block shapes; the 4 that moved are root-4
@@ -501,6 +507,39 @@ notes that killed the full-depth arm. And the acceptance oracle is deliberately 
 wrapped-equals-single-line, which agrees in **0 of 7,168 cells on base and on the fix alike**
 because the single-line form hits the out-of-scope nested-bracket defect and mis-parses on its
 own - inheriting it would make a correct fix unfalsifiable in both directions.
+
+Verify re-measured root 4 on **its own** corpus rather than replaying the ship one, and the
+numbers must always be quoted with the corpus attached because there are now three: the
+ticket's seven stray lines are **3,584 image-only and reproduce exactly**; the same seven over
+**both kinds** are **7,168 -> 1,024**; the ship corpus of 11 shapes x 2 kinds x 512 is
+**11,264 -> 1,024**; and Verify's own 14,336-cell corpus **closed 9,216 of 13,312**. A bare
+total from any one of them will be read as contradicting the others.
+
+Verify also settled claim (b) - that the naive "skip any `]` not followed by `(`" is worse than
+changing nothing - **by construction rather than by argument**: it built the confirmation-only
+arm and measured it **strictly worse than base**, 7,168 still leaking **and** 1,536 prose-loss
+cells, which is exactly what D-88-10 predicted. That is why (b) above is not a reasoned caution.
+
+Three smaller findings from that pass, none of them blocking and each recorded only so the next
+probe does not read it as new. **A token fused to an unmatched `<!--` on a label interior line
+stops being spoken at `speakImageAlt: true` too** (256 cells per kind), which looks like a new
+silencing until the control is run: the stray-free form drops the same token on base, so it is
+pre-existing and in the silencing direction, and the mechanism is already pinned by
+`local-html-state` and `srs.md:327`. **ADR 0019's deliberately-literal class moved 2,048 ->
+1,536 in Verify's corpus**, a *decrease* and therefore in the silencing direction, all of it at
+`speakImageAlt: false` with the control agreeing on base - do not reconcile it against the
+`1,024 on both sides` figure above, which is the ship corpus and a different one.
+
+Two traps worth preserving, because both cost time and neither is visible from the code.
+**A `sourceIndex` equation exemption must key on the synthetic TEXT, not on `blockType`.**
+`extract.ts:2407` pushes the synthetic `"equation"` chunk with `blockType` `"other"`, so a
+checker exempting `blockType === "equation"` silently exempts nothing and reports 8,192
+identity failures on a correct tree. **A naive function-body extractor false-positives on
+`flowDepthDelta`.** Its body holds the regex literal `/"(?:[^"\\]|\\.)*"|'[^']*'/g`, whose
+double quotes mis-pair any tokenizer that does not know a regex literal from a string, and the
+lines below it hold `"["`, `"{"`, `"]"` and `"}"` as string literals. Hashing function bodies is
+the right technique - NRL-73, NRL-74 and NRL-88 all used it - but the extractor has to skip
+regex literals or it will report a body that moved when nothing did.
 
 R-M10 (speech segmentation) did not move the count either, and the reason is different
 from R-M09's. Its acceptance criteria are met on the automated evidence and the evidence
