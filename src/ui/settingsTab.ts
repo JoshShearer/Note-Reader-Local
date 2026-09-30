@@ -601,6 +601,13 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			active?.label ?? "This engine",
 		).highlightToggle;
 
+		// No this.display() on any of these three. Re-rendering the tab to grey
+		// out two checkboxes costs a containerEl.empty() that moves focus to
+		// body, collapses the Advanced section, and re-runs every engine probe
+		// (subprocess spawns and a GPU adapter request) behind a highlight
+		// checkbox. The master switch is honoured where it matters instead, in
+		// highlightPlan(), so the child rows stay live and simply do nothing
+		// while it is off.
 		new Setting(containerEl)
 			.setName("Highlight while reading")
 			.setDesc("Master switch. Turn off to read with no marks at all.")
@@ -608,8 +615,6 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				toggle.setValue(this.plugin.settings.highlight.enabled).onChange(async (value) => {
 					this.plugin.settings.highlight.enabled = value;
 					await this.plugin.saveSettings();
-					// The two rows below only mean anything while this is on.
-					this.display();
 				});
 			});
 
@@ -621,7 +626,6 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 					this.plugin.settings.highlight.sentence = value;
 					await this.plugin.saveSettings();
 				});
-				if (!this.plugin.settings.highlight.enabled) toggle.setDisabled(true);
 			});
 
 		const wordSetting = new Setting(containerEl)
@@ -632,9 +636,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 					this.plugin.settings.highlight.word = value;
 					await this.plugin.saveSettings();
 				});
-				if (!wordToggleAffordance.enabled || !this.plugin.settings.highlight.enabled) {
-					toggle.setDisabled(true);
-				}
+				if (!wordToggleAffordance.enabled) toggle.setDisabled(true);
 			});
 		if (!wordToggleAffordance.enabled) {
 			wordSetting.descEl.createDiv({ text: wordToggleAffordance.reason });

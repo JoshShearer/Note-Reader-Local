@@ -12,6 +12,9 @@
  * `EditorView` needs a DOM and is never instantiated.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { EditorState } from "@codemirror/state";
 import {
 	sentenceHighlightField,
@@ -25,6 +28,11 @@ import {
 	clearWordHighlight,
 	highlightPlan,
 } from "../src/ui/highlight.ts";
+import {
+	SENTENCE_HIGHLIGHT_VAR,
+	WORD_HIGHLIGHT_VAR,
+	applySentenceHighlightColour,
+} from "../src/ui/highlightColour.ts";
 import { DEFAULT_SETTINGS, normaliseSettings } from "../src/settings/index.ts";
 import { controlAffordances } from "../src/ui/affordances.ts";
 import type { EngineCapabilities } from "../src/audio/types.ts";
@@ -277,6 +285,91 @@ console.log("10. Defaults, missing keys and invalid values");
 	});
 	check("invalid sentence takes the default", bad.highlight.sentence === true);
 	check("invalid word takes the default", bad.highlight.word === true);
+}
+
+// --- The distinction itself, which no other suite asserts -----------------
+
+/*
+ * styles.css is the whole mechanism by which the two layers are tellable apart,
+ * and nothing else in the 19 suites reads a byte of it. Without these checks
+ * someone "tidying" the two rules into one shared block reproduces the exact
+ * defect this ticket exists to fix, with a fully green suite - which is how the
+ * defect got here the first time.
+ */
+// The bundle runs from tests/.build/, so the repo root is two levels up, the
+// same as tests/release.test.ts.
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const CSS = fs.readFileSync(path.join(REPO, "styles.css"), "utf-8");
+
+function ruleBody(selector: string): string {
+	const m = new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`).exec(CSS);
+	return m?.[1] ?? "";
+}
+function declaredProps(selector: string): Set<string> {
+	const names: string[] = [];
+	for (const decl of ruleBody(selector).split(";")) {
+		const line = decl.trim();
+		if (!line.includes(":") || line.startsWith("/*")) continue;
+		const name = line.split(":")[0]?.trim();
+		if (name) names.push(name);
+	}
+	return new Set(names);
+}
+
+console.log("11. The two layers are visually distinct in styles.css");
+{
+	const sentence = declaredProps(".local-tts-reader-sentence");
+	const word = declaredProps(".local-tts-reader-word");
+	check("a .local-tts-reader-sentence rule exists", sentence.size > 0);
+	check("a .local-tts-reader-word rule exists", word.size > 0);
+
+	// Colour cannot be the difference: both vars fall back to the same theme
+	// value and main.ts feeds both from the one stored highlight.color. So the
+	// two rules must differ in what they declare, not just in the var they name.
+	check(
+		"the two rules do not declare the same property set",
+		sentence.size !== word.size || [...sentence].some((p) => !word.has(p)),
+		`sentence=${[...sentence].sort()} word=${[...word].sort()}`,
+	);
+	check(
+		"only one layer fills a background, so the other stays visible under it",
+		sentence.has("background-color") !== word.has("background-color"),
+		`sentence=${[...sentence].sort()} word=${[...word].sort()}`,
+	);
+
+	// Chrome 88 is the floor (Obsidian's Android WebView, SPIKE-ANDROID-001).
+	// color-mix() and relative colour syntax compute to nothing there rather
+	// than degrading, which would silently blank a layer on mobile only.
+	check("no color-mix() in the highlight rules", !/color-mix\(/.test(ruleBody(".local-tts-reader-sentence") + ruleBody(".local-tts-reader-word")));
+}
+
+console.log("12. Each layer's CSS var matches the name highlightColour.ts writes");
+{
+	check("sentence var name", SENTENCE_HIGHLIGHT_VAR === "--local-tts-reader-sentence-highlight", SENTENCE_HIGHLIGHT_VAR);
+	check("word var name", WORD_HIGHLIGHT_VAR === "--local-tts-reader-word-highlight", WORD_HIGHLIGHT_VAR);
+
+	// A one-character divergence between the constant and the stylesheet would
+	// silently produce no colour at all, and no other test would move.
+	check(`styles.css reads ${SENTENCE_HIGHLIGHT_VAR}`, CSS.includes(`var(${SENTENCE_HIGHLIGHT_VAR},`));
+	check(`styles.css reads ${WORD_HIGHLIGHT_VAR}`, CSS.includes(`var(${WORD_HIGHLIGHT_VAR},`));
+	check("both fall back to the theme's own highlight", (CSS.match(/var\(--text-highlight-bg\)/g) ?? []).length >= 2);
+}
+
+console.log("13. applySentenceHighlightColour writes and clears its own property");
+{
+	const props = new Map<string, string>();
+	const style = {
+		setProperty: (k: string, v: string) => void props.set(k, v),
+		removeProperty: (k: string) => void props.delete(k),
+	};
+	applySentenceHighlightColour(style as never, "#ff0000");
+	check("a stored colour is written", props.get(SENTENCE_HIGHLIGHT_VAR) === "#ff0000", JSON.stringify([...props]));
+	check("and only its own property", !props.has(WORD_HIGHLIGHT_VAR));
+
+	// Empty means follow the theme, which is done by removing the property so
+	// the fallback in styles.css is the single source of the theme colour.
+	applySentenceHighlightColour(style as never, "");
+	check("empty removes the property rather than setting a value", !props.has(SENTENCE_HIGHLIGHT_VAR), JSON.stringify([...props]));
 }
 
 if (failures > 0) {

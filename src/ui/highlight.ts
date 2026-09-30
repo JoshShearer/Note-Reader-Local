@@ -153,6 +153,28 @@ export function applyWordHighlight(editor: EditorView, range: HighlightRange | n
 	}
 }
 
+/**
+ * Set both layers at once, in a single transaction.
+ *
+ * Use this wherever both layers change together, so they cannot disagree for a
+ * frame: advancing to a new sentence is the main one, since the new sentence
+ * must arrive in the same transaction that retires the previous sentence's word
+ * mark. `null` means "no mark on this layer".
+ */
+export function applyHighlightLayers(
+	editor: EditorView,
+	layers: { sentence: HighlightRange | null; word: HighlightRange | null },
+): void {
+	try {
+		editor.dispatch({
+			effects: [setSentenceHighlight.of(layers.sentence), setWordHighlight.of(layers.word)],
+		});
+	} catch {
+		// The editor can be torn down mid-playback; a dropped highlight is not
+		// worth interrupting reading over.
+	}
+}
+
 /** Drop the word mark and leave the sentence alone. Use when the word advances. */
 export function clearWordHighlight(editor: EditorView): void {
 	applyWordHighlight(editor, null);
@@ -174,9 +196,5 @@ export function clearSentenceHighlight(editor: EditorView): void {
  * layers never disagree for a frame.
  */
 export function clearHighlights(editor: EditorView): void {
-	try {
-		editor.dispatch({ effects: [setSentenceHighlight.of(null), setWordHighlight.of(null)] });
-	} catch {
-		// Same reason as above: a torn-down editor is not worth an exception.
-	}
+	applyHighlightLayers(editor, { sentence: null, word: null });
 }
