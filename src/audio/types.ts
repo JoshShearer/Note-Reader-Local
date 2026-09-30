@@ -268,16 +268,20 @@ export interface SpeechEngine {
 	/**
 	 * Hold the current utterance without discarding it, and let it go on.
 	 *
-	 * A PAIR. An engine that implements one of these without the other is a
-	 * programming error, not an engine with half a pause: the player refuses
-	 * the pair outright, reports it, and falls back to stopping the utterance.
-	 * A pause there is no way back from is the defect this exists to remove.
+	 * Only meaningful for an engine that owns playback, and the player enforces
+	 * that rather than trusting it: `pauseRoute` tests `ownsPlayback` first, so a
+	 * buffer engine that declares either of these still takes the element route,
+	 * the declaration is reported as a programming error, and neither method is
+	 * ever called. A buffer engine's sound lives in the player's own `<audio>`
+	 * element, where `engine.pause()` could not reach it anyway.
 	 *
-	 * Only meaningful for an engine that owns playback. For a buffer engine the
-	 * player holds the sound in its own `<audio>` element and will never call
-	 * these. An engine that owns playback and implements neither is not thereby
-	 * unpausable: it gets the player's stop-and-retain fallback (srs.md:250),
-	 * which is exactly what speechd relies on.
+	 * On an engine that owns playback they are A PAIR. Implementing one without
+	 * the other is a programming error, not an engine with half a pause: the
+	 * player refuses the pair outright, reports it, and falls back to stopping
+	 * the utterance. A pause there is no way back from is the defect this exists
+	 * to remove. An engine that owns playback and implements neither is not
+	 * thereby unpausable: it gets the player's stop-and-retain fallback
+	 * (srs.md:277), which is exactly what speechd relies on.
 	 *
 	 * Synchronous, idempotent, and must not throw.
 	 */

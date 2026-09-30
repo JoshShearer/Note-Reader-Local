@@ -117,12 +117,23 @@ and `skipInlineCode`, even though extraction had read them separately since NRL-
      indistinguishable from a note title by inspection, and silencing every
      dotless target would break the wikilink parity this clause and srs.md
      promise for a note embed. Pinned by fixture, so it cannot drift silently.
-   - **A vault folder path in a dotless target is still spoken**, so
+   - ~~**A vault folder path in a dotless target is still spoken**, so
      `A ![[private/folder/Secret Note]] B` reads the folders aloud. That is
      unchanged here and is the documented target reduction shared with the
      `[[wikilink]]` branch, byte-identical on the merge base and default-on
      through that branch. Narrowing it would be a change to wikilink speech,
-     which is a different promise and a different ticket.
+     which is a different promise and a different ticket.~~
+     **SUPERSEDED by docs/adr/0017 (NRL-46).** The reasoning above is kept
+     because it is the record of why the case was deferred, and the deferral was
+     correct at the time: narrowing it *is* a change to default-on wikilink
+     speech and it needed its own decision. That decision was taken in ADR 0017,
+     which is the ticket this paragraph asked for. The label is now the target's
+     **final path segment only**, on either `/` or `\`, in both branches
+     together, so `A ![[private/folder/Secret Note]] B` reads `A Secret Note B`
+     and the folders are silent. A URL target reduces to its host instead, and
+     the final-segment split is shared with the classification above through one
+     `finalSegment()` helper, so the two can never disagree about which part of
+     the target is a name.
 
    Classification trims; emission does not. `![[Some Note.md ]]` stays a note.
 
