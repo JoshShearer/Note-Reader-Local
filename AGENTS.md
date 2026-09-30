@@ -525,6 +525,48 @@ rediscover them:
   place with a fully green suite. **Not solved, and an explicit follow-up:** nothing
   detects a manual mid-read scroll, so one is overridden at the next sentence boundary.
   R-S03 is a SHOULD, so the `2 of 16` MUST headline count does not move.
+- A note switch mid-read no longer drags the highlight or the NRL-72 scroll onto the
+  wrong document, as of NRL-89 (PR #116, `2b4c18a`). This is a **separate** gap from the
+  "not solved" follow-up in the bullet above - that one is about a manual scroll *within*
+  the note being read getting overridden, this one is about a **different note entirely**
+  getting decorated and scrolled - and NRL-89 closes only the second. Before it, nothing
+  in the plugin listened for `active-leaf-change` at all, so the chunk/word handlers'
+  `if (!this.activeEditor) return;` guard kept pointing at whichever editor
+  `retargetHighlightEditor` last touched: the note a read STARTED on, not the one now in
+  front. Before NRL-72 that only drew a stale decoration on the wrong document, odd but
+  passive; after NRL-72 the same path also moved that document's viewport, an active
+  disturbance of a note the user switched to for their own reasons. `shouldHighlightLeaf`
+  (`src/ui/highlight.ts`) is the pure decision a new `active-leaf-change` listener in
+  `main.ts` (`handleActiveLeafChange`) consults: a leaf earns the highlight and scroll only
+  while its file matches the in-flight read's path **and** a read is actually in flight.
+  `readingFilePath` alone cannot answer that: `Player.getFilePath()` is deliberately not
+  cleared by `stop()` (`player.ts:147-171`), so a finished or stopped read still names its
+  note by path long after nothing is in flight, and without the `readingInFlight` gate a
+  return visit to that same note would re-arm a dead reading's highlight. On a match,
+  `handleActiveLeafChange` resumes decorating and scrolling immediately via
+  `renderChunkHighlight(player.getChunk(player.getIndex()))` rather than waiting for the
+  next chunk event, which could be seconds away; on a mismatch while a read is in flight,
+  `suspendHighlightEditor` clears both layers and drops `activeEditor` so the existing
+  per-handler guards do the suppressing for as long as the mismatch lasts.
+  `renderChunkHighlight` is the prior inline `player.on("chunk", ...)` body, extracted
+  verbatim (diffed line-for-line byte-identical) so the normal chunk-advance path and this
+  reattach path cannot drift apart. Word-level highlighting is deliberately not replayed on
+  reattach - only the sentence layer redraws, the same precedent `refreshHighlightLayers`
+  already set elsewhere - so the word mark catches up on the next natural word event.
+  Evidence, **bare-Node only**: `tests/highlight.test.ts` block 18, 6 checks pinning
+  `shouldHighlightLeaf` across the match / different-file / not-in-flight / non-markdown-leaf
+  / no-read-started / neither cases; no failing-before count is claimed because the function
+  did not exist before this change, so this is new capability pinned fail-safe, not a
+  reproduced-then-fixed defect. **NOTHING WAS OBSERVED IN OBSIDIAN.** No deploy and no CDP
+  session happened for this fix, so two premises the commit message names as unconfirmed
+  stay unconfirmed here too: whether Obsidian reuses one CodeMirror `EditorView` per pane
+  across a same-pane file switch, and whether `leaf.view` can still be a `DeferredView`
+  rather than a loaded `MarkdownView` at the moment `active-leaf-change` fires - the
+  `instanceof MarkdownView` check fails closed in that case, which is under-highlighting,
+  not the wrong-note failure mode this fixes, so the failure direction stays safe either way
+  but the premise itself is unverified. R-S03 is a SHOULD, so the `2 of 16` MUST headline
+  count does not move, and this bullet does not touch the still-open manual-scroll follow-up
+  recorded immediately above.
 - A selection-scoped read clips its queue by **scanning** `sourceIndex` as of NRL-57
   (`src/audio/clip.ts`, `srs.md` R-M11). This defect was not recorded here before, and it
   shipped inside NRL-52. The deleted expression was `textStart = from - chunk.sourceStart`
