@@ -2,7 +2,8 @@
 
 - Status: accepted
 - Date: 2026-09-29
-- Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42 and NRL-44
+- Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42 and NRL-44; clause 2
+  amended by NRL-68
 
 ## Context
 
@@ -32,6 +33,53 @@ evidence, not a live Obsidian reading or highlighting observation.
    later lines. A lone `%` and backslash-escaped openers remain literal.
    Hiding every unmatched inline opener would silently discard visible prose;
    speaking unclosed blocks would disclose renderer-hidden content.
+
+   **Confirmed against the renderer by NRL-68, which was filed to contradict
+   it.** That ticket reported a trailing mid-line `%%` failing to open a block
+   and called the hidden text under it a disclosure. The premise is false. The
+   `%%` block tokenizer in the installed Obsidian 1.13.7, read out of
+   `.../flatpak/app/md.obsidian.Obsidian/x86_64/stable/092bb11df3c993bd41aebf29b91228e3dc47ebb918c0224cea792006f123e084/files/resources/obsidian.asar`
+   under `~/.local/share`, has three load-bearing lines:
+
+   ```js
+   for (var i = t.length, r = 0; r < i && 32 === t.charCodeAt(r);) r++;
+   if (37 === t.charCodeAt(r) && 37 === t.charCodeAt(r + 1)) {
+     for (var o = r += 2; r < i;) { var a = t.charCodeAt(r);
+       if (37 === a) return;
+   ```
+
+   The skip loop accepts **spaces only**, the `%%` must then sit at the block
+   start, and the function is registered as a **block** tokenizer, in all three
+   of the `interruptParagraph`, `interruptList` and `interruptBlockquote` sets,
+   so it cannot fire part way through a line at all.
+   The inline tokenizer is `/^%%(.*?)%%/`, anchored, and `.` does not match a
+   newline, so it cannot reach across the break either. A trailing mid-line `%%`
+   is therefore literal text in Obsidian, the text below it is displayed, and
+   speaking both is correct rather than a leak. `Plain prose %%` / `HIDEME` /
+   `%%` speaking `Plain prose %% HIDEME` is the renderer-faithful result, and
+   the line-start requirement in the first paragraph of this clause is now
+   evidence-backed rather than asserted.
+
+   Two real divergences fell out of the same reading, and both go the other
+   way - they hide text Obsidian displays, which is the direction this clause
+   calls out as the one that discards visible prose. `if (37 === a) return`
+   means **any** `%` before the newline disqualifies the block, while we look
+   only for a later `%%` closer, so `%% 50% off` opens a block for us and not
+   for Obsidian and the rest of the note is silenced (NRL-73). The path that
+   actually opens it is `cleanLine`: `close === -1` at `src/text/extract.ts:618`
+   falls past the guard on the next line and sets `openComment` at `:626`.
+   `opensHiddenComment` (`:1351`) encodes the same "no later `%%`" rule and is
+   worth fixing in step, but it is **not** the cause - it is reached only from
+   `interruptsParagraph` (`:1362`), whose only call sites are `:1391` and `:1394`
+   inside `codeSpanClosesLater`, so it never runs on a note with no backticks.
+   A fix applied there alone would leave the output unchanged.
+   And the line-start half of the guard at `src/text/extract.ts:619` is gated on
+   `obsidianComment`, so an unmatched mid-line `<!--` still opens a block while
+   `%%` correctly does not (NRL-74). Neither is fixed here.
+
+   This was read off the installed parser's own source and was **NOT observed
+   live** in Obsidian - the same standing this ADR's other tokenizer citations
+   have.
 
 3. **Only the active comment's first matching closer ends it.** Comments do
    not nest. HTML comments end at `-->`; Obsidian comments end at `%%`.

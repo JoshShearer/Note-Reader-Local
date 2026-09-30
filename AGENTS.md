@@ -478,23 +478,38 @@ rediscover them:
   73,728 extractions, the destination class moved 0 to 4,608, all at `skipInlineCode: false`.
   This is the intended reading of the requirement, not a deviation from it: both ADR 0019
   and `srs.md` R-M08 say so in as many words, so do not "fix" it back.
-- **NRL-68** (High, open): a trailing mid-line `%%` fails to open a block comment, and the
-  hidden text under it is spoken. `Plain prose %%` / `HIDEME` / `%%` says `HIDEME`. Filed
-  out of NRL-44's verify phase because that is where the disclosure direction was probed
-  hardest, but it is **not** NRL-44's defect and **not** a code-span defect: it is
-  byte-identical on both sides of the diff at **9,216 leaking cells each**, and it
-  reproduces with no backticks anywhere in the note. It is a direct violation of the
-  `%%...%%` promise R-M08 makes and NRL-38 was written to keep, through a shape NRL-38 did
-  not cover, since the opener sits at the end of a prose line rather than at the start of
-  one. This is now the **third distinct `%%` gap** open, and they have three different
-  roots, which is why they are tracked apart rather than merged: NRL-68 is a mid-line
-  trailing opener that never opens; **NRL-67** is a `%%` inside a wikilink target, spoken
-  because the label takes a raw-emission path that never runs comment stripping; and
+- **NRL-68 is closed as not-a-defect**, and the way it closed is worth carrying, because it
+  was filed High as a disclosure. It reported that a trailing mid-line `%%` fails to open a
+  block comment, so `Plain prose %%` / `HIDEME` / `%%` says `Plain prose %% HIDEME`. That is
+  the measured behaviour and it is correct. Obsidian 1.13.7's `%%` tokenizer, read out of the
+  installed `obsidian.asar`, skips **spaces only**, then requires `%%` at the block start, and
+  is registered as a **block** tokenizer in the `interruptParagraph` set, so it cannot fire
+  part way through a line at all; the inline tokenizer `/^%%(.*?)%%/` is anchored and `.` does
+  not match a newline. So `HIDEME` is displayed in Obsidian, speaking it is renderer-faithful,
+  and the ticket's own Caveat named this outcome. The spec sentence needed the citation, not
+  the code: `src/text/extract.ts` did not change, `srs.md:324` and ADR 0006 clause 2 now carry
+  the tokenizer evidence, and `pin-nrl68-midline-opener-is-literal` in `tests/extract.test.ts`
+  pins the correct behaviour so it cannot be "fixed" back. Read off the installed parser, **NOT
+  VERIFIED IN OBSIDIAN**. Two distinct `%%` gaps remain open, with different roots, which is
+  why they are tracked apart rather than merged: **NRL-67** is a `%%` inside a wikilink target,
+  spoken because the label takes a raw-emission path that never runs comment stripping; and
   **NRL-45's leftover** is `[a]: x.png "%%"` followed by a secret line, where the `%%` in a
-  quoted title is an unmatched inline opener (ADR 0006). NOT VERIFIED IN OBSIDIAN, and for
-  NRL-68 that caveat has teeth in both directions: if Obsidian does not treat a trailing
-  mid-line `%%` as an opener either, the current speech is right and the spec sentence is
-  what needs amending.
+  quoted title is an unmatched inline opener (ADR 0006).
+- Two new defects came out of reading that tokenizer, and both go the **opposite** way to the
+  family above: they hide text Obsidian displays, which is prose loss rather than disclosure.
+  **NRL-73** (High): `if (37 === a) return` means any lone `%` before the newline disqualifies
+  the block in Obsidian, while we look only for a later `%%` closer, so
+  `%% 50% off` / `VISIBLE PROSE AFTER` speaks `""` and the rest of the note is silenced. Fix it
+  in `cleanLine` - `close === -1` at `src/text/extract.ts:618` falls past the guard and sets
+  `openComment` at `:626`. `opensHiddenComment` (`:1351`) encodes the same rule and should move
+  in step, but it is **not** the cause: it is reached only from `interruptsParagraph` (`:1362`),
+  called only at `:1391` and `:1394` inside `codeSpanClosesLater`, so it never runs on a note
+  with no backticks and a fix applied there alone changes nothing. **NRL-74** (Medium): an unmatched mid-line `<!--` does open a block for us
+  while `%%` correctly does not, because the line-start half of the guard at
+  `src/text/extract.ts:619` is gated on `obsidianComment`; `Plain prose <!--` / `SECRETA` /
+  `more` speaks `Plain prose`. Both measured in bare Node by bundling the real extractor, both
+  **NOT VERIFIED IN OBSIDIAN**. The renderer-faithful fix for NRL-74 is to narrow `<!--`, not
+  to widen `%%`.
 
 ## Style
 
