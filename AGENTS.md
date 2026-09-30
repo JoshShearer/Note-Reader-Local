@@ -213,12 +213,12 @@ would then be a second optional download rather than a mandatory addition to eve
 
 R-M01's *evidence* is weaker than that parenthesis reads, and NRL-69 corrected it without
 moving the count. The "SLSA Level 3 workflow" had **never completed a single successful
-run**. Measured over the repo's full paginated Actions history at `01c9a84`: 112 recorded
-runs, of which `release.yml` accounts for 103 and **all 103 are failures, with zero
-successes ever**; 95 runs preceded the repo's first-ever successful run and every one of
-those 95 was a `release.yml` failure. Two compounding defects caused it, both fixed by
-NRL-69, and the comment block in `.github/workflows/release.yml` records the A/B that
-isolated them: the SLSA generator was called as a step's `uses:` when a reusable workflow
+run**, and it stayed that way until NRL-79. Measured over the repo's full paginated Actions
+history at `01c9a84`: 112 recorded runs, of which `release.yml` accounted for 103 and **all
+103 were failures, with zero successes ever**; 95 runs preceded the repo's first-ever
+successful run and every one of those 95 was a `release.yml` failure. Two compounding
+defects caused it, both fixed by NRL-69, and the comment block in
+`.github/workflows/release.yml` records the A/B that isolated them: the SLSA generator was called as a step's `uses:` when a reusable workflow
 has to be called at job level, **and** the reference was missing its `.yml` extension.
 Either half alone stops the whole file compiling, which is why every historical run was a
 0-second, 0-job failure with no log, created on branch pushes that `on: push: tags` should
@@ -227,18 +227,61 @@ never have matched at all. NRL-69 also added `.github/workflows/ci.yml`, which r
 on every push and every `pull_request`; its first run, `36677239800`, is this repo's first
 successful workflow run of any kind, and a deliberate one-line test inversion on a throwaway
 branch went red as run `36678786748` with the `Test` step the only failing step, so the check
-is demonstrated in both directions rather than inferred from YAML that parses.
+is demonstrated in both directions rather than inferred from YAML that parses. Those
+figures are history and not the present tally: as of NRL-79 `release.yml` stands at
+**`{failure: 106, success: 1}`**, the single success being run `36785920227`, and the
+repo-wide total was 281 immediately after that experiment (284 a few minutes later, from
+unrelated lane activity).
 
-What that does **not** establish is anything the release path does. `release.yml` is now
-shown only to *compile*: the merge commit `01c9a84` on `main` produced a green `ci.yml` run
-(`36679940668`) and **no** `release.yml` run at all, where every earlier push to `main`
-produced a failing one. **No release tag has ever been pushed** - `git ls-remote --tags
-origin` is empty and `gh release list` is empty - so `actions/create-release`, the artifact
-upload and the SLSA provenance job have never executed once, and `srs.md`'s "SLSA Level 3
-provenance" MUST still rests on a workflow that has never produced an attestation. Treat
-R-M01 as met on its shipped files and **unexercised on its release path**. Tracked as
-NRL-79. Of the two defects known to sit on that unexercised path, **both are now fixed**,
-NRL-75 and NRL-76, and both are fixed desk-verified only. NRL-75's own parenthesis needs
+What NRL-69 by itself established is only that `release.yml` *compiles*: the merge commit
+`01c9a84` on `main` produced a green `ci.yml` run (`36679940668`) and **no** `release.yml`
+run at all, where every earlier push to `main` produced a failing one. It said nothing about
+what the release path does.
+
+**NRL-79 exercised that path once, end to end.** Exactly one release tag has ever been
+pushed to this repo: `0.1.1`, at commit `3d7b3e1`, on 2026-09-30, alongside a `nightly`
+negative control at the identical commit. Both tags and the Release were deleted afterwards,
+so `git ls-remote --tags origin` and `gh release list` are **empty again** and the Release
+assets are no longer downloadable; what survives is the permanent run log, two still-live
+workflow artifacts and a Rekor entry. `actions/create-release`, the asset upload and the
+SLSA provenance job - none of which had executed once across 106 recorded `release.yml`
+failures - all executed and all concluded success in run `36785920227`: six jobs, none
+skipped, 97 seconds, this repo's first successful `release.yml` run. The workflow produced a
+real SLSA v0.2 in-toto attestation whose **seven subject digests equal the sha256 of the
+seven files that run actually built**, re-derived from the surviving `dist` workflow
+artifact and so independent of the deleted Release; whose **DSSE signature verifies**
+against a Fulcio certificate that chains to Fulcio's published root under `openssl verify
+-attime <integratedTime> -x509_strict`, with a flipped-byte tamper control on the rebuilt
+PAE giving `Verification failure`; and whose certificate **names this repository**, commit
+`3d7b3e18062cf11a86856db4e866e38075022059`, ref `refs/tags/0.1.1`,
+`.github/workflows/release.yml` and run `.../runs/36785920227/attempts/1`, with OIDC issuer
+`token.actions.githubusercontent.com`. It is recorded in Rekor at logIndex 3026377928, uuid
+`108e9186e8c5677a9dbc7018a00a5be00677d7a60223c5df12485367a30bc1a46bf46013a8350b1b`,
+integrated 2026-09-30T22:31:16Z, append-only and undeletable. Treat R-M01 as met on its
+shipped files and **exercised once, end to end, on its release path**.
+
+Four caveats travel with that sentence and must not be separated from it. It was exercised
+**once**, on a throwaway tag and a Release both since deleted, on one day, on
+`ubuntu-latest`, with three `The set-output command is deprecated and will be disabled soon`
+warnings from `actions/create-release@v1`, so **nothing about recurrence is established**;
+**2026-10-19** is a dated re-verification trigger for this path, because that is when the
+`ubuntu-latest` label migrates to Ubuntu 26, and the `set-output` retirement is the one
+observed thing that will actually break it. The attestation was **not** validated by
+`slsa-verifier` or `gh attestation` under a TUF-rooted Sigstore trust bundle: neither exists
+on this machine (`gh` is 2.45.0 and `gh attestation --help` returns `unknown command`), the
+trust anchor used was Fulcio's root fetched over TLS, Rekor's signed entry timestamp and its
+27-hash inclusion proof were not recomputed, the CT SCT was not checked against a CT log key
+and no policy engine ran - so this is **not** "verified to SLSA Level 3" in the conventional
+sense, and nobody has run the check a downstream consumer would run. **Nothing was installed
+into Obsidian**: the Release was world-readable for about two and a half minutes and was
+digested and deleted, never installed from, so `srs.md:106`'s "MUST install as an ordinary
+Obsidian Community Plugin" is still unobserved and is now the binding gap on R-M01, together
+with whatever NRL-96 does to clause 3. And the **`2 of 16` headline count does not move** -
+not because the evidence is thin, but because R-M01 was already one of the two met MUSTs
+before this ticket, so there is no R-M01-shaped seat left to take; what NRL-79 changed is
+that the weakest "met" claim in this file stopped being weak. Tracked as NRL-79. Of the two
+defects known to sit on that path, **both are now fixed**, NRL-75 and NRL-76, and NRL-79's
+run has since exercised both fixes on a real runner. NRL-75's own parenthesis needs
 correcting as well as closing: `tags: ["*"]` does **not** match any tag, it matches any tag
 whose name holds no `/`, because GitHub's
 published table row for `'*'` reads "Matches all branch and tag names that don't contain a
@@ -257,9 +300,20 @@ depend on is validated against **every row of that published table** rather than
 itself, because a wrong hand-rolled matcher would make the three checks green while the
 workflow behaved differently in production. Measured: the three went red against the
 unmodified file (`["*"]`, all ten operational shapes firing) and green after; the five
-guards, including the `backup/`-shaped name, were green on both sides. **DESK-VERIFIED ONLY
-AND UNEXERCISED**: no tag has ever been pushed, so it is not observed that `0.1.0` fires the
-workflow or that `nightly` no longer does, and NRL-79 still owns that empirical half.
+guards, including the `backup/`-shaped name, were green on both sides. **NRL-79 exercised
+exactly one pair of that filter empirically**, on a single commit: the tag `0.1.1` fired
+`release.yml` in **2 seconds**, and the tag `nightly` - slash-free, so it would have matched
+the old `["*"]` - produced **no run of any workflow**. That negative is exhaustive rather
+than bounded-wait: enumerating every run ever recorded against sha `3d7b3e18` returns two,
+the branch `ci.yml` run and the `0.1.1` Release run, and assumes no waiting bound at all. So
+the narrowing is **empirically established for that one pair** and only **strongly
+supported** as a general claim. The limits are real and should stay written down: only that
+pair was tested, the other nine operational shapes `tests/release.test.ts` enumerates remain
+**desk-verified** against GitHub's published table and are reasonably left there, and GitHub
+exposes no observable that distinguishes "the filter rejected this ref" from "this ref never
+reached the dispatcher", so `nightly`'s silence rests on the single-variable design - same
+commit, same `release.yml` bytes, six minutes apart, only the tag name differing - rather
+than on a direct signal.
 Two further things about that fix are worth carrying. The `matchesFilterPattern()` oracle in
 `tests/release.test.ts` **must stay faithful to GitHub's documented semantics rather than
 convenient**, because it is the only thing standing between a green suite and a workflow that
@@ -268,12 +322,17 @@ documented `\` escape: `v1\*` compiled to a literal backslash followed by a live
 did not match the tag `v1*`. The remedy for a related false comment was to **narrow the comment,
 not to add throws** - a throw on a character GitHub treats as an ordinary literal would make the
 oracle diverge from the thing it exists to model, which is the same failure in the other
-direction. And two shapes were seen on NRL-79's unexercised path and deliberately left there:
-`release.yml:118` passes `tag_name: ${{ github.ref }}`, the full `refs/tags/0.1.0`, where the
-adjacent `release_name` line uses the bare `github.ref_name`; and **nothing anywhere checks that
-a pushed tag matches `manifest.json`'s version**, so the trigger now admits only bare semver but
-admits any bare semver. Neither was measured, because the path has never run, and both belong to
-NRL-79 rather than to NRL-75.
+direction. And two shapes were seen on that path and deliberately left there. The first now
+has a measurement. `release.yml:179` passes `tag_name: ${{ github.ref }}`, the full
+`refs/tags/<tag>`, where the adjacent `release_name` line uses the bare `github.ref_name`;
+NRL-79's run log shows the step receiving `tag_name: refs/tags/0.1.1` verbatim, the resulting
+Release came out with the bare tag `0.1.1`, and `git ls-remote` after the run showed no stray
+`refs/tags/refs/tags/...` ref. So it is **harmless in practice and still wrong by
+inspection**, surviving only on server-side normalisation this repo does not control. The
+second is **unchanged by NRL-79**: **nothing anywhere checks that a pushed tag matches
+`manifest.json`'s version**, or that `versions.json` holds a key for it, so the trigger
+admits only bare semver but admits any bare semver. Obsidian's installer reads both files off
+the Release, which makes this the one item here with a user-visible failure mode.
 **NRL-76 is fixed** (`8797745`), and the defect it closed was worse than the ticket recorded.
 The old step's `cd dist || true` plus its `if [ -f ... ]` guard did not merely hash the repo
 root by accident: with one published asset missing it exited **0** and wrote a *silently
@@ -291,10 +350,14 @@ assumed: the generator's `parseSubjects` validates the **digest** only, and `ver
 never reads `subject.Name`. In `tests/release.test.ts`, `extractUploadedFiles` is the single
 source of truth tying the hashed set to the published set, and it and `extractRunBlock` both
 **throw** rather than returning empty, so a parser that stops matching fails the suite instead
-of passing vacuously. **Still entirely unexercised**: nothing here has run on a GitHub runner,
-no tag has ever been pushed and no attestation has ever been produced, so every number above
-is a local bash execution of the step body. R-M01 does not move and stays unmet on its
-release path.
+of passing vacuously. Every number above is a local bash execution of the step body, but the
+step itself is **no longer unexercised**: NRL-79's run `36785920227` ran it on a GitHub
+runner, `Generate checksums` concluded success under `set -euo pipefail` with the non-empty
+guard in place, and the attestation it fed carried all **seven** subjects - no `dist/`
+capture and no silent truncation, which is exactly the NRL-76 failure shape. One honest
+limit: the literal `hashes=` value is nowhere in the run log, because the step writes it to
+`$GITHUB_OUTPUT` and never echoes it, so the seven-subject decode downstream is the evidence
+and the 844-byte figure stays a reconstruction rather than a reading.
 One method trap from that work, recorded because mutation testing is how several tickets in
 this repo establish their counts: **symlinking a shadow root defeats mutation testing**. Node
 resolves symlinks, so a `__dirname`-derived `ROOT` silently resolves back to the real
@@ -306,7 +369,8 @@ that had broken every run in this repo's history, so its silence on this file is
 evidence. The `2 of 16` headline count does not move in either direction. Note also that
 `release.yml` runs will keep being created and failing on pushes of refs that predate
 `01c9a84`, because GitHub compiles the workflow from the pushed ref; that is expected, not
-a regression, so the 103 above grows rather than being a fixed total.
+a regression, so the failure figure above grows rather than being a fixed total - 103 at
+`01c9a84`, 106 by NRL-79's pre-flight.
 
 R-M09 (configurable content exclusions) did **not** move, and the reason matters because
 NRL-21's title invites the opposite conclusion. Its *configurability* half is met: all six
