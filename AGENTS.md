@@ -699,9 +699,10 @@ rediscover them:
   measurements: a short read that exits `code 0` with no signal, which no observable can
   detect, and the probe's non-atomicity across `-O` then N x `-o -L`, where removal fails
   closed but addition inside the measured 778 ms window could produce a wrong `local: true`.
-  NRL-71 took the partial mitigation for the second: a closing `spd-say -O` under the same
-  controller and the same three checks, giving up unless the parsed, order-independent module
-  set is unchanged. It narrows the window rather than closing it (a module can still be added
+  NRL-71 took the partial mitigation for the second: a closing `spd-say -O` with the same
+  three checks, giving up unless the parsed, order-independent module set is unchanged. It
+  originally ran under the probe's one shared controller; **NRL-84 gave it its own**, so read
+  that half of this sentence as history and the NRL-84 paragraph below as the current code. It narrows the window rather than closing it (a module can still be added
   and removed between the two `-O` calls, and the N per-module listings are still read at N
   different instants), and the give-up is memoised with no retry, so a daemon reconfigured
   inside the window leaves every voice `"unknown"` until the plugin reloads.
@@ -762,6 +763,54 @@ rediscover them:
   M6's contract check. **Nothing was observed in Obsidian**, which here is not applicable
   rather than skipped, nothing under `src/` having changed. R-S01 stays narrowed and the
   `2 of 16` MUST headline count does not move.
+  **NRL-84 (`8a025fc`) is the one of these three that DOES change `src/`**, unlike NRL-87 and
+  NRL-83. The closing `-O` now runs under a **fresh `AbortController` with its own
+  `CLOSING_PROBE_TIMEOUT_MS` of 500 ms** (`src/engines/system/speechd.ts`), a third defaulted
+  constructor positional so `registry.ts` and `affordances.test.ts` compile untouched. Before
+  it, N per-module listings - a count the probe does not bound - could spend the whole 5,000 ms
+  deadline and leave the closing run none; it then aborted **holding a perfectly good reply**
+  (code 0, no signal, the identical module set), the probe returned `null`, and the give-up
+  being memoised with no retry, every voice reported `"unknown"` for the life of the plugin
+  instance. **The outer abort is deliberately NOT inherited by that scope**, and the reason is
+  the whole of why the ticket is not a no-op: an outer deadline that expires *before* the
+  closing call is already caught by the per-module loop's own abort check, so the only case
+  left is the outer timer firing *during* a closing run that would otherwise have answered,
+  and propagating the outer abort would leave exactly that case returning `null` as before.
+  **The closing guard therefore carries EXACTLY ONE abort clause**, reading only the signal
+  that run was handed, and that is load-bearing rather than tidy. A two-clause guard would set
+  both flags in case M5, so each clause alone would survive deletion while the pair only
+  *looked* pinned - the silent split NRL-87 exists to correct. Verify measured the stronger
+  form: the suite now **rejects** a two-clause guard outright (mutation N1 is red on M7),
+  because M5 and M7 set **disjoint** flags, M5 pinning "the closing budget MUST discard" and
+  M7 "the outer one must NOT".
+  Two costs, both accepted and both to be read as current behaviour. The probe's worst case is
+  now `probeTimeoutMs + closingTimeoutMs` = **5500 ms** rather than 5000 ms, **measured at
+  5405 ms at shipped defaults** (a loop starved to +4903 ms then a hanging closing `-O`), with
+  no path exceeding the sum: still bounded, still deterministic, and the outer budget still
+  bounds the one part that grows with the module count. And **NRL-71's non-atomicity window
+  widens by up to 500 ms in the starved case**: the outer deadline is no longer a hard
+  "believe nothing observed after this instant" line, because the probe can now issue and
+  accept the closing `-O` up to 500 ms after `controller` aborted. The fail direction stays
+  safe - the closing set comparison still catches module **addition**, the one direction that
+  can produce a wrong `local: true` - and narrowing the window again would undo the ticket.
+  Two test-side facts that correct claims made above. **Case H now discriminates the loop's
+  abort clause**, which NRL-87 explicitly believed it could not: H's expired outer deadline no
+  longer reaches the closing run, so H attributes and its verdict moves. Mutation **P1 makes
+  four checks red, not one** (H x2 and H2 x2), so the pin got stronger without H being edited,
+  and H2's comment plus ADR 0015's coverage row were corrected rather than left standing. And
+  **the fake runner still does not model `NodeProcessRunner`'s SIGKILL-on-abort**, deliberately:
+  in production `spawn.ts` kills the child, so an aborted closing run also arrives with
+  `signal: "SIGKILL"`, and modelling that in the fake would let `againRun.signal !== null`
+  catch M5's expired closing budget and cost M5 its pin on **C1**. The abort clause and the
+  signal clause are cleanly separable in the suite and entangled in production; both stay.
+  Evidence is **bare-Node fixtures plus reading the code**, nothing more: **nothing was
+  observed in Obsidian** (CDP 9222 refused, so `/check-constraints` logged rule 11 as UNKNOWN,
+  which bites harder here than on NRL-87 or NRL-83 precisely because `src/` changed), and
+  **the starvation path was never provoked against a real daemon** - it was not reconfigured,
+  restarted or given extra modules. R-S01 is a SHOULD, so it stays narrowed rather than closed
+  and the `2 of 16` MUST headline count does not move. `srs.md` is silent on probe timeouts and
+  was not amended; `docs/adr/0015` gained the NRL-84 Residual-risk paragraph and the corrected
+  mutation rows inside PR #111, so do not duplicate them here.
 - Stop now aborts a read that is still in its load phase, as of NRL-48 (`docs/adr/0013`).
   Before it, `main.ts` held no `AbortController` at all and `Player`'s own one is created
   inside `play()`, so during `beforeAttempt`'s `await engine.prepare()` a Stop was
