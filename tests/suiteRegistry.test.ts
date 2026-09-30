@@ -66,6 +66,13 @@
  *     nothing is exactly the vacuous pass this file exists to prevent, so
  *     finding zero anchors, or more than one, both fail by name.
  *
+ * Section 13 is about the runner rather than the registry, and lives here for
+ * one reason: this file is where a check about run-tests.mjs can go without
+ * adding a 25th suite, which would move all four count sites at once. It pins
+ * NRL-80 F1 - that a failing run's last lines, `FAILING SUITES:` above all,
+ * reach a reader that is slow to drain the pipe - and, just as hard, that the
+ * exit code is still 1 on failure and 0 on success.
+ *
  * The checks in section 8 are permanent mutation guards, not scaffolding. They
  * run the same parsers and the same comparators over synthetic strings and
  * assert that a wrong count, a dropped name, a reordered name list and a
@@ -75,7 +82,9 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 // The runner's own derivation, not a copy of it. Importing the real function is
 // the whole point: a reimplementation here could agree with `pretest` while the
@@ -587,6 +596,211 @@ console.log("anti-vacuity mutation guards");
 				`${suitePathsFromPretest("").length} derived, ${parsePretest("").length} registered`,
 			);
 		}
+	}
+}
+
+console.log("run-tests.mjs flushes its output under a stalled reader");
+
+// --- 13. The failure path must not lose its last lines (NRL-80 F1) ---------
+// `process.exit()` tears the process down without flushing writes that are
+// still queued in userspace, and stdout to a PIPE is asynchronous, so a reader
+// that is slow to drain loses whatever had not reached the OS pipe buffer yet.
+// That is every CI log viewer, every `| tee`, every `| head`. Measured on the
+// real 24-suite run with one failure injected: a file redirect delivered 5,097
+// lines, and `node run-tests.mjs 2>&1 | { sleep 25; cat; }` delivered 915 and
+// LOST the `FAILING SUITES:` line - the one line this whole file exists to put
+// at the end of a failing log.
+//
+// Driven against a COPY of the real run-tests.mjs in a temp sandbox with a
+// synthetic package.json, not against the live tree: this suite runs INSIDE
+// run-tests.mjs, so spawning the real one here would recurse through all 24
+// suites, itself included.
+//
+// The failure sandbox names suites whose build outputs do not exist, so the
+// runner takes its named-failure branch without spawning a single child. It is
+// fast and it has no dependency on any suite's real behaviour.
+//
+// THE PASS CASE IS THE POSITIVE CONTROL AND IS NOT DECORATION. The success
+// path has no `process.exit` and never did, so it must survive the identical
+// stall. Without it, a harness that simply could not carry a large payload
+// would make the failure-path checks pass for the wrong reason, and the fix
+// would be unfalsifiable. Both payloads are comfortably over the 64 KiB pipe
+// buffer, which is what makes the stall bite at all.
+{
+	const STALL_SECONDS = 1;
+	// ~230 KB of runner output, ~3.5x the 64 KiB pipe buffer.
+	const MISSING_SUITES = 1200;
+	// ~840 KB from one synthetic suite, ~13x the buffer.
+	const PASS_LINES = 12000;
+
+	interface RunnerRun {
+		readonly out: string;
+		readonly code: number;
+		readonly error: string;
+	}
+
+	function makeSandbox(kind: "fail" | "pass"): string {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nrl80-flush-"));
+		fs.copyFileSync(path.join(ROOT, "run-tests.mjs"), path.join(dir, "run-tests.mjs"));
+		fs.mkdirSync(path.join(dir, "tests", ".build"), { recursive: true });
+		let names: string[];
+		if (kind === "fail") {
+			names = Array.from({ length: MISSING_SUITES }, (_, i) => `tests/s${i}.test.ts`);
+		} else {
+			names = ["tests/s0.test.ts"];
+			const body = Array.from(
+				{ length: PASS_LINES },
+				(_, i) => `console.log("  ok   synthetic check ${i}, padded so the payload clears the pipe buffer");`,
+			).join("\n");
+			fs.writeFileSync(path.join(dir, "tests", ".build", "s0.test.mjs"), `${body}\n`);
+		}
+		fs.writeFileSync(
+			path.join(dir, "package.json"),
+			JSON.stringify({ scripts: { pretest: `node build-tests.mjs ${names.join(" ")}` } }),
+		);
+		return dir;
+	}
+
+	/**
+	 * Run the sandboxed runner with its stdout on a pipe whose reader sleeps
+	 * `stallSeconds` before draining. `sleep 0` is the unstalled baseline, run
+	 * through the identical shell so the two differ in the stall and nothing
+	 * else.
+	 *
+	 * The runner's own exit code goes to a file rather than out of the shell:
+	 * a pipeline's status is its LAST command's, and `pipefail` is not portable
+	 * to every /bin/sh.
+	 */
+	function runStalled(dir: string, stallSeconds: number): RunnerRun {
+		const codeFile = path.join(dir, "code.txt");
+		fs.rmSync(codeFile, { force: true });
+		const script =
+			`{ "${process.execPath}" run-tests.mjs 2>&1; echo $? > code.txt; } | ` +
+			`{ sleep ${stallSeconds}; cat; }`;
+		const r = spawnSync("/bin/sh", ["-c", script], {
+			cwd: dir,
+			encoding: "utf8",
+			maxBuffer: 64 * 1024 * 1024,
+		});
+		if (r.error !== undefined && r.error !== null) {
+			return { out: "", code: Number.NaN, error: String(r.error) };
+		}
+		let code = Number.NaN;
+		try {
+			code = Number(fs.readFileSync(codeFile, "utf8").trim());
+		} catch (e) {
+			return { out: r.stdout ?? "", code: Number.NaN, error: `no exit code recorded: ${String(e)}` };
+		}
+		return { out: r.stdout ?? "", code, error: "" };
+	}
+
+	function tailOf(out: string): string {
+		const lines = out.trimEnd().split("\n");
+		return lines[lines.length - 1] ?? "";
+	}
+
+	// --- 13a-13d. The failure path.
+	{
+		const dir = makeSandbox("fail");
+		try {
+			const base = runStalled(dir, 0);
+			const stalled = runStalled(dir, STALL_SECONDS);
+
+			// 13a. Non-vacuity: the baseline must actually be large enough for the
+			// stall to mean anything, and must carry the line under test.
+			check(
+				"run-tests.mjs failure output clears the pipe buffer and ends in FAILING SUITES",
+				base.error === "" &&
+					base.out.length > 64 * 1024 &&
+					/\nFAILING SUITES: /.test(base.out),
+				`error ${JSON.stringify(base.error)}, ${base.out.length} bytes, tail ${JSON.stringify(tailOf(base.out))}`,
+			);
+
+			// 13b. THE DEFECT. Pre-fix this is red: the tail is lost.
+			check(
+				`the FAILING SUITES line survives a ${STALL_SECONDS}s stalled reader`,
+				/\nFAILING SUITES: /.test(stalled.out),
+				`stalled delivered ${stalled.out.length} of ${base.out.length} bytes (${
+					stalled.out.split("\n").length
+				} of ${base.out.split("\n").length} lines); last line ${JSON.stringify(tailOf(stalled.out))}`,
+			);
+
+			// 13c. Nothing else is lost either. Byte-identical, so this cannot be
+			// satisfied by flushing the summary and dropping the middle.
+			check(
+				"a stalled reader receives byte-identical output to an unstalled one",
+				stalled.out === base.out,
+				`${stalled.out.length} bytes stalled vs ${base.out.length} unstalled`,
+			);
+
+			// 13d. THE CONTRACT. A fix that flushes but loses the non-zero exit
+			// would be worse than the bug: CI would go green on a failing run.
+			check(
+				"a failing run still exits 1, stalled and unstalled",
+				base.code === 1 && stalled.code === 1,
+				`unstalled ${base.code}, stalled ${stalled.code}`,
+			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	// --- 13e-13f. The pass path, positive control.
+	{
+		const dir = makeSandbox("pass");
+		try {
+			const base = runStalled(dir, 0);
+			const stalled = runStalled(dir, STALL_SECONDS);
+
+			// 13e. The harness itself carries a payload of this size through a
+			// stalled pipe without loss. This is what makes 13b attributable to
+			// `process.exit` rather than to the test.
+			check(
+				"positive control: the success path survives the same stall intact",
+				base.error === "" &&
+					stalled.error === "" &&
+					base.out.length > 64 * 1024 &&
+					stalled.out === base.out &&
+					/all 1 suites passed/.test(stalled.out),
+				`unstalled ${base.out.length} bytes, stalled ${stalled.out.length} bytes, tail ${JSON.stringify(tailOf(stalled.out))}`,
+			);
+
+			// 13f. And exits 0, stalled and unstalled.
+			check(
+				"a passing run still exits 0, stalled and unstalled",
+				base.code === 0 && stalled.code === 0,
+				`unstalled ${base.code}, stalled ${stalled.code}`,
+			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	// --- 13g. Source guard, for the exits this harness cannot drive.
+	// run-tests.mjs has two other `process.exit(1)` sites - an empty `pretest`
+	// and the planned-vs-produced reconciliation - and both write their reason
+	// to the console immediately before exiting, so both carry the identical
+	// hazard. Driving them would need a third and fourth sandbox for two lines
+	// of output each, which a stalled pipe would deliver anyway; asserting the
+	// call is simply absent covers them and any site added later.
+	{
+		const runnerSrc = fs.readFileSync(path.join(ROOT, "run-tests.mjs"), "utf8");
+		const codeOnly = runnerSrc
+			.replace(/\/\*[\s\S]*?\*\//g, "")
+			.replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+		const calls = [...codeOnly.matchAll(/\bprocess\.exit\s*\(/g)];
+		check(
+			"run-tests.mjs calls process.exit() nowhere; it sets process.exitCode instead",
+			calls.length === 0,
+			`${calls.length} call(s) remain; process.exit does not flush a pending async stdout write`,
+		);
+		// Non-vacuity for 13g: the same scan finds a call when one is there.
+		check(
+			"guard: the process.exit scan detects a call, so 13g cannot pass over a broken regex",
+			[...'if (x) process.exit(1);'.matchAll(/\bprocess\.exit\s*\(/g)].length === 1 &&
+				[...'// process.exit(1)\n'.replace(/(^|[^:])\/\/[^\n]*/g, "$1").matchAll(/\bprocess\.exit\s*\(/g)].length === 0,
+			"the scan or the comment-stripper is not doing what 13g assumes",
+		);
 	}
 }
 

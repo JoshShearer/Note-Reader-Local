@@ -9,6 +9,19 @@
  * built loadingNotice suite (23 of 24): the chain exited 1 after ONE suite, the
  * log held one FAIL line and ZERO mentions of the late crash.
  *
+ * NOT `process.exit()`, ANYWHERE IN THIS FILE, AND THAT IS LOAD-BEARING (NRL-80
+ * F1). stdout to a PIPE is asynchronous, and `process.exit` tears the process
+ * down without flushing what is still queued in userspace - so exactly the log
+ * a CI viewer, a `| tee` or a `| head` sees loses its tail, which here is the
+ * `FAILING SUITES:` line this file exists to print. Measured on the real
+ * 24-suite run with one failure injected: a file redirect delivered 5,097
+ * lines, and `node run-tests.mjs 2>&1 | { sleep 25; cat; }` delivered 915 and
+ * lost that line; with `process.exitCode = 1` plus `return` the same stalled
+ * pipe delivers all 5,097. The exit code is unchanged - 1 on failure, 0 on
+ * success - and tests/suiteRegistry.test.ts section 13 pins both halves,
+ * because a flush that dropped the non-zero status would be far worse than the
+ * truncation it fixed.
+ *
  * The suites are independent - each is a standalone built `.mjs` that exits 0 or
  * 1 - so nothing about the design required the short-circuit.
  *
@@ -120,7 +133,8 @@ async function main() {
 		console.error(
 			"run-tests: package.json scripts.pretest names no tests/<name>.test.ts paths; nothing to run",
 		);
-		process.exit(1);
+		process.exitCode = 1;
+		return;
 	}
 
 	/** One entry per PLANNED path, appended in the loop. The post-loop
@@ -238,9 +252,13 @@ async function main() {
 		// Failing suite names LAST, so the final thing in a CI log names every
 		// suite to look at rather than only the first.
 		console.log(`\nFAILING SUITES: ${bad.map((r) => `${r.name} (${r.status})`).join(", ")}`);
-		process.exit(1);
+		process.exitCode = 1;
+		return;
 	}
-	if (results.length !== planned.length) process.exit(1);
+	if (results.length !== planned.length) {
+		process.exitCode = 1;
+		return;
+	}
 
 	// Never a bare all-passed line when something was skipped: a reader grepping
 	// for it would take a partial run for a full one. That is the house rule
