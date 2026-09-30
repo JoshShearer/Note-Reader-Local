@@ -1,6 +1,6 @@
 {
   "name": "note-reader-local",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Read notes aloud with on-device text-to-speech and word highlighting. No cloud, no API keys.",
   "main": "main.js",
   "private": true,
