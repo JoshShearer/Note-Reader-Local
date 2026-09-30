@@ -730,6 +730,17 @@ Amended by ADR 0014 (NRL-47):
 
 Not verified in Obsidian. Every number above comes from bare Node with `Intl.Segmenter` present. Whether Obsidian's WebView has a word segmenter at all is the same open question R-M10 carries, and nobody has watched a CJK note highlight in a real editor.
 
+Amended by ADR 0022 (NRL-72):
+
+- The editor viewport follows the highlight. Advancing to a new chunk dispatches `EditorView.scrollIntoView(chunk.sourceStart)` in the **same** transaction as the two decoration effects, so the two layers and the viewport can never disagree for a frame.
+- The scroll fires on the chunk (sentence) event only, never on a word tick, and never from a clear or from the settings-toggle redraw.
+- The scroll happens only when a highlight layer is drawn. `scrollTargetForChunk` returns the offset when the plan has a sentence layer **or** a word layer and `null` otherwise, so with `highlight.enabled` false, or with both layer rows off, the chunk dispatch carries no scroll effect. The scroll serves the highlight; with no highlight there is nothing to keep in view. The disjunction matters in both directions: a word-only plan still scrolls, because the word mark lands inside that chunk on the next word event, and a sentence-only plan still scrolls with no reference to word timing, which is what keeps speech-dispatcher - the one engine whose only possible layer is the sentence - scrolling at all. There is still no toggle dedicated to the scroll; the existing highlight settings are what gate it.
+- Visibility is CodeMirror's `y: "nearest"` default: a target already in view scrolls by zero. No viewport arithmetic of our own.
+- The scroll repositions the viewport only. The cursor, the text selection, the focused element and the undo history are untouched; measured in bare Node as a byte-identical `state.selection` with `docChanged === false`.
+- The offset is clamped to the document length, matching the clamp the two decoration fields already apply to `range.to`.
+- Known gap: a manual scroll made mid-read is overridden at the next sentence boundary. Nothing detects a manual scroll.
+- Not verified in Obsidian. No CDP session was available, and a bare-Node assertion that a `StateEffect` was dispatched is not evidence that a user sees the view move.
+
 ---
 
 ### R-S04 — Offline Preference
