@@ -59,19 +59,20 @@ function fakeRunner(reply: Partial<RunResult> & { stdoutText?: string }) {
 	const calls: { args: string[]; stdin?: string }[] = [];
 	const runner: ProcessRunner = {
 		async run(_cmd, args, stdin) {
-			if (args[0] === "-L") return { code: 0, stderr: "", stdout: Buffer.from(SPD_LIST) };
+			if (args[0] === "-L") return { code: 0, signal: null, stderr: "", stdout: Buffer.from(SPD_LIST) };
 			// NRL-55's module-attribution probe. Answering -O with a failure is
 			// what keeps this default fake producing all-"unknown" voices, which
 			// is the behaviour the assertions below were written against. The
 			// -o …-L arm exists only so a probe that ignored the failed -O would
 			// not land in `calls` and corrupt every calls.at(-1) assertion.
-			if (args[0] === "-O") return { code: 1, stderr: "", stdout: Buffer.from("") };
+			if (args[0] === "-O") return { code: 1, signal: null, stderr: "", stdout: Buffer.from("") };
 			if (args[0] === "-o" && args.includes("-L")) {
-				return { code: 0, stderr: "", stdout: Buffer.from(SPD_LIST) };
+				return { code: 0, signal: null, stderr: "", stdout: Buffer.from(SPD_LIST) };
 			}
 			calls.push({ args, stdin });
 			return {
 				code: reply.code ?? 0,
+				signal: reply.signal ?? null,
 				stderr: reply.stderr ?? "",
 				stdout: reply.stdout ?? Buffer.from(reply.stdoutText ?? ""),
 			};
@@ -168,14 +169,23 @@ console.log("speechd: failures are not silent (fake runner)");
  * claiming a voice is offline when the backend cannot determine it.
  */
 interface AttributionScript {
-	/** `-O` reply. A name array is wrapped in the real "OUTPUT MODULES" header. */
-	modules?: string[] | { code: number; stdout: string };
 	/**
-	 * `-o <module> -L` replies, per module. "throw" makes run() reject, and
-	 * `delayMs` holds the reply back so the probe's own deadline can expire
-	 * first (case H).
+	 * `-O` reply. A name array is wrapped in the real "OUTPUT MODULES" header.
+	 * `signal` is what the real spawn.ts reports for a child that was terminated
+	 * rather than exiting, which arrives alongside `code: 0` (cases I-L).
 	 */
-	lists?: Record<string, string | { code: number; stdout?: string; delayMs?: number } | "throw">;
+	modules?: string[] | { code: number; stdout: string; signal?: NodeJS.Signals | null };
+	/**
+	 * `-o <module> -L` replies, per module. "throw" makes run() reject,
+	 * `delayMs` holds the reply back so the probe's own deadline can expire
+	 * first (case H), and `signal` marks the child as signal-terminated.
+	 */
+	lists?: Record<
+		string,
+		| string
+		| { code: number; stdout?: string; delayMs?: number; signal?: NodeJS.Signals | null }
+		| "throw"
+	>;
 	/** Bare `-L` reply, i.e. what listVoices() itself enumerates. */
 	bare: string;
 }
@@ -188,25 +198,38 @@ function attributionRunner(script: AttributionScript) {
 				if (Array.isArray(spec)) {
 					return {
 						code: 0,
+						signal: null,
 						stderr: "",
 						stdout: Buffer.from(["OUTPUT MODULES", ...spec, ""].join("\n")),
 					};
 				}
-				return { code: spec.code, stderr: "", stdout: Buffer.from(spec.stdout) };
+				return {
+					code: spec.code,
+					signal: spec.signal ?? null,
+					stderr: "",
+					stdout: Buffer.from(spec.stdout),
+				};
 			}
 			if (args[0] === "-o" && args[2] === "-L") {
 				const module = args[1]!;
 				scopedCalls.push(module);
 				const reply = script.lists?.[module];
 				if (reply === "throw") throw new Error("spd-say could not be spawned");
-				if (typeof reply === "string") return { code: 0, stderr: "", stdout: Buffer.from(reply) };
+				if (typeof reply === "string")
+					return { code: 0, signal: null, stderr: "", stdout: Buffer.from(reply) };
 				if (reply) {
 					if (reply.delayMs) await new Promise((r) => setTimeout(r, reply.delayMs));
-					return { code: reply.code, stderr: "", stdout: Buffer.from(reply.stdout ?? "") };
+					return {
+						code: reply.code,
+						signal: reply.signal ?? null,
+						stderr: "",
+						stdout: Buffer.from(reply.stdout ?? ""),
+					};
 				}
 				throw new Error(`unscripted module: ${module}`);
 			}
-			if (args[0] === "-L") return { code: 0, stderr: "", stdout: Buffer.from(script.bare) };
+			if (args[0] === "-L")
+				return { code: 0, signal: null, stderr: "", stdout: Buffer.from(script.bare) };
 			throw new Error(`unexpected call: ${args.join(" ")}`);
 		},
 		async spawn() {
@@ -434,6 +457,109 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	check("H: and the ambiguous name is not called local", localOf(voices, "Afrikaans") !== true, `${localOf(voices, "Afrikaans")}`);
 	check("H: nothing reports local false", neverFalse(voices));
 }
+/**
+ * Cases I-L: the same truncation as case H, but caused by a kill the plugin did
+ * not issue. Case H's guard is `controller.signal.aborted`, which only ever sees
+ * our own deadline; an external `SIGTERM` (an OOM killer, a session teardown, a
+ * user's `pkill`) leaves that flag false. Measured this session against the real
+ * `NodeProcessRunner.run`: an externally SIGTERMed child closes with
+ * `code === null, signal === "SIGTERM"`, node's `close` handler discarded the
+ * second argument, and run() resolved `code: 0` with stdout cut short
+ * ("line1\nline2\n" of three lines). So the only remaining way to tell a
+ * truncated listing from a short one is the terminating signal, which
+ * `RunResult.signal` now carries.
+ *
+ * Three modules throughout, so dropping the non-allowlisted one still leaves the
+ * two the differential gate needs.
+ */
+const FESTIVAL_SHARES_EN = spdList([
+	["English (America)", "en-US", "none"],
+	["Festival Voice", "en-US", "none"],
+]);
+const THREE_MODULES = ["espeak-ng", "openjtalk", "festival"];
+const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "none"]]);
+{
+	// I. The exact Verify failure. festival really serves "English (America)" as
+	// well as espeak-ng, so that NAME is ambiguous and must stay unknown (case F).
+	// Its listing arrives truncated past the shared row, as `code: 0` plus a
+	// SIGTERM, and the lost row takes the ambiguity with it.
+	const { runner } = attributionRunner({
+		modules: THREE_MODULES,
+		lists: {
+			"espeak-ng": ESPEAK_LIST,
+			openjtalk: OPENJTALK_LIST,
+			festival: { code: 0, stdout: FESTIVAL_LIST, signal: "SIGTERM" },
+		},
+		bare: THREE_MODULE_BARE,
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check(
+		"I: a signal-terminated -o listing attributes nothing",
+		voices.length === 4 && voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("I: the shared name is not called local", localOf(voices, "English (America)") === "unknown", `${localOf(voices, "English (America)")}`);
+	check("I: and its requiresNetwork is not false", networkOf(voices, "English (America)") === "unknown", `${networkOf(voices, "English (America)")}`);
+	check("I: nothing reports local false", neverFalse(voices));
+}
+{
+	// J. The same kill on the `-O` run instead. The truncated module list has
+	// dropped festival, the only non-allowlisted module, so every remaining
+	// module is allowlisted and the shared NAME would be attributed local - and
+	// two modules are still listed, so the arity guard does not catch it either.
+	const { runner } = attributionRunner({
+		modules: { code: 0, stdout: ["OUTPUT MODULES", "espeak-ng", "openjtalk", ""].join("\n"), signal: "SIGTERM" },
+		lists: {
+			"espeak-ng": ESPEAK_LIST,
+			openjtalk: OPENJTALK_LIST,
+			festival: FESTIVAL_SHARES_EN,
+		},
+		bare: THREE_MODULE_BARE,
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check(
+		"J: a signal-terminated -O attributes nothing",
+		voices.length === 4 && voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("J: nothing reports local false", neverFalse(voices));
+}
+{
+	// K. The control arm. Identical fixtures to I and J with every child exiting
+	// normally: attribution must still happen, or the fix has simply switched the
+	// probe off. Afrikaans is served by espeak-ng alone, English (America) by
+	// espeak-ng and festival.
+	const { runner } = attributionRunner({
+		modules: THREE_MODULES,
+		lists: {
+			"espeak-ng": ESPEAK_LIST,
+			openjtalk: OPENJTALK_LIST,
+			festival: FESTIVAL_SHARES_EN,
+		},
+		bare: THREE_MODULE_BARE,
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check("K: control, no signal: an unambiguous allowlisted name is local", localOf(voices, "Afrikaans") === true, `${localOf(voices, "Afrikaans")}`);
+	check("K: control: the variant is local too", localOf(voices, "Afrikaans+Adam") === true, `${localOf(voices, "Afrikaans+Adam")}`);
+	check("K: control: the shared name stays unknown", localOf(voices, "English (America)") === "unknown", `${localOf(voices, "English (America)")}`);
+	check("K: control: nothing reports local false", neverFalse(voices));
+}
+{
+	// L. A signal can only ever cost information, never invert it: even when the
+	// killed module is the allowlisted one, no voice may come back local: false.
+	const { runner } = attributionRunner({
+		modules: THREE_MODULES,
+		lists: {
+			"espeak-ng": { code: 0, stdout: spdList([["Afrikaans", "af", "none"]]), signal: "SIGKILL" },
+			openjtalk: OPENJTALK_LIST,
+			festival: FESTIVAL_SHARES_EN,
+		},
+		bare: THREE_MODULE_BARE,
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check("L: a signal on the allowlisted module's listing yields only unknown", voices.every((v) => v.local === "unknown"), JSON.stringify(voices.map((v) => String(v.local))));
+	check("L: and never local false", neverFalse(voices));
+}
 {
 	// In -e mode spd-say runs any line starting "!-!" as a raw SSIP command
 	// instead of speaking it: the sentence vanishes with exit 0, and note
@@ -442,10 +568,10 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	const calls: { stdin?: string }[] = [];
 	const runner: ProcessRunner = {
 		async run(_cmd, args, stdin) {
-			if (args[0] === "-L") return { code: 0, stderr: "", stdout: Buffer.from(SPD_LIST) };
+			if (args[0] === "-L") return { code: 0, signal: null, stderr: "", stdout: Buffer.from(SPD_LIST) };
 			calls.push({ stdin });
 			// spd-say -e echoes what it read, byte for byte.
-			return { code: 0, stderr: "", stdout: Buffer.from(stdin ?? "") };
+			return { code: 0, signal: null, stderr: "", stdout: Buffer.from(stdin ?? "") };
 		},
 		async spawn() {
 			throw new Error("not used");
@@ -500,7 +626,7 @@ function abortRunner(opts: { holdCancel?: boolean } = {}) {
 
 	const runner: ProcessRunner = {
 		async run(_cmd, args, stdin, signal): Promise<RunResult> {
-			if (args[0] === "-L") return { code: 0, stderr: "", stdout: Buffer.from(SPD_LIST) };
+			if (args[0] === "-L") return { code: 0, signal: null, stderr: "", stdout: Buffer.from(SPD_LIST) };
 			const call: AbortCall = { args, stdin, done: false, speakersOpen: openSpeakers() };
 			calls.push(call);
 			if (args.includes("-w")) {
@@ -514,7 +640,7 @@ function abortRunner(opts: { holdCancel?: boolean } = {}) {
 				});
 			}
 			call.done = true;
-			return { code: 0, stderr: "", stdout: Buffer.from("") };
+			return { code: 0, signal: null, stderr: "", stdout: Buffer.from("") };
 		},
 		async spawn() {
 			throw new Error("not used");
@@ -678,7 +804,7 @@ console.log("speechd: isAvailable() distinguishes its failure modes (fake runner
 	// reported available.
 	const runner2: ProcessRunner = {
 		async run(_cmd, args) {
-			if (args[0] === "-O") return { code: 0, stderr: "", stdout: Buffer.from("OUTPUT MODULES\n") };
+			if (args[0] === "-O") return { code: 0, signal: null, stderr: "", stdout: Buffer.from("OUTPUT MODULES\n") };
 			throw new Error(`unexpected call: ${args.join(" ")}`);
 		},
 		async spawn() {
@@ -706,7 +832,7 @@ console.log("speechd: isAvailable() distinguishes its failure modes (fake runner
 	const runner2: ProcessRunner = {
 		async run(_cmd, args) {
 			if (args[0] === "-O") {
-				return { code: 0, stderr: "", stdout: Buffer.from("OUTPUT MODULES\nespeak-ng\nopenjtalk\n") };
+				return { code: 0, signal: null, stderr: "", stdout: Buffer.from("OUTPUT MODULES\nespeak-ng\nopenjtalk\n") };
 			}
 			throw new Error(`unexpected call: ${args.join(" ")}`);
 		},
@@ -728,7 +854,7 @@ console.log("speechd: isAvailable() distinguishes its failure modes (fake runner
 	// autospawns the daemon on connect, verified for real on this machine).
 	const runner2: ProcessRunner = {
 		async run(_cmd, args) {
-			if (args[0] === "-O") return { code: 1, stderr: "", stdout: Buffer.from("") };
+			if (args[0] === "-O") return { code: 1, signal: null, stderr: "", stdout: Buffer.from("") };
 			throw new Error(`unexpected call: ${args.join(" ")}`);
 		},
 		async spawn() {

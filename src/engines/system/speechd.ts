@@ -271,11 +271,25 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 			// The exit code cannot report the deadline. Aborting SIGKILLs the child,
 			// a SIGKILLed child closes with a null code, and run() resolves
 			// `code ?? 0` (spawn.ts), so a run cut short arrives looking like a
-			// success that simply printed less. Checking the signal is the only way
-			// to tell the two apart, and it has to happen after every run: a signal
-			// that aborted before spawn never fires the kill listener either, so the
-			// runs after the deadline are not even interrupted.
-			if (controller.signal.aborted || modulesRun.code !== 0) return null;
+			// success that simply printed less. Checking the abort flag is the only
+			// way to tell the two apart, and it has to happen after every run: a
+			// signal that aborted before spawn never fires the kill listener either,
+			// so the runs after the deadline are not even interrupted.
+			//
+			// The abort flag alone is not enough, because it only ever sees a kill
+			// *we* issued. An external SIGTERM - an OOM killer, a session teardown,
+			// a user's pkill - truncates the listing with the flag still false
+			// (measured: code 0, aborted false, stdout cut short mid-listing). A
+			// truncated `-O` is not merely less information: dropping a
+			// non-allowlisted module means it is never listed, never queried, and
+			// the ambiguity that was keeping a shared NAME "unknown" disappears with
+			// it, while two modules can still remain so the arity guard does not
+			// fire. `RunResult.signal` is read here and in the per-module loop only:
+			// the synthesize and `-S` paths below kill their own child on purpose and
+			// must go on reading that as a success (NRL-41).
+			if (controller.signal.aborted || modulesRun.signal !== null || modulesRun.code !== 0) {
+				return null;
+			}
 			const modules = parseOutputModules(modulesRun.stdout.toString());
 			// A differential needs two listings to compare, so a single-module
 			// desktop can never attribute anything.
@@ -283,7 +297,7 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 
 			const perModule = new Map<string, SpdVoiceRow[]>();
 			for (const module of modules) {
-				const { code, stdout } = await this.runner.run(
+				const { code, stdout, signal } = await this.runner.run(
 					"spd-say",
 					["-o", module, "-L"],
 					undefined,
@@ -293,8 +307,10 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 				// a missing one, because losing a row from a non-allowlisted module's
 				// listing removes the ambiguity that was keeping a shared name
 				// "unknown", and it makes two identical listings differ, which is the
-				// one thing the differential gate reads as proof that `-o` works.
-				if (controller.signal.aborted || code !== 0) return null;
+				// one thing the differential gate reads as proof that `-o` works. Our
+				// own deadline shows up as `aborted`; any other kill shows up only as
+				// a terminating signal, with `code` laundered to 0.
+				if (controller.signal.aborted || signal !== null || code !== 0) return null;
 				const rows = parseVoiceList(stdout.toString());
 				// An unparseable listing would otherwise give this module an empty
 				// canonical key, which trivially differs from a real one and would

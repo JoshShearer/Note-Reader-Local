@@ -51,6 +51,9 @@ whenever the proof does not land:
    allowlist of pure local synthesisers: `espeak-ng` and `openjtalk`. A name
    served by both an allowlisted and a non-allowlisted module is ambiguous and
    stays `"unknown"`.
+6. Any probe run whose child was **terminated by a signal** gives up, whatever
+   its exit code says. `RunResult.signal` carries the second argument of node's
+   `close` event for exactly this.
 
 Everything else stays `"unknown"`. The engine can never emit `local: false`.
 
@@ -64,6 +67,31 @@ missing one twice over: losing a row from a non-allowlisted module's listing
 removes the ambiguity that was keeping a shared NAME `"unknown"`, and it makes
 two otherwise identical listings differ, which is exactly what step 4 reads as
 proof that `-o` works. Case H in `tests/engine.test.ts` pins both.
+
+Step 6 exists because that abort check alone was not enough, and the reason it
+looked sufficient is worth naming: an abort flag only ever sees a kill *we*
+issued. Any other termination - an OOM killer, a session teardown, a stray
+`pkill` - truncates the listing in exactly the same way with
+`controller.signal.aborted` still `false`. Measured this session against the real
+`NodeProcessRunner.run`, with an external `SIGTERM` sent to a child printing
+three lines: `code 0`, `aborted false`, and stdout holding the first two lines
+only. Node's `close` event does pass the terminating signal as its second
+argument; the handler was discarding it. So `RunResult` now carries
+`signal: NodeJS.Signals | null` as a **required** field - an optional one a
+construction site forgets reads as "not signal-terminated", which is the unsafe
+default - while `code ?? 0` is deliberately left alone, because `synthesize()`
+SIGKILLs its own `spd-say` on Stop (NRL-41) and must go on reading that as a
+success. The new field is therefore read in the attribution probe and nowhere
+else.
+
+Fed the same truncated listings the real runner produces, the pre-step-6
+extractor reported `English (America)` as `local: true` / `requiresNetwork:
+false` where `"unknown"` is required, from a truncated `-o festival -L` that
+dropped the shared row and equally from a truncated `-O` that dropped festival
+itself; the untruncated fixtures gave `"unknown"` correctly. Cases I-L in
+`tests/engine.test.ts` pin all of it, including a control arm proving attribution
+still happens when nothing is killed, and that a signal can only ever cost
+information, never produce `local: false`.
 
 Two details on the gate in step 4. It is not a count comparison, because two
 modules can coincidentally serve the same number of voices. It is not "all
