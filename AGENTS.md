@@ -259,6 +259,20 @@ unmodified file (`["*"]`, all ten operational shapes firing) and green after; th
 guards, including the `backup/`-shaped name, were green on both sides. **DESK-VERIFIED ONLY
 AND UNEXERCISED**: no tag has ever been pushed, so it is not observed that `0.1.0` fires the
 workflow or that `nightly` no longer does, and NRL-79 still owns that empirical half.
+Two further things about that fix are worth carrying. The `matchesFilterPattern()` oracle in
+`tests/release.test.ts` **must stay faithful to GitHub's documented semantics rather than
+convenient**, because it is the only thing standing between a green suite and a workflow that
+behaves differently in production. NRL-75's first Verify caught it silently mistranslating the
+documented `\` escape: `v1\*` compiled to a literal backslash followed by a live wildcard, so it
+did not match the tag `v1*`. The remedy for a related false comment was to **narrow the comment,
+not to add throws** - a throw on a character GitHub treats as an ordinary literal would make the
+oracle diverge from the thing it exists to model, which is the same failure in the other
+direction. And two shapes were seen on NRL-79's unexercised path and deliberately left there:
+`release.yml:118` passes `tag_name: ${{ github.ref }}`, the full `refs/tags/0.1.0`, where the
+adjacent `release_name` line uses the bare `github.ref_name`; and **nothing anywhere checks that
+a pushed tag matches `manifest.json`'s version**, so the trigger now admits only bare semver but
+admits any bare semver. Neither was measured, because the path has never run, and both belong to
+NRL-79 rather than to NRL-75.
 NRL-76 is untouched (the checksum step `cd dist || true` into a directory that does not
 exist, whose output feeds the provenance job's subjects). `actionlint` 1.7.7 is not a substitute for
 running it: measured during NRL-69, it was silent on **both** halves of the compile defect
