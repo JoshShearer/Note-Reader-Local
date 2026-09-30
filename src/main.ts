@@ -16,7 +16,7 @@ import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
 import { platformSegmenters } from "./text/segment";
 import { resolveStoredVoice } from "./audio/voiceChoice";
-import { clipChunksToSelection } from "./audio/clip";
+import { applySelectionReadGate, clipChunksToSelection, type SelectionReadPort } from "./audio/clip";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
 import {
 	KokoroEngine,
@@ -804,12 +804,6 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			return;
 		}
 
-		this.readScope?.abort();
-		const scope = (this.readScope = new AbortController());
-
-		this.retargetHighlightEditor(current.editor);
-		registerHighlighting(current.editor);
-
 		const chunks = extractChunks(
 			current.source,
 			{
@@ -834,14 +828,25 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// `from - chunk.sourceStart` needed (non-negotiable 8, NRL-57).
 		const selectedChunks = clipChunksToSelection(chunks, from, to);
 
-		// Zero speakable content. This now also covers a selection that DID
-		// overlap chunks but contributed no spoken character, because it held
-		// only content extraction excludes - a selection of just `%%hidden%%`
-		// speaks nothing rather than speaking the words after it.
-		if (selectedChunks.length === 0) {
-			new Notice("No text in selection.");
-			return;
-		}
+		// NRL-92: selectedChunks is computed and checked BEFORE the in-flight
+		// read is touched. A selection that turns out to hold nothing
+		// speakable - because it held only content extraction excludes, e.g.
+		// a %%comment%% or a skipped code span - must leave whatever is
+		// currently playing untouched rather than aborting it and showing a
+		// Notice in its place. applySelectionReadGate is the one place that
+		// ordering is enforced; see src/audio/clip.ts for why the order is
+		// the whole point and not an implementation detail.
+		const port: SelectionReadPort = {
+			abort: () => this.readScope?.abort(),
+			retarget: () => {
+				this.retargetHighlightEditor(current.editor);
+				registerHighlighting(current.editor);
+			},
+			showEmptyNotice: () => new Notice("No text in selection."),
+		};
+		if (!applySelectionReadGate(port, selectedChunks)) return;
+
+		const scope = (this.readScope = new AbortController());
 
 		const selection = this.settings.engine;
 		const isAutomatic = selection === "auto";

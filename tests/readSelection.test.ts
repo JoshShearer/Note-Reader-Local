@@ -17,7 +17,7 @@
 import { extractChunks } from "../src/text/extract.ts";
 import { platformSegmenters } from "../src/text/segment.ts";
 import { allocateWordTimings, clipWordSpans, findWords } from "../src/audio/words.ts";
-import { clipChunksToSelection } from "../src/audio/clip.ts";
+import { applySelectionReadGate, clipChunksToSelection, type SelectionReadPort } from "../src/audio/clip.ts";
 import type { SpeechChunk } from "../src/audio/types.ts";
 
 let failures = 0;
@@ -470,6 +470,86 @@ console.log("NRL-47 clipWordSpans");
 	}
 	check("clipped CJK timings still name their raw markdown", bad === 0 && total > clipped.length, `${bad} bad of ${total}`);
 	check("G4 clipped CJK offsets stay inside the selection", offsetsOutside(clipped, from, to) === 0);
+}
+
+/*
+ * NRL-92. `readSelection` used to abort the in-flight read and retarget
+ * highlighting BEFORE it knew whether the new selection had anything
+ * speakable (main.ts:807-811, ~30 lines ahead of the L841-844 zero-chunk
+ * guard). A selection over excluded content (a %%comment%%, a skipped code
+ * span) therefore tore down whatever was playing and then showed "No text in
+ * selection." with nothing to replace it.
+ *
+ * This is a call-ORDER defect, not a wrong computed value: `selectedChunks`
+ * was always correct (NRL-57 already fixed that). A test that only checks
+ * `selectedChunks.length` cannot catch it, because that number does not
+ * change with the order its caller applies it in - which is exactly why the
+ * bug survived NRL-57's own review. So this block drives
+ * `applySelectionReadGate` with a fake port that records call ORDER into a
+ * shared array, and asserts on that array, not on a boolean.
+ */
+console.log("NRL-92 applySelectionReadGate call order");
+
+interface RecordingPort extends SelectionReadPort {
+	calls: string[];
+}
+
+function fakePort(): RecordingPort {
+	const calls: string[] = [];
+	return {
+		calls,
+		abort(): void {
+			calls.push("abort");
+		},
+		retarget(): void {
+			calls.push("retarget");
+		},
+		showEmptyNotice(): void {
+			calls.push("showEmptyNotice");
+		},
+	};
+}
+
+{
+	// Empty selection: "%%hidden%%" is a full-note comment, so
+	// clipChunksToSelection yields zero chunks (content-extraction-excluded,
+	// the same shape C3 above already pins for clipChunksToSelection itself).
+	const note = "%%hidden%%";
+	const chunks = extract(note);
+	const selectedChunks = clipChunksToSelection(chunks, 0, note.length);
+	check("NRL-92 precondition: the selection clips to zero chunks", selectedChunks.length === 0, `${selectedChunks.length}`);
+
+	const port = fakePort();
+	const replaced = applySelectionReadGate(port, selectedChunks);
+
+	check("NRL-92 empty selection: does not replace the in-flight read", replaced === false);
+	check(
+		"NRL-92 empty selection: showEmptyNotice is called, and is the ONLY call",
+		JSON.stringify(port.calls) === JSON.stringify(["showEmptyNotice"]),
+		JSON.stringify(port.calls),
+	);
+	check("NRL-92 empty selection: abort is NEVER called", !port.calls.includes("abort"));
+	check("NRL-92 empty selection: retarget is NEVER called", !port.calls.includes("retarget"));
+}
+
+{
+	// Non-empty selection: plain prose, nothing excluded.
+	const note = "Before bold after.";
+	const chunks = extract(note);
+	const selectedChunks = clipChunksToSelection(chunks, 0, note.length);
+	check("NRL-92 precondition: the selection clips to a non-empty set", selectedChunks.length > 0, `${selectedChunks.length}`);
+
+	const port = fakePort();
+	const replaced = applySelectionReadGate(port, selectedChunks);
+
+	check("NRL-92 non-empty selection: replaces the in-flight read", replaced === true);
+	check("NRL-92 non-empty selection: abort is called before retarget", JSON.stringify(port.calls.slice(0, 2)) === JSON.stringify(["abort", "retarget"]), JSON.stringify(port.calls));
+	check(
+		"NRL-92 non-empty selection: abort+retarget are the ONLY calls",
+		JSON.stringify(port.calls) === JSON.stringify(["abort", "retarget"]),
+		JSON.stringify(port.calls),
+	);
+	check("NRL-92 non-empty selection: showEmptyNotice is NEVER called", !port.calls.includes("showEmptyNotice"));
 }
 
 console.log("");

@@ -81,3 +81,49 @@ export function clipChunksToSelection(
 	}
 	return out;
 }
+
+/**
+ * What a selection-scoped read does to the in-flight one (NRL-92).
+ *
+ * Mirrors vaultEvents.ts's `VaultEventPort` shape: a narrow, obsidian-free
+ * port so `applySelectionReadGate`'s ordering can be driven and asserted on
+ * in the bare-Node suite, which is the only place main.ts's own orchestration
+ * cannot run.
+ */
+export interface SelectionReadPort {
+	/** Abort the in-flight read. Only called once selectedChunks is known non-empty. */
+	abort(): void;
+	/** Retarget highlighting onto the new editor. Runs immediately after abort(). */
+	retarget(): void;
+	/** Nothing in the selection was speakable. The in-flight read is left untouched. */
+	showEmptyNotice(): void;
+}
+
+/**
+ * Whether a selection-scoped read replaces whatever is currently playing.
+ *
+ * The order is the whole point of this function's existence, not an
+ * implementation detail inside it. Before NRL-92, main.ts called
+ * `readScope?.abort()` and retargeted highlighting a full ~30 lines before it
+ * computed `selectedChunks` and checked whether it held anything - so a
+ * selection over excluded content (a %%comment%%, a skipped code span, any
+ * shape `clipChunksToSelection` already reduces to zero chunks) tore down an
+ * in-flight read and replaced it with nothing. Reproduced directly: a
+ * throwaway probe against the real `extractChunks`/`clipChunksToSelection`
+ * with a note body of only "%%hidden%%" showed abort/retarget both firing
+ * before the zero-chunk guard ever ran.
+ *
+ * `port.abort()` must not run until `selectedChunks.length > 0` is already
+ * known, which is why this function takes the COMPUTED chunks rather than the
+ * raw selection bounds - a caller cannot accidentally call it before
+ * `clipChunksToSelection` has run, because there is nothing to pass yet.
+ */
+export function applySelectionReadGate(port: SelectionReadPort, selectedChunks: readonly SpeechChunk[]): boolean {
+	if (selectedChunks.length === 0) {
+		port.showEmptyNotice();
+		return false;
+	}
+	port.abort();
+	port.retarget();
+	return true;
+}
