@@ -691,11 +691,31 @@ rediscover them:
   every sibling under its parent folder. And **writes are serialised** by
   `src/settings/saveQueue.ts`: single-flight with coalescing, newest wins, at most one write
   in flight and one payload pending, a rejection reported exactly once through `reportError`
-  and never wedging the queue, and no retry of a failed payload (a blind retry could
-  resurrect a stale snapshot behind a newer one, which is the defect being closed). Both
-  handler bodies moved out of main.ts into `src/settings/vaultEvents.ts` behind a narrow
-  port, because main.ts has no runtime in the suite and those bodies shipped in NRL-51 with
-  no automated coverage of any kind.
+  and never wedging the queue, and, **as shipped by NRL-58**, no retry of a failed payload (a
+  blind retry could resurrect a stale snapshot behind a newer one, which is the defect being
+  closed). Both handler bodies moved out of main.ts into `src/settings/vaultEvents.ts` behind
+  a narrow port, because main.ts has no runtime in the suite and those bodies shipped in
+  NRL-51 with no automated coverage of any kind.
+  **NRL-58's two residuals - no retry, and `onunload` cannot drain - are both closed by
+  NRL-91 (PR #123, `aa87203`, `docs/adr/0026`).** `SaveQueue` now takes an optional
+  `getCurrentPayload` constructor option; when supplied, a rejected write arms a capped
+  3-attempt, 500/1000/2000ms backed-off retry that reads `getCurrentPayload()` FRESH at the
+  moment it fires rather than replaying the stale rejected object, so it can never write
+  anything older than what just failed. A real `enqueue()` always supersedes an armed retry
+  and resets its budget, which is the same newest-wins invariant extended to cover the
+  retry timer itself as a write source. `onunload` still cannot `await` - Obsidian gives no
+  hook to - so `dispose()` closes only the one NEW resource retry introduces, the armed
+  timer, and deliberately leaves an in-flight `running` write or a queued `pending` payload
+  exactly as it finds them. ADR 0026 states the resulting bound precisely: at most one
+  throttle window of position data, or one settings write that was mid-retry-backoff at the
+  moment of unload, whichever the moment catches - never a torn or corrupted payload, and
+  never accumulating across a session. **NOT VERIFIED IN OBSIDIAN**: whether Obsidian's real
+  `saveData()` ever actually rejects in practice is unmeasured, so if it never does,
+  residual 1's retry path has never been exercised by a real failure; whether an armed
+  `window.setTimeout` survives Obsidian's own plugin-unload teardown long enough for
+  `dispose()` to reach it is likewise unmeasured. All of NRL-91's evidence is bare-Node
+  against the real `SaveQueue` with a fake clock (`tests/vaultPersistence.test.ts` T7-T10,
+  18 failures pre-fix). R-M12's MUST audit floor does not move.
   Evidence, all bare-Node, measured on both sides of the diff by transcribing the shipped
   handler bodies and `saveSettings()` line for line and driving the real `PositionThrottle`
   and the real map sweeps: **7 failures at `c91ee0c`, 0 after**. A `Notes/A` -> `Notes/B`
@@ -724,6 +744,12 @@ rediscover them:
   queue's `drain()`, so an unload mid-flight can still lose the newest snapshot - unchanged
   in kind from the pre-existing un-awaited `void this.saveSettings()`, since coalescing only
   ever discards an intermediate snapshot and the newest payload is a strict successor.
+  **That specific gap is now named and bounded rather than merely noted, by NRL-91 (PR #123,
+  `docs/adr/0026`) - see the retry/dispose paragraph earlier in this bullet.** `onunload`
+  still cannot await anything; what NRL-91 adds is a capped retry for a failed write plus a
+  `dispose()` that clears the one new timer the retry introduces, so the pre-existing
+  async-gap-at-unload described here is unchanged in kind, not closed. NOT VERIFIED IN
+  OBSIDIAN applies to that paragraph exactly as it does here.
   **R-M12's MUST audit floor does NOT move** and the `2 of 16` headline count is untouched:
   nothing here was exercised in a real vault, so rule 11 applies exactly as it does
   elsewhere on this list.
