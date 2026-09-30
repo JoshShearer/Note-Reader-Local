@@ -323,9 +323,10 @@ deliberate - it keeps that half honest at the cost of leaked markup, which ADR 0
 prefers to a swallowed sentence. And a multi-line definition,
 with the destination on the following line, is out of scope (decision Q7) - it has the same
 per-line-scanner root as NRL-44's whole family. **Do not record R-M08 as fully met.** NRL-44
-closed the literal-region family (see the NRL-42/NRL-44 bullet below), but NRL-64 and NRL-63
-keep `srs.md`'s "known gap" clause alive against the same requirement, and nothing in that
-family has been observed in Obsidian. The headline count stays at 2 of 16.
+closed the literal-region family (see the NRL-42/NRL-44 bullet below) and NRL-64 closed its
+opening-line leftover, but NRL-63 keeps `srs.md`'s "known gap" clause alive against the same
+requirement, and nothing in that family has been observed in Obsidian. The headline count
+stays at 2 of 16.
 
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
@@ -600,13 +601,27 @@ rediscover them:
   **4,000-note fuzz** found **0 new disclosures and 0 prose loss**. Keeping the oracle's
   two classes apart is load-bearing rather than tidy: collapsing them scores NRL-42's
   designed literal `%%` as a leak and invents failures that are not there.
-  **Nothing was observed in Obsidian.** Two shapes stay open and are pinned so they change deliberately: **NRL-64**
-  (N1 - on the span's *opening* line the tail after the unmatched run is still spoken as
-  prose, because `cleanLine` runs there before `codeSpanClosesLater` has confirmed the span,
-  and silencing it without the confirmation would delete visible prose) and **NRL-63** (F9 -
-  a soft-wrapped image is not recognised across the break at all). `pin-skipped-code` now
-  pins the *new* behaviour, `"Before first after."`, with `first` audible for NRL-64's
-  reason. Two things NRL-44 did **not** weaken, and must not be: `codeSpanClosesLater`'s
+  **Nothing was observed in Obsidian.** One of the two shapes NRL-44 left open has since
+  closed. **NRL-64** (N1 - the tail after the unmatched run on the span's *opening* line was
+  spoken as prose) closed by reordering the per-line loop: `extractChunks` cleans a paragraph
+  line once to learn the run length, calls `codeSpanClosesLater` with the identical arguments,
+  and only then cleans the line again with a new 6th `cleanLine` parameter `outgoingCode`, so
+  the tail goes through the **same region emitter** as a carried-in span. `codeSpanClosesLater`
+  and `interruptsParagraph` were not touched (function bodies byte-identical), and the
+  `blockType === "paragraph"` test moved to the single confirmation site, where it is redundant
+  belt-and-braces rather than load-bearing: `codeSpanClosesLater` already runs
+  `interruptsParagraph` over the opening line, which matches all three constructs that make
+  `blockType` non-paragraph, and deleting the test changed 0 of 9,792 measured extractions. Two
+  consequences that are *not*
+  regressions: `pin-nrl64-opening-line` now expects `"Before a %%b%% c d after."` and
+  `pin-skipped-code` now expects `"Before after."`, both matching their single-line oracle.
+  Evidence, bare-Node, built side by side with base `29c52ae`: **0 hidden sentinels spoken on
+  either side over 11,264 sweep cells per side and 819,200 adversarial cells per side, with 0
+  cells leaking on one side and not the other**; the designed-literal class **0 -> 2,304**
+  spoken, all at `skipInlineCode: false`; **0 prose lost**; `sourceIndex` clean by numeric
+  UTF-16 index over those cells plus a 4,000-note fuzz; 13 fixtures red pre-fix.
+  **Nothing was observed in Obsidian.** Still open: **NRL-63** (F9 - a soft-wrapped image is
+  not recognised across the break at all). Two things NRL-44 did **not** weaken, and must not be: `codeSpanClosesLater`'s
   confirmation, which now prevents silencing visible prose as well as disclosing hidden
   text, and `interruptsParagraph`, which NRL-45 also depends on.
 - NRL-39's autolink shape (F7) closed with NRL-44, and it closed the way NRL-39 said it had

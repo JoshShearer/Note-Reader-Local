@@ -438,6 +438,15 @@ function wikiTargetClose(raw: string, from: number): number {
  * before that closing run on this line is code content, so a comment
  * delimiter in it is literal text rather than a comment, exactly as it
  * already is inside a single-line span.
+ *
+ * `outgoingCode` is the mirror of it, and it is what makes the OPENING line of
+ * a soft-wrapped span behave like every other line of that span (NRL-64). It is
+ * the length of the first unmatched run ON THIS LINE that extractChunks has
+ * already confirmed a later line closes, so everything after that run is code
+ * content too. It is a second pass: extractChunks cleans the line once to learn
+ * the run length, asks codeSpanClosesLater, and only then re-cleans with the
+ * answer. cleanLine therefore stays line-local - it is handed one scalar, not a
+ * lookahead into the document.
  */
 function cleanLine(
 	raw: string,
@@ -445,6 +454,7 @@ function cleanLine(
 	opts: StripOptions,
 	blockComments = false,
 	incomingCode?: number,
+	outgoingCode?: number,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -599,6 +609,36 @@ function cleanLine(
 		}
 	};
 
+	/**
+	 * A confirmed code span's literal region, `[from, to)`.
+	 *
+	 * One emitter, two call sites, because the two halves of a soft-wrapped span
+	 * are the same rule seen from either end: `[0, literalCodeEnd)` for a span
+	 * carried IN from an earlier line, and `[runEnd, raw.length)` for one opened
+	 * on this line and carried OUT (NRL-64). Keeping it in one place is what
+	 * makes those two provably identical rather than merely similar, and it is
+	 * where a third confirmed-carry kind would attach.
+	 */
+	const emitLiteralRegion = (from: number, to: number): void => {
+		if (opts.skipInlineCode) {
+			// Silenced whole. Exactly one space for the gap, the same shape as the
+			// unmatched-run drop below, so the words either side do not run
+			// together and never double up.
+			pushSpace(rawStart + to);
+			return;
+		}
+		// verbatimLine's emit rule, applied here rather than by calling
+		// verbatimLine: that function pops its own trailing space for the
+		// paragraph join, which is wrong mid-line. Each whitespace RUN
+		// collapses to one mapped space carrying the offset of the run's first
+		// character, which is what keeps the index non-decreasing.
+		for (let k = from; k < to; k++) {
+			const c = raw[k]!;
+			if (/\s/.test(c)) pushSpace(rawStart + k);
+			else emit(c, rawStart + k);
+		}
+	};
+
 	let openComment: CommentCloser | undefined;
 	// A carried span that this line does not close stays open, so a span may
 	// cross several soft line breaks. It owns the carry ahead of any run opened
@@ -629,23 +669,7 @@ function cleanLine(
 	 * behaviour change.
 	 */
 	if (carrying && literalCodeEnd > 0) {
-		if (opts.skipInlineCode) {
-			// Silenced whole. Exactly one space for the gap, the same shape as the
-			// unmatched-run drop below, so the words either side do not run
-			// together and never double up.
-			pushSpace(rawStart + literalCodeEnd);
-		} else {
-			// verbatimLine's emit rule, applied here rather than by calling
-			// verbatimLine: that function pops its own trailing space for the
-			// paragraph join, which is wrong mid-line. Each whitespace RUN
-			// collapses to one mapped space carrying the offset of the run's first
-			// character, which is what keeps the index non-decreasing.
-			for (let k = 0; k < literalCodeEnd; k++) {
-				const c = raw[k]!;
-				if (/\s/.test(c)) pushSpace(rawStart + k);
-				else emit(c, rawStart + k);
-			}
-		}
+		emitLiteralRegion(0, literalCodeEnd);
 		i = literalCodeEnd;
 	}
 
@@ -678,6 +702,11 @@ function cleanLine(
 		// extractChunks can check whether a later line closes it.
 		if (ch === "`") {
 			const { start, close, end } = inlineCodeBounds(raw, i);
+			// Does this run open the span extractChunks has already confirmed?
+			// Only the FIRST unmatched run can, which is what `openCode === undefined`
+			// says, and only when its length is the confirmed one - a second,
+			// differently sized run is content of the span this one opens.
+			let opensConfirmed = false;
 			if (close !== -1 && !opts.skipInlineCode) {
 				pushSpace(rawStart + i);
 				for (let k = start; k < close; k++) {
@@ -692,10 +721,19 @@ function cleanLine(
 				// unmatched run is a fact about the source, not about whether we
 				// speak it, and under skipInlineCode it is what arms the carry
 				// that then silences the rest of the span.
+				opensConfirmed = openCode === undefined && outgoingCode === start - i;
 				openCode ??= start - i;
 			}
 			i = end;
 			pushSpace(rawStart + i);
+			if (opensConfirmed) {
+				// The rest of the line is inside the span, so it is code content
+				// and nothing in it is markdown - the same region, the same
+				// emitter and the same two toggle positions as a carried-in span
+				// (NRL-64). Scanning stops here: there is no more line to clean.
+				emitLiteralRegion(i, raw.length);
+				i = raw.length;
+			}
 			continue;
 		}
 
@@ -1979,7 +2017,54 @@ export function extractChunks(
 			continue;
 		}
 
-		const cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode);
+		/*
+		 * Two passes, and the order is the whole of NRL-64.
+		 *
+		 * The first pass learns one fact this line cannot know on its own: the
+		 * length of an unmatched backtick run it leaves open. codeSpanClosesLater
+		 * then answers whether a later line in this paragraph really closes it,
+		 * with the IDENTICAL call the two old arming sites made - the call moved,
+		 * the function did not. Only then is the line cleaned again, now knowing
+		 * its own tail is code content rather than prose.
+		 *
+		 * Before this, cleanLine ran once and ran first, so on a span's OPENING
+		 * line the text after the run was cleaned as markdown while every other
+		 * line of the same span was verbatim. That was NRL-44's N1 sub-shape.
+		 *
+		 * The `blockType === "paragraph"` guard is HOISTED here from the two old
+		 * arming sites, where it was explicit at one and left to the
+		 * `blockType !== "paragraph"` early return at the other. It is kept
+		 * deliberately, and it is deliberately NOT the only thing stopping a carry
+		 * being armed off a heading, a quote or a list line: `blockType` leaves
+		 * "paragraph" only when HEADING, BLOCKQUOTE or LIST_BULLET matched this
+		 * same raw line, and codeSpanClosesLater runs interruptsParagraph over
+		 * `lines[from]` first, which tests all three. Measured: deleting this test
+		 * changed 0 of 9,792 extractions across those shapes. So it is redundant
+		 * belt-and-braces today, cheap, and the thing that keeps the intent -
+		 * a span cannot leave its own block - stated where the carry is armed
+		 * rather than only inside a helper two hundred lines away.
+		 *
+		 * Not a lookahead callback into cleanLine: that would make cleanLine
+		 * document-aware. The cost is one redundant clean of a line with a
+		 * confirmed unmatched run, which is rare, and provably a no-op on a line
+		 * wholly inside an already-carried span.
+		 */
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode);
+		let confirmed: number | undefined;
+		if (
+			blockType === "paragraph" &&
+			cleaned.openCode !== undefined &&
+			codeSpanClosesLater(lines, lineNo, cleaned.openCode)
+		) {
+			confirmed = cleaned.openCode;
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed);
+		}
+		// Taken from the SECOND pass on purpose. A comment delimiter inside the
+		// confirmed tail is code content, so it opens nothing - which is the same
+		// reading of ADR 0006 clause 4 that NRL-44 applied to continuation lines,
+		// not a new hole. It cannot hide anything either: a line that leaves a
+		// comment open is an opensHiddenComment line, and codeSpanClosesLater
+		// rejects those at both ends, so no confirmation exists on such a line.
 		inComment = cleaned.openComment;
 		// A link reference definition renders as nothing, so the whole line goes
 		// (docs/adr/0018). Deliberately AFTER cleanLine and after `inComment` is
@@ -2011,17 +2096,18 @@ export function extractChunks(
 			flushParagraph();
 			continue;
 		}
+		// The single arming site, replacing the two NRL-44 left behind. Its
+		// position is load-bearing in both directions. It is AFTER the
+		// LINK_REF_DEF drop and the skipTables/skipHeadings drop, because a line
+		// those remove renders as nothing and must hand on no carry - a next line
+		// treated as the continuation of a span whose opener was never spoken.
+		// And it is BEFORE the empty-output continue below, because NRL-44 made
+		// that path reachable: under skipInlineCode a line lying wholly inside a
+		// span is silenced whole and cleans to the empty string, and dropping the
+		// carry there would leave the span's closing line read as fresh prose.
+		if (confirmed !== undefined) openCode = confirmed;
+
 		if (cleaned.text.trim() === "") {
-			// A line that produced nothing still has to hand the carry on. NRL-44
-			// made this reachable: under skipInlineCode a continuation line lying
-			// wholly inside a soft-wrapped span is silenced whole, so it cleans to
-			// the empty string, and dropping the carry here would leave the span's
-			// closing line to be read as fresh prose - the very thing the silence
-			// was for. Same guard as the arming site below, same
-			// codeSpanClosesLater confirmation, and paragraph lines only.
-			if (blockType === "paragraph" && cleaned.openCode !== undefined && codeSpanClosesLater(lines, lineNo, cleaned.openCode)) {
-				openCode = cleaned.openCode;
-			}
 			continue;
 		}
 
@@ -2032,11 +2118,6 @@ export function extractChunks(
 		}
 
 		appendToParagraph(cleaned, lineStart + prefixChars);
-		// Only a plain paragraph line can carry a span forward, and only when a
-		// later line in the same paragraph really closes it.
-		if (cleaned.openCode !== undefined && codeSpanClosesLater(lines, lineNo, cleaned.openCode)) {
-			openCode = cleaned.openCode;
-		}
 		if (wasContainer) prevContainer = true;
 		else prevPara = true;
 	}

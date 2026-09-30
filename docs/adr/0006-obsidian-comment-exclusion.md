@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-29
-- Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42 and NRL-44; clause 2
+- Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44 and NRL-64; clause 2
   amended by NRL-68
 
 ## Context
@@ -162,12 +162,66 @@ evidence, not a live Obsidian reading or highlighting observation.
      safe direction: a silenced region cannot disclose anything, whereas the
      disclosure hazard the NRL-42 amendment guards against exists only when the
      region is spoken. The gap left behind is exactly one mapped space.
-   - **The opening line is still not covered.** `cleanLine` runs on the line
+   - **The opening line is not covered.** `cleanLine` runs on the line
      that opens the span before `codeSpanClosesLater` has confirmed it, so at
      that moment the run is unmatched, and an unmatched run is literal text whose
      tail must be spoken. Silencing or literalising that tail without the
      confirmation would delete visible prose. Confirming before cleaning is a
      restructure of the per-line loop, tracked as NRL-64 and pinned in a test.
+     *Superseded by the NRL-64 amendment below.*
+
+   **Amended by NRL-64: the opening line is covered too, by confirming before
+   cleaning.** The gap above was an ordering gap, not a rule gap. `extractChunks`
+   now cleans a paragraph line once to learn the length of the unmatched run it
+   leaves open, asks `codeSpanClosesLater` that same question with the identical
+   call the two old arming sites made, and only then cleans the line a second
+   time with the confirmed length. So:
+
+   - **The region `[runEnd, end-of-line)` on the opening line is the same region
+     as `[0, closerRun)` on a continuation line**, emitted by the same code:
+     verbatim when inline code is spoken, one mapped space when it is skipped.
+     `` Before `a %%b%% c `` / `` d` after. `` speaks `Before a %%b%% c d after.`
+     and is silent as `Before after.` under `skipInlineCode`, which is what the
+     single-line span `` `a %%b%% c d` `` has always done in both positions.
+   - **`codeSpanClosesLater` and `interruptsParagraph` are untouched**, which is
+     the whole reason this is safe. The call moved earlier; the function did not
+     change, and neither did the value passed to it. An unmatched run with no
+     confirmed closer still arms nothing, so the clause above about hidden text
+     stands exactly as written.
+   - **The `blockType === "paragraph"` test is now at the single confirmation
+     site, and it is redundant belt-and-braces there rather than load-bearing.**
+     It used to be explicit at one arming site and implicit at the other, where
+     an early return did the work. The rule it states - a carry is never armed
+     off a heading, a quote or a list line, because a span cannot leave the block
+     it is in - is real and is pinned by three fixtures. But the test is not what
+     enforces it: `blockType` leaves `"paragraph"` only when `HEADING`,
+     `BLOCKQUOTE` or `LIST_BULLET` matched the same raw line, and
+     `codeSpanClosesLater` runs `interruptsParagraph` over that line first, which
+     tests all three. Measured while shipping NRL-64: deleting the test changed 0
+     of 9,792 extractions across those shapes. It is kept because it is free and
+     because it states the intent where the carry is armed, not because removing
+     it would break anything today.
+   - **A comment delimiter in the confirmed tail no longer opens a comment, and
+     that is not a new disclosure.** The span is confirmed to close later, so the
+     renderer shows that `%%` as code. It cannot hide anything either: a line
+     that leaves a comment open is an `opensHiddenComment` line, and
+     `codeSpanClosesLater` rejects those at both ends, so no confirmation exists
+     on such a line in the first place.
+   - **The confirmation is armed after the link reference definition drop**
+     (ADR 0018). A line that renders as nothing hands on no carry, or the next
+     line would be read as the continuation of a span whose opener was never
+     spoken.
+
+   Measured, all bare-Node, both sides of the diff built side by side: **0 hidden
+   sentinels spoken on either side across 11,264 sweep cells per side** (22 note
+   shapes x all 512 content-key combinations) and **0 across 819,200 adversarial
+   cells per side** (every unmatched, mismatched, double and triple run shape the
+   ticket names, on both sides of a real `%%` and `<!--` block comment, with no
+   cell leaking on one side and not the other); the designed-literal class moved
+   **0 -> 2,304** spoken, all of them at `skipInlineCode: false`; **0 prose
+   sentinels lost**; and `sourceIndex` clean by numeric UTF-16 code-unit index
+   over **11,264 + 819,200 cells per side plus 4,000 fuzz notes**. **Nothing was
+   observed in Obsidian.**
    - **Neither the closer confirmation nor the paragraph-interrupter list was
      weakened.** They now carry more weight, not less: without the confirmation
      an unmatched run would silence visible prose as well as disclose hidden
