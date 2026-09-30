@@ -668,6 +668,83 @@ console.log("word timings cover the sentence");
 	check("lookup past end holds last word", wordAt(words, 99999) === words.length - 1);
 }
 
+/*
+ * NRL-47 / ADR 0013, the end-to-end half.
+ *
+ * P3 is acceptance criterion 3 in its strongest form: the timings a player
+ * actually receives must name the same raw-markdown characters they name in
+ * the chunk text. P5 is acceptance criterion 2: the scripts that must not move
+ * are asserted against durations captured from the code before this change.
+ */
+console.log("NRL-47 CJK word timings");
+{
+	const OPTS = {
+		stripTags: true,
+		speakUrls: false,
+		skipCodeBlocks: true,
+		skipInlineCode: true,
+		skipTables: true,
+		skipHeadings: false,
+		skipFrontmatter: true,
+		speakImageAlt: true,
+		speakEmbeds: false,
+		locale: "en",
+	};
+
+	// P3. Every timing lands on matching source text, on the CJK fixtures.
+	for (const src of ["这是第一句。这是第二句。第三句结束了。", "日本語のテキストを読み上げます。", "안녕하세요세계반갑습니다."]) {
+		const chunks = extractChunks(src, OPTS, undefined, "Notes/cjk.md");
+		let bad = 0;
+		let total = 0;
+		for (const chunk of chunks) {
+			for (const w of allocateWordTimings(chunk, 3000, 1)) {
+				total += 1;
+				if (src.slice(w.sourceStart, w.sourceEnd) !== chunk.text.slice(w.start, w.end)) bad += 1;
+			}
+		}
+		// `total > chunks.length` and not `total > 1`: the Chinese fixture is
+		// three chunks, so one timing each already clears a bare `> 1`.
+		check(
+			`NRL-47 P3 timings land on matching source text ${JSON.stringify(src)}`,
+			bad === 0 && total > chunks.length,
+			`${bad} bad of ${total} over ${chunks.length} chunks`,
+		);
+
+		// Monotonic and non-overlapping still, now that there are many of them.
+		for (const chunk of chunks) {
+			const t = allocateWordTimings(chunk, 3000, 1);
+			check(
+				`NRL-47 P3 timings stay ordered ${JSON.stringify(chunk.text)}`,
+				t.every((w, i) => i === 0 || w.offsetMs >= t[i - 1]!.offsetMs + t[i - 1]!.durationMs - 0.001),
+			);
+		}
+	}
+
+	/*
+	 * P5. Identity sweep. A regex span holding no Han, Kana or Hangul code
+	 * point is pushed through subdivision untouched, and `weightOf`'s new CJK
+	 * term is zero for these scripts, so both the spans and their weights are
+	 * unchanged by construction. The durations below were captured by running
+	 * the pre-NRL-47 code, so this is evidence rather than restatement.
+	 */
+	const SNAPSHOT: Array<[string, string, number, number[]]> = [
+		["latin", "The quick brown fox jumps over a lazy dog.", 9, [279, 300, 300, 279, 300, 461, 259, 461, 279]],
+		["cyrillic", "Съешь ещё этих мягких французских булок.", 6, [476, 443, 459, 492, 574, 476]],
+		["greek", "Ο γρήγορος καφέ αλεπού πηδάει.", 5, [504, 644, 564, 604, 604]],
+		["arabic", "نص حكيم له سر قاطع وذو شأن.", 7, [404, 435, 404, 404, 435, 419, 419]],
+	];
+	for (const [name, src, count, durations] of SNAPSHOT) {
+		const chunk = extractChunks(src, OPTS, undefined, `Notes/${name}.md`)[0]!;
+		const t = allocateWordTimings(chunk, 3000, 1);
+		check(`NRL-47 P5 ${name} span count unchanged`, t.length === count, `got ${t.length}`);
+		check(
+			`NRL-47 P5 ${name} durations unchanged`,
+			t.length === durations.length && t.every((w, i) => Math.round(w.durationMs) === durations[i]),
+			JSON.stringify(t.map((w) => Math.round(w.durationMs))),
+		);
+	}
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);

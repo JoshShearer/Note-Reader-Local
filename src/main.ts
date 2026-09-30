@@ -7,6 +7,7 @@ import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
 import { platformSegmenters } from "./text/segment";
 import { resolveStoredVoice } from "./audio/voiceChoice";
+import { clipWordSpans } from "./audio/words";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
 import {
 	KokoroEngine,
@@ -758,6 +759,11 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				sourceIndex: newSourceIndex,
 				sourceStart: newSourceStart,
 				sourceEnd: newSourceEnd,
+				// The spread would carry wordSpans through unchanged, still
+				// indexing the UNCLIPPED text, so every span past the clip
+				// point would be off by textStart and the highlight would land
+				// on the wrong characters (non-negotiable 8).
+				wordSpans: chunk.wordSpans && clipWordSpans(chunk.wordSpans, chunk.text, textStart, textEnd),
 			};
 		});
 
