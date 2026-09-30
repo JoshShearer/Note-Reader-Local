@@ -30,15 +30,15 @@ console.log("Worker inlining verification");
 	check("main.js exists and is readable", mainJs.length > 0);
 	check(
 		"main.js contains the KOKORO_WORKER_CODE variable",
-		mainJs.includes("var KOKORO_WORKER_CODE ="),
+		mainJs.includes("globalThis.KOKORO_WORKER_CODE ="),
 	);
 	check(
 		"base64 worker code is embedded",
-		mainJs.match(/var KOKORO_WORKER_CODE = "[A-Za-z0-9+/]+={0,2}";/) !== null,
+		mainJs.match(/globalThis\.KOKORO_WORKER_CODE = "[A-Za-z0-9+/]+={0,2}";/) !== null,
 	);
 
 	// Extract and verify the base64 code can be decoded
-	const match = mainJs.match(/var KOKORO_WORKER_CODE = "([A-Za-z0-9+/]+={0,2})";/);
+	const match = mainJs.match(/globalThis\.KOKORO_WORKER_CODE = "([A-Za-z0-9+/]+={0,2})";/);
 	if (match && match[1]) {
 		try {
 			const decoded = Buffer.from(match[1], "base64").toString("utf8");

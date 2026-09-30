@@ -31,6 +31,7 @@ bundle, the worker, or the esbuild config.
 ```bash
 npm run deploy         # build + copy into ~/Documents/Notes/.obsidian/plugins/
 npm run test:obsidian  # CDP smoke test; needs Obsidian on --remote-debugging-port=9222
+npm run test:inline-worker # 1 suite (nrl-15-inline-worker.test.ts): verifies main.js/ort/ after a production build; run separately, not part of npm test's bare-Node chain
 ```
 
 `tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running
