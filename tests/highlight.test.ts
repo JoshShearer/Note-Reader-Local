@@ -29,10 +29,11 @@ import {
 	clearSentenceHighlight,
 	clearWordHighlight,
 	highlightPlan,
+	nextScrollSuppression,
 	scrollTargetForChunk,
 	shouldHighlightLeaf,
 } from "../src/ui/highlight.ts";
-import type { HighlightToggles } from "../src/ui/highlight.ts";
+import type { HighlightLayers, HighlightToggles } from "../src/ui/highlight.ts";
 import {
 	SENTENCE_HIGHLIGHT_VAR,
 	WORD_HIGHLIGHT_VAR,
@@ -528,6 +529,12 @@ console.log("17. NRL-72 F1: the scroll is gated on a layer being drawn");
 	 * `scrollTargetForChunk` and `applyHighlightLayers` are all the real
 	 * symbols, and `word: null` at chunk time is main.ts's own value, not a
 	 * simplification - the word range is not known until the word event.
+	 *
+	 * `suppressed: false` is passed explicitly everywhere in this block
+	 * (NRL-90 added the parameter after this block was written): these checks
+	 * predate scroll suppression and must stay pinned to the unsuppressed
+	 * behaviour they already assert. Block 19 covers the `suppressed: true`
+	 * case this block deliberately does not touch.
 	 */
 	const chunk = { sourceStart: 18, sourceEnd: 37 };
 	const chunkDispatch = (toggles: HighlightToggles, hasWordTiming: boolean) => {
@@ -539,7 +546,7 @@ console.log("17. NRL-72 F1: the scroll is gated on a layer being drawn");
 				sentence: layers.sentence ? { from: chunk.sourceStart, to: chunk.sourceEnd } : null,
 				word: null,
 			},
-			scrollTargetForChunk(layers, chunk.sourceStart),
+			scrollTargetForChunk(layers, chunk.sourceStart, false),
 		);
 		return editor;
 	};
@@ -587,13 +594,13 @@ console.log("17. NRL-72 F1: the scroll is gated on a layer being drawn");
 		[{ sentence: false, word: true }, 18],
 		[{ sentence: true, word: true }, 18],
 	] as const;
-	const got = table.map(([layers]) => scrollTargetForChunk(layers, 18));
+	const got = table.map(([layers]) => scrollTargetForChunk(layers, 18, false));
 	const want = table.map(([, expected]) => expected);
 	check("17g NEW scrollTargetForChunk is null only when neither layer is drawn", JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got));
 
 	// Zero is a real offset: the first chunk of a note starts there, and a
 	// `!target` test would silently stop scrolling to the top of every note.
-	check("17h GUARD sourceStart 0 is returned, not treated as absent", scrollTargetForChunk({ sentence: true, word: false }, 0) === 0, `${scrollTargetForChunk({ sentence: true, word: false }, 0)}`);
+	check("17h GUARD sourceStart 0 is returned, not treated as absent", scrollTargetForChunk({ sentence: true, word: false }, 0, false) === 0, `${scrollTargetForChunk({ sentence: true, word: false }, 0, false)}`);
 }
 
 // --- NRL-89: a leaf-change must not decorate or scroll the wrong document --
@@ -624,6 +631,113 @@ console.log("18. NRL-89: a leaf only gets the playback highlight while its file 
 	check("no read ever started (readingFilePath empty) -> false even if in flight", shouldHighlightLeaf("Notes/A.md", "", true) === false);
 	check("neither in flight nor matching -> false", shouldHighlightLeaf("Notes/B.md", "Notes/A.md", false) === false);
 }
+
+// --- NRL-90: auto-scroll must not fight a manual scroll mid-read -----------
+
+console.log("19. NRL-90: scroll suppression after a manual scroll, until playback restarts");
+{
+	/*
+	 * DEFECT REPRODUCTION for `scrollTargetForChunk`.
+	 *
+	 * `oldScrollTargetForChunk` below is the function exactly as it existed
+	 * before this ticket - a verbatim transcription of the two-parameter
+	 * version, the same transcribe-old-vs-real-new technique the NRL-63/73/74
+	 * family uses, chosen because there is no base commit to check out inside
+	 * this test file and the point is to demonstrate the OLD shape had no way
+	 * to express "a manual scroll happened", not to diff two commits.
+	 *
+	 * It returns a non-null scroll target regardless of any prior manual
+	 * scroll, because the concept does not exist in its signature at all -
+	 * this IS acceptance criterion 5 from the ticket's own description made
+	 * concrete: "every chunk event scrolls unconditionally regardless of any
+	 * prior manual scroll". Confirmed by direct code reading before this
+	 * ticket touched the file (`src/ui/highlight.ts`, pre-NRL-90):
+	 *
+	 *   export function scrollTargetForChunk(layers: HighlightLayers, sourceStart: number): number | null {
+	 *       if (!layers.sentence && !layers.word) return null;
+	 *       return sourceStart;
+	 *   }
+	 *
+	 * and confirmed by `grep -rn "suppress\|WeakMap\|scrollDOM" src/ui/highlight.ts src/main.ts`
+	 * returning zero matches for any suppression mechanism anywhere in the
+	 * codebase before this ticket's changes.
+	 */
+	function oldScrollTargetForChunk(layers: HighlightLayers, sourceStart: number): number | null {
+		if (!layers.sentence && !layers.word) return null;
+		return sourceStart;
+	}
+	const layers: HighlightLayers = { sentence: true, word: false };
+	check(
+		"REPRO: the pre-NRL-90 function always scrolls, with no way to express a manual scroll happened",
+		oldScrollTargetForChunk(layers, 100) === 100,
+		`${oldScrollTargetForChunk(layers, 100)}`,
+	);
+
+	// The real (fixed) three-arg export. `suppressed: true` MUST return no
+	// scroll target - this is the check that fails before the fix, since
+	// `oldScrollTargetForChunk` above has no third parameter to pass it to at
+	// all and the real export did not accept one either until this ticket.
+	check(
+		"FIX: suppressed=true returns no scroll target even though a layer is drawn",
+		scrollTargetForChunk(layers, 100, true) === null,
+		`${scrollTargetForChunk(layers, 100, true)}`,
+	);
+	// GUARD: suppressed=false is byte-identical to the pre-fix behaviour above,
+	// so a caller that never suppresses sees no change at all.
+	check(
+		"GUARD: suppressed=false still scrolls exactly as before",
+		scrollTargetForChunk(layers, 100, false) === 100,
+		`${scrollTargetForChunk(layers, 100, false)}`,
+	);
+
+	/*
+	 * NEW CAPABILITY, pinned fail-safe (no prior function existed to fail):
+	 * `nextScrollSuppression`'s whole state machine. No failing-before count
+	 * is claimed for these four, consistent with how NRL-89's block 18 above
+	 * was labelled - this function did not exist before this ticket, so
+	 * there is nothing to reproduce.
+	 *
+	 * The four cases are the full 2x2 of (currently suppressed, user scroll
+	 * observed now): a fresh editor with no user scroll stays clear; a user
+	 * scroll observed while clear arms suppression; suppression already
+	 * armed with no new user scroll stays armed (it latches - there is no
+	 * "no scroll seen this tick" auto-clear); and the idempotent case of both
+	 * true. `resetScrollSuppression` is the only way out, and it is not a
+	 * `nextScrollSuppression` input at all - see the doc comment on the
+	 * function for why conflating "reset" with "no user scroll" would be a
+	 * different, wrong, policy.
+	 */
+	check("armed by programmatic scroll: not suppressed, no user scroll -> stays clear", nextScrollSuppression(false, false) === false);
+	check("a user scroll while clear -> suppression latches on", nextScrollSuppression(false, true) === true);
+	check("already suppressed, no new user scroll -> stays suppressed (latches, no auto-clear)", nextScrollSuppression(true, false) === true);
+	check("already suppressed, another user scroll -> stays suppressed (idempotent)", nextScrollSuppression(true, true) === true);
+}
+
+/*
+ * KNOWN GAP, stated honestly rather than left implicit: this block covers
+ * only the two PURE pieces of NRL-90 - `nextScrollSuppression`'s state
+ * transitions and `scrollTargetForChunk`'s new `suppressed` parameter. It
+ * does NOT cover, and CANNOT cover in this suite:
+ *
+ *   - `registerScrollSuppression`'s actual `scrollDOM.addEventListener("scroll", ...)`
+ *     wiring. This file never instantiates a real `EditorView` (ADR 0022
+ *     decision 3's own comment already says so, and it remains true), only
+ *     the `fakeEditor` object above, which has no `scrollDOM` at all.
+ *   - Whether the read-and-clear `expectingOwnScroll` heuristic correctly
+ *     identifies the plugin's OWN scroll versus a genuine user scroll in a
+ *     real browser. This is a best-effort heuristic with no automated
+ *     coverage of any kind here - see docs/adr/0027, which states plainly
+ *     that it has never been run against a real browser's actual
+ *     scroll-event timing (AGENTS.md rule 13: never assert an unmeasured
+ *     claim as fact).
+ *
+ * Both gaps require a real EditorView and a real DOM `scroll` event, neither
+ * of which bare Node can build. main.ts's three call-site edits
+ * (`registerScrollSuppression`/`resetScrollSuppression` at readActiveNote,
+ * readSelection and readFromCursor) also have no automated coverage: main.ts
+ * imports `obsidian` and cannot run in this suite, the same gap every prior
+ * highlight-wiring ticket (NRL-54, NRL-72, NRL-89) already carries.
+ */
 
 if (failures > 0) {
 	console.log(`\n${failures} failure(s)`);
