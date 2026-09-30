@@ -291,7 +291,7 @@ console.log("10. Defaults, missing keys and invalid values");
 
 /*
  * styles.css is the whole mechanism by which the two layers are tellable apart,
- * and nothing else in the 19 suites reads a byte of it. Without these checks
+ * and nothing else in the 20 suites reads a byte of it. Without these checks
  * someone "tidying" the two rules into one shared block reproduces the exact
  * defect this ticket exists to fix, with a fully green suite - which is how the
  * defect got here the first time.
