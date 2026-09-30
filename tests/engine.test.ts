@@ -191,7 +191,7 @@ console.log("speechd: failures are not silent (fake runner)");
  *
  * Every case here uses a fake ProcessRunner: none of them talks to the real
  * daemon. The point of the whole block is that every failure mode lands on
- * "unknown" rather than on a guessed `true`, because srs.md:663 forbids
+ * "unknown" rather than on a guessed `true`, because `srs.md` R-S01 forbids
  * claiming a voice is offline when the backend cannot determine it.
  */
 interface AttributionScript {
@@ -201,6 +201,17 @@ interface AttributionScript {
 	 * rather than exiting, which arrives alongside `code: 0` (cases I-L).
 	 */
 	modules?: string[] | { code: number; stdout: string; signal?: NodeJS.Signals | null };
+	/**
+	 * Reply to the CLOSING `-O` only, i.e. NRL-71's atomicity re-read. Same union
+	 * as `modules`.
+	 *
+	 * Left undefined, both `-O` calls answer with the same bytes, so every case
+	 * written before NRL-71 keeps its fixtures verbatim and becomes a free control
+	 * arm proving the re-read did not switch attribution off. That is why `modules`
+	 * was not turned into a consumed queue: a queue would have required every
+	 * existing case to grow a second entry.
+	 */
+	modulesAgain?: string[] | { code: number; stdout: string; signal?: NodeJS.Signals | null };
 	/**
 	 * `-o <module> -L` replies, per module. "throw" makes run() reject,
 	 * `delayMs` holds the reply back so the probe's own deadline can expire
@@ -217,10 +228,12 @@ interface AttributionScript {
 }
 function attributionRunner(script: AttributionScript) {
 	const scopedCalls: string[] = [];
+	let oCalls = 0;
 	const runner: ProcessRunner = {
 		async run(_cmd, args): Promise<RunResult> {
 			if (args[0] === "-O") {
-				const spec = script.modules ?? [];
+				oCalls += 1;
+				const spec = (oCalls > 1 ? script.modulesAgain : undefined) ?? script.modules ?? [];
 				if (Array.isArray(spec)) {
 					return {
 						code: 0,
@@ -265,7 +278,9 @@ function attributionRunner(script: AttributionScript) {
 			return "/usr/bin/spd-say";
 		},
 	};
-	return { runner, scopedCalls };
+	// oCount is a function, not a number: `oCalls` is captured by value at return
+	// time, so a plain property would read 0 in every assertion.
+	return { runner, scopedCalls, oCount: () => oCalls };
 }
 
 /** Build a `spd-say -L` listing from rows, column widths as spd-say prints them. */
@@ -459,7 +474,7 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	// that arrives after the deadline has lost that row. The ambiguity which
 	// should keep Afrikaans unknown disappears with it, and the voice would be
 	// reported local although a non-allowlisted module serves it - the claim
-	// srs.md:661 forbids. The same truncation makes two otherwise identical
+	// `srs.md` R-S01 forbids. The same truncation makes two otherwise identical
 	// listings differ, so it can also carry the differential gate on a build
 	// that ignores `-o` altogether.
 	const { runner } = attributionRunner({
@@ -585,6 +600,104 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	const voices = await new SpeechDispatcherEngine(runner).listVoices();
 	check("L: a signal on the allowlisted module's listing yields only unknown", voices.every((v) => v.local === "unknown"), JSON.stringify(voices.map((v) => String(v.local))));
 	check("L: and never local false", neverFalse(voices));
+}
+
+/**
+ * NRL-71: the probe is a sequence of separate `spd-say` runs, so the daemon's
+ * module set can change underneath it. Module ADDITION is the direction that can
+ * produce a wrong `local: true`, because a non-allowlisted module configured in
+ * after `-O` was read serves names the probe never sees it serving. So `-O` is
+ * run again at the end and the parsed module set must be unchanged.
+ *
+ * The cases below are the divergence arms. The control arms come for free from
+ * the cases above that attribute today and set no `modulesAgain`, so each now
+ * answers both `-O` calls with the same bytes: A, B, F, G (including its
+ * `scopedCalls.length === 2` memo assertion and its two-concurrent-listVoices
+ * assertion) and K. C, D, D2, D3, E, E2, H, I, J and L give up before the
+ * closing `-O` is ever reached, so they are unaffected by construction rather
+ * than by assertion; a reviewer should not expect them to move.
+ */
+{
+	// M1. A module appears between the two `-O` calls. Only the first `-O`'s two
+	// modules are ever queried, so festival deliberately gets no `lists` entry:
+	// an unscripted module throws, which would make the case pass for the wrong
+	// reason. Pre-NRL-71 this fixture attributes (Afrikaans === true).
+	const { runner, oCount } = attributionRunner({
+		modules: ["espeak-ng", "openjtalk"],
+		modulesAgain: THREE_MODULES,
+		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
+		bare: THREE_MODULE_BARE,
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check(
+		"M1: a module set that changed under the probe attributes nothing",
+		voices.length === 4 && voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("M1: nothing reports local false", neverFalse(voices));
+	check("M1: the closing -O really ran", oCount() === 2, `${oCount()}`);
+}
+{
+	// M2. The same set in reversed order. The daemon is not promised a stable
+	// module order, so this is the case that pins "compare the parsed set, not the
+	// stdout bytes": a byte comparison gives up here and costs every voice its
+	// attribution for nothing.
+	const { runner, oCount } = attributionRunner({
+		modules: ["espeak-ng", "openjtalk"],
+		modulesAgain: ["openjtalk", "espeak-ng"],
+		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
+		bare: spdList([...ESPEAK_ROWS, ["Default", "ja", "none"], ["Ghost", "xx", "none"]]),
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check("M2: a reordered module set still attributes", localOf(voices, "Afrikaans") === true, `${localOf(voices, "Afrikaans")}`);
+	check("M2: and the other module's voice too", localOf(voices, "Default") === true, `${localOf(voices, "Default")}`);
+	check("M2: nothing reports local false", neverFalse(voices));
+	check("M2: the closing -O really ran", oCount() === 2, `${oCount()}`);
+}
+{
+	// M3. The closing `-O` is signal-terminated while reporting the same module
+	// set, so only the signal check can catch it. Without this case the closing
+	// run's `RunResult.signal` check is only established by reading the code.
+	const { runner } = attributionRunner({
+		modules: ["espeak-ng", "openjtalk"],
+		modulesAgain: {
+			code: 0,
+			stdout: ["OUTPUT MODULES", "espeak-ng", "openjtalk", ""].join("\n"),
+			signal: "SIGTERM",
+		},
+		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
+		bare: spdList([...ESPEAK_ROWS, ["Default", "ja", "none"]]),
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check(
+		"M3: a signal-terminated closing -O attributes nothing",
+		voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("M3: nothing reports local false", neverFalse(voices));
+}
+{
+	// M4. The closing `-O` exits non-zero while reporting the SAME module set, so
+	// only the exit-code check can catch it. The set has to match for this case to
+	// mean anything: with an empty or truncated stdout the set comparison catches
+	// it instead, M1 already pins that comparison, and deleting the `code !== 0`
+	// clause then leaves the whole suite green. Mutation-checked both ways.
+	const { runner } = attributionRunner({
+		modules: ["espeak-ng", "openjtalk"],
+		modulesAgain: {
+			code: 1,
+			stdout: ["OUTPUT MODULES", "espeak-ng", "openjtalk", ""].join("\n"),
+		},
+		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
+		bare: spdList([...ESPEAK_ROWS, ["Default", "ja", "none"]]),
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check(
+		"M4: a non-zero closing -O attributes nothing",
+		voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("M4: nothing reports local false", neverFalse(voices));
 }
 {
 	// In -e mode spd-say runs any line starting "!-!" as a raw SSIP command
