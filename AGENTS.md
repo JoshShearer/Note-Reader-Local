@@ -1020,6 +1020,32 @@ rediscover them:
   to re-read: the `%%` half is now a helper call and the `<!--` half is still the bare
   `obsidianComment` gate, which isolates the two predicates and should make NRL-74 easier rather
   than harder.
+- R-C02's Context table named three gaps: three of five install-time fields missing (language,
+  installed size, license), and no remove action at all, so up to 573 MB across three Kokoro
+  builds plus the ~31 MB ORT runtime could accumulate in a directory deliberately hidden from
+  the vault's file tree. NRL-33 (PR #112, `cf9f7fe`) addresses all of it in `settingsTab.ts`,
+  `modelStore.ts` and `kokoro.ts`: `KOKORO_MODEL_METADATA` and `VOICE_FILE_SIZE_BYTES` are
+  measured off this session's own `node_modules` rather than guessed, `getInstalledSizeMb` and
+  `getTotalUsage` are always a real `adapter.stat()` rather than the download-size table so a
+  resumed or hand-edited file cannot silently lie, and `removeModelBuild` falls the engine back
+  to `"auto"` with a notice when removing the build behind a literal Kokoro pin would otherwise
+  leave `resolveSelection`'s one-element candidate list with nothing to select (owner Decision
+  3). Language coverage is deliberately `English (US, UK)` with no download-other-languages
+  control - `kokoro-js@1.2.1` freezes its voice map at 28 English voices, its phonemizer at
+  en-us/en, and its bundled espeak-ng WASM throws on any other language code, so a button that
+  looked like it worked would fetch, write, report success, and fail at play time - which is a
+  scoping decision recorded on the issue, not a gap left open.
+  **R-C02 is NOT recorded as met, and should not be until someone says otherwise with evidence
+  named.** All of the above is bare-Node: `tests/kokoro.test.ts` and `tests/modelStore.test.ts`
+  only, no deploy and no CDP session. Rule 11 applies at full force here because the change is
+  entirely new `settingsTab.ts` UI surface - a model card, a measured installed-size read, a
+  remove button, a confirmation flow, an engine-fallback notice - and `settingsTab.ts` imports
+  `obsidian` and cannot run in the bare-Node suite at all, exactly as NRL-54's highlight settings
+  rows could not. Nobody has opened Obsidian's settings tab and seen the five fields render, or
+  the license text, or pressed the remove button and watched a real 522 KB or larger file
+  disappear from `.obsidian/local-tts/kokoro`, or confirmed the fallback notice fires when the
+  pinned engine's only build is removed. Move R-C02 to met only after that observation happens
+  in a real Obsidian, and name what was seen.
 
 ## Style
 
