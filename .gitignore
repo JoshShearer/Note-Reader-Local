@@ -28,11 +28,12 @@ data.json
 .DS_Store
 
 # Agent pipeline state (machine-local, never committed)
-# Main repo and worktree lanes use separate state files for isolation
-.claude/pipeline-state.json
-.claude/pipeline-state-local.json
+# One stamped file per /run-tickets run, so parallel runs never share a record
+.claude/pipeline-state*.json
 .claude/last-critique.md
 .claude/scratch/
-# Run and deploy locks: per-working-tree, taken atomically with mkdir
-.claude/pipeline.lock/
+# Deploy slot lock: one shared vault folder, taken atomically with mkdir
 .claude/deploy.lock/
+# Legacy: the repo-wide run lock, removed when runs became parallel. Kept so a
+# lock left by an older in-flight run does not show up as untracked.
+.claude/pipeline.lock/

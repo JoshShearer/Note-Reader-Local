@@ -17,7 +17,8 @@ never create a worktree here for a gnhf run. A sibling directory that does not m
 per run and removes it itself at the end, so list it as `run lane` with its branch and whether it is
 dirty, and **refuse to remove it**: if a run is live, removing its checkout destroys the tickets in
 flight, and if the lane outlived its run, it is on disk precisely because cleanup found unpushed
-commits or a dirty tree there. Point at `$PRIMARY/.claude/pipeline-state.json`, whose `worktree` field
+commits or a dirty tree there. Point at the `$PRIMARY/.claude/pipeline-state.<stamp>.json` whose stamp
+matches the lane's, and whose `worktree` field
 names the lane and whose ticket entries say why it was kept. Never take the deploy slot from a live
 run lane without saying so: `/run-tickets` Phase 7 deploys merged `main` from it.
 
@@ -350,7 +351,7 @@ printf '%s\nbranch=%s commit=%s at=%s\n' \
 ## Mode: Remove
 
 0. **Refuse a `note-reader-local-run-*` lane.** It belongs to `/run-tickets`. Say so, read
-   `$PRIMARY/.claude/pipeline-state.json` for the ticket that kept it and its `blockedReason`, and
+   the matching `$PRIMARY/.claude/pipeline-state.<stamp>.json` for the ticket that kept it and its `blockedReason`, and
    print the lane's unpushed commits. If the owner still wants it gone, they run the discard command
    `/run-tickets` Step 8 printed; this command does not do it for them.
 
@@ -402,7 +403,7 @@ that exists nowhere else, which is why there is no symlink caveat here.
 | Linear tool absent | Do the git work, print what you would have asked Linear |
 | `gh` not authenticated | Skip the PR lookup, say it was skipped |
 | Inside the worktree being removed | Tell the user to exit; do not force |
-| A sibling matching `note-reader-local-run-*` | List as `run lane`, touch nothing. It belongs to `/run-tickets`, which creates and removes its own. Refuse `remove`; read `$PRIMARY/.claude/pipeline-state.json` to say why it is still there |
+| A sibling matching `note-reader-local-run-*` | List as `run lane`, touch nothing. It belongs to `/run-tickets`, which creates and removes its own. Refuse `remove`; read the `$PRIMARY/.claude/pipeline-state.<stamp>.json` with the matching stamp to say why it is still there |
 | A sibling directory matching neither pattern | List as unmanaged, touch nothing. It may belong to treehouse |
 
 Every worktree branch still passes `/critique` and `/check-constraints` through `/ship` before
