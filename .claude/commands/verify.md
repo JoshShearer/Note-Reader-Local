@@ -86,9 +86,12 @@ until you run `npm ci`. Check before trusting a pass.
 npm test
 ```
 
-Seven suites run in sequence: `extract`, `engine`, `player`, `paths`, `kokoro`, `settings`, `highlightColour`. The `test`
-script chains them with `&&`, so the first failure stops the rest. If `extract` fails you
-have learned nothing about the other six. Say that rather than reporting them as passing.
+Every registered suite runs, serially, and every one of them is reported. The `test` script is
+no longer an `&&` chain, so an early failure no longer hides the suites after it: read the
+runner's per-suite `ok` / `FAIL` / `CRASH` table, its aggregate check counts, and on a failure
+the `FAILING SUITES:` line it prints last. Report what that table says rather than a count of
+your own. `AGENTS.md`'s quality-gates block is the one place the suite list lives; do not copy
+it here.
 
 `tests/engine.test.ts` shells out to real `espeak-ng` and `spd-say` on this machine. It is
 a Linux desktop test. A failure there can mean a missing or misconfigured binary rather than
@@ -200,7 +203,7 @@ Verification for NRL-12
 =======================
 
 Gates
-  npm test         7/7 suites (extract, engine, player, paths, kokoro, settings, highlightColour)
+  npm test         <the runner's "N suites: ... checks ok ..." line, verbatim, and any FAILING SUITES: line>
   npm run typecheck clean
   npm run build    ran / not needed
   main.js requires obsidian, @codemirror/view, @codemirror/state

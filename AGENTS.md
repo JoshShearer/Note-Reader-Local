@@ -1565,19 +1565,22 @@ rediscover them:
   `/run-tickets` run, every time on a **clean** merge, because two lanes bumping the number from
   their own bases touch either different files or different lines of one file and git has
   nothing to conflict on.
-  **One live trap, and it is armed for NRL-80.** Checks 5 and 6 compare the `test` script
-  against the registry, and a `test` naming **no** `tests/.build/*.test.mjs` path prints two
-  counted SKIPs rather than failing, deliberately, so NRL-80's runner rewrite cannot turn this
-  red for no defect. The SKIP is loud rather than silent - it is counted separately, and it
-  suppresses the bare `all suite registry tests passed` line that a reader would grep for - but
-  what is lost is real: once `test` names no suite path, **nothing ties the registry to
-  execution**. Measured at its sharpest against the shipped file rebuilt at `558bd40`, run over
-  a copied tree: with `"test": "true"`, running zero suites, it prints `2 SKIPPED` and
-  `all suite registry tests passed (2 skipped)` and **exits 0**. Naming some but not all stays a
-  hard failure, measured on the same tree by dropping one entry from the real chain:
-  `1 FAILURE(S)`, exit 1, naming the missing suite. So the degradation is the all-or-nothing
-  case specifically, and whoever lands NRL-80 should replace that tie rather than read the SKIP
-  as harmless.
+  **The SKIP trap this paragraph used to describe is gone: NRL-80 replaced the tie rather than
+  leaving it, which is what NRL-85 asked whoever landed it to do.** Read the history only as
+  history. Checks 5 and 6 no longer parse the `test` script for suite paths - it holds none, so
+  looking for them could only ever have reached that SKIP. They import the runner's own pure
+  `suitePathsFromPretest` and assert what matters now: that the runner derives the same suites
+  as `pretest`, in the same order, with no duplicate and every derived path shaped
+  `tests/.build/<name>.test.mjs`, plus a check 5''' that `scripts.test` invokes
+  `run-tests.mjs` at all. That last one is a **named failure and not a skip**. Measured on this
+  tree: `suiteRegistry` reports 34 ok and **0 skipped**, nothing in the file skips today, and
+  its `skip()` helper survives only behind a `void skip;` so a future conditional check has one
+  ready.
+  **One honest limit survives, unchanged from the chain and not widened by the rewrite.** A
+  `test` replaced by a command that never invokes the runner at all still cannot be caught from
+  in here, because this file runs inside the run that command would not start. Layer 2, the
+  runner's own planned-versus-produced reconciliation, is the other half of the tie and is
+  likewise inside it.
   Three residual holes, all inside that one file. A **trailing comma** in this file's name list
   passes silently, because the splitter filters empty entries (measured: exit 0 with a comma
   appended to `suiteRegistry`); that one is cosmetic, since no wrong count and no wrong name can
