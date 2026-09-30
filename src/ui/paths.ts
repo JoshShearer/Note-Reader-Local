@@ -48,7 +48,7 @@ export interface ModelStorePaths {
 	workerPath: string;
 	/**
 	 * Vault path of one onnxruntime file, in a model directory written by a
-	 * build that predates ADR 0026.
+	 * build that predates ADR 0028.
 	 *
 	 * The runtime is bundled inside main.js now and nothing reads this, but an
 	 * upgrading install can still have real `ort/` files on disk, and
@@ -68,7 +68,7 @@ export interface ModelStorePaths {
  * once lived there too (NRL-37) and no longer does: it is bundled inside
  * main.js, because a runtime fetched from a release URL is executable
  * dependency management, which the community-plugin policies prohibit
- * (ADR 0026). See `ortFile` above for why the path survives anyway.
+ * (ADR 0028). See `ortFile` above for why the path survives anyway.
  */
 export function modelStorePaths(manifestDir: string, modelDir: string): ModelStorePaths {
 	const pluginRoot = pluginVaultPath(manifestDir);

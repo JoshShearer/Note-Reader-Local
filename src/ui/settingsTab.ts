@@ -450,7 +450,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			this.app.vault.adapter,
 			this.plugin.settings.kokoroModelPath,
 			// The full list, not an empty array. The runtime is bundled now
-			// (ADR 0026), so on a fresh install every one of these stats is 0 -
+			// (ADR 0028), so on a fresh install every one of these stats is 0 -
 			// but an install upgrading from the on-demand layout still has that
 			// ort/ directory on disk, and passing [] would quietly drop 31 MB
 			// from the figure this row is promising to be honest about.
@@ -523,7 +523,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	/**
 	 * The ONNX runtime is part of the plugin, not something the user installs.
 	 *
-	 * ADR 0026 supersedes ADR 0024's distribution decision: Obsidian's
+	 * ADR 0028 supersedes ADR 0024's distribution decision: Obsidian's
 	 * community-plugin policies prohibit installing or updating dependencies,
 	 * and a runtime fetched from a release URL is executable dependency
 	 * management however well it is verified. The runtime therefore travels

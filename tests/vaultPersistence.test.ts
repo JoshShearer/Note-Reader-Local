@@ -594,6 +594,316 @@ console.log("T6 a failed write is reported once and does not wedge the queue (PO
 }
 
 // =====================================================================
+console.log("T7 a write that fails, with no further real save: it is retried and eventually succeeds (NRL-91)");
+// =====================================================================
+{
+	/*
+	 * RED pre-fix, confirmed against the unmodified SaveQueue before this class
+	 * gained retry logic (see NRL-91 implementationSummary for the exact counts
+	 * observed). `finish()`'s failure branch called `onError` on every single
+	 * rejection and then `pump()` unconditionally; `pump()` found `pending ===
+	 * null` (nothing new was enqueued) and simply resolved drain waiters - no
+	 * second `write` call ever happened, whatever options were passed, because
+	 * `SaveQueueOptions` had no `getCurrentPayload` field for a retry to read.
+	 */
+	const clock = new FakeClock();
+	const calls: PluginData[] = [];
+	const attemptFailures: number[] = [];
+	const errors: unknown[] = [];
+	let failNext = true;
+	// A DIFFERENT identity than staleRejected, so `===` proves a retry reads
+	// live truth rather than replaying the object that was rejected.
+	const staleRejected: PluginData = { version: 2, settings: { ...DEFAULT_SETTINGS }, positions: {} };
+	const freshSentinel: PluginData = {
+		version: 2,
+		settings: { ...DEFAULT_SETTINGS },
+		positions: { "fresh.md": pos("fresh.md", 9) },
+	};
+
+	const queue = new SaveQueue({
+		write: async (payload) => {
+			calls.push(payload);
+			if (failNext) {
+				failNext = false;
+				throw new Error("transient disk error");
+			}
+		},
+		getCurrentPayload: () => freshSentinel,
+		onAttemptFailed: (_err, attempt) => attemptFailures.push(attempt),
+		onError: (err) => errors.push(err),
+		timers: clock.timers,
+	});
+
+	let rejected = false;
+	const first = queue.enqueue(staleRejected).catch(() => {
+		rejected = true;
+	});
+	await tick();
+	await first;
+
+	check(
+		"T7 the first write call carried the originally-enqueued payload",
+		calls.length === 1 && calls[0] === staleRejected,
+		`calls=${calls.length}`,
+	);
+	check("T7 the original enqueue() rejected (unchanged promise semantics)", rejected, "did not reject");
+	check(
+		"T7 onAttemptFailed fired once, for attempt 1",
+		attemptFailures.length === 1 && attemptFailures[0] === 1,
+		JSON.stringify(attemptFailures),
+	);
+	check("T7 onError (exhaustion) has not fired: nothing is exhausted yet", errors.length === 0, `errors=${errors.length}`);
+	check(
+		"T7 a retry timer is armed instead of the queue going idle",
+		clock.pending() === 1 && !queue.idle(),
+		`armed=${clock.pending()}`,
+	);
+
+	// No further real save happens anywhere: advance the clock through the
+	// backoff and let the retry itself run.
+	clock.fire();
+	await tick();
+
+	check("T7 a second write call happened (the retry)", calls.length === 2, `calls=${calls.length}`);
+	check(
+		"T7 the retry read getCurrentPayload() fresh, not the stale rejected payload",
+		calls[1] === freshSentinel,
+		calls[1] === staleRejected ? "replayed the stale rejected payload" : "unexpected payload identity",
+	);
+	check("T7 the retry succeeded and the queue returned to idle", queue.idle(), "queue not idle");
+	check(
+		"T7 onError never fired: the retry recovered before exhausting the budget",
+		errors.length === 0,
+		`errors=${errors.length}`,
+	);
+}
+
+// =====================================================================
+console.log("T8 a write that exhausts every retry: onError fires exactly once, not once per attempt (NRL-91)");
+// =====================================================================
+{
+	/*
+	 * RED pre-fix: with no retry mechanism at all, `write` is called exactly
+	 * once and `onError` fires once for that one failure - which happens to
+	 * equal the post-fix exhaustion count by coincidence of arithmetic, not
+	 * because the behaviour exists. The calls-per-episode and attempt-number
+	 * checks below are what actually distinguish "no retry" from "capped
+	 * retry, reported once": pre-fix `calls.length` stays at 1 forever.
+	 */
+	const clock = new FakeClock();
+	const calls: PluginData[] = [];
+	const attemptFailures: number[] = [];
+	const errors: unknown[] = [];
+	const alwaysFails: PluginData = { version: 2, settings: { ...DEFAULT_SETTINGS }, positions: {} };
+	const liveTruth: PluginData = {
+		version: 2,
+		settings: { ...DEFAULT_SETTINGS },
+		positions: { "live.md": pos("live.md", 1) },
+	};
+
+	const queue = new SaveQueue({
+		write: async (payload) => {
+			calls.push(payload);
+			throw new Error("disk stays full");
+		},
+		getCurrentPayload: () => liveTruth,
+		onAttemptFailed: (_err, attempt) => attemptFailures.push(attempt),
+		onError: (err) => errors.push(err),
+		timers: clock.timers,
+	});
+
+	await queue.enqueue(alwaysFails).catch(() => {});
+	// DEFAULT_MAX_RETRIES retries follow the first failed attempt, so firing
+	// the clock this many times drains the whole budget.
+	for (let i = 0; i < 3; i++) {
+		check(`T8 a retry is armed before advancing attempt ${i + 2}`, clock.pending() === 1, `armed=${clock.pending()}`);
+		clock.fire();
+		await tick();
+	}
+
+	check("T8 write was called 1 + DEFAULT_MAX_RETRIES(3) = 4 times total", calls.length === 4, `calls=${calls.length}`);
+	check("T8 onAttemptFailed fired once per failed attempt (4, not 1)", attemptFailures.length === 4, JSON.stringify(attemptFailures));
+	check(
+		"T8 the attempt numbers are 1,2,3,4 in order",
+		attemptFailures.join(",") === "1,2,3,4",
+		attemptFailures.join(","),
+	);
+	check("T8 onError fired exactly once, not once per exhausted attempt", errors.length === 1, `errors=${errors.length}`);
+	check("T8 no retry timer is left armed after exhaustion", clock.pending() === 0, `armed=${clock.pending()}`);
+	check("T8 the queue is idle and not permanently wedged", queue.idle(), "queue not idle");
+
+	// Capped PER FAILURE-EPISODE, not for the queue's whole lifetime: a fresh
+	// enqueue after exhaustion starts a new retry budget from zero rather than
+	// being stuck at "already exhausted" forever.
+	calls.length = 0;
+	attemptFailures.length = 0;
+	await queue.enqueue(alwaysFails).catch(() => {});
+	for (let i = 0; i < 3; i++) {
+		clock.fire();
+		await tick();
+	}
+	check(
+		"T8 a fresh episode gets its own full retry budget (4 calls again)",
+		calls.length === 4,
+		`calls=${calls.length}`,
+	);
+	check(
+		"T8 a fresh episode's onError fires once more (2 episodes, 2 notices)",
+		errors.length === 2,
+		`errors=${errors.length}`,
+	);
+}
+
+// =====================================================================
+console.log("T9 a write that fails, then one real save lands before the backoff elapses: the later save wins (NRL-91)");
+// =====================================================================
+{
+	/*
+	 * This is the critical invariant NRL-58 was written to protect, verified
+	 * explicitly against the NEW retry machinery: the queue must never let an
+	 * older snapshot land after a newer one. A naive retry that replayed the
+	 * ORIGINAL rejected payload on a timer, racing a real save that happened
+	 * in between, would resurrect stale state behind the newer one - exactly
+	 * the class of defect NRL-58 closed. This proves the real save wins
+	 * outright: the armed retry is CANCELLED, not merely outrun.
+	 *
+	 * RED pre-fix on its first check alone: there is no retry timer to be
+	 * armed at all, so "a retry timer is armed from the failure" fails before
+	 * the rest of the scenario's precondition even holds.
+	 */
+	const clock = new FakeClock();
+	const calls: PluginData[] = [];
+	let failNext = true;
+	const staleRejected: PluginData = {
+		version: 2,
+		settings: { ...DEFAULT_SETTINGS },
+		positions: { stale: pos("stale.md", 0) },
+	};
+	const wouldBeRetryPayload: PluginData = {
+		version: 2,
+		settings: { ...DEFAULT_SETTINGS },
+		positions: { retry: pos("retry.md", 0) },
+	};
+	const freshReal: PluginData = {
+		version: 2,
+		settings: { ...DEFAULT_SETTINGS },
+		positions: { "real.md": pos("real.md", 5) },
+	};
+
+	const queue = new SaveQueue({
+		write: async (payload) => {
+			calls.push(payload);
+			if (failNext) {
+				failNext = false;
+				throw new Error("transient disk error");
+			}
+		},
+		getCurrentPayload: () => wouldBeRetryPayload,
+		timers: clock.timers,
+	});
+
+	await queue.enqueue(staleRejected).catch(() => {});
+	check("T9 a retry timer is armed from the failure", clock.pending() === 1, `armed=${clock.pending()}`);
+
+	// A real save (e.g. a rate nudge) lands inside the backoff window, BEFORE
+	// the clock advances at all.
+	await queue.enqueue(freshReal);
+
+	check("T9 the armed retry was cancelled, not merely outrun", clock.pending() === 0, `armed=${clock.pending()}`);
+	check(
+		"T9 the real save's payload was written, not the synthetic retry payload",
+		calls.length === 2 && calls[1] === freshReal,
+		JSON.stringify(calls.map((c) => Object.keys(c.positions))),
+	);
+	check(
+		"T9 the would-be retry payload was never written at all (no resurrection of stale state)",
+		!calls.includes(wouldBeRetryPayload),
+		"the retry payload reached write",
+	);
+	check("T9 the queue is idle: nothing left armed behind the winning save", queue.idle(), "queue not idle");
+}
+
+// =====================================================================
+console.log("T10 dispose() during an in-flight write does not throw; the documented bound is exactly what it claims (NRL-91)");
+// =====================================================================
+{
+	/*
+	 * Mirrors main.ts's onunload(): synchronous, cannot await, calls
+	 * SaveQueue.dispose() defensively. Two parts, matching docs/adr/0026:
+	 * dispose() closes the armed-retry-timer leak and nothing else - an
+	 * in-flight write (or a payload already queued behind it) is left exactly
+	 * as it is, because Obsidian gives onunload no async hook to wait for one.
+	 *
+	 * RED pre-fix: `dispose` does not exist on SaveQueue at all today, so
+	 * every one of the three sub-cases below throws a TypeError, caught and
+	 * recorded rather than crashing the suite. This is new-capability pinned
+	 * fail-safe, not a reproduced defect - there is no prior dispose() to
+	 * regress from, matching NRL-89's own precedent for shouldHighlightLeaf.
+	 */
+
+	// (a) an in-flight write that never resolves. dispose() must not throw,
+	// must not touch it, and the write stays exactly as it was.
+	// An object holder, not a bare `let`, so a nested-closure assignment does
+	// not run into TypeScript's CFA narrowing a `let T | null = null` variable
+	// to `never` at a later top-level read (a known tsc quirk, reproduced and
+	// worked around rather than fought).
+	const settle: { write: (() => void) | null } = { write: null };
+	const inFlight = new SaveQueue({
+		write: () =>
+			new Promise<void>((resolve) => {
+				settle.write = () => resolve();
+			}),
+	});
+	const p = inFlight.enqueue({ version: 2, settings: { ...DEFAULT_SETTINGS }, positions: {} });
+	await tick();
+
+	let threwA = false;
+	try {
+		inFlight.dispose();
+	} catch {
+		threwA = true;
+	}
+	check("T10a dispose() does not throw while a write is in flight", !threwA, "threw");
+	check("T10a the in-flight write is untouched: the queue is still not idle", !inFlight.idle(), "queue went idle");
+	// Clean up: settle it so the process does not hang on an unresolved write.
+	settle.write?.();
+	await p;
+
+	// (b) a failed write with an armed retry timer, not yet fired. dispose()
+	// must clear specifically that timer.
+	const clock = new FakeClock();
+	const armed = new SaveQueue({
+		write: async () => {
+			throw new Error("disk full");
+		},
+		getCurrentPayload: () => ({ version: 2, settings: { ...DEFAULT_SETTINGS }, positions: {} }) as PluginData,
+		timers: clock.timers,
+	});
+	await armed.enqueue({ version: 2, settings: { ...DEFAULT_SETTINGS }, positions: {} }).catch(() => {});
+	check("T10b a retry timer is armed before dispose()", clock.pending() === 1, `armed=${clock.pending()}`);
+
+	let threwB = false;
+	try {
+		armed.dispose();
+	} catch {
+		threwB = true;
+	}
+	check("T10b dispose() does not throw while a retry is armed", !threwB, "threw");
+	check("T10b dispose() cleared the armed retry timer", clock.pending() === 0, `armed=${clock.pending()}`);
+	check("T10b the queue reports idle once the timer is cleared", armed.idle(), "queue not idle");
+
+	// (c) dispose() is safe to call with nothing armed and nothing running -
+	// the common case, and the no-op path must not throw either.
+	let threwC = false;
+	try {
+		new SaveQueue({ write: async () => {} }).dispose();
+	} catch {
+		threwC = true;
+	}
+	check("T10c dispose() is a safe no-op with nothing armed", !threwC, "threw");
+}
+
+// =====================================================================
 console.log("G1 guard: a sibling folder is not swept and not stopped");
 // =====================================================================
 {

@@ -143,7 +143,13 @@ This paragraph's conclusion is unchanged and `opensMathBlock` is untouched;
 `bracketClosesLater`'s body was proven byte-identical to base modulo the threaded
 argument. NRL-74 also changed `interruptsParagraph`'s answer set, so whichever of
 NRL-74 and NRL-88 merges second must re-measure the five roots below. See ADR
-0025.) And this was found by the
+0025. NRL-88 merged second and DID re-measure: root 4 had not moved, traced
+rather than assumed - its shapes carry no `%%` and no `<!--` on either the opener
+or the stray line, so the narrowing never fires inside them, and NRL-74's
+unmasking landed on root 1. `opensMathBlock` is still untouched and
+`interruptsParagraph`, `codeSpanClosesLater`, `opensHiddenComment` and
+`inlineContainerClose` were all proven byte-identical by hashing their bodies out
+of both trees.) And this was found by the
 adversarial review of this branch rather than by the fixtures, which is why the
 guard is pinned by its own check with the invariant that actually applies: the
 table's fixture harness asserts `src[sourceIndex[i]] === text[i]`, and the
@@ -165,7 +171,10 @@ either, and `AGENTS.md` already tracks the same family under
 R-M09 is **not** recorded as met. Two image shapes `AGENTS.md` already names
 stay open (`![a [[N|l]] b](dest.png)` and `![alt](dest(1).png)` speaking
 `.png)`), and clauses 6 and 7 above add named residuals of their own. The MUST
-audit headline count does not move.
+audit headline count does not move. **Still true after NRL-88 closed root 4**:
+roots 1, 2, 3 and 5 remain, root 4 leaves two named residual shapes of its own,
+and those two pre-existing image shapes are untouched. The `2 of 16` count does
+not move.
 
 All evidence below is bare-Node measurement, taken in this session from the
 session scratchpad, bundling the real `src/text/extract.ts` with the repo's own
@@ -215,16 +224,38 @@ matrix-dependent and is not comparable to the 36-shape figure above):
    Measured on seven such lines - `[bracket]` prose, `[^1]`, `[[wk]]`, `[x]`, a
    link reference definition, `![[embed]]` and a bare `]` - each leaking 512 of
    512 where the same shape without the stray bracket leaks 0 of 512, so 3,584
-   cells;
+   cells. **CLOSED as of NRL-88, and this count was wrong by half**: 3,584 counts
+   the **image** form only, and the link twin is another 3,584 through the same
+   two sites, so root 4's real size on a corpus counting both kinds is **7,168**,
+   plus more for shapes the seven lines do not cover. Two named shapes remain and
+   are deliberate, not leftovers of the same root. See **ADR 0027**, which owns
+   the mechanism, the residuals and the three measured-wrong alternatives;
 5. clause 6 and 7's precedence rules, 1,024 of 1,024.
 
-Root 4 is the one worth carrying forward, because it is not a container problem
+Root 4 was the one worth carrying forward, because it is not a container problem
 at all and no amount of teaching the lookahead about container prefixes would
-reach it. All five are destination-only, fail-closed and prose-safe: an aborted
-confirmation leaves the line exactly as the pre-NRL-63 tree had it. A **setext** heading is
+reach it. That is what ADR 0027 closed. **Four remain** - 1, 2, 3 and 5 above,
+renumbered nowhere so the original numbering in `AGENTS.md` and in NRL-88's own
+ticket still resolves - and all of them, open or closed, are destination-only,
+fail-closed and prose-safe: an aborted confirmation leaves the line exactly as
+the pre-NRL-63 tree had it. Roots 1 and 2 are deferred rather than attempted and
+are tracked as **NRL-98**,
+because fixing them means widening `interruptsParagraph`, which is shared with
+`codeSpanClosesLater` and which NRL-73 and NRL-74 had just narrowed; root 3 is
+left because clause 7a's `opensMathBlock` stop exists to fix a real prose-loss
+defect and removing it trades prose for a destination, which ADR 0007 clause 6
+refuses; root 5 is clause 6's own recorded precedence rule.
+
+A **setext** heading is
 the one member that is in fact carried, so clause 2's "not carried inside a
 heading" is true of the ATX form only; that direction silences the destination and
-is safe.
+is safe. **Narrower than it reads, measured at NRL-88**: what is carried is a
+setext underline sitting *after* the label has already closed
+(`A ![alt` / `words](d.png) B` / `===`, 0 of 1,024 cells leaking on both sides).
+An underline *between* opener and closer is `SETEXT.test` and therefore
+`interruptsParagraph`, so it is root 2 and it leaks on both sides (1,024 of
+1,024). The ATX form leaks 1,024 of 1,024 on both sides and is correct, an ATX
+heading being a single line that cannot soft-wrap.
 
 **Prose loss**, the direction that bites. 18 sources built around labels that
 never close, labels closed only by a shortcut `]`, unbalanced brackets in

@@ -171,7 +171,7 @@ you took the shared deploy slot.
 - ...
 
 ## Gates before you commit
-npm test           # 7 suites: extract, engine, player, paths, kokoro, settings, highlightColour
+npm test           # every registered suite; AGENTS.md's quality-gates block names them
 npm run typecheck
 npm run build      # only if the bundle, worker or esbuild config moved
 

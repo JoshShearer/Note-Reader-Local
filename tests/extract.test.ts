@@ -1387,6 +1387,87 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// and its unmatched `<!--` goes on truncating locally. srs.md's
 		// non-nesting bullet requires that; the symmetric form breaks it.
 		["guard-nrl74-recursive-label-stays-local", "[label <!--hidden](target) after.\nVisible.", "label after. Visible."],
+		// NRL-88 ROOT 4 (ADR 0023's residual-roots section, R-M09). A line
+		// between a soft-wrapped label's opener and its closer that carries a
+		// bracket of its own used to abort the confirmation, because
+		// bracketClosesLater stopped at the FIRST `]` on the first line that had
+		// one and tested only that. The label was then never recognised and the
+		// whole construct, `](zdestz.png)` included, fell through as prose. Both
+		// the confirmation and the CONSUMPTION site now scan through `labelClose`
+		// with bracket depth, so they cannot disagree about where the label ends.
+		// Each of these was measured RED against base df12262.
+		["pin-nrl88-root4-stray-bracket", "A ![alt\nsome [bracket] here\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		// The same note in the other toggle position, so the fix is shown to
+		// restore speakImageAlt's governance of the alt text rather than to
+		// silence the construct wholesale.
+		["pin-nrl88-root4-stray-bracket-alt", "A ![alt\nsome [bracket] here\nwords](zdestz.png) B", "A alt some bracket here words B", { speakImageAlt: true }],
+		// Five more bracket-bearing interior lines. They are not variations for
+		// their own sake: each is a different construct a real note carries, and
+		// the point of the set is that NONE of them is a label closer, so the
+		// depth scan must walk past all five.
+		["pin-nrl88-root4-footnote", "A ![alt\n[^1] here\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl88-root4-wikilink", "A ![alt\n[[wk]] here\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl88-root4-checkbox", "A ![alt\n[x] here\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl88-root4-linkrefdef", "A ![alt\n[a]: /u \"t\"\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl88-root4-embed", "A ![alt\n![[embed]] here\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		// The link twin. The ticket counted the image form only; the link form is
+		// the same defect through the same two sites, and leaving it unpinned
+		// would let half the fix be reverted silently.
+		["pin-nrl88-root4-link-twin", "A [lab\nsome [bracket] here\nwords](zdestz.png) B", "A lab some bracket here words B"],
+		// The stray and the real closer on ONE line. Not one of the ticket's
+		// seven, and it is the case that proves the scan advances WITHIN a line
+		// and not merely from line to line - a per-line "does this line hold a
+		// non-closing bracket" test would pass every fixture above and fail this.
+		["pin-nrl88-root4-same-line-stray", "A ![alt\nsome [bracket] and words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		// THE CONTROL, and the fail-first evidence for the nine above: the same
+		// shape with no stray bracket never leaked, on base or here. Green on
+		// both sides by design - it is what makes "the stray bracket is the
+		// cause" a measurement rather than an assertion.
+		["control-nrl88-no-stray", "A ![alt\nsome plain here\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		// GUARDS. Green on BOTH sides of this fix, so none of them is evidence
+		// that anything was fixed. They exist so the three measured-wrong
+		// alternatives cannot be reintroduced by a later tidy-up.
+		//
+		// D-88-13. A BARE unmatched `]` is NOT root 4 and must keep leaking.
+		// CommonMark ends a label at an unmatched `]`, so this is a shortcut
+		// reference with no definition: the image never forms and
+		// `](zdestz.png)` is literal text the renderer shows. Silencing it would
+		// be the silence-visible-prose trade ADR 0007 clause 6 refuses. Read from
+		// the CommonMark spec text, NOT run against a reference implementation
+		// and NOT observed in Obsidian. A tripwire, so a later "finish root 4"
+		// pass has to change this on purpose.
+		["guard-nrl88-bare-close-still-leaks", "A ![alt\nfoo ] bar\nwords](zdestz.png) B", "A [alt foo ] bar words](zdestz.png) B", { speakImageAlt: false }],
+		// D-88-11, THE PROSE-LOSS PIN, and the single most important guard here.
+		// Measured RED against the naive-skip arm, which said "A here": skipping
+		// a shortcut label's own closer lets the scan run on and adopt an
+		// unrelated later `](`, swallowing every word between. Depth is what
+		// stops that - this `]` is reached at depth 0, so it is ours, it fails
+		// the `](`/`][` test, and the scan returns false. Nothing else in the
+		// suite would catch a regression to the naive skip.
+		["guard-nrl88-shortcut-not-confirmed", "A ![shortcut\nmore] text\nand [link](dest) here", "A [shortcut more] text and link here", { speakImageAlt: false }],
+		// D-88-12. labelClose returns at the first line with no `]` left and does
+		// NOT count a trailing unmatched `[`, so this shape still leaks. That
+		// early return looks like an oversight and is load-bearing: completing
+		// the accounting was built and measured, and it newly leaked in 10 of
+		// 4,000 fuzz notes and moved guard-nrl63-nested-label, because our carry
+		// takes the FIRST unmatched opener where CommonMark takes the LAST.
+		["guard-nrl88-unbalanced-open-residual", "A ![alt [inner\nx] words](zdestz.png) B", "A [alt [inner x] words](zdestz.png) B", { speakImageAlt: false }],
+		// The SAME residual in its other two positions, added at ship review
+		// because the first draft of ADR 0027 recorded the clause-3 residual as
+		// one shape when it is one MECHANISM in three positions, and only the
+		// opener-line one above was pinned. Both are green on base and on the fix
+		// (measured 1,024 of 1,024 cells each, both kinds, both sides), so they
+		// are GUARDS and are evidence of nothing except that this diff did not
+		// move them. They come off together when the early return is revisited,
+		// not one at a time.
+		["guard-nrl88-unbalanced-interior-residual", "A ![alt\n[a [b] c\nwords](zdestz.png) B", "A [alt a [b c words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl88-straddling-pair-residual", "A ![alt\nsome [strad\ndle] here\nwords](zdestz.png) B", "A [alt some [strad dle] here words](zdestz.png) B", { speakImageAlt: false }],
+		// The three fail-closed stops, each with a stray bracket in front of it,
+		// so the widened scan is shown still to give up where NRL-63 made it give
+		// up. Roots 1, 2 and 3 are out of scope and must not move.
+		["guard-nrl88-stray-then-blank", "A ![alt\nsome [b] here\n\nwords](zdestz.png) B", "A [alt some b here words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl88-stray-then-heading", "A ![alt\nsome [b] here\n# H\nwords](zdestz.png) B", "A [alt some b here H words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl88-stray-then-never-closes", "A ![alt\nsome [b] here\nno closer\n\ntail.", "A [alt some b here no closer tail.", { speakImageAlt: false }],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });

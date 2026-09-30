@@ -320,9 +320,9 @@ export interface ModelStore {
 	workerPath: string;
 	/**
 	 * There is deliberately no `ortFile` here. The onnxruntime runtime is
-	 * packed inside main.js and unpacked as a blob URL (ADR 0026), so the
+	 * packed inside main.js and unpacked as a blob URL (ADR 0028), so the
 	 * engine has no runtime file to resolve. `ModelStorePaths.ortFile` still
-	 * exists for disk-usage accounting of a pre-ADR-0026 install; that is a
+	 * exists for disk-usage accounting of a pre-ADR-0028 install; that is a
 	 * settings-tab concern and never reaches the engine.
 	 */
 	/** Read any file the vault adapter knows about, including plugin files. */
@@ -570,7 +570,7 @@ export class KokoroEngine implements SpeechEngine {
 	 * Expose a bundled runtime asset as a same-origin blob URL.
 	 *
 	 * Unpacks lazily and caches per instance, so a reader on a system voice
-	 * never decompresses the 21 MB WebGPU build at all (ADR 0026). The
+	 * never decompresses the 21 MB WebGPU build at all (ADR 0028). The
 	 * verification happens inside `unpackRuntimeFile`; a corrupt pack throws
 	 * before any Worker is constructed, which is the visible-failure
 	 * direction the project requires rather than a half-booted worker.

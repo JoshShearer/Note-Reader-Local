@@ -10,7 +10,7 @@
  * settings/data.ts and settings/positionThrottle.ts already use.
  *
  * The ONNX runtime used to be in this file too. It is bundled inside main.js
- * now rather than downloaded (ADR 0026), so the download path, the atomic
+ * now rather than downloaded (ADR 0028), so the download path, the atomic
  * write helper and the missing/ok/mismatch classification it needed are gone;
  * what replaced the runtime checks is covered in tests/release.test.ts.
  */

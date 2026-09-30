@@ -1,8 +1,8 @@
-# 0026. Bundle the executable runtime, download nothing
+# 0028. Bundle the executable runtime, download nothing
 
 - **Status:** accepted
 - **Date:** 2026-09-30
-- **Supersedes:** [0024](0024-ort-on-demand.md) — its distribution decision only.
+- **Supersedes:** [0024](0024-ort-on-demand.md) - its distribution decision only.
   Its verification reasoning survives and is reused here; see *Relationship to
   ADR 0024* below.
 - **Amends:** `srs.md` R-S02 (privacy) and the release section that described
@@ -28,7 +28,7 @@ own repository, and requires a click does not change what it is: the plugin is
 arranging for new executable code to run on the user's machine, from outside the
 reviewed artifact. "Trust our own checksum" is not a defence, because the
 checksum and the code it covers are both compiled into the very bundle the
-reviewer looked at — so the review is simultaneously necessary and
+reviewer looked at, so the review is simultaneously necessary and
 insufficient, which is the worst of both rather than a mitigation.
 
 So the distribution decision had to be revisited. The three-file install is
@@ -172,7 +172,7 @@ nothing else, Obsidian 1.13.7 on Linux:
   resolved `kokoro`, the notice read *"Reading 2 passages with Kokoro (local
   neural) on CPU (WASM, 1 thread)"*, and the player went `idle` -> `finished`
   over both chunks in 25.2 s. CPU/WASM is the backend that reads the pack, so
-  this is the code path ADR 0026 is about.
+  this is the code path ADR 0028 is about.
 - **Zero non-local network requests during a full read.** Captured on the CDP
   `Network` domain across a complete `idle` -> `finished` read, filtering out
   `app:`, `blob:`, `data:` and `chrome:` schemes: none. The runtime came out of
@@ -213,3 +213,24 @@ close are unchanged:
 
 Rule 11 in `AGENTS.md` still applies to the bare-Node half. The desktop half is
 now observation rather than inference, which is what moved.
+
+**The Android half has since closed, on a second, independent device (NRL-96).**
+A Pixel 9 Pro XL (Android 17, WebView `app.vanium.webview`, Chromium 154) loaded
+the identical 13,649,236-byte `main.js`; all 9 commands registered; the runtime
+unpacked with matching SHA-256 digests (SIMD 354.2 ms, JSEP 524.9 ms); a real
+Kokoro read produced real-time audio with zero non-local network requests;
+stop/restart survived an actual `adb shell am force-stop` process kill and
+resumed mid-chunk; and `setRate(1.5)` gave exactly 1.5 with no doubling. So
+`DecompressionStream` does exist on this WebView and 21 MB inflates in
+tolerable time (measured above), answering the second bullet for this one
+device. The JSEP/WebGPU bullet is still open: this device also had no
+GPU-loadable weights downloaded, so the packed JSEP build remains
+verified-but-unexecuted on both platforms tested so far. Two new findings came
+out of that same session, filed rather than folded in here: a Kokoro ONNX crash
+that leaves the session poisoned until Obsidian reloads, trigger unidentified
+(NRL-101), and the 4-thread WASM load failing reproducibly on a desktop Flatpak
+install, falling back to ~2.7x-real-time single-threaded synthesis (NRL-102).
+Neither is a defect in this ADR's own decision; both are pre-existing engine
+and host characteristics this ADR's own verification work happened to surface
+for the first time. Full measurement detail is in NRL-96's comment thread, not
+duplicated here.

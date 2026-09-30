@@ -105,7 +105,7 @@ const workerConfig = {
  * Left to itself, onnxruntime-web resolves its `.wasm` from a jsdelivr CDN URL
  * the first time a session is created. That would mean the plugin reaches the
  * network on every cold start, and would fail outright on a phone that is
- * offline. ADR 0026 settles the alternative: it cannot be shipped as a
+ * offline. ADR 0028 settles the alternative: it cannot be shipped as a
  * side-directory, because the three-file install has no side-directory, and it
  * cannot be fetched on demand, because the plugin review guidelines treat that
  * as executable dependency management. So it goes into the bundle.
@@ -132,7 +132,7 @@ const ORT_FILES = [
  *
  * Level 9 because these are already-compressed-ish WASM blobs that never
  * compress further, and the whole point is that the embedded copy is paid for
- * by every install (ADR 0026). The digest stays of the *plain* bytes, so a
+ * by every install (ADR 0028). The digest stays of the *plain* bytes, so a
  * decompression bug cannot pass verification by agreeing with itself.
  */
 async function packOrtAssets() {

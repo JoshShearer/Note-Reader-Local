@@ -2,8 +2,45 @@ name: Release
 
 on:
   push:
+    # NRL-75. This was `- "*"`, which cut a real, public GitHub Release
+    # (the `Create GitHub Release` step below) on ANY tag whose name holds no
+    # `/`: `nightly`, `wip`, `pre-rebase`, `v0.1.0`, `0.1.0-rc1`. A
+    # `backup/`-shaped tag was inert only because of the slash.
+    #
+    # THESE ARE GITHUB FILTER PATTERNS, NOT REGEXES, and the two look alike
+    # while behaving differently. `*` is a wildcard - "zero or more characters,
+    # but does not match the `/` character" - and NOT a quantifier over what
+    # precedes it, so `[0-9]*.[0-9]*.[0-9]*` would read as "one digit then any
+    # non-slash run" and would fire on `0.1.0-rc1`. `+` IS the quantifier:
+    # "matches one or more of the preceding character". GitHub's own published
+    # table applies it to a preceding BRACKET CLASS - the row
+    # `v[12].[0-9]+.[0-9]+` is documented as matching `v1.10.1` and `v2.0.0`,
+    # and that two-digit minor is what proves `[0-9]+` means one-or-more digits
+    # rather than one. Read verbatim during NRL-75 from github/docs@main,
+    # content/actions/reference/workflows-and-actions/workflow-syntax.md.
+    #
+    # The double quotes are required, not style: the same docs say a pattern
+    # starting with `[` must be quoted or YAML fails to parse the workflow.
+    #
+    # Prereleases are excluded deliberately. `prerelease: false` is hardcoded in
+    # the `Create GitHub Release` step below and versions.json holds no
+    # prerelease key, so a matching `0.1.0-rc1` would cut a Release that claims
+    # to be stable.
+    #
+    # No `v` prefix, because nothing here uses one: manifest.json's version is
+    # `0.1.0` and versions.json's sole key is `"0.1.0"` (both measured during
+    # NRL-75), so a `v*.*.*` pattern would simply never fire.
+    #
+    # `tags-ignore` is not an option beside this - the docs say you cannot use
+    # both `tags` and `tags-ignore` for the same event - and a `!` negation
+    # entry was rejected as redundant next to an all-digits-and-dots positive
+    # pattern, and as making the file read safer than the pattern really is.
+    #
+    # DESK-VERIFIED FROM THE DOCS ONLY. No tag has ever been pushed to this
+    # repo, so it is not observed that `0.1.0` fires this workflow or that
+    # `nightly` no longer does. NRL-79 owns that empirical half.
     tags:
-      - "*"
+      - "[0-9]+.[0-9]+.[0-9]+"
 
 jobs:
   build:
@@ -24,9 +61,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Build strictly before test: tests/release.test.ts asserts main.js and
-      # ort/ exist, so on a fresh checkout it fails for that reason alone. This
-      # step used to run typecheck, test, build in that order.
+      # Build strictly before test: tests/release.test.ts asserts main.js
+      # exists and carries the packed ORT runtime, so on a fresh checkout it
+      # fails for that reason alone. This step used to run typecheck, test,
+      # build in that order.
       #
       # NRL_SKIP_REAL_SPEECHD bypasses the two regions of tests/engine.test.ts
       # that need a running speech-dispatcher daemon and an audio sink. This
@@ -41,14 +79,64 @@ jobs:
         env:
           NRL_SKIP_REAL_SPEECHD: "1"
 
+      # NRL-76, amended by NRL-96/ADR 0028. This step feeds
+      # `needs.build.outputs.hashes` into the SLSA generator's
+      # `base64-subjects`, so everything it gets wrong becomes a signed
+      # attestation over the wrong bytes rather than a failed run.
+      #
+      # `cd dist || true`: there is no `dist/` in this repo - `npm run build`
+      # writes `main.js` to the REPO ROOT and deploy.mjs reads from the root -
+      # so the `cd` always failed, `|| true` swallowed it, and the step stayed
+      # in the root and found the right files BY ACCIDENT. Measured in a
+      # sandbox during NRL-76: with a `dist/` present holding different bytes
+      # under the same names, the attested `main.js` digest was the dist
+      # copy's (`e32e168f...`) and not the root's (`79a8a4a7...`). A directory
+      # created by any future build step, cache restore or action would
+      # therefore capture the attestation silently.
+      #
+      # `set -euo pipefail` is in the BODY rather than via `shell: bash`,
+      # because the body is what tests/release.test.ts extracts and executes;
+      # a harness-level flag would be a guarantee no test covers. GitHub's
+      # documented default for a `run:` is fail-fast via `set -e` ALONE, with
+      # `-o pipefail` added only when `shell: bash` is written explicitly
+      # (github/docs@main workflow-syntax.md) - and that absence is exactly why
+      # a failing `sha256sum` on the left of `| base64` could not fail the step.
+      #
+      # ALL THREE published assets are subjects, matching `Upload Release
+      # Assets` below. NRL-76 originally attested all seven build outputs,
+      # including the four ORT runtime files, because those were the bytes a
+      # user downloaded at runtime (R-M01 clause 3, ADR 0024) and attesting 3
+      # of 7 left the two largest downloadables with no subject at all. ADR
+      # 0028 (NRL-96) removed that download entirely - the runtime is packed
+      # inside `main.js` now, so `npm run build` no longer produces an `ort/`
+      # directory at all, and there is nothing left to hash separately. The
+      # runtime's own integrity is verified by `main.js`'s attested digest
+      # covering it, and independently by `tests/release.test.ts` comparing the
+      # packed bytes against `node_modules/onnxruntime-web/dist` at build time.
+      #
+      # The non-empty guard lives HERE and nowhere else. Do not add
+      # `if: needs.build.outputs.hashes != ''` to the `provenance` job: a
+      # failing step already stops it through `needs: build`, whereas an `if:`
+      # would SKIP provenance silently and produce a green run with no
+      # attestation - the same silence this step is being cleaned of.
+      #
+      # DESK-VERIFIED. Every number above is a local bash execution of this
+      # body; no tag has ever been pushed, so this step has never run on a
+      # runner. NRL-79 owns that half.
       - name: Generate checksums
         id: hash
         run: |
-          cd dist || true
-          if [ -f main.js ] && [ -f manifest.json ]; then
-            sha256sum main.js manifest.json styles.css 2>/dev/null | base64 -w0 > checksums.txt
-            echo "hashes=$(cat checksums.txt)" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          HASHES=$(sha256sum \
+            main.js \
+            manifest.json \
+            styles.css \
+            | base64 -w0)
+          if [ -z "$HASHES" ]; then
+            echo "Generate checksums produced an empty subject list; refusing to hand the SLSA generator an empty base64-subjects" >&2
+            exit 1
           fi
+          echo "hashes=$HASHES" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -58,7 +146,6 @@ jobs:
             main.js
             manifest.json
             styles.css
-            ort/
 
   release:
     needs: build
@@ -87,7 +174,7 @@ jobs:
       # else. The four ort/ assets used to be published here so the plugin
       # could fetch its runtime from a release URL; they do not any more,
       # because that is executable dependency management and the
-      # community-plugin policies prohibit it (ADR 0026). The runtime now
+      # community-plugin policies prohibit it (ADR 0028). The runtime now
       # ships inside main.js. Publishing them anyway would leave a
       # downloadable copy of executable code that nothing installs and that a
       # future reader would reasonably assume is load-bearing.

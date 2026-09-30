@@ -131,6 +131,13 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// than a fix for a present ordering bug.
 		this.saveQueue = new SaveQueue({
 			write: (payload) => this.saveData(payload),
+			// The same expression saveSettings() computes below, so a retry
+			// (NRL-91) reads live settings at the moment it fires and can never
+			// resurrect the stale payload that was rejected.
+			getCurrentPayload: () => serialisePluginData(this.pluginData, this.settings),
+			onAttemptFailed: (err, attempt) => {
+				trace(this.app, this.manifest.dir!, `save attempt ${attempt} failed`, err);
+			},
 			onError: (err) => {
 				reportError(this.app, this.manifest.dir!, "save failed", err);
 			},
@@ -185,9 +192,10 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			save: () => {
 				void this.saveSettings().catch(() => {
 					// Deliberately swallowed, and it is not a lost error. The
-					// SaveQueue's onError above reports every rejected write exactly
-					// once, so reporting here as well would show the user two notices
-					// for one failure; and the trace line the orchestration emits
+					// SaveQueue's onError above reports every write that could not
+					// be saved (even after retrying, NRL-91) exactly once, so
+					// reporting here as well would show the user two notices for
+					// one failure; and the trace line the orchestration emits
 					// immediately before this names which event it was.
 				});
 			},
@@ -505,6 +513,14 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// after dispose would call savePosition on an unloaded plugin. Nothing
 		// cleared the window handle before this - it leaked on every path.
 		this.positionThrottle?.dispose();
+		// After the position flush above has had its one synchronous chance to
+		// enqueue a final write (which may itself arm a retry if that write
+		// later fails): clears only the armed-retry-timer resource NRL-91
+		// introduces, a leak this ticket would otherwise add on top of the
+		// pre-existing gap. Deliberately does NOT await or drain the in-flight
+		// write itself - onunload() is synchronous and Obsidian gives it no
+		// hook to wait for one; see docs/adr/0026 for the bound this leaves.
+		this.saveQueue?.dispose();
 		this.controlBar?.destroy();
 		this.player?.dispose();
 		// Both, or the sentence property outlives the plugin on document.body.

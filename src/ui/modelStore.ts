@@ -242,7 +242,7 @@ function errText(err: unknown): string {
  * call site.
  *
  * It used to carry `writeBinary`/`readBinary`/`rename` for the atomic runtime
- * write. The runtime is bundled in main.js now (ADR 0026), so nothing writes
+ * write. The runtime is bundled in main.js now (ADR 0028), so nothing writes
  * binaries here any more and those members are gone rather than left as
  * unused surface.
  */
@@ -369,7 +369,7 @@ export interface UsageSummary {
  * 0, never `NaN` or a negative number.
  *
  * `ortFiles` is retained by the signature rather than removed: an install
- * that predates ADR 0026 can still have an `ort/` directory on disk from the
+ * that predates ADR 0028 can still have an `ort/` directory on disk from the
  * on-demand runtime, and that disk space is real until the user clears it.
  * Counting it is the difference between telling the truth and quietly
  * reporting a smaller number, so the argument stays and stays required.

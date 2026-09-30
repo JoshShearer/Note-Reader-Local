@@ -34,6 +34,52 @@ bundle, the worker, or the esbuild config.
 That `npm test` line's count and its name list are asserted against `package.json`'s
 `pretest` by `tests/suiteRegistry.test.ts`, so a new suite is added by editing the script
 and the prose follows, rather than the two drifting apart on a clean merge (NRL-85).
+Do not add a second gate line of that shape anywhere in this file: that test fails by
+name when it finds zero anchors or more than one.
+
+`npm test` is `node run-tests.mjs` (NRL-80). It used to be a 24-deep `&&` chain, whose
+short-circuit meant the first failing suite hid every later one - measured, with a
+`process.exit(1)` appended to the built extract suite (1 of 24) and a `throw` appended to
+the built loadingNotice suite (23 of 24), the chain exited 1 after ONE suite with zero
+mentions of the late crash. The runner runs all 24 serially, streams each one's output
+verbatim behind a `>>> <name>` banner, and ends with a per-suite `ok` / `FAIL` / `CRASH`
+table, the aggregate check counts, and the failing suite names LAST. The same injection
+against the runner names both. Three things about it are load-bearing. **The suite list
+is not written in it** - `pretest` stays the one registry and `suitePathsFromPretest`
+derives the built paths from it, which is why adding a suite still means editing exactly
+one script. **Its main guard is `path.basename(process.argv[1]) === "run-tests.mjs"`, not
+the usual `import.meta.url` idiom**, which fires inside the esbuild bundle of the test
+that imports the runner and would re-enter the whole run from inside a suite. And
+**classification is by exit code only** - `tests/readSelection.test.ts` prints no
+`all ... passed` line at all, so a summary-line rule would invent a failure; a non-zero
+exit with no `FAIL` line of its own is a CRASH and the summary carries its last lines.
+`run-tests.d.mts` exists so `tsc` can type that import without a `tsconfig.json` change.
+One thing this does not catch, unchanged from the chain: a `test` script that never
+invokes the runner at all cannot be detected from inside a suite the runner is what runs.
+
+Two more things about it, both of which a tidy-up would plausibly undo.
+
+**`run-tests.mjs` must never call `process.exit`.** All three failure exits are
+`process.exitCode = 1` plus a `return`, and that is not a style preference.
+`process.exit` tears the process down without flushing writes still queued in userspace,
+and stdout to a **pipe** is asynchronous - which is every CI log viewer, every `| tee`,
+every `| head`. Measured on the real 24-suite run with one failure injected: a file
+redirect delivered 5,097 lines while `node run-tests.mjs 2>&1 | { sleep 25; cat; }`
+delivered **915 and lost the `FAILING SUITES:` line** - the one line the runner exists to
+put at the end of a failing log. `tests/suiteRegistry.test.ts` section 13 pins both
+directions, with the no-failure path as a positive control so a harness that simply
+cannot carry a large payload cannot make the failure checks pass for the wrong reason.
+
+**The registry-to-execution link is two layers, and both are load-bearing.** Layer 1 is
+`suiteRegistry` importing `suitePathsFromPretest` and asserting order, set and count,
+which catches a suite dropped in *derivation*. Layer 2 is the runner's own
+planned-vs-produced reconciliation, which catches one dropped in the *execution loop* -
+and layer 1 is **blind** to that, because it runs inside that loop. Measured: a layer-2
+mutation leaves `suiteRegistry` green while the runner still exits 1. Neither is
+redundant with the other.
+
+Windows portability of the runner is **reasoned, not measured**. Nothing here has been
+run on Windows, and section 13's own harness shells out to `/bin/sh`.
 
 ```bash
 npm run deploy         # build + copy into ~/Documents/Notes/.obsidian/plugins/
@@ -169,7 +215,7 @@ tickets have closed gaps against it, so treat it as a floor rather than as curre
 
 **NRL-96 bundled the ONNX runtime and, for the first time in this repo, exercised the
 plugin in a real Obsidian.** The runtime is packed into `main.js` by
-`esbuild.config.mjs` (`docs/adr/0026`, superseding ADR 0024's distribution decision),
+`esbuild.config.mjs` (`docs/adr/0028`, superseding ADR 0024's distribution decision),
 because Obsidian's community-plugin policy prohibits installing or updating dependencies
 at runtime and a release-URL runtime is that however carefully it is verified. Install is
 three files: `main.js`, `manifest.json`, `styles.css`, and `npm run build` no longer emits
@@ -289,10 +335,70 @@ origin` is empty and `gh release list` is empty - so `actions/create-release`, t
 upload and the SLSA provenance job have never executed once, and `srs.md`'s "SLSA Level 3
 provenance" MUST still rests on a workflow that has never produced an attestation. Treat
 R-M01 as met on its shipped files and **unexercised on its release path**. Tracked as
-NRL-79, and two defects are already known to sit on that unexercised path: NRL-75
-(`tags: ["*"]` matches any tag, so pushing a backup tag would cut a real GitHub Release)
-and NRL-76 (the checksum step `cd dist || true` into a directory that does not exist, whose
-output feeds the provenance job's subjects). `actionlint` 1.7.7 is not a substitute for
+NRL-79. Of the two defects known to sit on that unexercised path, **both are now fixed**,
+NRL-75 and NRL-76, and both are fixed desk-verified only. NRL-75's own parenthesis needs
+correcting as well as closing: `tags: ["*"]` does **not** match any tag, it matches any tag
+whose name holds no `/`, because GitHub's
+published table row for `'*'` reads "Matches all branch and tag names that don't contain a
+slash (`/`)" (github/docs@main `workflow-syntax.md`, read verbatim during NRL-75). So the
+`backup/nrl-54-pre-split-...` tag the ticket cited was **documented-inert**, and the live
+hazard was the slash-free shapes - `nightly`, `wip`, `pre-rebase`, `v0.1.0`, `0.1.0-rc1`,
+`backup-nrl-54-...` - each of which would have cut a real public GitHub Release. The trigger
+is now `tags: ["[0-9]+.[0-9]+.[0-9]+"]`: bare semver, no `v` prefix (manifest.json's version
+is `0.1.0` and versions.json's sole key is `"0.1.0"`, so a `v*.*.*` pattern would never
+fire), prereleases excluded (`prerelease: false` is hardcoded in the `Create GitHub Release`
+step). These are **filter patterns, not regexes** - `*` is a wildcard and not a quantifier,
+which is why `[0-9]*.[0-9]*.[0-9]*` was rejected as matching `0.1.0-rc1` - and the authority
+for applying `+` to a bracket class is GitHub's own row `v[12].[0-9]+.[0-9]+`, documented as
+matching `v1.10.1`. `tests/release.test.ts` pins it with three checks, and the matcher they
+depend on is validated against **every row of that published table** rather than against
+itself, because a wrong hand-rolled matcher would make the three checks green while the
+workflow behaved differently in production. Measured: the three went red against the
+unmodified file (`["*"]`, all ten operational shapes firing) and green after; the five
+guards, including the `backup/`-shaped name, were green on both sides. **DESK-VERIFIED ONLY
+AND UNEXERCISED**: no tag has ever been pushed, so it is not observed that `0.1.0` fires the
+workflow or that `nightly` no longer does, and NRL-79 still owns that empirical half.
+Two further things about that fix are worth carrying. The `matchesFilterPattern()` oracle in
+`tests/release.test.ts` **must stay faithful to GitHub's documented semantics rather than
+convenient**, because it is the only thing standing between a green suite and a workflow that
+behaves differently in production. NRL-75's first Verify caught it silently mistranslating the
+documented `\` escape: `v1\*` compiled to a literal backslash followed by a live wildcard, so it
+did not match the tag `v1*`. The remedy for a related false comment was to **narrow the comment,
+not to add throws** - a throw on a character GitHub treats as an ordinary literal would make the
+oracle diverge from the thing it exists to model, which is the same failure in the other
+direction. And two shapes were seen on NRL-79's unexercised path and deliberately left there:
+`release.yml:118` passes `tag_name: ${{ github.ref }}`, the full `refs/tags/0.1.0`, where the
+adjacent `release_name` line uses the bare `github.ref_name`; and **nothing anywhere checks that
+a pushed tag matches `manifest.json`'s version**, so the trigger now admits only bare semver but
+admits any bare semver. Neither was measured, because the path has never run, and both belong to
+NRL-79 rather than to NRL-75.
+**NRL-76 is fixed** (`8797745`), and the defect it closed was worse than the ticket recorded.
+The old step's `cd dist || true` plus its `if [ -f ... ]` guard did not merely hash the repo
+root by accident: with one published asset missing it exited **0** and wrote a *silently
+truncated* attestation - 216 bytes covering two subjects - rather than the absent one the
+ticket predicted, so a green run could have shipped provenance that omitted files the release
+carried. The step now hashes **all seven** published paths, including the four `ort/` WASM
+runtime files, and three parts of that are load-bearing. `set -euo pipefail` is not
+decoration: without `pipefail` a missing asset still gives exit 0 and 720 bytes of truncated
+`hashes=`, because the failing `sha256sum` sits upstream of a pipe. The non-empty guard lives
+**in the build step**, and there is deliberately **no `if:` on the provenance job** - a
+failing step already stops it through `needs: build`, whereas an `if:` would SKIP provenance
+silently and produce a green run with no attestation, which is the same silence being removed.
+And the `ort/` path prefixes are safe in the SLSA input format, settled at source rather than
+assumed: the generator's `parseSubjects` validates the **digest** only, and `verifyDigest`
+never reads `subject.Name`. In `tests/release.test.ts`, `extractUploadedFiles` is the single
+source of truth tying the hashed set to the published set, and it and `extractRunBlock` both
+**throw** rather than returning empty, so a parser that stops matching fails the suite instead
+of passing vacuously. **Still entirely unexercised**: nothing here has run on a GitHub runner,
+no tag has ever been pushed and no attestation has ever been produced, so every number above
+is a local bash execution of the step body. R-M01 does not move and stays unmet on its
+release path.
+One method trap from that work, recorded because mutation testing is how several tickets in
+this repo establish their counts: **symlinking a shadow root defeats mutation testing**. Node
+resolves symlinks, so a `__dirname`-derived `ROOT` silently resolves back to the real
+worktree, the mutation is never read, and every run comes back green. Copy the bundle instead
+of linking it, and sanity-mutate once before trusting a shadow.
+`actionlint` 1.7.7 is not a substitute for
 running it: measured during NRL-69, it was silent on **both** halves of the compile defect
 that had broken every run in this repo's history, so its silence on this file is weak
 evidence. The `2 of 16` headline count does not move in either direction. Note also that
@@ -396,10 +502,14 @@ fixed: **512/512 leaking cells fell to 0/512** for each, and the wrapped form is
 byte-identical to the single-line form, so `speakImageAlt` governs the alt text across the
 break exactly as it does on one line.
 
-**11,520 of 19,456 cells still leak a destination**, tracked as **NRL-88**. Record them as
-**five distinct roots and not one**, because earlier drafts of ADR 0023 and `srs.md:366` said
-"one mechanism" and a reader who assumes it is just containers will fix two of the five and
-believe they are done.
+**A destination is still spoken**, tracked as **NRL-88**. Record it as **five distinct roots
+and not one**, because earlier drafts of ADR 0023 and `srs.md` said "one mechanism" and a
+reader who assumes it is just containers will fix two of the five and believe they are done.
+**Root 4 is CLOSED as of NRL-88** (`docs/adr/0027`); **four remain** and root 4 leaves
+named residual shapes of its own. The numbering is kept as it was so every existing citation still
+resolves. The `11,520 of 19,456` headline this paragraph used to carry is **deleted rather
+than updated**: it was a pre-NRL-74 baseline on a corpus nobody can reconstruct, and NRL-88
+re-measured its own (below) rather than trying to reconcile it.
 
 **Every count in this list is a pre-NRL-74 baseline and root 1's is known to be low.** NRL-74
 made an unmatched mid-line `<!--` literal instead of opening a comment block, and that
@@ -414,21 +524,68 @@ reasoning from it** - see NRL-74's bullet below for the numbers and the method.
    5,120 NRL-74 unmasked**; this row is the one the re-measure will move most.
 2. `interruptsParagraph` matching on a line **between** opener and closer - 1,792 of 2,048.
 3. `opensMathBlock`, clause 7a's separate stop - 512 of 512.
-4. **`bracketClosesLater` returns at the first later line bearing any `]`**, so a line that
-   does *not* end the paragraph but carries a non-closing bracket aborts the confirmation.
-   Measured on seven such lines - `[bracket]` in prose, `[^1]`, `[[wk]]`, `[x]`, a link
-   reference definition, `![[embed]]` and a bare `]` - each leaking 512 of 512 where the same
-   shape without the stray bracket leaks 0 of 512. **3,584 cells.** **This one is not a
-   container problem at all**, and it is why "just handle blockquotes and lists" would not
-   finish the ticket.
+4. **CLOSED as of NRL-88** (`docs/adr/0027`). `bracketClosesLater` returned at the first later
+   line bearing any `]` and tested only that one, so a line that does *not* end the paragraph
+   but carries a non-closing bracket aborted the confirmation. **The recorded 3,584 was wrong
+   by half**: it counts the **image** form only, and the link twin is another 3,584 through the
+   same code, so root 4's real size is **7,168** on a corpus counting both kinds, and more once
+   shapes the ticket's seven lines miss are added (a stray and the closer on one line,
+   `[a][b]`, two pairs, a nested pair). Re-measured at `df12262` over an 11-shape x 2-kind x
+   512 corpus: **11,264 cells, all 11,264 leaking -> 1,024**, so **10,240 closed and 0 newly
+   leaking**. This one was never a container problem at all, which is why "just handle
+   blockquotes and lists" would not have finished the ticket.
+   **Three things a later reader would otherwise redo, all measured rather than reasoned.**
+   (a) **Both call sites must change together.** Fixing the confirmation alone is not a safe
+   subset, it is strictly worse than changing nothing: the consumption site in `cleanLine`
+   closed a carried label at the first `]` unconditionally, so it ended the label at the stray
+   and let the real `](dest)` fall out as prose - all 7,168 cells still leaked **and** the alt
+   text was silenced. One shared helper, `labelClose`.
+   (b) **It is bracket DEPTH, not "skip any `]` not followed by `(`"**, which is how the ticket
+   worded it. The naive skip loses real prose: `A ![shortcut` / `more] text` /
+   `and [link](dest) here` became `"A here"`, because skipping a shortcut label's own closer
+   lets the scan adopt an unrelated later `](`. `guard-nrl88-shortcut-not-confirmed` is the
+   only thing in the suite that catches a regression to it.
+   (c) **`labelClose`'s early return at "no `]` left on this line" is load-bearing and must not
+   be "completed".** It leaves a trailing unmatched `[` uncounted, which looks like an
+   oversight. Completing it newly leaked in **10 of 4,000** fuzz notes and moved
+   `guard-nrl63-nested-label`, because our carry takes the **first** unmatched opener where
+   CommonMark takes the **last**.
+   **Two residual shapes remain, both deliberate and both pinned.** A **bare unmatched `]`** on
+   an interior line keeps its destination spoken and that is CORRECT: CommonMark ends a label
+   there, so the construct is a shortcut reference with no definition and `](dest)` is literal
+   text the renderer shows (read from the CommonMark spec TEXT, not run against a reference
+   implementation, not seen in Obsidian). So the ticket's "seven such lines" is **six defects
+   and one correct behaviour**. And clause (c)'s uncounted bracket, which is **one
+   mechanism in THREE positions and not one shape** - corrected at NRL-88's ship review,
+   where the first draft said one and pinned one. A trailing unmatched `[` on the **opener**
+   line, an unbalanced `[` on an **interior** line (there the `[` IS counted, and the
+   label's real closer is then eaten as the inner pair's), and a pair **straddling** the
+   break. Each measures 1,024 of 1,024 cells in both kinds and each is **identical on base
+   and on the fix**; all three are now pinned, and they come off together when the
+   first-versus-last-opener conflict is settled, never one at a time.
 5. Clause 6 and 7 precedence - a line opening both a label and a soft-wrapped code span arms
    the code carry only, and a code span opening on a later line inside a live label is not
    recognised - 1,024 of 1,024.
 
 All five are **destination-only, fail-closed and prose-safe**: an aborted confirmation leaves
-the line exactly as the pre-NRL-63 tree had it, so none of them can lose prose. Part of the
-11,520 is also not a defect and must not be "fixed": an ATX heading is a single line and cannot
-soft-wrap, and a setext heading is in fact already carried.
+the line exactly as the pre-NRL-63 tree had it, so none of them can lose prose. Some of the
+remainder is also not a defect and must not be "fixed": an ATX heading is a single line and
+cannot soft-wrap, and a setext heading is already carried. **That second half is narrower than
+it reads**, measured at NRL-88: what is carried is an underline sitting *after* the label has
+closed (0 of 1,024 leaking, both sides). An underline *between* opener and closer is
+`SETEXT.test` and therefore `interruptsParagraph`, so it is **root 2** and it leaks 1,024 of
+1,024 on both sides. The ATX form leaks 1,024 of 1,024 on both sides and is correct.
+
+**Roots 1 and 2 were deferred, not attempted, and are tracked as NRL-98**, and the reason is a
+standing rule rather than time: fixing them means widening `interruptsParagraph`, which is
+shared with `codeSpanClosesLater` and which NRL-73 and NRL-74 had just narrowed in the same run.
+NRL-98 carries the reproductions, the pre-NRL-74 baselines with the instruction to re-measure
+before quoting them, and the setext correction below. Root 3 is
+left because clause 7a's `opensMathBlock` stop exists to fix a real prose-loss defect, and
+removing it trades prose for a destination - the trade ADR 0007 clause 6 refuses. Root 5 is
+clause 6's own recorded precedence rule. Neither root 3 nor root 5 has a ticket, deliberately:
+each is a recorded decision rather than an open defect, so reopening either means arguing with
+the reason and not just picking up a number.
 
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
@@ -439,16 +596,108 @@ commit: a `$$` display-math block between a label's opener and closer silenced t
 later-closer search; `interruptsParagraph` was deliberately **not** widened, because it is
 shared with `codeSpanClosesLater` and widening it would move NRL-64. Verify then enumerated
 **all 20 skip-paths** between the carry read and the carry arm and found the rest fail-closed:
-31,744 cells, 0 prose loss. **Re-run that enumeration** before touching the lookahead.
+31,744 cells, 0 prose loss. **Re-run that enumeration** before touching the lookahead - and
+do not reuse the number, because the region has moved. **Three different numbers have been
+claimed for this one enumeration and the arithmetic below is the settled one**, re-counted at
+NRL-88's ship review by stripping comments and attributing every `continue` to its owning loop
+by brace depth. The per-line loop body holds **20** control-flow exits, all of them `continue`
+and all of them the outer `lineNo` loop's: **16** between the carry read and the confirmation
+call, **2** between that call and the carry write-back, and **2** after the write-back, which
+therefore cannot drop the carry. So **18 can bypass the arm**. NRL-88's own **plan said 18 and
+was RIGHT**; NRL-88's implement and the first draft of `docs/adr/0027` said 16 exits / 12
+pre-arm / 14 bypass and were **low by four**, and the cause is identified rather than guessed:
+that count matched `^\s*continue;$` and missed the four inline `if (...) continue` forms
+(the frontmatter blank/`#` line, `inComment` with no closer on the line, `inIndentedCode` with
+a blank line, and `inFence` under `skipCodeBlocks`). NRL-63's recorded **20** equals this
+total-exits figure, but its prose called it the read-to-arm window, which is 16. Over 15
+mid-line shapes x 2 kinds x 512 = **15,360 cells: 0 newly leaking, 0 prose sentinels lost**,
+and the four paths the miscount had omitted were then probed in their own right, in both the
+"after the label closes" and "between opener and closer" positions, over **4,096 further
+cells: 0 newly leaking and 0 prose words lost at `speakImageAlt: true`**. So the miscount hid
+no unexamined defect, which is the only reason it is a corrected record rather than a blocker.
+**Fourteen of the eighteen are unreachable with a live carry** because `interruptsParagraph`
+or `opensMathBlock` already matches the line, which is fail-closed by construction - that
+covers the fence, the indented-code and the `inComment` paths, since a line opening any of
+them aborts the confirmation. The rest need their own argument and have one: the two
+frontmatter exits `continue` before the arm so never arm a carry, and the `LINK_REF_DEF` drop
+additionally requires `paraText === "" && !wasPara`, which a live carry makes false.
 
 Two pre-existing image shapes are **not** NRL-88 and remain open against the same requirement,
 in **both** positions of `speakImageAlt`: a label holding another bracket construct
 (`![a [[N|l]] b](dest.png)`), and `![alt](dest(1).png)`, which speaks a fragment of the
-destination, `.png)`. Neither was opened by NRL-21. **Do not record R-M09 as met until NRL-88
-and those two close**, and the headline count stays at 2 of 16: NRL-46, NRL-44, NRL-66, NRL-67
-and NRL-63 each closed a leftover, not the requirement. **Nothing in any of it was observed in
+destination, `.png)`. Neither was opened by NRL-21. **Do not record R-M09 as met until roots 1
+and 2 (NRL-98), roots 3 and 5, root 4's named residuals (clause 4's bare `]`, plus clause 3's
+uncounted bracket in all three of its positions), and those two shapes all close**, and the
+headline count stays at 2 of 16: NRL-46, NRL-44, NRL-66, NRL-67, NRL-63 and NRL-88 each closed a
+leftover, not the requirement. **R-M09 is NOT met.** **Nothing in any of it was observed in
 Obsidian** - CDP port 9222 was unreachable at every attempt, so rule 11 applies to every number
 in this section.
+
+NRL-88's own evidence, all bare-Node against base `df12262` with the repo's own esbuild, and
+kept here because the shapes are worth knowing. **0 of 39,936 non-root-4 cells changed a single
+output byte**, so roots 1, 2, 3 and 5 are unmoved cell for cell rather than merely equal in
+leak count, and eight function bodies (`interruptsParagraph`, `codeSpanClosesLater`,
+`opensMathBlock`, `opensHiddenComment`, `opensObsidianBlock`, `opensHtmlBlock`,
+`inlineContainerClose`, `wikiTargetClose`) were proven byte-identical by hashing them out of
+both trees. **Prose loss** over 18 shortcut/never-closes/bracket-only shapes x 512 = 9,216
+cells, **0 losing a prose word**, with one class run down rather than waved at: 512 cells stop
+speaking `ref` on `A ![sc` / `[b] more][ref]`, and `ref` is a reference NAME the single-line
+branch has always consumed, confirmed by the stray form on the fix being byte-identical to the
+stray-free form on base. **That `ref` class is 512 here and 256 in NRL-88's PR, and both are
+right**: 256 is the `speakImageAlt: true` half, 512 is the full sweep over both positions. If
+the two numbers ever read as a contradiction, it is this and not a measurement dispute. **Non-interference with all three carries** - NRL-64's `outgoingCode`,
+NRL-63's own paragraph carry and NRL-74's `lastHtmlCloser` - over 19 shapes x 512 = 9,728
+cells, of which **15 shapes are byte-identical on both sides** including "code+label same
+line" (root 5), "all three live" and both hidden-block shapes; the 4 that moved are root-4
+fixes with 0 newly leaking and 0 prose sentinels lost over 2,048 cells. **Disclosure**, since
+this diff WIDENS `bracketClosesLater` and NRL-74 required the later ticket to re-measure: a
+genuine hidden comment block beside a newly-armed carry, **12,288 cells per side, 0 spoken on
+base, 0 on the fix, 0 newly spoken**, with ADR 0019's deliberately-literal class kept separate
+at **1,024 on both sides** and the probe shown non-vacuous by a NRL-73-disqualified `%%`
+opener. `sourceIndex` clean by numeric UTF-16 index over **40,448 chunks / 870,144 units** with
+all four mutators firing (drop 39,936 length; shift 32,768 bounds + 667,648 identity; swap
+78,848 monotonic + 77,824 identity; zero 672,768 identity), and **both exemptions shown
+mandatory AND pre-existing** by removing each from a correct tree: without `text[i] === " "`
+the fix reports 45,696 and BASE reports 52,224, and without ADR 0004's `equation` allow both
+arms report 8,192. A **4,000-note fuzz** x 4 option sets: **0 newly leaking, 0 prose sentinels
+lost, 44 leaks closed**, demonstrably able to fail since the same fuzz found the 10 newly-leaking
+notes that killed the full-depth arm. And the acceptance oracle is deliberately **not** NRL-63's
+wrapped-equals-single-line, which agrees in **0 of 7,168 cells on base and on the fix alike**
+because the single-line form hits the out-of-scope nested-bracket defect and mis-parses on its
+own - inheriting it would make a correct fix unfalsifiable in both directions.
+
+Verify re-measured root 4 on **its own** corpus rather than replaying the ship one, and the
+numbers must always be quoted with the corpus attached because there are now three: the
+ticket's seven stray lines are **3,584 image-only and reproduce exactly**; the same seven over
+**both kinds** are **7,168 -> 1,024**; the ship corpus of 11 shapes x 2 kinds x 512 is
+**11,264 -> 1,024**; and Verify's own 14,336-cell corpus **closed 9,216 of 13,312**. A bare
+total from any one of them will be read as contradicting the others.
+
+Verify also settled claim (b) - that the naive "skip any `]` not followed by `(`" is worse than
+changing nothing - **by construction rather than by argument**: it built the confirmation-only
+arm and measured it **strictly worse than base**, 7,168 still leaking **and** 1,536 prose-loss
+cells, which is exactly what D-88-10 predicted. That is why (b) above is not a reasoned caution.
+
+Three smaller findings from that pass, none of them blocking and each recorded only so the next
+probe does not read it as new. **A token fused to an unmatched `<!--` on a label interior line
+stops being spoken at `speakImageAlt: true` too** (256 cells per kind), which looks like a new
+silencing until the control is run: the stray-free form drops the same token on base, so it is
+pre-existing and in the silencing direction, and the mechanism is already pinned by
+`local-html-state` and `srs.md:327`. **ADR 0019's deliberately-literal class moved 2,048 ->
+1,536 in Verify's corpus**, a *decrease* and therefore in the silencing direction, all of it at
+`speakImageAlt: false` with the control agreeing on base - do not reconcile it against the
+`1,024 on both sides` figure above, which is the ship corpus and a different one.
+
+Two traps worth preserving, because both cost time and neither is visible from the code.
+**A `sourceIndex` equation exemption must key on the synthetic TEXT, not on `blockType`.**
+`extract.ts:2407` pushes the synthetic `"equation"` chunk with `blockType` `"other"`, so a
+checker exempting `blockType === "equation"` silently exempts nothing and reports 8,192
+identity failures on a correct tree. **A naive function-body extractor false-positives on
+`flowDepthDelta`.** Its body holds the regex literal `/"(?:[^"\\]|\\.)*"|'[^']*'/g`, whose
+double quotes mis-pair any tokenizer that does not know a regex literal from a string, and the
+lines below it hold `"["`, `"{"`, `"]"` and `"}"` as string literals. Hashing function bodies is
+the right technique - NRL-73, NRL-74 and NRL-88 all used it - but the extractor has to skip
+regex literals or it will report a body that moved when nothing did.
 
 R-M10 (speech segmentation) did not move the count either, and the reason is different
 from R-M09's. Its acceptance criteria are met on the automated evidence and the evidence
@@ -764,11 +1013,31 @@ rediscover them:
   every sibling under its parent folder. And **writes are serialised** by
   `src/settings/saveQueue.ts`: single-flight with coalescing, newest wins, at most one write
   in flight and one payload pending, a rejection reported exactly once through `reportError`
-  and never wedging the queue, and no retry of a failed payload (a blind retry could
-  resurrect a stale snapshot behind a newer one, which is the defect being closed). Both
-  handler bodies moved out of main.ts into `src/settings/vaultEvents.ts` behind a narrow
-  port, because main.ts has no runtime in the suite and those bodies shipped in NRL-51 with
-  no automated coverage of any kind.
+  and never wedging the queue, and, **as shipped by NRL-58**, no retry of a failed payload (a
+  blind retry could resurrect a stale snapshot behind a newer one, which is the defect being
+  closed). Both handler bodies moved out of main.ts into `src/settings/vaultEvents.ts` behind
+  a narrow port, because main.ts has no runtime in the suite and those bodies shipped in
+  NRL-51 with no automated coverage of any kind.
+  **NRL-58's two residuals - no retry, and `onunload` cannot drain - are both closed by
+  NRL-91 (PR #123, `aa87203`, `docs/adr/0026`).** `SaveQueue` now takes an optional
+  `getCurrentPayload` constructor option; when supplied, a rejected write arms a capped
+  3-attempt, 500/1000/2000ms backed-off retry that reads `getCurrentPayload()` FRESH at the
+  moment it fires rather than replaying the stale rejected object, so it can never write
+  anything older than what just failed. A real `enqueue()` always supersedes an armed retry
+  and resets its budget, which is the same newest-wins invariant extended to cover the
+  retry timer itself as a write source. `onunload` still cannot `await` - Obsidian gives no
+  hook to - so `dispose()` closes only the one NEW resource retry introduces, the armed
+  timer, and deliberately leaves an in-flight `running` write or a queued `pending` payload
+  exactly as it finds them. ADR 0026 states the resulting bound precisely: at most one
+  throttle window of position data, or one settings write that was mid-retry-backoff at the
+  moment of unload, whichever the moment catches - never a torn or corrupted payload, and
+  never accumulating across a session. **NOT VERIFIED IN OBSIDIAN**: whether Obsidian's real
+  `saveData()` ever actually rejects in practice is unmeasured, so if it never does,
+  residual 1's retry path has never been exercised by a real failure; whether an armed
+  `window.setTimeout` survives Obsidian's own plugin-unload teardown long enough for
+  `dispose()` to reach it is likewise unmeasured. All of NRL-91's evidence is bare-Node
+  against the real `SaveQueue` with a fake clock (`tests/vaultPersistence.test.ts` T7-T10,
+  18 failures pre-fix). R-M12's MUST audit floor does not move.
   Evidence, all bare-Node, measured on both sides of the diff by transcribing the shipped
   handler bodies and `saveSettings()` line for line and driving the real `PositionThrottle`
   and the real map sweeps: **7 failures at `c91ee0c`, 0 after**. A `Notes/A` -> `Notes/B`
@@ -797,6 +1066,12 @@ rediscover them:
   queue's `drain()`, so an unload mid-flight can still lose the newest snapshot - unchanged
   in kind from the pre-existing un-awaited `void this.saveSettings()`, since coalescing only
   ever discards an intermediate snapshot and the newest payload is a strict successor.
+  **That specific gap is now named and bounded rather than merely noted, by NRL-91 (PR #123,
+  `docs/adr/0026`) - see the retry/dispose paragraph earlier in this bullet.** `onunload`
+  still cannot await anything; what NRL-91 adds is a capped retry for a failed write plus a
+  `dispose()` that clears the one new timer the retry introduces, so the pre-existing
+  async-gap-at-unload described here is unchanged in kind, not closed. NOT VERIFIED IN
+  OBSIDIAN applies to that paragraph exactly as it does here.
   **R-M12's MUST audit floor does NOT move** and the `2 of 16` headline count is untouched:
   nothing here was exercised in a real vault, so rule 11 applies exactly as it does
   elsewhere on this list.
@@ -1109,9 +1384,13 @@ rediscover them:
   **Nothing was observed in Obsidian.** The other shape NRL-44 left open, **NRL-63** (F9 - a
   soft-wrapped image was not recognised across the break at all), closed **partially** with
   `0e44050` / `docs/adr/0023`: `bracketClosesLater` now carries a label across the break, the
-  plain-paragraph image and link cases went 512/512 leaking to 0/512, and **11,520 of 19,456
-  cells still leak a destination through five distinct roots**, tracked as **NRL-88** and
-  enumerated in the R-M09 section above. Nothing in that fix was observed in Obsidian either.
+  plain-paragraph image and link cases went 512/512 leaking to 0/512, and **a destination is
+  still spoken through five distinct roots**, tracked as **NRL-88** and
+  enumerated in the R-M09 section above. **Root 4 of the five closed with NRL-88**
+  (`docs/adr/0027`); four remain, plus root 4's own named residuals. The
+  `11,520 of 19,456` figure that used to sit in this sentence is deleted rather than updated:
+  it was a pre-NRL-74 baseline on an unreconstructable corpus, and NRL-88 measured its own.
+  Nothing in either fix was observed in Obsidian.
   Two things NRL-44 did **not** weaken, and must not be: `codeSpanClosesLater`'s
   confirmation, which now prevents silencing visible prose as well as disclosing hidden
   text, and `interruptsParagraph`, which NRL-45 also depends on.
@@ -1389,7 +1668,11 @@ rediscover them:
   neither re-measured nor claimed here. **Concretely: NRL-74 UNMASKS 5,120 cells of NRL-88 root
   1** that the prose-loss bug was hiding, so root 1's recorded `2,048 of 2,048` and the
   `11,520 of 19,456` headline in the R-M09 section are both **pre-NRL-74 baselines** and neither
-  is current. NRL-88 runs next in this batch and must re-measure before it reasons from them.
+  is current. **NRL-88 merged second and did re-measure**, for root 4 only, which is the one it
+  scoped: root 4 had **not** moved, and that was traced rather than assumed - its shapes carry
+  no `%%` and no `<!--` on either the opener or the stray line, so the narrowing never fires
+  inside them, and the unmasking landed on root 1. Roots 1, 2, 3 and 5 are **still
+  un-re-measured** and their recorded counts are still pre-NRL-74 baselines.
   R-M08 is **NOT** met and the `2 of 16` count does not move.
 - R-C02's Context table named three gaps: three of five install-time fields missing (language,
   installed size, license), and no remove action at all, so up to 573 MB across three Kokoro
@@ -1427,19 +1710,22 @@ rediscover them:
   `/run-tickets` run, every time on a **clean** merge, because two lanes bumping the number from
   their own bases touch either different files or different lines of one file and git has
   nothing to conflict on.
-  **One live trap, and it is armed for NRL-80.** Checks 5 and 6 compare the `test` script
-  against the registry, and a `test` naming **no** `tests/.build/*.test.mjs` path prints two
-  counted SKIPs rather than failing, deliberately, so NRL-80's runner rewrite cannot turn this
-  red for no defect. The SKIP is loud rather than silent - it is counted separately, and it
-  suppresses the bare `all suite registry tests passed` line that a reader would grep for - but
-  what is lost is real: once `test` names no suite path, **nothing ties the registry to
-  execution**. Measured at its sharpest against the shipped file rebuilt at `558bd40`, run over
-  a copied tree: with `"test": "true"`, running zero suites, it prints `2 SKIPPED` and
-  `all suite registry tests passed (2 skipped)` and **exits 0**. Naming some but not all stays a
-  hard failure, measured on the same tree by dropping one entry from the real chain:
-  `1 FAILURE(S)`, exit 1, naming the missing suite. So the degradation is the all-or-nothing
-  case specifically, and whoever lands NRL-80 should replace that tie rather than read the SKIP
-  as harmless.
+  **The SKIP trap this paragraph used to describe is gone: NRL-80 replaced the tie rather than
+  leaving it, which is what NRL-85 asked whoever landed it to do.** Read the history only as
+  history. Checks 5 and 6 no longer parse the `test` script for suite paths - it holds none, so
+  looking for them could only ever have reached that SKIP. They import the runner's own pure
+  `suitePathsFromPretest` and assert what matters now: that the runner derives the same suites
+  as `pretest`, in the same order, with no duplicate and every derived path shaped
+  `tests/.build/<name>.test.mjs`, plus a check 5''' that `scripts.test` invokes
+  `run-tests.mjs` at all. That last one is a **named failure and not a skip**. Measured on this
+  tree: `suiteRegistry` reports 34 ok and **0 skipped**, nothing in the file skips today, and
+  its `skip()` helper survives only behind a `void skip;` so a future conditional check has one
+  ready.
+  **One honest limit survives, unchanged from the chain and not widened by the rewrite.** A
+  `test` replaced by a command that never invokes the runner at all still cannot be caught from
+  in here, because this file runs inside the run that command would not start. Layer 2, the
+  runner's own planned-versus-produced reconciliation, is the other half of the tie and is
+  likewise inside it.
   Three residual holes, all inside that one file. A **trailing comma** in this file's name list
   passes silently, because the splitter filters empty entries (measured: exit 0 with a comma
   appended to `suiteRegistry`); that one is cosmetic, since no wrong count and no wrong name can

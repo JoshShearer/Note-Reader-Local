@@ -3,7 +3,7 @@
  *
  * Obsidian's community-plugin policies prohibit installing or updating
  * dependencies, and a runtime fetched from a release URL is executable
- * dependency management regardless of how it is verified (ADR 0026, which
+ * dependency management regardless of how it is verified (ADR 0028, which
  * supersedes ADR 0024's distribution decision). So the build gzips each
  * onnxruntime-web dist file, base64s it, and injects the result alongside the
  * digests. Decompression is lazy and per-file, so a reader on a system voice
