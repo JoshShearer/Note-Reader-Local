@@ -515,12 +515,47 @@ export class Player {
 
 		const canPause = typeof engine.pause === "function";
 		const canResume = typeof engine.resume === "function";
+
+		// Tested BEFORE the pair, and the order is the whole fix (NRL-49). A
+		// buffer engine's sound lives in the player's own <audio> element, so
+		// engine.pause() cannot stop it: taking the engine route on a declaration
+		// alone left the player reporting "paused" over sound that kept playing,
+		// and returned out of resume() before the element route's primeBuffer(),
+		// so a Look ahead raise stored while paused was never spent. types.ts
+		// promises these are never called on a buffer engine; this is what makes
+		// that true rather than merely likely.
+		if (!engine.capabilities.ownsPlayback) {
+			if (canPause || canResume) {
+				// Declaring either half is the programming error, whichever half it
+				// is: neither method can ever be called here. Reported rather than
+				// silently ignored, because silence is how it went unnoticed in the
+				// first place. Fires once per pause press, not once per engine, and
+				// main.ts's "error" handler clears the highlight and raises a Notice;
+				// that is loud for a pause which in fact succeeded, and is the known
+				// cost of reporting it through the same channel as the half-pair
+				// notice rather than a second one. Log-safe by construction (non-negotiable
+				// 1): this reaches trace() via reportError, and it interpolates
+				// only engine.id, never note text. Keep it that way.
+				this.emitter.emit(
+					"error",
+					new Error(
+						`Engine "${engine.id}" declares pause()/resume() but does not own playback; ` +
+							"the player holds the sound in its own <audio> element and never calls them. " +
+							"Pausing the element instead.",
+					),
+				);
+			}
+			return "element";
+		}
+
 		if (canPause && canResume) return "engine";
 		if (canPause !== canResume) {
 			// Half a pair is a programming error, and silently taking the half
 			// that exists is how a reading ends up paused with nothing able to
 			// resume it. Refuse the engine route, say so, and fall through to a
-			// route that does have a way back.
+			// route that does have a way back. Only reachable on an engine that
+			// owns playback now, which is what makes the message's last sentence
+			// true: stopping the sentence is exactly what "restart" does.
 			this.emitter.emit(
 				"error",
 				new Error(
@@ -531,7 +566,18 @@ export class Player {
 			);
 		}
 
-		return engine.capabilities.ownsPlayback ? "restart" : "element";
+		// A literal, not `ownsPlayback ? "restart" : "element"`, so the invariant
+		// the guard above enforces is visible here: everything still falling
+		// through owns its playback. That is only true while that guard returns
+		// for every buffer engine, so the edit to refuse is weakening, narrowing
+		// or moving the guard itself - not inserting a return between it and this
+		// line, which no buffer engine could reach anyway. A buffer engine that
+		// did reach "restart" would have its chunk torn down and re-read instead
+		// of paused. tests/player.test.ts covers this: deleting the guard's
+		// `return "element"` fails the element-pause delta assertions, because
+		// tearDownCurrentChunk() pauses the element twice where the element route
+		// pauses it once.
+		return "restart";
 	}
 
 	pause(): void {
@@ -579,9 +625,11 @@ export class Player {
 			// engine's own boundary events.
 			//
 			// No priming either, for the same reason as above plus one more:
-			// the only engine that takes this route owns playback, and the run
-			// loop is still parked inside the utterance it is holding, so it
-			// will prime for itself when it advances.
+			// pauseRoute only hands this route to an engine that owns playback
+			// (an invariant it now enforces, not an observation about which
+			// engines happen to be in the tree), and the run loop is still
+			// parked inside the utterance it is holding, so it will prime for
+			// itself when it advances.
 			return;
 		}
 

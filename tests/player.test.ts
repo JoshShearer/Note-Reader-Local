@@ -1595,6 +1595,147 @@ console.log("an engine that declares pause without resume is refused, not half-u
 	await playing.catch(() => undefined);
 }
 
+// --- NRL-49: a buffer engine that declares the pair -------------------------
+//
+// pauseRoute() used to test the pause/resume pair BEFORE ownsPlayback, so a
+// buffer engine that merely declared both methods took the engine route: the
+// <audio> element was never paused (the player reported "paused" over sound
+// that kept playing) and resume() returned before the element route's
+// primeBuffer(), so a Look ahead raise stored while paused was never spent.
+// The declaration is now reported as the programming error it is and the engine
+// still takes the element route. Measured on the unfixed player: the declaring
+// fake went 2 -> 2 synthesize calls across pause / setBufferAhead(6) / resume,
+// where the same fake without the declaration went 2 -> 6.
+
+console.log("a buffer engine that declares pause/resume is still paused by the element (NRL-49)");
+{
+	// bufferAhead 1 over six chunks gives 2 calls at play (current + 1 ahead)
+	// and 6 once the window widens, which is the 2 -> 6 the repro measured.
+	const { engine, calls } = makeEngine();
+	let pauses = 0;
+	let resumes = 0;
+	// Spread the espeak-shaped buffer fake and only attach the pair, so the
+	// declaration is the single difference from the control arm below.
+	const declaring: SpeechEngine = {
+		...engine,
+		pause: () => {
+			pauses += 1;
+		},
+		resume: () => {
+			resumes += 1;
+		},
+	};
+
+	const player = new Player({ bufferAhead: 1 });
+	const errors: string[] = [];
+	player.on("error", (e) => errors.push(e.message));
+	const playing = player.play(declaring, numbered(6), 1, 0);
+	await tick();
+	check("two chunks synthesised before the pause", calls.length === 2, `got ${calls.length}`);
+
+	const pausesBefore = fakeAudio.pauseCalls;
+	player.pause();
+	check("the element was paused", fakeAudio.pauseCalls - pausesBefore === 1, `delta ${fakeAudio.pauseCalls - pausesBefore}`);
+	check("the declared engine.pause() was not called", pauses === 0, String(pauses));
+	check("state is paused", player.getState() === "paused", `got ${player.getState()}`);
+	check("exactly one error was emitted", errors.length === 1, JSON.stringify(errors));
+	check("the error names the engine", errors[0]?.includes('"espeak"') === true, errors[0] ?? "none");
+	check("it is not the half-pair message", errors[0]?.includes("must come as a pair") !== true, errors[0] ?? "none");
+
+	player.setBufferAhead(6);
+	await tick();
+	check("paused player does not prefetch", calls.length === 2, `got ${calls.length}`);
+	check("the raise was stored", player.getBufferAhead() === 6, `got ${player.getBufferAhead()}`);
+
+	void player.resume();
+	await tick();
+	check("resume fills the widened window", calls.length === 6, `got ${calls.length}`);
+	check("the declared engine.resume() was not called", resumes === 0, String(resumes));
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("the control arm: the same buffer engine without the pair (NRL-49)");
+{
+	// What makes the block above a statement about the declaration alone.
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 1 });
+	const errors: string[] = [];
+	player.on("error", (e) => errors.push(e.message));
+	const playing = player.play(engine, numbered(6), 1, 0);
+	await tick();
+	check("control: two chunks before the pause", calls.length === 2, `got ${calls.length}`);
+
+	const pausesBefore = fakeAudio.pauseCalls;
+	player.pause();
+	check("control: the element was paused", fakeAudio.pauseCalls - pausesBefore === 1, `delta ${fakeAudio.pauseCalls - pausesBefore}`);
+	player.setBufferAhead(6);
+	await tick();
+	check("control: nothing prefetched while paused", calls.length === 2, `got ${calls.length}`);
+	void player.resume();
+	await tick();
+	check("control: resume fills the widened window", calls.length === 6, `got ${calls.length}`);
+	check("control: no error, because nothing was declared", errors.length === 0, JSON.stringify(errors));
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("a buffer engine declaring half a pair reports the ownsPlayback error, once (NRL-49)");
+{
+	// The ownsPlayback check runs first, so the half-pair branch is unreachable
+	// for a buffer engine: one error, and not the half-pair one, whose
+	// "Pausing by stopping the sentence instead" is false on the element route.
+	const { engine } = makeEngine();
+	const half: SpeechEngine = { ...engine, pause: () => {} };
+	const player = new Player({ bufferAhead: 1 });
+	const errors: string[] = [];
+	player.on("error", (e) => errors.push(e.message));
+	const playing = player.play(half, numbered(6), 1, 0);
+	await tick();
+
+	const pausesBefore = fakeAudio.pauseCalls;
+	player.pause();
+	check("half pair: the element was paused", fakeAudio.pauseCalls - pausesBefore === 1, `delta ${fakeAudio.pauseCalls - pausesBefore}`);
+	check("half pair: exactly one error", errors.length === 1, JSON.stringify(errors));
+	check("half pair: it is the ownsPlayback error", errors[0]?.includes("does not own playback") === true, errors[0] ?? "none");
+	check("half pair: not the must-come-as-a-pair message", errors[0]?.includes("must come as a pair") !== true, errors[0] ?? "none");
+
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("rate is still applied exactly once for a declaring buffer engine (NRL-49)");
+{
+	// Non-negotiable 9, on exactly the shape whose route moved. This engine used
+	// to be handed to the engine branch and is now handed to the element branch,
+	// and the element branch is the one that applies the rate.
+	for (const rate of [1, 1.5, 2]) {
+		const { engine } = makeEngine();
+		const seen: number[] = [];
+		const declaring: SpeechEngine = {
+			...engine,
+			async synthesize(req: SynthRequest, signal: AbortSignal) {
+				seen.push(req.rate);
+				return await engine.synthesize(req, signal);
+			},
+			pause: () => {},
+			resume: () => {},
+		};
+		const player = new Player({ bufferAhead: 1 });
+		const playing = player.play(declaring, numbered(6), rate, 0);
+		await tick();
+		player.pause();
+		void player.resume();
+		await tick();
+		check(`${rate}x: engine rendered at natural speed`, seen.length > 0 && seen.every((r) => r === 1), JSON.stringify(seen));
+		check(`${rate}x: the element carries the whole rate`, fakeAudio.playbackRate === rate, String(fakeAudio.playbackRate));
+		player.stop();
+		await playing.catch(() => undefined);
+	}
+}
+
 console.log("a rejected resume reports an error instead of hanging in paused");
 {
 	const { engine } = makeEngine();
