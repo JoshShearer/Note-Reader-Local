@@ -77,6 +77,8 @@ src/
 ├── settings/index.ts           Settings type, defaults, normaliseSettings()
 ├── settings/data.ts            data.json container: version (v2), v0 and v1 migrations, save round trip
 ├── settings/positionThrottle.ts leading/trailing position saves, injected timers and queue-path guard (NRL-51)
+├── settings/vaultEvents.ts     rename/delete orchestration behind a narrow port, obsidian-free (NRL-58)
+├── settings/saveQueue.ts       single-flight coalescing saveData queue, obsidian-free (NRL-58)
 ├── text/extract.ts             markdown → SpeechChunk[] with source offsets
 ├── text/segment.ts             sentence/grapheme/word boundaries, injected SegmenterSource, pure (ADR 0009)
 ├── audio/
@@ -262,13 +264,33 @@ These are design-level, not bugs, and they shape any new work:
   there without a stub. One predicate, `key === path || key.startsWith(path + "/")`, covers
   a file (exact key only) and a folder (the subtree), with no type branch. Both return the
   input *unchanged* when nothing matched, so repeating an already-applied event is a no-op.
-  The handlers stop playback first only when the event's old/deleted path exactly equals
-  the queue's file path. A folder-only event does not match a descendant queue; its later
-  progress can recreate the old key unless a matching descendant event stops it. Real-vault
-  event sequencing remains unverified. The queue is not retargeted (its `id` hashes
-  `filePath`), so `getFilePath()` keeps answering with the pre-rename name until the next
-  `play()`. Map mutation order also does not guarantee disk-write order; the unresolved
-  asynchronous save race is recorded in `AGENTS.md`.
+  That predicate is `covers`, and since NRL-58 it is **exported and serves two callers**: the
+  sweeps here and the playback stop in `settings/vaultEvents.ts`, which is the whole of
+  "the same path-boundary-safe relation". The orchestration - stop, then sweep, then save -
+  lives in `settings/vaultEvents.ts` behind a narrow port, not in main.ts, for the same
+  reason the sweeps live here. `covers(candidate, eventPath)` is **not symmetric and the
+  argument order is load-bearing**: the queue's file path is the candidate and the event's
+  path is the prefix, so a folder event covers a descendant read while a file event covers
+  neither its folder nor a sibling. Reversed, renaming one note would stop a read of every
+  sibling under its parent. The stop sits **ahead** of the identity early-out, so a folder
+  holding no stored position still stops a descendant read. The queue is not retargeted (its
+  `id` hashes `filePath`), so `getFilePath()` keeps answering with the pre-rename name until
+  the next `play()` - which is why the comparison is against `oldPath` and why a repeated
+  descendant event matches again and calls `stop()` a second time. That is harmless rather
+  than merely tolerated: `Player.stop()` ends in `setState("idle")`, which early-returns on
+  an unchanged state, and the module is stateless by design so there is nowhere to dedupe.
+  **Write ordering is no longer unresolved.** Every durable write goes through
+  `settings/saveQueue.ts`, which `saveSettings()` now enqueues instead of calling `saveData`
+  directly: single-flight with coalescing, newest wins, one write in flight and one payload
+  pending, a replaced payload never written, a rejection reported exactly once and never
+  wedging the queue, and no retry of the failed payload. The reversal is not corrected so
+  much as made unexpressible, since the second write is not issued until the first settles.
+  In-memory container mutation is deliberately **not** serialised, only the write:
+  `savePosition` relies on its synchronous mutation so a Stop has recorded its position
+  before returning. The residual is `onunload`, which is synchronous and cannot await
+  `drain()`, so an unload mid-flight can lose the newest snapshot - unchanged in kind from
+  the pre-existing un-awaited `void this.saveSettings()`. Real-vault event sequencing and
+  durable resume are still unverified; nothing here was observed in Obsidian.
 - **Capabilities are consumed for the transport controls only.** `src/ui/affordances.ts`
   gates play/pause, the rate nudges and the highlight toggle, and the settings engine list
   reports each engine's limitations. `pitch` still gates nothing (there is no pitch control

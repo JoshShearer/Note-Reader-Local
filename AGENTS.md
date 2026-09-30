@@ -23,7 +23,7 @@ script and no git hook, so nothing runs the gates at the moment you commit: CI i
 backstop, not a substitute. Run them locally first.
 
 ```bash
-npm test          # 20 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, adrNumbers
+npm test          # 21 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, adrNumbers, vaultPersistence
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
 ```
@@ -411,16 +411,53 @@ rediscover them:
   therefore keeps reporting the *old* path until the next `play()`. So a handler that
   compared `newPath === player.getFilePath()` would never fire, and one that skipped the
   stop would let the next progress event write the old key back, recreating the orphan the
-  handler just cleaned. The cost is user-visible: the audio stops on an exact-path match.
-  **Folder playback is a remaining limit:** the stop comparisons use exact equality, not
-  the helpers' prefix predicate. A folder-only event does not stop a descendant's queue;
-  later progress can recreate its old key. Whether Obsidian also emits descendant events
-  is unverified, so helper coverage does not establish end-to-end folder correctness.
-  A stop that flushes a pending position can also overlap the handler's `saveData()` call.
-  These writes are not serialised; their completion order and durable result have not been
-  verified in Obsidian. An older write could restore an old or deleted key on disk. There is
-  no measured bound on the race and no guaranteed later save before shutdown, so it is not
-  established as harmless or self-healing. A serialised save queue remains unimplemented.
+  handler just cleaned. The cost is user-visible: the audio stops.
+  **Both of NRL-51's two residual gaps closed with NRL-58**, and the paragraphs that said
+  they were open have been deleted rather than appended to. There is now **one** predicate,
+  `covers`, exported from `src/settings/data.ts` and used by the sweep *and* the stop, which
+  is what "the same path-boundary-safe relation" means: a folder event stops a descendant's
+  read, and `Notes/AB/x.md` survives a `Notes/A` event because of the trailing separator.
+  Its **argument order is load-bearing and not symmetric** - the queue path is the candidate,
+  the event path is the prefix - because reversed, renaming one note would stop a read of
+  every sibling under its parent folder. And **writes are serialised** by
+  `src/settings/saveQueue.ts`: single-flight with coalescing, newest wins, at most one write
+  in flight and one payload pending, a rejection reported exactly once through `reportError`
+  and never wedging the queue, and no retry of a failed payload (a blind retry could
+  resurrect a stale snapshot behind a newer one, which is the defect being closed). Both
+  handler bodies moved out of main.ts into `src/settings/vaultEvents.ts` behind a narrow
+  port, because main.ts has no runtime in the suite and those bodies shipped in NRL-51 with
+  no automated coverage of any kind.
+  Evidence, all bare-Node, measured on both sides of the diff by transcribing the shipped
+  handler bodies and `saveSettings()` line for line and driving the real `PositionThrottle`
+  and the real map sweeps: **7 failures at `c91ee0c`, 0 after**. A `Notes/A` -> `Notes/B`
+  rename while reading `Notes/A/deep.md` left `stop()` uncalled and the in-memory map holding
+  **both** `Notes/A/deep.md` and `Notes/B/deep.md` one throttle window later, and a folder
+  delete resurrected its key the same way. Two writes released in reverse settled in reverse,
+  durable order `[w1, w0]` against an enqueue order of `[w0, w1]`, leaving the disk holding
+  `["Notes/A/deep.md"]` after a rename to `Notes/A/renamed.md`. Staged fail-first in the new
+  modules, as both halves are extractions: **21 failures** in
+  `tests/vaultPersistence.test.ts` against the verbatim old behaviour (10 for the stop, 8 for
+  the ordering, 3 for the post-fix-only failure case), 0 after.
+  **A user-visible behaviour change:** a folder rename or delete now stops a descendant read
+  audibly. That is the identical trade NRL-51 already took and documented for the exact-path
+  case, extended to descendants for consistency rather than as a new decision.
+  What still does **not** hold. **NOTHING WAS OBSERVED IN OBSIDIAN**; CDP 9222 has been
+  refused for every recent ticket in this repo and no deploy happened. main.ts's two handler
+  shells, the port construction and the `SaveQueue` construction still have no automated
+  coverage of any kind, obsidian having no runtime, and the stop-then-flush ordering the
+  combined test relies on is a *transcription* of main.ts's player state subscription, not
+  the real wiring. Whether Obsidian emits descendant events is still unverified, though
+  correctness no longer depends on the answer. A repeated descendant event after a folder
+  event does call `stop()` again: the queue is deliberately not retargeted so it still
+  matches, and the module is stateless so there is nowhere to dedupe. That is harmless
+  rather than merely tolerated, because `Player.stop()` ends in `setState("idle")`, which
+  early-returns on an unchanged state. `onunload` is synchronous and cannot await the
+  queue's `drain()`, so an unload mid-flight can still lose the newest snapshot - unchanged
+  in kind from the pre-existing un-awaited `void this.saveSettings()`, since coalescing only
+  ever discards an intermediate snapshot and the newest payload is a strict successor.
+  **R-M12's MUST audit floor does NOT move** and the `2 of 16` headline count is untouched:
+  nothing here was exercised in a real vault, so rule 11 applies exactly as it does
+  elsewhere on this list.
 - Reading positions are throttled with a leading edge and a trailing flush, in
   `src/settings/positionThrottle.ts`, not in main.ts, and the window is flushed from the
   player's `state` subscription on `paused` / `idle` / `finished` rather than from
@@ -428,8 +465,11 @@ rediscover them:
   `getIndex()`, because on natural completion `getIndex()` is `chunks.length` and resolves to
   no chunk. The pre-change gate recorded nothing inside its window and its timer only
   nulled the handle, so the last position of a read was simply never persisted; measured
-  with a replica of it, 5 progress events produced 2 saves and index 4 was dropped. A second
-  in-flight save race exists on a rate nudge and is pre-existing. The `registerEvent` wiring
+  with a replica of it, 5 progress events produced 2 saves and index 4 was dropped. The
+  second in-flight save race this bullet used to record - a position write overlapping a rate
+  nudge - closed with NRL-58's `src/settings/saveQueue.ts`, and `tests/vaultPersistence.test.ts`
+  T5 pins exactly that pair: a rename's write and a rate change's write, released newest-first,
+  must still end with both the rekeyed map and rate 1.5 durable. The `registerEvent` wiring
   and the state-subscription flush are **not covered by the committed suite**: `obsidian`
   has no runtime in bare Node. Prior scratch probes used a stub, not a real vault. R-M12
   remains unverified in Obsidian, including stop, quit, reopen and resume; this merge does

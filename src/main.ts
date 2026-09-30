@@ -25,14 +25,10 @@ import {
 	type RankedCandidate,
 } from "./engines/selection";
 import { DEFAULT_SETTINGS, type Settings } from "./settings";
-import {
-	loadPluginData,
-	serialisePluginData,
-	dropReadingPositions,
-	moveReadingPositions,
-	type PluginData,
-} from "./settings/data";
+import { loadPluginData, serialisePluginData, type PluginData } from "./settings/data";
 import { PositionThrottle } from "./settings/positionThrottle";
+import { SaveQueue } from "./settings/saveQueue";
+import { applyVaultDelete, applyVaultRename, type VaultEventPort } from "./settings/vaultEvents";
 import {
 	applyHighlightLayers,
 	applySentenceHighlight,
@@ -96,6 +92,18 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 */
 	private positionThrottle!: PositionThrottle;
 	/**
+	 * The single funnel for every durable write. One write in flight, one pending
+	 * payload, newest wins; see src/settings/saveQueue.ts for why ordering the
+	 * writes is the whole point.
+	 */
+	private saveQueue!: SaveQueue;
+	/**
+	 * Everything the vault rename/delete orchestration needs from obsidian. The
+	 * orchestration itself lives in src/settings/vaultEvents.ts so it is reachable
+	 * from the suite; this object is the only part that cannot be.
+	 */
+	private vaultEvents!: VaultEventPort;
+	/**
 	 * The last automatic resolution computed, so `activeEngine()` has a sync
 	 * answer for UI call sites that cannot await (checkCallback, the control
 	 * bar). Only meaningful when `settings.engine === "auto"`; refreshed by
@@ -126,6 +134,17 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		this.pluginData = loadPluginData(await this.loadData());
 		this.settings = this.pluginData.settings;
+		// Immediately after the container and before anything else in onload, not
+		// beside the PositionThrottle below: saveSettings() now routes through this
+		// and nothing in onload may save before it exists. Nothing between here and
+		// there saves today, so this is a guard against a later insertion rather
+		// than a fix for a present ordering bug.
+		this.saveQueue = new SaveQueue({
+			write: (payload) => this.saveData(payload),
+			onError: (err) => {
+				reportError(this.app, this.manifest.dir!, "save failed", err);
+			},
+		});
 		this.applyHighlightColour();
 
 		this.modelStore = createModelStore(
@@ -161,6 +180,28 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				clearTimeout: (handle) => window.clearTimeout(handle as number),
 			},
 		});
+
+		// After the player, because the port reads the queue's file path off it.
+		this.vaultEvents = {
+			currentFilePath: () => this.player.getFilePath(),
+			stop: () => this.stopReading(),
+			positions: () => this.pluginData.positions,
+			setPositions: (next) => {
+				// The FIELD, never the container: a rebuilt root would take every
+				// key this build does not know about with it (non-negotiable 10).
+				this.pluginData.positions = next;
+			},
+			save: () => {
+				void this.saveSettings().catch(() => {
+					// Deliberately swallowed, and it is not a lost error. The
+					// SaveQueue's onError above reports every rejected write exactly
+					// once, so reporting here as well would show the user two notices
+					// for one failure; and the trace line the orchestration emits
+					// immediately before this names which event it was.
+				});
+			},
+			trace: (step, detail) => trace(this.app, this.manifest.dir!, step, detail),
+		};
 
 		// After the loadPluginData() call above and not before: a vault event
 		// arriving first would hit a `!`-initialised field. Registered through
@@ -911,94 +952,21 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
-	 * A vault rename carries every stored position under the old prefix.
-	 *
-	 * The order is load bearing. Stopping first is not tidiness: the queue's
-	 * chunks still carry the old filePath, so Player.getFilePath() keeps
-	 * reporting it and the next progress event would write the old key straight
-	 * back, about a second after this cleaned it. Stopping first means the
-	 * stop's own save records the final position under the old path
-	 * synchronously, and the re-key below moves that exact value to the new path,
-	 * retaining the final position in memory. Disk ordering is a separate concern.
-	 *
-	 * Retargeting the queue instead was rejected on evidence: SpeechChunk.id
-	 * hashes filePath, so rewriting it without recomputing the id would
-	 * desynchronise the field from its own definition.
-	 *
-	 * The cost is visible: the audio stops. An alternative is a stale position
-	 * under the new name and a fresh orphan, which is worse.
-	 *
-	 * Known race, unchanged in kind from the pre-existing one between a rate
-	 * nudge and a position write: a pending stop flush can overlap this handler's
-	 * saveData() call. Nothing serialises the writes, so issuing the re-key second
-	 * does not establish which state is durable. Completion order has not been
-	 * verified in Obsidian, and a later corrective save before shutdown is not
-	 * guaranteed. A serialised save queue remains unimplemented.
+	 * Unwrap Obsidian's event argument and hand the orchestration two strings.
 	 *
 	 * TAbstractFile, not TFile, and no branch on the type: a folder event reaches
-	 * the same handler, and an exact-key-only handler would orphan every position
-	 * under a renamed folder. The map sweep handles the subtree, but the stop
-	 * check below matches only an exact path. A descendant queue can keep writing
-	 * its old key unless Obsidian also emits a matching file event; that event
-	 * sequencing has not been verified in a real vault.
+	 * the same handler, and since NRL-58 one `covers` relation serves both the map
+	 * sweep and the playback stop, so a folder needs no special case anywhere.
+	 * Everything that decides anything lives in src/settings/vaultEvents.ts,
+	 * because main.ts has no runtime in the bare-Node suite and these two bodies
+	 * shipped in NRL-51 with no automated coverage at all.
 	 */
 	private handleVaultRename(file: TAbstractFile, oldPath: string): void {
-		const newPath = file.path;
-		// Also the guard on a double-fired folder event.
-		if (oldPath === newPath) return;
-		// oldPath, not newPath. The queue still carries the old filePath on every
-		// chunk, so getFilePath() reports the pre-rename path until the next
-		// play(); comparing against newPath would never match a read that is
-		// actually in progress. This is the observable consequence, not a
-		// theoretical one: stopReading() leaves the queue in place by design, so
-		// the accessor keeps answering with the old name for as long as the
-		// player lives.
-		if (oldPath === this.player.getFilePath()) this.stopReading();
-
-		const before = this.pluginData.positions;
-		const after = moveReadingPositions(before, oldPath, newPath);
-		// Identity, not equality: nothing matched, so there is nothing to write.
-		if (after === before) return;
-
-		this.pluginData.positions = after;
-		trace(this.app, this.manifest.dir!, "position keys renamed", `${oldPath} -> ${newPath}`);
-		void this.saveSettings().catch((err: unknown) => {
-			reportError(this.app, this.manifest.dir!, "save after rename failed", err);
-		});
+		applyVaultRename(this.vaultEvents, oldPath, file.path);
 	}
 
-	/**
-	 * A vault delete drops every stored position under the deleted path, so
-	 * entries cannot outlive the notes they describe.
-	 *
-	 * It does stop a read of the deleted note, and that is load-bearing rather
-	 * than tidiness. The queue is untouched by the delete, so the player keeps
-	 * reporting the deleted path and the next progress event writes that key
-	 * straight back - one save later, recreating exactly the orphan this handler
-	 * exists to remove. Stopping first orders the in-memory mutations, not the
-	 * asynchronous disk writes; the rename handler's save-ordering caveat applies.
-	 *
-	 * Same comparison as a rename, and for the same reason: the queue still
-	 * reports the old name, which for a delete is the only name it has.
-	 */
 	private handleVaultDelete(file: TAbstractFile): void {
-		const path = file.path;
-		if (path === this.player.getFilePath()) this.stopReading();
-
-		const before = this.pluginData.positions;
-		const after = dropReadingPositions(before, path);
-		if (after === before) return;
-
-		this.pluginData.positions = after;
-		trace(
-			this.app,
-			this.manifest.dir!,
-			"position keys dropped",
-			`${path} (${Object.keys(before).length - Object.keys(after).length})`,
-		);
-		void this.saveSettings().catch((err: unknown) => {
-			reportError(this.app, this.manifest.dir!, "save after delete failed", err);
-		});
+		applyVaultDelete(this.vaultEvents, file.path);
 	}
 
 	private async voicesForSelection(engine: SpeechEngine, isAutomatic: boolean): Promise<VoiceInfo[]> {
@@ -1466,11 +1434,17 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		this.pluginData = serialisePluginData(this.pluginData, this.settings);
-		await this.saveData(this.pluginData);
 		// A highlight toggle flipped mid-read takes effect now rather than at the
 		// next sentence boundary. Cheap, and it is the only thing that makes the
 		// toggles feel connected on an engine with no word events.
+		//
+		// BEFORE the await, not after, since NRL-58 put a queue behind the write:
+		// after it, a mid-read toggle would wait behind an unrelated queued save
+		// before the highlight moved, which is exactly the promise above.
 		this.refreshHighlightLayers();
+		// The queue, not saveData directly. This is the plugin's only saveData
+		// call site, so ordering it here orders every persistence path.
+		await this.saveQueue.enqueue(this.pluginData);
 	}
 
 	getPlayer(): Player {

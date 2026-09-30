@@ -152,8 +152,21 @@ export function serialisePluginData(data: PluginData, settings: Settings): Plugi
  * not promise anything about how a folder's descendants are sequenced. The
  * trailing separator is what keeps `Notes2/x.md` alive when `Notes` is
  * renamed: a bare `startsWith("Notes")` would take it too.
+ *
+ * Exported since NRL-58, because it now serves TWO callers and they have to
+ * agree: the map sweeps below, and the playback stop in vaultEvents.ts. Before
+ * that the stop used exact equality, so a folder rename re-keyed a descendant's
+ * stored position and left that descendant's read running, and the read's next
+ * progress event wrote the old key straight back - measured as
+ * `["Notes/A/deep.md","Notes/B/deep.md"]` in memory one throttle window after a
+ * `Notes/A` -> `Notes/B` rename of a queue on `Notes/A/deep.md`.
+ *
+ * ARGUMENT ORDER IS LOAD-BEARING and is not symmetric. `key` is the candidate
+ * being tested (a map key, or the queue's file path) and `path` is the event's
+ * path. Reversed, a rename of one note would stop a read of anything its parent
+ * folder contains, because the note's path is not a prefix of the folder's.
  */
-function covers(key: string, path: string): boolean {
+export function covers(key: string, path: string): boolean {
 	return key === path || key.startsWith(`${path}/`);
 }
 
