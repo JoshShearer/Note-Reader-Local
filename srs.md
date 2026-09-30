@@ -131,12 +131,14 @@ The plugin MUST ship with:
 
 1. **Standard files** (`README.md`, `LICENSE`, `manifest.json`, `versions.json`).
 2. **SLSA Level 3 provenance** - GitHub Actions builds the release artifact and generates cryptographic attestation of the source commit and build process (per [slsa-framework/slsa-github-generator](https://github.com/slsa-framework/slsa-github-generator)). This clause was exercised end to end once, in run `36785920227` on tag `0.1.1` at commit `3d7b3e1` on 2026-09-30 (NRL-79); that tag and its Release were deleted afterwards.
-3. **ORT runtime checksum validation, in two phases** (NRL-37, ADR 0024 amends ADR 0011) - SHA-256 checksums of all ONNX Runtime WASM files are still compiled into `main.js` at build time, from the same local `node_modules/onnxruntime-web` source and with no network access at build time. The runtime files themselves are no longer part of the shipped `main.js`/`manifest.json`/`styles.css` bundle Obsidian's installer fetches: they ship as separate assets on the same tagged GitHub Release, and are fetched on explicit user action from the Settings tab, verified against those same compiled-in digests before being trusted - exactly mirroring the existing Kokoro-weights download gate. The compiled-in checksums are also still validated against whatever is already on disk on every plugin load, as a corruption/tamper check independent of the download step.
-   - Non-negotiable: no model weights downloaded during build, only published ORT files.
-   - Non-negotiable: no automatic fallback on checksum failure; user is told to re-install the plugin (build-time checksum mismatch) or re-download the runtime (download-time or load-time checksum mismatch).
-   - Non-negotiable: checksums are read-only in the bundle and never modified at runtime.
+3. **The ONNX runtime ships inside `main.js`, and is never downloaded** (NRL-96, ADR 0028, which supersedes ADR 0024's distribution decision) - the four ONNX Runtime WASM/JS files are read from the local `node_modules/onnxruntime-web` at build time, gzipped, base64-encoded and injected into `main.js`, each with a SHA-256 digest of its *plain* bytes compiled in beside it. There is no runtime download of any kind, on any path, and no runtime asset published on the release: the three files Obsidian's installer fetches are the whole install, and Kokoro can synthesise with nothing else present. A pack is inflated lazily, one file at a time, and the digest verified *after* decompression, so a decode bug cannot pass verification by agreeing with itself and a damaged install reports itself instead of handing wrong bytes to onnxruntime.
+   - Non-negotiable: no model weights packed or downloaded during build, only the published ORT files.
+   - Non-negotiable: no fetch, no CDN, no lazy remote chunk, and no "fall back to a remote copy if the pack is broken". Arranging for executable code to arrive from outside the reviewed artifact is what the community-plugin submission guidelines prohibit (ADR 0028), and a corrupt local install is fixed by reinstalling the plugin.
+   - Non-negotiable: no automatic fallback on digest failure; the user is told to reinstall the plugin.
+   - Non-negotiable: the packed digests are read-only in the bundle and never modified at runtime.
+   - Accepted cost, recorded in ADR 0028: every install carries the runtime whether or not it uses Kokoro. Measured on the shipped build, 32,794,766 bytes of runtime compress to 10,579,272 packed and `main.js` goes from 2.3 MB to 13.6 MB.
 
-See ADR 0024 (ort-on-demand.md), alongside ADR 0011 (release-attestation.md).
+See ADR 0028 (0028-bundle-executable-runtime.md), which supersedes ADR 0024 (ort-on-demand.md) for distribution and keeps its verification reasoning, alongside ADR 0011 (release-attestation.md).
 
 Quality gates run before any release:
 - `npm run typecheck` (TypeScript must compile).
@@ -1798,11 +1800,14 @@ The plugin SHALL:
 - Avoid content telemetry.
 - Avoid logging note contents.
 - Avoid logging selected text.
-- Avoid dynamically downloading executable JavaScript, except this plugin's own pinned
-  ONNX Runtime build, fetched only on explicit user action from this plugin's own tagged
-  GitHub Release and verified against a SHA-256 digest compiled into `main.js` at build
-  time before it is ever executed (see ADR 0024).
-- Download future neural model assets only following explicit user action.
+- Never dynamically download executable code. The ONNX Runtime ships inside `main.js`,
+  gzipped and digest-verified against a SHA-256 compiled in at build time and checked after
+  decompression, so there is no exception clause to honour and nothing to download before
+  speech works (see ADR 0028, which superseded ADR 0024's on-demand download for exactly
+  this reason: fetching executable code at runtime is what the community-plugin submission
+  guidelines prohibit).
+- Download future neural model assets only following explicit user action. Model *weights*
+  are the only things this plugin ever fetches, and only on a click.
 
 Safe debug logging:
 

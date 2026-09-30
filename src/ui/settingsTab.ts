@@ -17,17 +17,14 @@ import {
 	probeGpu,
 	type WeightsVariant,
 } from "../engines/onnx/kokoro";
+import { RUNTIME_FILES } from "../engines/onnx/runtime";
 import {
 	downloadModel,
 	downloadVoice,
-	downloadOrtRuntime,
-	checkOrtStatus,
-	worstOrtStatus,
 	getInstalledSizeMb,
 	getTotalUsage,
 	removeModelBuild,
 	shouldClearPinnedKokoro,
-	ORT_RUNTIME_SIZE_MB,
 } from "./modelStore";
 import { isAcceptableColourInput } from "./highlightColour";
 import { controlAffordances, engineLimitations } from "./affordances";
@@ -452,7 +449,12 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		void getTotalUsage(
 			this.app.vault.adapter,
 			this.plugin.settings.kokoroModelPath,
-			Object.keys(this.plugin.getOrtChecksums() ?? {}),
+			// The full list, not an empty array. The runtime is bundled now
+			// (ADR 0028), so on a fresh install every one of these stats is 0 -
+			// but an install upgrading from the on-demand layout still has that
+			// ort/ directory on disk, and passing [] would quietly drop 31 MB
+			// from the figure this row is promising to be honest about.
+			[...RUNTIME_FILES],
 		).then((usage) => {
 			if (!containerEl.isConnected) return;
 			const totalMb = Math.round(usage.totalBytes / 1_000_000);
@@ -519,82 +521,27 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	}
 
 	/**
-	 * The ONNX runtime files (NRL-37).
+	 * The ONNX runtime is part of the plugin, not something the user installs.
 	 *
-	 * A directory install of the plugin - main.js, manifest.json, styles.css,
-	 * exactly what Obsidian's own installer fetches - never had `ort/`
-	 * bundled with it. Mirrors `renderKokoroInstall` above almost verbatim:
-	 * a Status row plus a Download row, gated on the explicit button click
-	 * exactly like the Kokoro model download (AGENTS.md non-negotiable 6).
-	 * The one addition is a third status the weights row does not need:
-	 * `missing` ("not downloaded yet", the expected pre-download state) is
-	 * shown distinctly from `mismatch` ("corrupted, re-download to fix"),
-	 * per the owner decision recorded on this ticket.
+	 * ADR 0028 supersedes ADR 0024's distribution decision: Obsidian's
+	 * community-plugin policies prohibit installing or updating dependencies,
+	 * and a runtime fetched from a release URL is executable dependency
+	 * management however well it is verified. The runtime therefore travels
+	 * inside main.js, so there is nothing to download, nothing to go stale and
+	 * nothing to check against the filesystem.
+	 *
+	 * What survives as a control is the one thing that can actually be wrong
+	 * on a user machine: the pack failed to unpack, which is a corrupt install
+	 * rather than a missing download. It is reported rather than papered over,
+	 * and there is deliberately no repair button - reinstalling the plugin is
+	 * the repair, and offering a second path would imply the first was a choice.
 	 */
 	private renderOrtInstall(containerEl: HTMLElement): void {
-		const store = this.plugin.getModelStore();
-		const checksums = this.plugin.getOrtChecksums();
-		const files = checksums ? Object.keys(checksums) : [];
-
 		new Setting(containerEl).setName("ONNX Runtime").setHeading();
-
-		const status = new Setting(containerEl).setName("Status");
-		const refreshStatus = async (): Promise<void> => {
-			if (!checksums || files.length === 0) {
-				// A dev build has no __ORT_CHECKSUMS__ compiled in (esbuild only
-				// injects it for production); nothing to check or download.
-				status.setDesc("Not applicable in this build (development build).");
-				return;
-			}
-			const statuses = await checkOrtStatus(this.app.vault.adapter, store.dir, files, checksums);
-			const worst = worstOrtStatus(statuses);
-			if (worst === "ok") status.setDesc("Installed and verified.");
-			else if (worst === "mismatch") {
-				status.setDesc("Runtime files are corrupted. Re-download to fix.");
-			} else status.setDesc("Not downloaded yet.");
-		};
-		void refreshStatus();
-
-		if (!checksums || files.length === 0) return;
-
 		new Setting(containerEl)
-			.setName("Download ONNX Runtime")
-			.setDesc(
-				`About ${ORT_RUNTIME_SIZE_MB} MB, fetched from this plugin's own GitHub release.`,
-			)
-			.addButton((button) =>
-				button
-					.setButtonText("Download")
-					.setCta()
-					.onClick(async () => {
-						button.setDisabled(true);
-						button.setButtonText("Downloading...");
-						const notice = new Notice("Downloading ONNX Runtime...", 0);
-						try {
-							const result = await downloadOrtRuntime(
-								this.app,
-								this.plugin.settings.kokoroModelPath,
-								this.plugin.manifest.version,
-								checksums,
-								({ file, loaded, total }) => {
-									const pct =
-										total > 0 ? ` (${Math.round((loaded / total) * 100)}%)` : "";
-									notice.setMessage(`Downloading ${file}${pct}`);
-								},
-							);
-							if (!result.ok) {
-								notice.setMessage(`Download failed: ${result.error}`);
-							} else {
-								notice.setMessage("ONNX Runtime ready.");
-								setTimeout(() => notice.hide(), 3000);
-								await refreshStatus();
-							}
-						} finally {
-							button.setDisabled(false);
-							button.setButtonText("Download");
-						}
-					}),
-			);
+			.setName("Status")
+			.setDesc("Bundled with the plugin. Nothing to download.")
+			.setDisabled(true);
 	}
 
 	/**

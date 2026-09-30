@@ -61,9 +61,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Build strictly before test: tests/release.test.ts asserts main.js and
-      # ort/ exist, so on a fresh checkout it fails for that reason alone. This
-      # step used to run typecheck, test, build in that order.
+      # Build strictly before test: tests/release.test.ts asserts main.js
+      # exists and carries the packed ORT runtime, so on a fresh checkout it
+      # fails for that reason alone. This step used to run typecheck, test,
+      # build in that order.
       #
       # NRL_SKIP_REAL_SPEECHD bypasses the two regions of tests/engine.test.ts
       # that need a running speech-dispatcher daemon and an audio sink. This
@@ -78,29 +79,20 @@ jobs:
         env:
           NRL_SKIP_REAL_SPEECHD: "1"
 
-      # NRL-76. This step feeds `needs.build.outputs.hashes` into the SLSA
-      # generator's `base64-subjects`, so everything it gets wrong becomes a
-      # signed attestation over the wrong bytes rather than a failed run. The
-      # previous body held FOUR independent silencers and all four are gone.
+      # NRL-76, amended by NRL-96/ADR 0028. This step feeds
+      # `needs.build.outputs.hashes` into the SLSA generator's
+      # `base64-subjects`, so everything it gets wrong becomes a signed
+      # attestation over the wrong bytes rather than a failed run.
       #
       # `cd dist || true`: there is no `dist/` in this repo - `npm run build`
-      # writes `main.js` and `ort/` to the REPO ROOT and deploy.mjs reads from
-      # the root - so the `cd` always failed, `|| true` swallowed it, and the
-      # step stayed in the root and found the right files BY ACCIDENT. Measured
-      # in a sandbox during NRL-76: with a `dist/` present holding different
-      # bytes under the same three names, the attested `main.js` digest was the
-      # dist copy's (`e32e168f...`) and not the root's (`79a8a4a7...`). A
-      # directory created by any future build step, cache restore or action
-      # would therefore capture the attestation silently.
-      #
-      # The `if [ -f ... ]` guard and `2>/dev/null`: measured in the same
-      # sandbox, deleting `styles.css` left the step exiting 0 and still
-      # writing a 216-byte `hashes=` covering only two files - a SILENTLY
-      # TRUNCATED attestation, which is worse than the absent one. `2>/dev/null`
-      # also hid which filename failed.
-      #
-      # `checksums.txt`: written into the workspace as a side effect. The pipe
-      # now feeds a variable, so no file is needed anywhere.
+      # writes `main.js` to the REPO ROOT and deploy.mjs reads from the root -
+      # so the `cd` always failed, `|| true` swallowed it, and the step stayed
+      # in the root and found the right files BY ACCIDENT. Measured in a
+      # sandbox during NRL-76: with a `dist/` present holding different bytes
+      # under the same names, the attested `main.js` digest was the dist
+      # copy's (`e32e168f...`) and not the root's (`79a8a4a7...`). A directory
+      # created by any future build step, cache restore or action would
+      # therefore capture the attestation silently.
       #
       # `set -euo pipefail` is in the BODY rather than via `shell: bash`,
       # because the body is what tests/release.test.ts extracts and executes;
@@ -110,15 +102,17 @@ jobs:
       # (github/docs@main workflow-syntax.md) - and that absence is exactly why
       # a failing `sha256sum` on the left of `| base64` could not fail the step.
       #
-      # ALL SEVEN published assets are subjects, matching `Upload Release
-      # Assets` below. The four ORT files are the bytes a user downloads at
-      # runtime (R-M01 clause 3, ADR 0024); attesting 3 of 7 left the two
-      # largest downloadables with no subject at all. Subject names keep their
-      # `ort/` prefix: slsa-verifier's verifyDigest compares only
-      # subject.Digest[sha256] and never the name, so flattening them to the
-      # release-asset basenames would buy nothing and add one more silent
-      # transformation of the kind this step is being cleaned of. See
-      # docs/adr/0011-release-attestation.md, Amendment (NRL-76).
+      # ALL THREE published assets are subjects, matching `Upload Release
+      # Assets` below. NRL-76 originally attested all seven build outputs,
+      # including the four ORT runtime files, because those were the bytes a
+      # user downloaded at runtime (R-M01 clause 3, ADR 0024) and attesting 3
+      # of 7 left the two largest downloadables with no subject at all. ADR
+      # 0028 (NRL-96) removed that download entirely - the runtime is packed
+      # inside `main.js` now, so `npm run build` no longer produces an `ort/`
+      # directory at all, and there is nothing left to hash separately. The
+      # runtime's own integrity is verified by `main.js`'s attested digest
+      # covering it, and independently by `tests/release.test.ts` comparing the
+      # packed bytes against `node_modules/onnxruntime-web/dist` at build time.
       #
       # The non-empty guard lives HERE and nowhere else. Do not add
       # `if: needs.build.outputs.hashes != ''` to the `provenance` job: a
@@ -137,10 +131,6 @@ jobs:
             main.js \
             manifest.json \
             styles.css \
-            ort/ort-wasm-simd-threaded.mjs \
-            ort/ort-wasm-simd-threaded.wasm \
-            ort/ort-wasm-simd-threaded.jsep.mjs \
-            ort/ort-wasm-simd-threaded.jsep.wasm \
             | base64 -w0)
           if [ -z "$HASHES" ]; then
             echo "Generate checksums produced an empty subject list; refusing to hand the SLSA generator an empty base64-subjects" >&2
@@ -156,7 +146,6 @@ jobs:
             main.js
             manifest.json
             styles.css
-            ort/
 
   release:
     needs: build
@@ -181,6 +170,14 @@ jobs:
           draft: false
           prerelease: false
 
+      # Exactly the three files Obsidian's own installer fetches, and nothing
+      # else. The four ort/ assets used to be published here so the plugin
+      # could fetch its runtime from a release URL; they do not any more,
+      # because that is executable dependency management and the
+      # community-plugin policies prohibit it (ADR 0028). The runtime now
+      # ships inside main.js. Publishing them anyway would leave a
+      # downloadable copy of executable code that nothing installs and that a
+      # future reader would reasonably assume is load-bearing.
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
@@ -188,10 +185,6 @@ jobs:
             main.js
             manifest.json
             styles.css
-            ort/ort-wasm-simd-threaded.mjs
-            ort/ort-wasm-simd-threaded.wasm
-            ort/ort-wasm-simd-threaded.jsep.mjs
-            ort/ort-wasm-simd-threaded.jsep.wasm
 
   # NRL-69: the SLSA generator is a REUSABLE WORKFLOW, so it has to be called
   # at job level via `jobs.<id>.uses:`. It used to be a step's `uses:`, which

@@ -1,8 +1,19 @@
 # 0024. Download the ONNX runtime on demand
 
-- Status: accepted
+- Status: **superseded for its distribution decision** by
+  [0028](0028-bundle-executable-runtime.md) (NRL-96, 2026-09-30); the verification
+  reasoning below is kept and reused there
 - Date: 2026-09-30
 - Ticket: NRL-37 (srs.md Security and Privacy; R-M01 Release Infrastructure); amends ADR 0011
+
+> **Superseded, and kept deliberately.** Everything below is accurate history:
+> this is what shipped, and why. The *distribution* half - fetch the runtime
+> from a tagged release into the vault on a click - cannot be submitted to the
+> Obsidian community plugin directory, because it is executable dependency
+> management, which the submission guidelines prohibit. ADR 0028 bundles the
+> runtime into `main.js` instead. Read the Context below for why the download
+> existed at all (it is still exactly right about the three-file installer) and
+> read 0028 for what replaced the distribution.
 
 ## Context
 

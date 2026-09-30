@@ -100,6 +100,7 @@ src/
 │   │   └── speechd.ts          spd-say → speaks directly, no samples back
 │   └── onnx/
 │       ├── kokoro.ts           engine, weights table, GPU probe, backend plan
+│       ├── runtime.ts          bundled ORT runtime: lazy gzip inflate, digest check, blob URL (ADR 0028)
 │       ├── kokoro.worker.ts    the worker: transformers.js + ORT, network-refusing
 │       └── browser-environment.ts  hides Node from transformers.js
 └── ui/
@@ -109,7 +110,7 @@ src/
     ├── highlight.ts             two CodeMirror StateFields (sentence, word) + highlightPlan (ADR 0020) + viewport scroll on the chunk event (ADR 0022) + shouldHighlightLeaf gating both on active-leaf-change (NRL-89)
     ├── highlightColour.ts      highlight colour setting -> CSS variable, pure (ADR 0005)
     ├── loadingNotice.ts        dismissal policy for the "Loading X..." Notice, obsidian-free (NRL-65)
-    ├── modelStore.ts           downloads, vault file IO for model assets
+    ├── modelStore.ts           model/voice downloads, vault file IO; no runtime path (ADR 0028)
     └── paths.ts                vault path resolution
 ```
 
@@ -203,28 +204,37 @@ Anything else that needs cross-line state should follow one of those two shapes:
 confirm-then-commit carry when the question is about this line, or a precomputed scalar
 when it is about the document. Never a lookahead callback into `cleanLine`.
 
-**The worker is a jail.** `kokoro.worker.ts` shims `fetch` to reject any cross-origin
-URL and asserts locality on the ORT paths, because both transformers.js and kokoro-js
-default to CDN URLs. `esbuild.config.mjs` still computes the ORT files' SHA-256 checksums
-at build time and compiles them into `main.js`, but as of NRL-37 (ADR 0024) the runtime
-files themselves are no longer vendored into the shipped plugin bundle: Obsidian's
-community-plugin installer only ever fetches `main.js`, `manifest.json` and `styles.css`,
-so a real directory install never had the old build-output `ort/` folder in the first
-place. The runtime is instead fetched on explicit user action from this plugin's own
-tagged GitHub Release, into the vault-adjacent model directory, and verified against
-those same compiled-in digests before use - the download is the one place this jail's
-network ban is deliberately not absolute, and it stays narrow: pinned version, this
-plugin's own release, nothing executed before the checksum matches.
+**The worker is a jail, and the jail has no door.** `kokoro.worker.ts` shims `fetch` to
+reject any cross-origin URL and asserts locality on the ORT paths, because both
+transformers.js and kokoro-js default to CDN URLs. As of NRL-96 (ADR 0028) the runtime
+files themselves are packed into `main.js` by `esbuild.config.mjs` - gzipped, base64'd,
+with a SHA-256 of the *plain* bytes compiled in beside each - so there is nothing left for
+the jail to guard. The download path ADR 0024 added is gone: it could not be submitted,
+because Obsidian's community-plugin guidelines prohibit a plugin installing or updating
+its own dependencies at runtime, and a runtime fetched from a release URL is that however
+carefully it is verified.
+
+Three things about the pack are load-bearing rather than tidiness. The digest is of the
+**plain** bytes and checked **after** decompression, so a decode bug cannot pass
+verification by agreeing with itself. Inflation is **per file and lazy**, because a WASM
+backend read never touches the 21 MB JSEP payload, which is the one saving that makes this
+trade survivable on a phone. And the file list is **not** trimmed per platform, because a
+build whose shipped bytes depend on the build machine would make the release
+unreproducible and the SLSA attestation meaningless.
 
 **Blob URLs for local code.** Obsidian serves the plugin folder from `app://`, which
-cannot be used as a worker origin, so `kokoro.ts` reads its own worker and ORT files out
-of the vault and re-wraps them as same-origin blobs.
+cannot be used as a worker origin, so `kokoro.ts` re-wraps both the inlined worker code
+and each unpacked runtime file as same-origin blob URLs. The worker code arrives as a
+`globalThis.KOKORO_WORKER_CODE` string and the runtime as a lazy `readBundledRuntime()`
+call - different mechanisms, same reason.
 
 **Weights live outside the plugin folder** (`.obsidian/local-tts/kokoro`) so a plugin
 update does not discard hundreds of megabytes, and out of the file tree so they do not
-clutter the vault. The ORT runtime files live in the same directory, under `ort/`, for
-the identical reason (NRL-37): a plugin update must not force a 31 MB re-download any
-more than it should for the weights.
+clutter the vault. Weights are the only thing this plugin downloads, and only on an
+explicit click. `paths.ts` still exposes `ortFile()` for one reason: an install upgrading
+from ADR 0024 can have real `ort/` files on disk, and `getTotalUsage` counts them so the
+usage figure in the settings tab stays true rather than quietly dropping 31 MB. Nothing
+reads them.
 
 **One setting key, one option field, no negation.** Each row in the settings tab's
 "Content" group writes exactly one `Settings` key, `main.ts` hands that key to the
