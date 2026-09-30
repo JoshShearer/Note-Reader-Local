@@ -13,6 +13,7 @@ import {
 	serialisePluginData,
 	moveReadingPositions,
 	dropReadingPositions,
+	covers,
 	PLUGIN_DATA_VERSION,
 	type ReadingPosition,
 } from "../src/settings/data.ts";
@@ -382,6 +383,31 @@ console.log("engine: EngineSelection widens the type, defaults to auto (NRL-24, 
 		pinned.settings?.engine === "espeak",
 		JSON.stringify(pinned.settings?.engine),
 	);
+}
+
+console.log("covers: the one path-boundary relation, pinned where it lives (NRL-58)");
+{
+	// Exported in NRL-58 because it now serves TWO callers and they have to agree:
+	// the two sweeps below, and the playback stop in src/settings/vaultEvents.ts.
+	// tests/vaultPersistence.test.ts drives it through the orchestration; these
+	// pin the predicate itself, beside the sweeps, for whoever edits it next.
+	//
+	// Guards, all of them: `covers` itself did not change in NRL-58, only its
+	// visibility and its second caller. Green on both sides of that change.
+	check("guard: covers is reflexive on an exact path", covers("Notes/a.md", "Notes/a.md") === true);
+	check("guard: covers takes a descendant of a folder", covers("Notes/A/deep.md", "Notes/A") === true);
+	check("guard: covers takes a deep descendant", covers("Notes/A/x/y/z.md", "Notes/A") === true);
+	// The trailing separator is the whole mechanism, and this is the sibling that
+	// would be swept up without it.
+	check("guard: covers rejects a prefix sibling folder", covers("Notes/AB/x.md", "Notes/A") === false);
+	check("guard: covers rejects a prefix sibling file", covers("Notes/AB.md", "Notes/A") === false);
+	// Not symmetric, and the asymmetry is load-bearing at the stop's call site:
+	// swapped, a rename of one note would stop a read of its parent folder.
+	check("guard: covers is not symmetric", covers("Notes", "Notes/a.md") === false);
+	// Fail closed on the empty edges. "" is what the player answers with when
+	// nothing is queued, and it must match nothing rather than every folder.
+	check("guard: an empty candidate matches no path", covers("", "Notes") === false);
+	check("guard: an empty path matches no candidate", covers("Notes/a.md", "") === false);
 }
 
 console.log("a rename carries the position, and only the renamed note's (NRL-51)");
