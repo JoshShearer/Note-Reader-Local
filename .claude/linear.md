@@ -42,9 +42,25 @@ Code lowercases it and uses double underscores. That is exactly the kind of diff
 breaks a hardcoded string.
 
 **Do not hardcode a prefix.** Look up the actual name in your available tools and use the
-operation names below (`get_issue`, `list_issues`, `save_issue`, `create_comment`,
+operation names below (`get_issue`, `list_issues`, `save_issue`, `save_comment`,
 `list_teams`, `list_issue_statuses`, `list_issue_labels`, `get_workspace`). If no Linear
 tool is present at all, follow the degradation rule at the bottom of this file.
+
+### The operation name can be wrong too, not just the prefix
+
+Resolving the prefix from your tool list is necessary and **not sufficient**. Linear
+consolidated its create-and-update pairs into single `save_*` operations, so an operation
+name that was correct when a command was written can disappear. Verified 2026-09-30 against
+the live server: posting a comment is **`save_comment`** (issue id plus body; `parentId` for
+a reply). There is no `create_comment`, and the one `create_*` survivor for a savable
+entity, `create_issue_label`, is itself marked deprecated in favour of `save_issue_label`.
+
+Every command in `.claude/commands/` used to name `create_comment` and every one of those
+calls would have failed. It failed **silently**, because the degradation rule below says a
+missing tracker never blocks a commit, so the run reported success with nothing posted.
+
+So when a Linear call fails to resolve, check the operation name against your tool list
+before concluding the server is down, and say in the run's report that nothing was posted.
 
 ## First-run setup
 

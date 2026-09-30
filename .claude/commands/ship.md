@@ -11,9 +11,11 @@ you.
 
 ## Linear tool names
 
-Operations used here: `get_issue`, `save_issue`, `create_comment`, `list_issue_statuses`.
+Operations used here: `get_issue`, `save_issue`, `save_comment`, `list_issue_statuses`.
 **Do not hardcode a tool prefix.** Resolve the real names for the `linear-nrl` server from your
-available tool list. Linear being unreachable never blocks a commit: do the git work and print
+available tool list. Resolving the prefix is not enough: Linear folded its create/update pairs
+into `save_*`, so posting a comment is `save_comment` and there is no `create_comment` (see
+`.claude/linear.md`). Linear being unreachable never blocks a commit: do the git work and print
 what you would have sent.
 
 ## Hard refusals
@@ -337,7 +339,7 @@ not exist fails, so check rather than assume.
 2. Exists → `save_issue` with `state: "In Review"`.
 3. Does not exist → leave the issue **In Progress**. The open PR is the review signal. Do not
    invent a status, and do not move it to Done: it is not done.
-4. Either way, `create_comment` with the PR link and the implementation summary. When there is
+4. Either way, `save_comment` with the PR link and the implementation summary. When there is
    no `In Review` status, that comment is what carries the review state.
 5. Attach the PR URL to the issue links if the MCP supports it.
 

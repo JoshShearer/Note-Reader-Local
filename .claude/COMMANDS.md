@@ -87,3 +87,25 @@ The workspace, team, statuses and labels were verified on 2026-09-28 and are rec
 Tool names are never hardcoded in a command, because the prefix genuinely differs:
 `mcp__linear-nrl__get_issue` in Claude Code, `mcp_Linear-nrl_get_issue` in opencode. Commands
 name the bare operation and resolve the real tool from the available list at runtime.
+
+Resolving the prefix is not sufficient, and this bit everything: Linear folded its create/update
+pairs into `save_*`, so **posting a comment is `save_comment` and `create_comment` no longer
+exists**. Every command here named the dead one until 2026-09-30, and because a missing tracker
+never blocks a commit, each call failed silently and the run reported success with nothing posted.
+When a Linear call will not resolve, check the operation name before blaming the server.
+
+## Running the pipeline without a human
+
+`/run-tickets` promises it never waits. That is a property of how it is launched, not of the file.
+`opencode.json` sets `git push *`, `git branch -D *` and `rm -rf *` to `ask`, and the pipeline runs
+all three: Ship pushes, Finish deletes the squash-merged branch with `-D`, and the run releases
+`.claude/pipeline.lock` with `rm -rf`. Those rules protect every other session in this repo, so the
+fix is the launch, not the config:
+
+```bash
+opencode run --auto --command run-tickets "NRL-19,NRL-20,NRL-21"
+```
+
+In Claude Code the equivalent is a bypass-mode session; the project has no `.claude/settings.json`
+and the global one allows only `Bash(npm install:*)`, so an ordinary session prompts the same way.
+`--command` and the symlink resolution were verified on opencode 1.18.32.
