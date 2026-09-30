@@ -213,3 +213,280 @@ async function downloadFiles(
 function errText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
+
+// --- ONNX Runtime on-demand download (NRL-37) ---------------------------
+//
+// The runtime WASM/mjs files are ~31 MB (measured from
+// node_modules/onnxruntime-web's dist files this session: 20,856 +
+// 11,133,407 + 44,484 + 21,596,019 bytes). Obsidian's own installer fetches
+// only main.js, manifest.json and styles.css, so a directory install never
+// had these files bundled with it. They are fetched from this plugin's own
+// tagged GitHub Release on explicit user action instead, gated identically
+// to the Kokoro model download above (AGENTS.md non-negotiable 6): nothing
+// here runs on load, on prewarm, or on first read.
+
+const ORT_RELEASE_REPO = "JoshShearer/Note-Reader-Local";
+
+/** Approximate total download size, for the settings row shown before a
+ *  click ever fires a request (measured this session; see comment above). */
+export const ORT_RUNTIME_SIZE_MB = 31;
+
+export type OrtStatus = "missing" | "ok" | "mismatch";
+
+/**
+ * The subset of Obsidian's `DataAdapter` the atomic-write and status-check
+ * helpers need.
+ *
+ * A narrow injected shape rather than the full `App`, so this logic is
+ * unit-testable in the bare-Node suite: `obsidian` has no runtime there
+ * (AGENTS.md), the same escape hatch `settings/data.ts` and
+ * `settings/positionThrottle.ts` already use. Obsidian's real
+ * `app.vault.adapter` satisfies this structurally; no wrapping needed at the
+ * call site.
+ */
+export interface AtomicAdapter {
+	writeBinary(path: string, data: ArrayBuffer): Promise<void>;
+	readBinary(path: string): Promise<ArrayBuffer>;
+	rename(oldPath: string, newPath: string): Promise<void>;
+	remove(path: string): Promise<void>;
+	exists(path: string): Promise<boolean>;
+}
+
+async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
+	const hashBuffer = await crypto.subtle.digest("SHA-256", bytes);
+	return Array.from(new Uint8Array(hashBuffer))
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
+}
+
+/** Remove a path, swallowing the error: a failed cleanup must not mask the
+ *  real failure the caller is already about to report. */
+async function removeQuietly(adapter: AtomicAdapter, path: string): Promise<void> {
+	try {
+		await adapter.remove(path);
+	} catch {
+		// Best-effort only, see doc comment above.
+	}
+}
+
+/**
+ * Write bytes to `finalPath` only if they pass their checksum, and only ever
+ * by an atomic rename - never a partial write visible at the final name.
+ *
+ * "Refuse half-written files" (ticket acceptance criterion) is satisfied
+ * literally: the only path that ever becomes `finalPath` is one that passed
+ * its checksum in full, in this attempt. A stale `.part` left over from an
+ * earlier crashed attempt is never trusted or renamed over - it is removed
+ * before the fresh write, not after, so a half-written file from a previous
+ * run can never be silently promoted by a write that fails before it gets
+ * that far.
+ */
+export async function writeBinaryAtomic(
+	adapter: AtomicAdapter,
+	finalPath: string,
+	bytes: ArrayBuffer,
+	expectedChecksum: string,
+): Promise<DownloadResult> {
+	const tempPath = `${finalPath}.part`;
+
+	if (await adapter.exists(tempPath)) {
+		await removeQuietly(adapter, tempPath);
+	}
+
+	try {
+		await adapter.writeBinary(tempPath, bytes);
+	} catch (err) {
+		await removeQuietly(adapter, tempPath);
+		return { ok: false, error: `Could not write ${finalPath}: ${errText(err)}` };
+	}
+
+	const actual = await sha256Hex(bytes);
+	if (actual !== expectedChecksum) {
+		await removeQuietly(adapter, tempPath);
+		return {
+			ok: false,
+			error: `Checksum mismatch for ${finalPath}: expected ${expectedChecksum}, got ${actual}`,
+		};
+	}
+
+	try {
+		await adapter.rename(tempPath, finalPath);
+	} catch (err) {
+		await removeQuietly(adapter, tempPath);
+		return { ok: false, error: `Could not finalise ${finalPath}: ${errText(err)}` };
+	}
+
+	return { ok: true };
+}
+
+/**
+ * Classify every ORT file as `missing` (not downloaded yet - the expected
+ * state on a fresh directory install, not a failure), `ok` (present and
+ * verified), or `mismatch` (present but corrupt or tampered with).
+ *
+ * Reuses the read-and-hash shape `validateOrtChecksums()` in main.ts already
+ * had, but returns a status per file instead of only tracing, so the caller
+ * can tell "not downloaded yet" apart from "downloaded and corrupt" - two
+ * states that call for very different UI and, for mismatch, a user-visible
+ * Notice rather than a diagnostics-log-only trace().
+ */
+export async function checkOrtStatus(
+	adapter: Pick<AtomicAdapter, "exists" | "readBinary">,
+	dir: string,
+	files: string[],
+	checksums: Record<string, string>,
+): Promise<Record<string, OrtStatus>> {
+	const result: Record<string, OrtStatus> = {};
+	const ortDir = normaliseVaultPath(`${dir}/ort`);
+
+	for (const file of files) {
+		const filePath = normaliseVaultPath(`${ortDir}/${file}`);
+		const expected = checksums[file];
+
+		if (!(await adapter.exists(filePath))) {
+			result[file] = "missing";
+			continue;
+		}
+		if (!expected) {
+			// No compiled digest to compare against. Should not happen - every
+			// file in `files` comes from the same checksum map - but a file
+			// that cannot be verified is not one that can be called `ok`.
+			result[file] = "mismatch";
+			continue;
+		}
+		try {
+			// readBinary(), never read(): these are binary .wasm/.mjs files,
+			// and adapter.read() decodes as UTF-8 text, which is lossy for
+			// bytes that are not valid UTF-8 (invalid sequences collapse to
+			// U+FFFD). That round-trip once made this exact check hash its own
+			// corrupted copy rather than the file, reporting a mismatch
+			// unconditionally regardless of whether the file on disk was
+			// correct (NRL-60).
+			const bytes = await adapter.readBinary(filePath);
+			const actual = await sha256Hex(bytes);
+			result[file] = actual === expected ? "ok" : "mismatch";
+		} catch {
+			result[file] = "mismatch";
+		}
+	}
+
+	return result;
+}
+
+/** Reduce a per-file status map to one summary: mismatch outranks missing,
+ *  which outranks ok, so any real corruption is never hidden by an
+ *  also-missing file next to it. */
+export function worstOrtStatus(statuses: Record<string, OrtStatus>): OrtStatus {
+	const values = Object.values(statuses);
+	if (values.some((s) => s === "mismatch")) return "mismatch";
+	if (values.length === 0 || values.some((s) => s === "missing")) return "missing";
+	return "ok";
+}
+
+/**
+ * Fetch the ONNX runtime into the vault, from this plugin's own tagged
+ * GitHub Release assets - not a CDN, not onnxruntime-web's own default
+ * jsdelivr URL (ADR 0011's original reasoning, preserved: the plugin never
+ * reaches a third party at runtime).
+ *
+ * Each file is buffered completely before its checksum is trusted - never
+ * mid-stream - and only written to its final name by `writeBinaryAtomic`
+ * once that checksum, computed against the same digests `esbuild.config.mjs`
+ * compiled into main.js at build time, matches. `version` is the plugin's own
+ * `manifest.version` (bare semver, e.g. "0.1.0"): the same tag shape
+ * `release.yml` already produces from a plain version-string tag push, and
+ * the same string this repo's own `versions.json` keys on, with no new
+ * stored config.
+ */
+export async function downloadOrtRuntime(
+	app: App,
+	modelDir: string,
+	version: string,
+	checksums: Record<string, string>,
+	onProgress: (progress: DownloadProgress) => void,
+): Promise<DownloadResult> {
+	const dir = normaliseVaultPath(modelDir);
+	const ortDir = normaliseVaultPath(`${dir}/ort`);
+	const files = Object.keys(checksums);
+
+	try {
+		for (const folder of [dir, ortDir]) {
+			if (!(await app.vault.adapter.exists(folder))) {
+				await app.vault.adapter.mkdir(folder);
+			}
+		}
+	} catch (err) {
+		return { ok: false, error: `Could not create ort folder: ${errText(err)}` };
+	}
+
+	for (const file of files) {
+		const expected = checksums[file];
+		if (!expected) {
+			return { ok: false, error: `No checksum compiled for ${file}; refusing to download` };
+		}
+
+		try {
+			onProgress({ file, loaded: 0, total: 0 });
+			const res = await fetch(
+				`https://github.com/${ORT_RELEASE_REPO}/releases/download/${version}/${file}`,
+			);
+			if (!res.ok) {
+				return { ok: false, error: `Download failed for ${file} (${res.status})` };
+			}
+			const total = Number(res.headers.get("content-length") ?? 0);
+			const bytes = await bufferOrtResponse(res, file, total, onProgress);
+
+			const finalPath = normaliseVaultPath(`${ortDir}/${file}`);
+			const written = await writeBinaryAtomic(app.vault.adapter, finalPath, bytes, expected);
+			if (!written.ok) return written;
+		} catch (err) {
+			return { ok: false, error: `Download failed for ${file}: ${errText(err)}` };
+		}
+	}
+
+	return { ok: true };
+}
+
+/**
+ * Stream a response into one buffer, reporting progress as it arrives.
+ *
+ * Deliberately separate from `downloadFiles()`'s streaming loop above rather
+ * than shared: that path writes each chunk straight to the vault as it
+ * arrives, which is exactly the non-atomic, trust-mid-stream behaviour this
+ * download must not have (the whole buffer needs to exist before its
+ * checksum can be trusted). Reusing it would mean threading an
+ * atomic-vs-direct flag through code that today has neither, for a function
+ * whose existing direct-write behaviour is deliberately left untouched
+ * (owner decision, NRL-37 D5).
+ */
+async function bufferOrtResponse(
+	res: Response,
+	file: string,
+	total: number,
+	onProgress: (progress: DownloadProgress) => void,
+): Promise<ArrayBuffer> {
+	if (res.body && typeof res.body.getReader === "function") {
+		const reader = res.body.getReader();
+		const parts: Uint8Array[] = [];
+		let loaded = 0;
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (value) {
+				parts.push(value);
+				loaded += value.byteLength;
+				onProgress({ file, loaded, total });
+			}
+		}
+		const merged = new Uint8Array(loaded);
+		let at = 0;
+		for (const part of parts) {
+			merged.set(part, at);
+			at += part.byteLength;
+		}
+		return merged.buffer;
+	}
+	const buffer = await res.arrayBuffer();
+	onProgress({ file, loaded: buffer.byteLength, total });
+	return buffer;
+}

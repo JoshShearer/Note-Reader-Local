@@ -65,9 +65,15 @@ console.log("model files sit outside the plugin folder");
 
 	check("worker script resolves inside the plugin folder",
 		store.workerPath.startsWith(store.pluginRoot), `${store.workerPath} vs ${store.pluginRoot}`);
-	check("ort runtime resolves inside the plugin folder",
-		store.ortFile("x.wasm").startsWith(store.pluginRoot),
-		`${store.ortFile("x.wasm")} vs ${store.pluginRoot}`);
+	// NRL-37: ort/ moved out of the plugin folder, alongside weights and
+	// voices. A directory install of the plugin (main.js, manifest.json,
+	// styles.css only, per Obsidian's own installer) never had `ort/`
+	// bundled with it, so resolving it inside the plugin folder pointed at
+	// files that would never be there; it is fetched into the model
+	// directory on explicit user action instead (modelStore.ts).
+	check("ort runtime resolves inside the model directory",
+		store.ortFile("x.wasm").startsWith(store.modelDir),
+		`${store.ortFile("x.wasm")} vs ${store.modelDir}`);
 }
 
 console.log("model paths are built per file");

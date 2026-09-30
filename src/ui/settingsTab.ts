@@ -2,7 +2,14 @@ import { App, Notice, PluginSettingTab, Setting, type ColorComponent } from "obs
 import type LocalTtsReaderPlugin from "../main";
 import type { VoiceInfo } from "../audio/types";
 import { KOKORO_VOICES, KOKORO_WEIGHTS, probeGpu } from "../engines/onnx/kokoro";
-import { downloadModel, downloadVoice } from "./modelStore";
+import {
+	downloadModel,
+	downloadVoice,
+	downloadOrtRuntime,
+	checkOrtStatus,
+	worstOrtStatus,
+	ORT_RUNTIME_SIZE_MB,
+} from "./modelStore";
 import { isAcceptableColourInput } from "./highlightColour";
 import { controlAffordances, engineLimitations } from "./affordances";
 
@@ -70,6 +77,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		if (this.plugin.activeEngine()?.id === "kokoro") {
 			this.renderKokoroRuntime(contentEl);
 			this.renderKokoroInstall(contentEl);
+			this.renderOrtInstall(contentEl);
 		}
 		if (!this.plugin.activeEngine()?.capabilities.ownsPlayback) {
 			this.renderLookAheadSection(contentEl);
@@ -322,6 +330,85 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 								// The engine may be holding an older build open.
 								await this.plugin.reloadKokoro();
 								this.display();
+							}
+						} finally {
+							button.setDisabled(false);
+							button.setButtonText("Download");
+						}
+					}),
+			);
+	}
+
+	/**
+	 * The ONNX runtime files (NRL-37).
+	 *
+	 * A directory install of the plugin - main.js, manifest.json, styles.css,
+	 * exactly what Obsidian's own installer fetches - never had `ort/`
+	 * bundled with it. Mirrors `renderKokoroInstall` above almost verbatim:
+	 * a Status row plus a Download row, gated on the explicit button click
+	 * exactly like the Kokoro model download (AGENTS.md non-negotiable 6).
+	 * The one addition is a third status the weights row does not need:
+	 * `missing` ("not downloaded yet", the expected pre-download state) is
+	 * shown distinctly from `mismatch` ("corrupted, re-download to fix"),
+	 * per the owner decision recorded on this ticket.
+	 */
+	private renderOrtInstall(containerEl: HTMLElement): void {
+		const store = this.plugin.getModelStore();
+		const checksums = this.plugin.getOrtChecksums();
+		const files = checksums ? Object.keys(checksums) : [];
+
+		new Setting(containerEl).setName("ONNX Runtime").setHeading();
+
+		const status = new Setting(containerEl).setName("Status");
+		const refreshStatus = async (): Promise<void> => {
+			if (!checksums || files.length === 0) {
+				// A dev build has no __ORT_CHECKSUMS__ compiled in (esbuild only
+				// injects it for production); nothing to check or download.
+				status.setDesc("Not applicable in this build (development build).");
+				return;
+			}
+			const statuses = await checkOrtStatus(this.app.vault.adapter, store.dir, files, checksums);
+			const worst = worstOrtStatus(statuses);
+			if (worst === "ok") status.setDesc("Installed and verified.");
+			else if (worst === "mismatch") {
+				status.setDesc("Runtime files are corrupted. Re-download to fix.");
+			} else status.setDesc("Not downloaded yet.");
+		};
+		void refreshStatus();
+
+		if (!checksums || files.length === 0) return;
+
+		new Setting(containerEl)
+			.setName("Download ONNX Runtime")
+			.setDesc(
+				`About ${ORT_RUNTIME_SIZE_MB} MB, fetched from this plugin's own GitHub release.`,
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("Download")
+					.setCta()
+					.onClick(async () => {
+						button.setDisabled(true);
+						button.setButtonText("Downloading...");
+						const notice = new Notice("Downloading ONNX Runtime...", 0);
+						try {
+							const result = await downloadOrtRuntime(
+								this.app,
+								this.plugin.settings.kokoroModelPath,
+								this.plugin.manifest.version,
+								checksums,
+								({ file, loaded, total }) => {
+									const pct =
+										total > 0 ? ` (${Math.round((loaded / total) * 100)}%)` : "";
+									notice.setMessage(`Downloading ${file}${pct}`);
+								},
+							);
+							if (!result.ok) {
+								notice.setMessage(`Download failed: ${result.error}`);
+							} else {
+								notice.setMessage("ONNX Runtime ready.");
+								setTimeout(() => notice.hide(), 3000);
+								await refreshStatus();
 							}
 						} finally {
 							button.setDisabled(false);

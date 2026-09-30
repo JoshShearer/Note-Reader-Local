@@ -50,7 +50,12 @@ import {
 	applyWordHighlightColour,
 	applySentenceHighlightColour,
 } from "./ui/highlightColour";
-import { createModelStore, type VaultModelStore } from "./ui/modelStore";
+import {
+	createModelStore,
+	checkOrtStatus,
+	worstOrtStatus,
+	type VaultModelStore,
+} from "./ui/modelStore";
 import { reportError, trace } from "./diagnostics";
 import { LocalTtsSettingTab } from "./ui/settingsTab";
 import { ControlBar } from "./ui/controlBar";
@@ -107,10 +112,25 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	override async onload(): Promise<void> {
 		trace(this.app, this.manifest.dir!, "plugin loaded");
 
-		// Validate ORT runtime checksums on load if present (production builds only).
-		// Non-negotiable: ensures integrity of published artifact files without
-		// triggering downloads. No automatic fallback on failure; user is told
-		// to re-install the plugin (report the error with manifest.dir).
+		this.pluginData = loadPluginData(await this.loadData());
+		this.settings = this.pluginData.settings;
+		this.applyHighlightColour();
+
+		this.modelStore = createModelStore(
+			this.app,
+			this.manifest.dir!,
+			this.settings.kokoroModelPath,
+		);
+
+		// Validate ORT runtime checksums on load if present (production builds
+		// only). Non-negotiable: ensures integrity of already-downloaded
+		// runtime files without triggering a download itself. Moved to after
+		// modelStore creation (NRL-37): the files now live in the vault-
+		// adjacent model directory, not the plugin folder, so resolving where
+		// to look needs settings.kokoroModelPath, which is not known until
+		// after loadPluginData() above. No automatic fallback on failure;
+		// user is told to re-install the plugin (report the error with
+		// manifest.dir).
 		if (__ORT_CHECKSUMS__) {
 			try {
 				await this.validateOrtChecksums();
@@ -124,15 +144,6 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			}
 		}
 
-		this.pluginData = loadPluginData(await this.loadData());
-		this.settings = this.pluginData.settings;
-		this.applyHighlightColour();
-
-		this.modelStore = createModelStore(
-			this.app,
-			this.manifest.dir!,
-			this.settings.kokoroModelPath,
-		);
 		this.engines = createEngines(this.modelStore, this.kokoroOptions());
 
 		// Which backend the engine settled on, and why the faster ones were
@@ -1326,51 +1337,59 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	/**
+	 * The build-time-compiled ORT checksums, or undefined outside a
+	 * production build. Exposed for settingsTab.ts, which needs the same map
+	 * both to show download-status UI and to hand to `downloadOrtRuntime()`
+	 * as the digest every downloaded byte is verified against.
+	 */
+	getOrtChecksums(): Record<string, string> | undefined {
+		return __ORT_CHECKSUMS__;
+	}
+
+	/**
 	 * Validate ORT runtime file checksums against expected values.
 	 * Non-negotiable: no silent failure or automatic fallback.
 	 * Only runs in production builds where __ORT_CHECKSUMS__ is defined.
-	 * Failures are traced but do not block plugin load (user sees error).
+	 *
+	 * `missing` (NRL-37) is the expected state before the user has ever
+	 * clicked Download - a directory install has no `ort/` bundled with it
+	 * at all (that is the whole point of the on-demand move), so treating an
+	 * absent file as a failure here would trace and alarm on every ordinary
+	 * fresh install. Only `mismatch` - a file that exists but does not hash
+	 * to its compiled-in digest, meaning real corruption or tampering after
+	 * a successful download - is traced AND surfaced as a Notice. Before
+	 * NRL-37 both cases were folded into one silent trace() call, which is
+	 * not "visible actionable failure on mismatch" (the ticket's acceptance
+	 * criterion): trace() only reaches a diagnostics log nobody opens
+	 * unprompted.
 	 */
 	private async validateOrtChecksums(): Promise<void> {
 		if (!__ORT_CHECKSUMS__) return;
 
 		const expectedChecksums = __ORT_CHECKSUMS__;
 		const pluginDir = this.manifest.dir!;
+		const files = Object.keys(expectedChecksums);
 
-		// Checksums are compiled at build time; if any file is missing,
-		// the user's plugin install is corrupted. Report it and continue
-		// so the user gets immediate visibility rather than silent failure.
-		for (const [file, expectedHash] of Object.entries(expectedChecksums)) {
-			const filePath = `${pluginDir}/ort/${file}`;
-			try {
-				// These are binary .wasm/.mjs files: readBinary(), not read().
-				// adapter.read() decodes as UTF-8 text, and these bytes are not
-				// valid UTF-8, so that round-trip is lossy (invalid sequences
-				// collapse to U+FFFD) and re-encoding the mangled string never
-				// reproduces the original bytes. That made this check hash its
-				// own corrupted copy rather than the file, so it reported a
-				// mismatch unconditionally, on every platform, regardless of
-				// whether the file on disk was actually correct - confirmed by
-				// pushing a known-good file to a device, verifying its SHA-256
-				// on-device against the real bytes (matched), and watching this
-				// check report a mismatch anyway with the exact same wrong hash
-				// (NRL-60).
-				const buffer = await this.app.vault.adapter.readBinary(filePath);
-				const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
-				const hashArray = Array.from(new Uint8Array(hashBuffer));
-				const actualHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+		const statuses = await checkOrtStatus(
+			this.app.vault.adapter,
+			this.modelStore.dir,
+			files,
+			expectedChecksums,
+		);
+		const worst = worstOrtStatus(statuses);
 
-				if (actualHash !== expectedHash) {
-					trace(
-						this.app,
-						pluginDir,
-						"checksum mismatch",
-						`${file}: expected ${expectedHash}, got ${actualHash}`,
-					);
-				}
-			} catch (err) {
-				trace(this.app, pluginDir, "checksum read failed", `${file}: ${err}`);
-			}
+		if (worst === "missing") return;
+
+		if (worst === "mismatch") {
+			const mismatched = Object.entries(statuses)
+				.filter(([, status]) => status === "mismatch")
+				.map(([file]) => file)
+				.join(", ");
+			trace(this.app, pluginDir, "ORT checksum mismatch", mismatched);
+			new Notice(
+				"ONNX Runtime files are corrupted. Open Settings and re-download the runtime to fix speech synthesis.",
+				0,
+			);
 		}
 	}
 

@@ -131,10 +131,12 @@ The plugin MUST ship with:
 
 1. **Standard files** (`README.md`, `LICENSE`, `manifest.json`, `versions.json`).
 2. **SLSA Level 3 provenance** - GitHub Actions builds the release artifact and generates cryptographic attestation of the source commit and build process (per [slsa-framework/slsa-github-generator](https://github.com/slsa-framework/slsa-github-generator)).
-3. **ORT runtime checksum validation** - SHA-256 checksums of all ONNX Runtime WASM files are compiled into `main.js` at build time and validated on plugin load.
+3. **ORT runtime checksum validation, in two phases** (NRL-37, ADR 0021 amends ADR 0011) - SHA-256 checksums of all ONNX Runtime WASM files are still compiled into `main.js` at build time, from the same local `node_modules/onnxruntime-web` source and with no network access at build time. The runtime files themselves are no longer part of the shipped `main.js`/`manifest.json`/`styles.css` bundle Obsidian's installer fetches: they ship as separate assets on the same tagged GitHub Release, and are fetched on explicit user action from the Settings tab, verified against those same compiled-in digests before being trusted - exactly mirroring the existing Kokoro-weights download gate. The compiled-in checksums are also still validated against whatever is already on disk on every plugin load, as a corruption/tamper check independent of the download step.
    - Non-negotiable: no model weights downloaded during build, only published ORT files.
-   - Non-negotiable: no automatic fallback on checksum failure; user is told to re-install the plugin.
+   - Non-negotiable: no automatic fallback on checksum failure; user is told to re-install the plugin (build-time checksum mismatch) or re-download the runtime (download-time or load-time checksum mismatch).
    - Non-negotiable: checksums are read-only in the bundle and never modified at runtime.
+
+See ADR 0021 (ort-on-demand.md), alongside ADR 0011 (release-attestation.md).
 
 Quality gates run before any release:
 - `npm run typecheck` (TypeScript must compile).
@@ -1775,7 +1777,10 @@ The plugin SHALL:
 - Avoid content telemetry.
 - Avoid logging note contents.
 - Avoid logging selected text.
-- Avoid dynamically downloading executable JavaScript.
+- Avoid dynamically downloading executable JavaScript, except this plugin's own pinned
+  ONNX Runtime build, fetched only on explicit user action from this plugin's own tagged
+  GitHub Release and verified against a SHA-256 digest compiled into `main.js` at build
+  time before it is ever executed (see ADR 0021).
 - Download future neural model assets only following explicit user action.
 
 Safe debug logging:
