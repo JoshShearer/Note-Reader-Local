@@ -9,7 +9,7 @@ import { extractChunks } from "../src/text/extract.ts";
 import { parseWav, pcmToWav } from "../src/audio/wav.ts";
 import { allocateWordTimings, wordAt } from "../src/audio/words.ts";
 import { getProcessRunner } from "../src/engines/system/spawn.ts";
-import { SpeechDispatcherEngine } from "../src/engines/system/speechd.ts";
+import { SpeechDispatcherEngine, spdRateFor } from "../src/engines/system/speechd.ts";
 import type { ProcessRunner, RunResult } from "../src/engines/system/spawn.ts";
 import type { SpeechEngine, VoiceInfo } from "../src/audio/types.ts";
 import { pickLocaleVoice, resolveStoredVoice } from "../src/audio/voiceChoice.ts";
@@ -2054,6 +2054,53 @@ console.log("NRL-47 CJK word timings");
 
 console.log("");
 if (skipped > 0) console.log(`${skipped} SKIPPED (NRL_SKIP_REAL_SPEECHD=1)`);
+// NRL-143. `-r` is espeak-ng's words-per-minute interpolation (80 / 170 / 449),
+// not a percentage. Each expected value is the curve inverted: the wpm it asks
+// for, divided by 170, is the rate the user picked.
+{
+	const wpm = (r: number) => (r >= 0 ? 170 + (r / 100) * (449 - 170) : 170 + (r / 100) * (170 - 80));
+	const cases: [number, number][] = [[1, 0], [1.5, 30], [1.7, 43], [2, 61], [0.5, -94], [0.75, -47], [3, 100], [0.25, -100]];
+	for (const [rate, want] of cases) {
+		const got = spdRateFor(rate);
+		check(`NRL-143: rate ${rate} sends -r ${want}`, got === want, `got ${got}`);
+	}
+	for (const rate of [0.5, 0.75, 1.25, 1.5, 1.7, 2, 2.5]) {
+		const heard = wpm(spdRateFor(rate)) / 170;
+		check(`NRL-143: rate ${rate} is heard within 2% (curve)`, Math.abs(heard / rate - 1) < 0.02, `heard ${heard.toFixed(3)}`);
+	}
+	check("NRL-143: 1x sends no -r at all, not -0", Object.is(spdRateFor(1), 0));
+	// The old mapping, kept only to prove these checks can fail.
+	const old = (rate: number) => Math.round(Math.max(-100, Math.min(100, (rate - 1) * 100)));
+	check("NRL-143 guard: the old mapping fails the 1.7x curve check", Math.abs(wpm(old(1.7)) / 170 / 1.7 - 1) > 0.1);
+}
+
+// The argv a real synthesize() sends, through a fake runner, so the mapping is
+// proven to be what reaches spd-say and not only what the helper returns.
+{
+	const calls: string[][] = [];
+	const runner: ProcessRunner = {
+		async run(cmd, args) {
+			calls.push([cmd, ...args]);
+			return { stdout: Buffer.from(""), stderr: "", code: 0, signal: null };
+		},
+		async spawn() {
+			throw new Error("not used");
+		},
+		async which() {
+			return "/usr/bin/spd-say";
+		},
+	};
+	const engine = new SpeechDispatcherEngine(runner);
+	await engine.synthesize({ chunk: CHUNK, rate: 1.7, pitch: 0 }, new AbortController().signal);
+	const argv = calls.find((c) => c[0] === "spd-say" && c.includes("-e")) ?? [];
+	const at = argv.indexOf("-r");
+	check("NRL-143: synthesize at 1.7x sends -r 43", at > 0 && argv[at + 1] === "43", JSON.stringify(argv));
+	calls.length = 0;
+	await engine.synthesize({ chunk: CHUNK, rate: 1, pitch: 0 }, new AbortController().signal);
+	const argv1 = calls.find((c) => c[0] === "spd-say" && c.includes("-e")) ?? [];
+	check("NRL-143: synthesize at 1x sends no -r", argv1.length > 0 && !argv1.includes("-r"), JSON.stringify(argv1));
+}
+
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);
 	process.exit(1);

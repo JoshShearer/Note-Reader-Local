@@ -232,6 +232,36 @@ function parseVoiceList(output: string): SpdVoiceRow[] {
 	return rows;
 }
 
+/**
+ * speech-dispatcher's espeak-ng output module turns `-r` into words per minute
+ * by linear interpolation between three numbers in
+ * `/etc/speech-dispatcher/modules/espeak-ng.conf` (shipped defaults, read
+ * 2026-10-01 on speech-dispatcher 0.12.1): `-r 0` is EspeakNormalRate 170 wpm,
+ * `-r 100` is EspeakMaxRate 449 and `-r -100` is EspeakMinRate 80. So `-r` is
+ * not "percent faster", and the old `(rate - 1) * 100` played every rate above
+ * 1x too fast: measured on one 140-character sentence (NRL-143), 1.5x played at
+ * 1.74x, 1.7x at 2.00x and 2.0x at 2.46x, while 0.5x only slowed to 0.74x.
+ *
+ * This inverts that curve, so the multiplier the user picked is the one heard,
+ * up to espeak-ng's own range: about 0.47x to 2.64x, beyond which `-r` clamps.
+ * The curve is espeak-ng's. Another output module (festival, a generic module)
+ * maps `-r` its own way, and this does not claim to be accurate for it; it is
+ * still monotonic there, and 1x is still `-r 0` everywhere.
+ */
+const ESPEAK_MIN_WPM = 80;
+const ESPEAK_NORMAL_WPM = 170;
+const ESPEAK_MAX_WPM = 449;
+
+export function spdRateFor(rate: number): number {
+	const target = ESPEAK_NORMAL_WPM * rate;
+	const r =
+		rate >= 1
+			? ((target - ESPEAK_NORMAL_WPM) / (ESPEAK_MAX_WPM - ESPEAK_NORMAL_WPM)) * 100
+			: ((target - ESPEAK_NORMAL_WPM) / (ESPEAK_NORMAL_WPM - ESPEAK_MIN_WPM)) * 100;
+	// `|| 0` folds a -0 from Math.round into 0, so 1x sends no -r at all.
+	return Math.round(clamp(-100, 100, r)) || 0;
+}
+
 export class SpeechDispatcherEngine implements SpeechEngine {
 	readonly id: EngineId = "speechd";
 	readonly label = "speech-dispatcher";
@@ -616,8 +646,9 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 			args.push("-y", name);
 		}
 
-		// spd-say rate and pitch are -100..100.
-		const rate = Math.round(clamp(-100, 100, (req.rate - 1) * 100));
+		// spd-say rate and pitch are -100..100. Rate is NOT a percentage: see
+		// spdRateFor.
+		const rate = spdRateFor(req.rate);
 		if (rate !== 0) args.push("-r", String(rate));
 		const pitch = Math.round(clamp(-100, 100, req.pitch));
 		if (pitch !== 0) args.push("-p", String(pitch));
