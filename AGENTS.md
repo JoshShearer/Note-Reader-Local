@@ -289,10 +289,21 @@ rewritten and this sentence is the correction.
 Two residuals, both reproduced and filed. **NRL-142**: two concurrent `spd-say` clients
 racing the daemon's autospawn leave one exiting 1 with `Can't set lock on pid file`, so a
 probe that runs beside another (plugin enable, or the settings tab's paired calls) reports
-speechd unreachable and Auto picks espeak. A single cold probe autospawns fine. **NRL-141**:
-the Web Speech probe waits its full 5,000 ms timeout on every call when the host has no
-voices, so every Auto read here reached `playing` at about +5.1 s, against `srs.md:2282`'s
-1,000 ms acceptable bound.
+speechd unreachable and Auto picks espeak. A single cold probe autospawns fine. **NRL-141**
+(PR #181, `47cf18d`, ADR 0010's NRL-141 amendment): the Web Speech probe used to wait its
+full 5,000 ms timeout on **every** call when the host had no voices, so every Auto read here
+reached `playing` at about +5.1 s, against `srs.md:2282`'s 1,000 ms acceptable bound. The
+confirmed-empty outcome is now cached per `WebSpeechEngine` behind one shared in-flight
+poll, invalidated by a persistent `voiceschanged` listener and by a synchronous
+`getVoices()` read on every call, so the local-voice gate stays fail-closed. Measured with
+the real `webspeech.ts` and real timers at 0 voices, in bare Node and injected into the
+running Obsidian 1.13.7 renderer: first `hasLocalVoice()` 4,909 ms, later calls and
+`isAvailable()` 0 ms. **The fix narrows the wait, it does not remove it**: the first probe
+after load still pays up to the full timeout, so a read issued inside that window waits out
+the rest of it. **The acceptance criterion itself, an Auto read reaching `playing` in under
+1,000 ms with speechd warm, is NOT VERIFIED**: no build carrying the fix was loaded into an
+Obsidian that can reach `spd-say`, and no real host firing `voiceschanged` late has been
+observed.
 
 **The first of those three has since closed, on a second, independent device.** A Pixel 9
 Pro XL (Android 17, WebView `app.vanium.webview`, Chromium 154) loaded the identical
