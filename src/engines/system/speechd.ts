@@ -120,6 +120,48 @@ const PROBE_TIMEOUT_MS = 5000;
  */
 const CLOSING_PROBE_TIMEOUT_MS = 500;
 
+/**
+ * Pause before the one retry of a `-O` that lost the autospawn race (NRL-142).
+ *
+ * The loser exits within about 8 ms (7-8 ms over 3 shell trials at ship
+ * time), long before the winner's daemon is accepting connections, and a
+ * retry that arrives during that window tries to autospawn again and loses
+ * the same way. Measured this session with the real bundled
+ * module against a private spd-say 0.12.0-rc2 autospawned daemon, two engine
+ * instances probing a stopped daemon at once: the winning `-O` returned at
+ * 326-343 ms, and the retry still lost in 10 of 10 trials at a 0 ms delay and
+ * 5 of 10 at 300 ms (retry issued at ~323 ms), and in 0 of 10 at 500 ms and 0
+ * of 10 at 1000 ms. 500 is the smallest of those with no loss, about 180 ms
+ * after the slowest winner. A slower or loaded machine spawns more slowly, so
+ * this is a measured floor rather than a guarantee: if the retry also loses,
+ * the probe reports unavailable exactly as it did before NRL-142, and the next
+ * probe sees the then-running daemon.
+ */
+const RACE_RETRY_DELAY_MS = 500;
+
+/**
+ * Whether a failed `-O` lost the autospawn race to another client (NRL-142).
+ *
+ * Two spd-say clients that connect to a stopped autospawned daemon at the same
+ * moment both try to spawn it; one wins, and the other exits 1 with one of two
+ * reasons, and this machine's spd-say 0.12.0-rc2 printed both: "Speech
+ * Dispatcher already running" in every losing trial during implementation, and
+ * "Can't set lock on pid file" (the variant the ticket recorded) in 2 of 3
+ * losing trials at ship time. Both are required to sit behind
+ * "Autospawn failed", so a daemon that genuinely cannot start - "Can't bind
+ * local socket", a plain connection refused, an empty stderr - is never
+ * retried and still reports unavailable.
+ *
+ * Reads stderr only to classify it. It is never logged or echoed into a
+ * reason: the reasons below stay fixed literals.
+ */
+function isAutospawnRaceLoss(stderr: string): boolean {
+	return (
+		stderr.includes("Autospawn failed") &&
+		(stderr.includes("Can't set lock on pid file") || stderr.includes("Speech Dispatcher already running"))
+	);
+}
+
 interface SpdVoiceRow {
 	name: string;
 	lang: string;
@@ -217,6 +259,17 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 	private inFlight = 0;
 	/** A `-S` that has been issued but may not have reached the daemon yet. */
 	private cancelInFlight: Promise<void> | null = null;
+	/**
+	 * The availability probe currently running, shared by every caller that
+	 * arrives while it is in flight (NRL-142). Cleared the moment it settles,
+	 * so it is a coalescing point and never a cache: a daemon that appears or
+	 * disappears later is still seen by the next call.
+	 *
+	 * Separate from `attribution` on purpose. That probe has its own `-O`
+	 * calls, deadlines and call-count contract (NRL-71, NRL-83, NRL-84), and
+	 * routing availability through it would change all three.
+	 */
+	private availabilityProbe: Promise<EngineAvailability> | null = null;
 
 	constructor(
 		private readonly runner: ProcessRunner,
@@ -230,9 +283,31 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 		 * to exercise the closing deadline. Production always takes the default.
 		 */
 		private readonly closingTimeoutMs: number = CLOSING_PROBE_TIMEOUT_MS,
+		/**
+		 * Overridden only by tests, which pass 0 so the suite never sleeps.
+		 * Production always takes the default.
+		 */
+		private readonly raceRetryDelayMs: number = RACE_RETRY_DELAY_MS,
 	) {}
 
-	async isAvailable(): Promise<EngineAvailability> {
+	/**
+	 * Concurrent callers share one in-flight probe (NRL-142). The plugin probes
+	 * from more than one place at once - `onload`'s resolveAutomaticChoice()
+	 * racing anything right after enable, and the settings tab's
+	 * resolveAutomaticChoice()/getEngineStatuses() pair - and two `spd-say -O`
+	 * clients reaching a stopped autospawned daemon together make one of them
+	 * lose the spawn and read as "could not be reached".
+	 */
+	isAvailable(): Promise<EngineAvailability> {
+		if (this.availabilityProbe) return this.availabilityProbe;
+		const probe = this.probeAvailability().finally(() => {
+			if (this.availabilityProbe === probe) this.availabilityProbe = null;
+		});
+		this.availabilityProbe = probe;
+		return probe;
+	}
+
+	private async probeAvailability(): Promise<EngineAvailability> {
 		if (!(await this.runner.which("spd-say"))) {
 			return {
 				available: false,
@@ -244,11 +319,20 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 			// -O lists configured output modules. spd-say's client autospawns
 			// the daemon on connect (verified on this machine: pointing it at
 			// an empty XDG_RUNTIME_DIR still started a fresh daemon rather than
-			// failing), so "daemon unreachable" is not a state this probe can
-			// normally observe when the spd-say binary itself exists - a failed
-			// autospawn surfaces as a non-zero exit or a thrown run() below,
-			// not as a distinguishable third case.
-			const { code, stdout } = await this.runner.run("spd-say", ["-O"]);
+			// failing), so a single cold probe against a stopped daemon is fine.
+			// What is NOT fine is two clients connecting to a stopped daemon at
+			// the same moment (NRL-142): both try to spawn it, one wins, and
+			// the other exits 1 even though the daemon is coming up. Our own
+			// callers are coalesced in isAvailable(); another client (a screen
+			// reader, a second plugin instance, a shell) cannot be, so that one
+			// specific loss is retried exactly once below. Any other failed
+			// autospawn still surfaces as a non-zero exit or a thrown run().
+			let result = await this.runner.run("spd-say", ["-O"]);
+			if (result.code !== 0 && result.signal === null && isAutospawnRaceLoss(result.stderr)) {
+				await new Promise<void>((resolve) => setTimeout(resolve, this.raceRetryDelayMs));
+				result = await this.runner.run("spd-say", ["-O"]);
+			}
+			const { code, stdout } = result;
 			const text = stdout.toString();
 			if (code !== 0 || !/OUTPUT MODULES/i.test(text)) {
 				return {
