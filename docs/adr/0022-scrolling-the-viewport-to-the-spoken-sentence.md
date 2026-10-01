@@ -332,8 +332,9 @@ is **false**: the zero-movement set is large, not measure-zero, and F1 is reacha
 at the opening of every read. The error is identifiable - every claim in this
 paragraph reasons about `moveY` at the `if (moveX || moveY)` gate
 (`node_modules/@codemirror/view/dist/index.js:200`) and stops there, missing
-`movedY` twenty lines later. At `:208-213` the library does
+`movedY` seven lines later. At `:207-209` the library does
 `let start = cur.scrollTop; cur.scrollTop += moveY / scaleY; movedY = (cur.scrollTop - start) * scaleY;`
+(the `scrollLeft` twin is the next four lines, `:211-214`)
 The browser **clamps** an out-of-range `scrollTop`, and a `scrollTop` write that
 does not change the value fires **no `scroll` event at all**. So "`moveY` is
 non-zero" and "the DOM moved" are different facts, and only the second one

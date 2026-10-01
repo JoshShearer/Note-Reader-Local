@@ -791,12 +791,13 @@ console.log("19. NRL-90: scroll suppression after a manual scroll, until playbac
 	 * native 'scroll' event ever fires and nothing consumes the arm:
 	 * `scrollRectIntoView` computes a non-zero `moveY` and passes the
 	 * `if (moveX || moveY)` gate at node_modules/@codemirror/view/dist/
-	 * index.js:200, but the write twenty lines later
-	 * (`cur.scrollTop += moveY / scaleY`, :208-213) is CLAMPED by the browser,
+	 * index.js:200, but the write seven lines later
+	 * (`cur.scrollTop += moveY / scaleY`, :207-209; the `scrollLeft` twin is at
+	 * :211-214) is CLAMPED by the browser,
 	 * and a `scrollTop` write that does not change the value fires no event.
 	 * This is the ordinary case at the opening of a read: centring a chunk in
 	 * the first half-viewport needs a negative `scrollTop`. It is measured on
-	 * a real device already, in this repo - docs/adr/0022:245-249 records
+	 * a real device already, in this repo - docs/adr/0022:242-243 records
 	 * chunks 0-4 holding `scrollTop` 0 on NRL-110's own post-`center` series,
 	 * five of twenty-two dispatches moving the DOM by zero.
 	 *

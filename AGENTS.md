@@ -1328,7 +1328,8 @@ rediscover them:
   what two ADRs predicted. `applyHighlightLayers` arms the flag before every scrolling
   dispatch, but a dispatch does not always move the DOM: `scrollRectIntoView` passes its
   `if (moveX || moveY)` gate at `node_modules/@codemirror/view/dist/index.js:200` and then
-  has its `cur.scrollTop += moveY / scaleY` write **clamped** by the browser at `:208-213`,
+  has its `cur.scrollTop += moveY / scaleY` write **clamped** by the browser at `:207-209`
+  (the `scrollLeft` twin is the next four lines, `:211-214`),
   and a `scrollTop` write that changes nothing fires **no `scroll` event**. So the arm
   survives unconsumed, and before this line it survived a playback restart too and
   swallowed the first genuine user scroll of the next read - contradicting
@@ -1336,13 +1337,17 @@ rediscover them:
   bare Node against the real `src/ui/highlight.ts` before anything was changed; `19h` and
   `19i` in `tests/highlight.test.ts` block 19 are red against the unfixed function and
   green after, with four guards and one tripwire green on both sides and labelled as such.
-  **F1 is REACHABLE, and the earlier "measure-zero" reading was wrong.** Both
-  `docs/adr/0030`'s own Consequences and `docs/adr/0022`'s NRL-110 amendment expected
-  `{ y: "center" }` to make the zero-movement case vanish, because the `center` arm
-  computes `moveY` unconditionally. That reasoning stops at the gate and misses `movedY`
-  twenty lines later; `moveY != 0` with the DOM not moving is ordinary. Both documents are
-  corrected in place rather than left standing, and the superseded reading must not be
-  restated. The strongest evidence was already in the repo: NRL-110's own post-`center`
+  **F1 is REACHABLE, and the earlier "measure-zero" reading was wrong.** That expectation
+  came from **`docs/adr/0022`'s NRL-110 amendment at `:313-317`** and from NRL-90's
+  pre-flight triage note, **not** from ADR 0030 - an earlier draft of this bullet and of
+  ADR 0030's own amendment attributed it to ADR 0030's Consequences, and that section
+  contains no occurrence of `center`, `NRL-110`, `F1` or `measure-zero` at all, which is
+  unsurprising since ADR 0030 predates NRL-110. Get the attribution right or a reader goes
+  hunting for a sentence that is not there. The reasoning itself was that the `center` arm
+  computes `moveY` unconditionally, so the gate almost never zeroes; it stops at the gate
+  and misses `movedY` **seven lines later**; `moveY != 0` with the DOM not moving is
+  ordinary. Both ADR 0022 and ADR 0030 are corrected in place rather than left standing,
+  and the superseded reading must not be restated. The strongest evidence was already in the repo: NRL-110's own post-`center`
   on-device series at `docs/adr/0022:240-249` records chunks 0-4 holding `scrollTop` 0,
   **five of twenty-two dispatches moving the DOM by zero**, at the opening of every read.
   Three further reachable cases are named in ADR 0030; R2 (a note's tail) and R3 (a note
@@ -1358,6 +1363,19 @@ rediscover them:
   gesture emitting two or more events still latches. `19n` pins both halves as a tripwire.
   Build on the NRL-110 decision-3 correction recorded above rather than the superseded
   `side === 1` reasoning.
+  **The one-liner is not purely fail-open either, and that cost is now written into
+  ADR 0030 rather than living only in PR #157's body.** `expectingOwnScroll.delete` opens a
+  narrow **fail-closed** window that did not exist before: CodeMirror writes `scrollTop` off
+  its own `requestAnimationFrame` and the native `scroll` event arrives at the next
+  rendering update, so a read restarting **inside that gap** deletes the arm and the still
+  pending event from our own scroll latches suppression at the start of the new read. Before
+  the fix the surviving arm absorbed it - which was the defect - so this is the fix's own
+  cost, not a pre-existing shape. It is bounded to **one read** (one DOM move produces one
+  event, measured, so at most one is ever pending and the next restart clears it) and needs
+  **two user actions inside one rendering update**, which a human cannot produce by hand.
+  Note the bound's units: "about one animation frame" is a **60Hz-unloaded** figure, and the
+  real bound is one rendering update, which stretches with frame time under load - and this
+  device demonstrably stalls. Still one read, so the conclusion holds and the number does not.
   **OBSERVED IN A REAL OBSIDIAN, for the first time for this feature, on Android** - so
   ADR 0030's original "NOT VERIFIED IN OBSIDIAN" is superseded for these four facts and
   stands for everything else. Pixel 9 Pro XL, Obsidian WebView Chrome/154, vault
@@ -1379,6 +1397,26 @@ rediscover them:
   `scrollTop` **300 back to 0**; after, it carried **zero** scroll effects and `scrollTop`
   held at **300**. And a restart does restore follow - with suppression latched, a fresh read
   dispatched scroll effects again at heads 2 and 21.
+  **All three of those were then re-measured by a second agent rather than replayed, which is
+  rare enough in this repo to be worth saying.** **M1 confirmed independently**: two
+  consecutive opening chunk dispatches each carried a `y: "center"` scroll effect (heads 2
+  and 21) with `scrollTop` **0 before, 0 synchronously after, 0 two frames after and 0 at
+  300 ms**, and **zero native `scroll` events over 72 s**. **M2 came out stronger than the
+  first pass**: **47, 53, 53, 54, 56, 98 and 223** events across **seven** gestures, **four
+  of them real OS-level touches via `adb shell input swipe`** rather than CDP synthesis -
+  minimum **47**, never 1 - so F1's accepted residual costs **one swallowed event out of
+  dozens**. **M4 confirmed single-variable**, with the pre-fix side built in a copied shadow
+  root by removing only the one-liner so the worktree was never touched: before, `scrollTop`
+  dragged **300 -> 0**; after, **16 dispatches, 0 scroll effects, `scrollTop` held at 300**.
+  **Two method traps from that device work, recorded so they are not re-learned.** Clearing a
+  stored reading position with `plugin.saveData()` alone is **not enough** - the in-memory
+  `plugin.pluginData.positions` is re-saved over it and the read resumes at the stored index
+  (observed resuming at **chunk 29**), silently invalidating any series meant to start at
+  chunk 0; it must be emptied in memory too. And the arbitrary-CDP helper's `send` mode
+  **hangs and the gesture silently does not fire** without a preceding `Runtime.evaluate` on
+  the same socket - three runs returned zero events and no error, which reads as "the gesture
+  produced nothing" rather than "the gesture never happened". Use the `seq` form with a
+  leading eval, or `adb shell input swipe`, which is both more real and more reliable.
   **Limits.** `main.ts` imports `obsidian` and has no bare-Node runtime, so the three
   register/reset call sites and the `isScrollSuppressed` read are **unexercised by
   `npm test`**. The suite invokes the captured handler directly, so real event timing

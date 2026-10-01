@@ -208,19 +208,28 @@ editor, because the concept is absent from its signature.
 Added in place rather than as a new ADR, because this is the same decision
 finished rather than a different one. It does three things: it clears a stale
 `expectingOwnScroll` arm in `resetScrollSuppression`; it re-derives F1 against
-NRL-110's `{ y: "center" }` and finds it **reachable**, correcting both this ADR's
-own expectation and ADR 0022:309-346; and it records F1 as an accepted,
-reachability-mapped, fail-open residual with the one measurement that would decide
-whether it needs machinery.
+NRL-110's `{ y: "center" }` and finds it **reachable**, correcting
+ADR 0022:309-346 and the NRL-90 pre-flight triage note that said the same; and it
+records F1 as an accepted, reachability-mapped, fail-open residual with the one
+measurement that would decide whether it needs machinery.
 
 ### F1 is reachable, and the earlier "measure-zero" reading was wrong
 
-Both this ADR's Consequences and ADR 0022's NRL-110 amendment expected
-`{ y: "center" }` to make F1 vanish, on the ground that the `center` arm of
+The "measure-zero" expectation did **not** come from this ADR. Its
+pre-amendment body, Consequences included, says nothing about `{ y: "center" }`
+at all - grep lines 1-205 for `center`, `NRL-110`, `F1`, `zero-movement` or
+`measure-zero` and every count is zero, which is unsurprising since ADR 0030 was
+written before NRL-110 landed. The expectation lived in exactly two places:
+**ADR 0022's NRL-110 amendment at :313-317**, and the NRL-90 pre-flight triage
+note that was carried into this ticket's clarification. Attributing it to this
+ADR's own Consequences, as an earlier draft of this amendment and of AGENTS.md
+did, sends a reader looking for a sentence that is not there. Both of those two
+places expected `{ y: "center" }` to make F1 vanish, on the ground that the
+`center` arm of
 `scrollRectIntoView` computes `moveY` unconditionally, so the
 `if (moveX || moveY)` gate at `node_modules/@codemirror/view/dist/index.js:200`
 almost never zeroes. That reasoning is correct as far as it goes and **stops one
-screen too early**. Twenty lines past the gate, at `:208-213`:
+screen too early**. Seven lines past the gate, at `:207-209`:
 
 ```js
 let start = cur.scrollTop;
@@ -248,7 +257,16 @@ Four reachable sub-cases, named so each can be argued with separately:
 - **R2, the tail of every note. REASONED, not measured.** Symmetric: `scrollTop`
   is already at its maximum, so centring a chunk in the last half-viewport clamps
   the same way. NRL-110's series stopped at chunk 21, `scrollTop` 1209 of a
-  maximum 8116, so it never reached this.
+  maximum of **8,500**, so it never reached this. That maximum belongs to one
+  specific note and is quoted with it so it cannot drift again:
+  `AcceptanceTest/ScrollAcceptance.md`, 60 sentences, doc length 16,211,
+  `scrollHeight` **9,497** against `clientHeight` 997, re-measured on the Pixel 9
+  Pro XL during NRL-90's verification pass and agreeing with the On-device
+  section below. An earlier draft of this bullet derived 8,116 from
+  ADR 0022:225's `scrollHeight` 9,113, which is an **older measurement of the
+  same note from a different session**; 9,497 / 8,500 is the current pair, and
+  the discrepancy is session drift in the note or the editor's own geometry
+  rather than an error in either ticket.
 - **R3, a note shorter than the viewport. REASONED, not measured.** At
   `index.js:152-155`, `if (cur.scrollHeight <= cur.clientHeight && cur.scrollWidth <= cur.clientWidth) { cur = parent; continue; }`
   skips `scrollDOM` entirely and the parent walk ends at `doc.body`, where `:202`
@@ -282,7 +300,7 @@ arm behind - was designed, costed and **rejected, because it fails closed**:
 - CodeMirror does not scroll inside `dispatch`. `index.js:7714-7715` calls
   `this.requestMeasure()`, and `:8003-8005` is
   `requestMeasure(request) { if (this.measureScheduled < 0) this.measureScheduled = this.win.requestAnimationFrame(() => this.measure()); }`.
-  The `scrollTop` write at `:208-213` therefore happens in a **later** animation
+  The `scrollTop` write at `:207-209` therefore happens in a **later** animation
   frame than our dispatch.
 - A `scrollTop` write fires `scroll` asynchronously, at the next rendering update
   per CSSOM-View's "run the scroll steps", so the event lands at least one frame
@@ -324,6 +342,48 @@ restart and swallowed the **first** genuine user scroll of the next read, which
 contradicts this function's own claim to restore normal follow behaviour and is
 acceptance criterion 4 of the ticket ("playback restarting resets to the normal
 follow behaviour").
+
+### The shipped fix's own cost: a narrow fail-closed window (critique F2)
+
+Recorded here rather than left in PR #157's body, because the section above
+rejects the self-expiring arm **entirely** on a fail-open versus fail-closed
+asymmetry, and the one-liner that shipped instead is not purely fail-open. It
+opens a fail-closed window of its own, and a reader weighing that asymmetry
+should see both sides of it.
+
+The window: CodeMirror writes `scrollTop` off its own `requestAnimationFrame`
+(`:8003-8005`), and the browser then fires `scroll` asynchronously at the next
+rendering update. If a read **restarts inside that gap** - after the write, before
+the event is dispatched - `resetScrollSuppression` deletes the arm, and the still
+pending event from *our own* scroll arrives with nothing to consume it and latches
+suppression at the very start of the new read. Before the fix the surviving arm
+absorbed exactly that event, so this is the fix's own cost rather than a
+pre-existing shape: the window **did not exist** before `expectingOwnScroll.delete`.
+
+Three things bound it, and the bound is why it is accepted rather than designed
+around:
+
+- **It is bounded to one read.** A single DOM move produces a single `scroll`
+  event - measured on the device, where a programmatic write 0 -> 1 and
+  CodeMirror's own 300 -> 0 move each produced exactly one - so at most one event
+  is ever pending, and the next `resetScrollSuppression` clears the spurious
+  suppression.
+- **It needs two user actions inside one rendering update.** A stop and a restart
+  have to land between CodeMirror's `scrollTop` write and the resulting event's
+  dispatch. A human cannot produce that by hand.
+- **It is strictly narrower than the rejected arm's failure.** The self-expiring
+  arm fails closed on *every* chunk of *every* read; this fails closed only on a
+  restart that happens to fall inside one rendering update, and only until the
+  next restart.
+
+One refinement on that second bullet, from NRL-90's verification pass. The
+window is often described as "about one animation frame", and that is a
+**60Hz-unloaded** figure rather than a constant: what actually bounds it is one
+rendering update, which stretches with frame time under main-thread load - and
+this device demonstrably stalls (the `preparing` stalls recorded at the end of
+this amendment are the same machine). So the window is wider than 16 ms under
+load. It is still one rendering update, still one read, and still two user
+actions deep, so the conclusion does not change; the number does.
 
 ### Coverage, and what the suite now does and does not prove
 
@@ -398,6 +458,15 @@ immediately after, 0 two frames later and 0 at 100 ms** on every one of them, wi
 measured on the device rather than derived from the library source, and it confirms
 R1 independently of ADR 0022's series.
 
+**M1 was then confirmed a second time, by a different agent re-measuring rather
+than reading this section.** Two consecutive opening chunk dispatches each carried
+three effects including one `y: "center"` scroll effect, at heads 2 and 21 - the
+same first two heads as above - with `scrollTop` **0 before, 0 synchronously
+after, 0 two animation frames after and 0 at 300 ms** on both, and **zero native
+`scroll` events over a 72-second window**. Independent confirmation of a
+measurement is rare in this repo, so it is worth saying plainly: F1 is observed,
+not argued, and observed twice.
+
 **M2, the deciding measurement, and it answers the falsifiable prediction above in
 the favourable direction.** A real touch drag synthesized through CDP
 `Input.synthesizeScrollGesture` (`gestureSourceType: "touch"`, 350-400 px,
@@ -409,6 +478,16 @@ follow-up ticket is filed**. The honest limit is that this is the typical case, 
 the worst one: a programmatic `scrollDOM.scrollTop += 300` emits exactly one event
 and is indistinguishable from a user scroll to the listener, so a single-event
 scroll source would still lose that one event.
+
+**M2 re-measured independently, and with real OS-level touches.** NRL-90's
+verification pass repeated it on the same device rather than replaying the series
+above, and got **47, 53, 53, 54, 56, 98 and 223 events across seven gestures** -
+**four of them real OS-level touches via `adb shell input swipe`** rather than CDP
+synthesis, which is a stronger input path than the one the three figures above
+used. The minimum over both passes is **47**, never 1 and never close to 1, so
+F1's accepted residual costs **one swallowed event out of dozens**. The two series
+agree in the only way that matters here (order of magnitude, not the digit), and
+the second one widens the method as well as the sample.
 
 **M3, the feature works at all.** After that 54-event gesture moved `scrollTop`
 from 0 to 400 mid-read, the next two chunk dispatches carried **two effects and
@@ -433,6 +512,32 @@ single event).
   and zero scroll effects**, `scrollTop` held at **300**, and `nEvents` stayed at
   1, so the plugin produced no scroll of its own. The single event latched
   suppression, because the arm no longer survived the restart.
+
+**M4 re-measured independently too, single-variable.** The second pass rebuilt the
+pre-fix side in a copied shadow root by removing only the one-liner - so the real
+worktree was never touched - pushed it, verified the on-device digest, and ran the
+identical command sequence. **Before**: the restarted read's chunk dispatch
+carried a scroll effect and dragged `scrollTop` **300 -> 0**, suppression never
+latching. **After**: **16 dispatches, zero scroll effects, heads `[]`, `scrollTop`
+held at 300.** Both sides of the original M4 reproduce.
+
+### Two method traps, recorded so they are not re-learned
+
+Neither is a finding about the plugin. Both cost time during NRL-90's device work
+and neither is visible from the code.
+
+- **Clearing a stored reading position with `plugin.saveData()` alone is not
+  enough.** The plugin's in-memory `plugin.pluginData.positions` is re-saved over
+  whatever was written to disk, so the read resumes at the stored index anyway -
+  observed resuming at **chunk 29** after what looked like a successful clear,
+  which silently invalidates any before/after series that was supposed to start at
+  chunk 0. `plugin.pluginData.positions` must be emptied in memory as well.
+- **The arbitrary-CDP helper's `send` mode hangs, and the gesture silently does
+  not fire, without a preceding `Runtime.evaluate` on the same socket.** Three
+  runs came back with zero scroll events and no error, which reads as "the gesture
+  produced nothing" rather than "the gesture never happened". Use the `seq` form
+  with a leading eval, or `adb shell input swipe`, which is both more real and more
+  reliable - it is also what produced four of M2's seven gestures.
 
 **M4(i), a restart does return to normal follow behaviour.** With suppression
 latched by a 33-event real gesture, a stop and a fresh read produced chunk
