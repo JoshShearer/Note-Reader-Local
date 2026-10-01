@@ -271,8 +271,13 @@ reported unavailable, because `spawn.ts`'s `import("child_process")` could not r
 Obsidian's renderer. NRL-135 (PR #177, `docs/adr/0033`) replaced it with a call-time
 `require`; on 2026-10-01 in native Obsidian 1.13.7 both reported available and a read on
 Auto went `preparing` -> `playing` on `speechd`, advancing a chunk. Not listened to by ear.
-One residual, unticketed: with no speech-dispatcher daemon process running, the probe
-reported `spd-say could not be reached` until the daemon was started.
+Two residuals, both reproduced and filed. **NRL-142**: two concurrent `spd-say` clients
+racing the daemon's autospawn leave one exiting 1 with `Can't set lock on pid file`, so a
+probe that runs beside another (plugin enable, or the settings tab's paired calls) reports
+speechd unreachable and Auto picks espeak. A single cold probe autospawns fine. **NRL-141**:
+the Web Speech probe waits its full 5,000 ms timeout on every call when the host has no
+voices, so every Auto read here reached `playing` at about +5.1 s, against `srs.md:2282`'s
+1,000 ms acceptable bound.
 
 **The first of those three has since closed, on a second, independent device.** A Pixel 9
 Pro XL (Android 17, WebView `app.vanium.webview`, Chromium 154) loaded the identical
