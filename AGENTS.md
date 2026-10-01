@@ -2015,7 +2015,9 @@ construction, not by measurement: `opensHtmlBlock` is a second predicate beside
 `opensObsidianBlock` rather than a widened one, and `.trim()` is correct for `<!--` where it is
 wrong for `%%`). **NRL-95 came off this list** - a mid-line `<!--` whose only `-->` sits in a
 LATER paragraph is no longer hidden; see its own paragraph at the end of this section, and read
-the NRL-111 correction there before quoting its probe. Nothing in any of the three was exercised
+the NRL-111 correction there before quoting its probe. **NRL-136**, a disclosure filed against
+R-M08 after this list was written (a line-start `<!-- y --> <!--` hides the rest of the note), is
+closed and not on it; see its bullet after NRL-120's. Nothing in any of the three was exercised
 in a real Obsidian (rule 11).
 
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
@@ -3572,7 +3574,8 @@ rediscover them:
   not cover them). Ship's own census, 989,184 cells against real rendered HTML, found **73,728
   newly speaking, every one reproduced on base** once the heading's `<!--` becomes plain text:
   the same-line reopen (`<!-- y --> <!--` is raw HTML to the renderer, which hides the rest of the
-  note; **NRL-136**), which part 2's `$$` stop also unmasks by a second route; and raw HTML blocks
+  note; **NRL-136**, since closed, see the next bullet), which part 2's `$$` stop also unmasks by a
+  second route; and raw HTML blocks
   spoken as prose, `<?x` and a `<div>` holding a mid-line `<!--` (**NRL-137**). Verify added a
   fourth, **736 cells** of a space-tab `<!--`, the NRL-93 / NRL-115 family. The
   `pin-nrl120-unmasked-*` rows are the tripwires, each beside a base control. **NRL-115 overlaps term 1**, and it
@@ -3593,6 +3596,39 @@ rediscover them:
   `wasPara`). Quote and list arms stay spaces-only, fail-closed. 12 core pins red on `faf55a3`,
   green after; bare Node against the executed parser, **NOT VERIFIED IN OBSIDIAN**. R-M08 not
   met, `2 of 16` unchanged.
+- **NRL-136 closed the same-line reopen** (`docs/adr/0025`'s NRL-136 section, `srs.md`'s `<!--`
+  bullet). A line that is an HTML block for the renderer (its FIRST `<!--` a line-start opener) is
+  raw to its end, so a LATER unclosed `<!--` on it, or one in the remainder of a block's closing
+  line, opens a **browser comment** scoped to the document, hiding through the next `-->` anywhere.
+  `cleanLine` takes a 13th argument, `htmlContext`, which the CALLER decides; do not move that
+  decision into `cleanLine`, it needs document state. The first draft (PR #186) was blocked at
+  Verify for three disclosure classes, and the rework closes each: a `-->` inside an inline
+  `%%...%%` pair does NOT close (`browserCloserAt`, same line, non-greedy, after code spans,
+  escapes and complete inline comments, never on fence, raw or heading lines; this REVERSES run
+  180051's decision to leave it unmodelled); every line of a markdown HTML block is raw, so a
+  heading inside one is text; and list-item content is measured after module 5540's real strip.
+  **The load-bearing piece is `containerViews`**, one recursive parse of quote runs and list items
+  that yields the list strip (`listStrip`), each line's container stack (`containerHome`), and
+  which lines are literal (`literalAt`: fence, math, frontmatter) or markdown HTML-block lines
+  (`htmlLineAt`). Blocks opened under a browser comment end with their container by comparing
+  those stacks. Four traps, each a measured disclosure or loss when missed: the lead rule differs
+  by paragraph state (`htmlParaOpen`: three spaces and no tab after a paragraph, anything but a
+  leading four spaces or tab on a fresh block, and a line leaving a quote is fresh); setext beats
+  the block term even under a lazy `=` underline (`setextLike`); a callout marker is one only on
+  its quote's first line; and the app's comment tokenizer interrupts a list or a quote only for
+  spaces-only lead and no further `%`, so `%%%Z --> Z%% Z` stays a lazy line. A heading's `-->`
+  closes inside `data-heading`, so the rest of the raw line is SPOKEN before the heading (the plan
+  pinned that as a residual; it is closed). A separate Q2 state turned out redundant with
+  `htmlLineAt` (0 differing outputs over 50,725 notes x 2 option sets) and was removed. Evidence,
+  all bare Node against the executed renderer: four censuses (8,792 / 20,640 / 75,582 / 323,460
+  cells) with **0 newly disclosing and 0 newly lost**, each with a wrong arm that leaks; a 7-seed
+  fuzz (338,716 cells) with 21 newly disclosing and 49 newly lost cells, every one reproducing on
+  base defused or tied by a named base-losing control to a pre-existing misread (math in list
+  items, callout-title `%%`, `%%` in item code, term 2 crossing a `%%` line); the first draft's 41
+  unexplained loss cells all spoken now; `sourceIndex` clean over 50,128 notes on both arms with
+  all four mutators firing. The four NRL-120 rows naming NRL-136 were replaced in place, names
+  kept; the NRL-137 rows did not move. **NOT VERIFIED IN OBSIDIAN**: reading view only, no deploy,
+  rule 11 applies. R-M08 is still **NOT** met and the `2 of 16` count does not move.
 - R-C02's Context table named three gaps: three of five install-time fields missing (language,
   installed size, license), and no remove action at all, so up to 573 MB across three Kokoro
   builds plus the ~31 MB ORT runtime could accumulate in a directory deliberately hidden from
