@@ -50,8 +50,12 @@ explicit.
 
 Two lines: the absolute worktree path, and `branch=<name> commit=<short hash> at=<ISO time>`.
 It lives beside the artifacts rather than in the repo because the slot is the shared resource
-and `.claude/` is per-worktree. `deploy.mjs` copies only `main.js`, `kokoro-worker.js`,
-`manifest.json`, `styles.css` and `ort`, so it never removes the marker, and Obsidian reads only
+and `.claude/` is per-worktree. `deploy.mjs` copies only `main.js`, `manifest.json` and
+`styles.css` - ADR 0028 inlines the ONNX runtime and the worker into `main.js`, so there is no
+`ort/` and no `kokoro-worker.js` to copy - and since NRL-122 it also **deletes** every other
+top-level entry in the destination, including a stale `kokoro-worker.js` or `ort/` an older build
+left there. The marker survives that prune because the prune keeps anything dot-prefixed by name,
+not because nothing is deleted; do not rename it to a non-dot name. Obsidian reads only
 `manifest.json`, `main.js`, `styles.css` and `data.json`, so a dotfile is inert.
 
 **The marker is a declaration, not proof.** A `/ship` run in another worktree may have deployed

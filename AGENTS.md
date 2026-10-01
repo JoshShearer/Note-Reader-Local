@@ -82,7 +82,7 @@ Windows portability of the runner is **reasoned, not measured**. Nothing here ha
 run on Windows, and section 13's own harness shells out to `/bin/sh`.
 
 ```bash
-npm run deploy         # build + copy into ~/Documents/Notes/.obsidian/plugins/
+npm run deploy         # build, copy the three shipped files into ~/Documents/Notes/.obsidian/plugins/, and PRUNE: it then deletes every other top-level entry there except data.json and dotfiles (NRL-122)
 npm run test:obsidian  # CDP smoke test; needs Obsidian on --remote-debugging-port=9222
 npm run test:inline-worker # 1 suite (nrl-15-inline-worker.test.ts): verifies the shipped main.js (no ort/ directory) after a production build; run separately, not part of npm test's bare-Node chain
 ```
@@ -227,7 +227,9 @@ three files: `main.js`, `manifest.json`, `styles.css`, and `npm run build` no lo
 `ort/`. Measured: 32,794,766 plain ORT bytes, 7,934,451 gzipped, carried as 10,579,272
 bytes of base64 inside a 13,649,236-byte `main.js`. (This line used to call 10,579,272 the
 gzipped size. It is the base64 length; corrected 2026-10-01 by re-deriving all three
-figures from `node_modules/onnxruntime-web/dist`.) `tests/release.test.ts` (30 checks) unpacks all four assets from the shipped
+figures from `node_modules/onnxruntime-web/dist`.) `tests/release.test.ts` (82 checks as of
+NRL-122, measured off the `release` row of `npm test` on merged `main`; the `30` this line
+carried was stale by 52 and had been since long before that ticket) unpacks all four assets from the shipped
 bundle and compares them by SHA-256 against `node_modules/onnxruntime-web/dist`, so the
 pack is verified against the publisher's bytes rather than against itself; mutations that
 add a weight, drop a digest, reintroduce a download URL, or drop a file from the build's
