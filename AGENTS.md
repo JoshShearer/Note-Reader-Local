@@ -3216,4 +3216,4 @@ rediscover them:
   sentence, never a line number, because a line number rots on the next edit anywhere above
   it and nothing checks it. Measured: NRL-152 surveyed 53 `srs.md:<line>` citations across 22
   files and found roughly half stale, with one sentence cited seven times; NRL-134's own two
-  citations rotted twice in the days it was open.
+  citations rotted twice while it was open.
