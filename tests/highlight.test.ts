@@ -1009,6 +1009,177 @@ console.log("19. NRL-90: scroll suppression after a manual scroll, until playbac
  * highlight-wiring ticket (NRL-54, NRL-72, NRL-89) already carries.
  */
 
+// --- NRL-112: the mobile placement of the floating control bar ------------
+
+/*
+ * `src/ui/controlBar.ts` imports `obsidian` at line 1, so it has NO runtime in
+ * this suite and nothing here can observe a rect, a wrap, a safe-area inset or
+ * whether a 44px target is actually tappable. All of that was measured on a
+ * real device and is recorded in docs/adr/0032; a green run of this section is
+ * NOT evidence that the bar is reachable (AGENTS.md rule 11).
+ *
+ * What IS checkable is styles.css as text, which is the whole of the change.
+ * These checks exist so a later tidy-up cannot delete a load-bearing
+ * declaration, cannot "simplify" the mobile override into an edit of the
+ * desktop rule, and cannot hide a control instead of letting the row wrap.
+ *
+ * The existing `ruleBody()` above builds its pattern as `\\${selector}`, which
+ * escapes a leading `.` and takes one simple class. It cannot match
+ * `body.is-mobile .local-tts-control-bar`, and it is deliberately left
+ * byte-identical here so blocks 11 and 12 cannot move; this section uses its
+ * own scanner instead.
+ */
+
+type CssRule = { selectors: string[]; body: string };
+
+// Comments are stripped before scanning, so prose in a comment can never
+// satisfy or break a check - the NRL-112 block's own comment contains the
+// strings "display: none" and "visibility: hidden" while describing why
+// neither appears in a rule.
+const CSS_NO_COMMENTS = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+
+// This scanner is flat and cannot parse a NESTED at-rule. `styles.css`'s one
+// at-rule today is `@keyframes local-tts-spin` (:152), which yields phantom
+// rules whose selectors are `from` and `to`; nothing below matches those, and
+// the file has zero `@media` queries. If a mobile rule is ever wrapped in an
+// `@media`, the hidden-control sweep stops covering it SILENTLY - teach this
+// function about nesting at that point rather than trusting it.
+const CSS_RULES: CssRule[] = (() => {
+	const rules: CssRule[] = [];
+	const re = /([^{}]+)\{([^{}]*)\}/g;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(CSS_NO_COMMENTS)) !== null) {
+		const head = (m[1] ?? "").trim();
+		if (!head || head.startsWith("@")) continue;
+		rules.push({
+			selectors: head.split(",").map((s) => s.trim()).filter(Boolean),
+			body: m[2] ?? "",
+		});
+	}
+	return rules;
+})();
+
+function rulesMatching(predicate: (selector: string) => boolean): CssRule[] {
+	return CSS_RULES.filter((rule) => rule.selectors.some(predicate));
+}
+function declarations(body: string): Map<string, string> {
+	const out = new Map<string, string>();
+	for (const decl of body.split(";")) {
+		const line = decl.trim();
+		const colon = line.indexOf(":");
+		if (colon <= 0) continue;
+		out.set(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+	}
+	return out;
+}
+
+console.log("20. NRL-112: styles.css carries the mobile control-bar placement");
+{
+	const mobile = rulesMatching((s) => s.startsWith("body.is-mobile"));
+	check("a body.is-mobile block exists at all", mobile.length > 0, `${mobile.length} rule(s)`);
+
+	const barRule = rulesMatching((s) => s === "body.is-mobile .local-tts-control-bar")[0];
+	check("a body.is-mobile .local-tts-control-bar rule exists", barRule !== undefined);
+	const bar = declarations(barRule?.body ?? "");
+
+	/*
+	 * The offset must be built from Obsidian's own variables, never a literal.
+	 * Measured on the device 2026-10-01: --safe-area-inset-top 66.333336px and
+	 * --view-header-height 44px. A frozen number would be wrong on the next
+	 * device and is exactly what rule 13 forbids.
+	 */
+	const top = bar.get("top") ?? "";
+	check("the bar's mobile top is declared", bar.has("top"), top);
+	check("top reads --safe-area-inset-top", top.includes("var(--safe-area-inset-top)"), top);
+	check("top reads --view-header-height", top.includes("var(--view-header-height)"), top);
+	check("top is not a frozen pixel literal", !/\d+px/.test(top), top);
+
+	/*
+	 * flex-wrap is the load-bearing one: at 44px targets the content sums past
+	 * the device's measured 448px viewport, and wrapping is what absorbs that
+	 * without shrinking a target or removing a control. Measured post-fix, the
+	 * bar wraps into three rows at 224px with scrollWidth == clientWidth.
+	 *
+	 * max-width is NOT what forced that wrap and was measured not to be: its
+	 * computed value was 432px against a settled width of 224px (ADR 0032
+	 * decision 4). It is kept as the landscape/notched-side guard, so this
+	 * check asserts only that it is present and does not claim it binds.
+	 */
+	check("the bar wraps rather than overflowing", bar.get("flex-wrap") === "wrap", bar.get("flex-wrap") ?? "(absent)");
+	check("the bar is clamped to the viewport", bar.has("max-width"), bar.get("max-width") ?? "(absent)");
+
+	const btnRule = rulesMatching((s) => s === "body.is-mobile .local-tts-cb-btn")[0];
+	check("a body.is-mobile button rule exists", btnRule !== undefined);
+	check(
+		"the same rule covers the speed buttons, which were the smallest targets",
+		btnRule?.selectors.includes("body.is-mobile .local-tts-cb-speed-btn") === true,
+		JSON.stringify(btnRule?.selectors ?? []),
+	);
+	const btn = declarations(btnRule?.body ?? "");
+	// 44px is Obsidian's own --input-height, measured at 44px on the device.
+	check("transport and speed targets are at least 44px wide", btn.get("min-width") === "44px", btn.get("min-width") ?? "(absent)");
+	check("transport and speed targets are at least 44px tall", btn.get("min-height") === "44px", btn.get("min-height") ?? "(absent)");
+	/*
+	 * min-* rather than width/height is what keeps the desktop declarations
+	 * authoritative on desktop: CSS clamps the used value to
+	 * max(min-width, width), so 44 wins on mobile with 28 still in the file.
+	 */
+	// TRIPWIRES for the wrong implementation of the same fix: these two and
+	// "top is not a frozen pixel literal" pass on the unmodified stylesheet
+	// (there is no mobile rule to get wrong), so they are not reproductions.
+	check("the mobile rule does not restate width", !btn.has("width"), JSON.stringify([...btn]));
+	check("the mobile rule does not restate height", !btn.has("height"), JSON.stringify([...btn]));
+
+	/*
+	 * TRIPWIRE, not a reproduction: this passes on the unmodified stylesheet
+	 * too. R-M14 requires a control the engine cannot honour to be disabled and
+	 * visibly so rather than removed - see the comment block above
+	 * `.local-tts-cb-btn:disabled`. A future mobile tidy-up that buys space by
+	 * hiding the progress readout or a button instead of letting the row wrap
+	 * fails here by name.
+	 */
+	for (const rule of mobile) {
+		const decls = declarations(rule.body);
+		check(
+			`no control is hidden on mobile: ${rule.selectors[0]}`,
+			decls.get("display") !== "none" && decls.get("visibility") !== "hidden",
+			rule.body.trim(),
+		);
+	}
+
+	/*
+	 * TRIPWIRE, not a reproduction. Chrome/88 is the floor (SPIKE-ANDROID-001),
+	 * where color-mix() and relative colour syntax compute to nothing rather
+	 * than degrading - which would break mobile only, the one platform this
+	 * block exists for. calc(), min-width, flex-wrap and custom properties are
+	 * all fine on 88.
+	 */
+	const mobileText = mobile.map((r) => r.body).join("");
+	check("no color-mix() in the mobile rules", !/color-mix\(/.test(mobileText));
+	check("no :has() in the mobile selectors", !mobile.some((r) => r.selectors.some((s) => s.includes(":has("))));
+}
+
+console.log("21. GUARDS: the desktop control-bar rules are still literally present");
+{
+	/*
+	 * Green on both sides of NRL-112 by design - these are the "desktop
+	 * unchanged" tripwire, and they are the one thing that would catch someone
+	 * rewriting the mobile override as an edit to the desktop rule. The
+	 * stronger demonstration is that the NRL-112 diff deletes zero lines from
+	 * this file; no desktop Obsidian was observed (CDP 9222 unreachable).
+	 */
+	const desktopBar = declarations(rulesMatching((s) => s === ".local-tts-control-bar")[0]?.body ?? "");
+	check("GUARD: the desktop bar still pins top: 0", desktopBar.get("top") === "0", desktopBar.get("top") ?? "(absent)");
+
+	const desktopBtn = declarations(rulesMatching((s) => s === ".local-tts-cb-btn")[0]?.body ?? "");
+	check("GUARD: desktop transport buttons are still 28px wide", desktopBtn.get("width") === "28px", desktopBtn.get("width") ?? "(absent)");
+	check("GUARD: desktop transport buttons are still 28px tall", desktopBtn.get("height") === "28px", desktopBtn.get("height") ?? "(absent)");
+
+	const desktopSpeed = declarations(rulesMatching((s) => s === ".local-tts-cb-speed-btn")[0]?.body ?? "");
+	check("GUARD: desktop speed buttons are still 20px wide", desktopSpeed.get("width") === "20px", desktopSpeed.get("width") ?? "(absent)");
+	check("GUARD: desktop speed buttons are still 20px tall", desktopSpeed.get("height") === "20px", desktopSpeed.get("height") ?? "(absent)");
+}
+
 if (failures > 0) {
 	console.log(`\n${failures} failure(s)`);
 	process.exit(1);

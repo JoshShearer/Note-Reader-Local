@@ -200,3 +200,69 @@
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 }
+
+/*
+ * Mobile placement for the floating control bar (NRL-112, docs/adr/0032).
+ *
+ * The desktop rules above are untouched - this block only appends overrides,
+ * so `git diff -- styles.css` has zero deleted lines and desktop sizing is
+ * unchanged by construction rather than by re-measurement. `body.is-mobile`
+ * cannot match a desktop Obsidian, and it is deliberately the superset of
+ * `is-phone`: a tablet has the same safe-area inset, the same `.view-header`
+ * and the same touch input, so scoping this to phones would leave a tablet
+ * with the identical defect.
+ *
+ * `top: 0` put the whole bar inside the device safe-area inset: measured on a
+ * Pixel 9 Pro XL (Android 17, Obsidian 1.13.7, 2026-10-01) the shown bar
+ * occupied y 0-46.28 against a `--safe-area-inset-top` of 66.333336px, so it
+ * rendered beneath the Android status bar and a real `adb shell input tap` at
+ * the play/pause button's own centre changed nothing. Both terms below are
+ * Obsidian-owned variables rather than literals, so the offset tracks the
+ * device and the theme instead of freezing a number.
+ *
+ * `flex-wrap` is load-bearing, not belt-and-braces, and it is what did the
+ * work here. At 44px targets the bar's content sums to ~464px (arithmetic from
+ * the declarations in this file, not a measurement) against this device's
+ * measured 448px viewport, and a narrower phone overflows by more. Measured
+ * post-fix the bar wraps into three rows and settles at 224px wide with
+ * `scrollWidth == clientWidth`, so nothing overflows.
+ *
+ * `max-width` was expected to be the constraint that forced that wrap and
+ * MEASURED NOT TO BE: its computed value on this device is 432px, well above
+ * the 224px the bar settled at. A `position: fixed` shrink-to-fit box with
+ * `left: 50%` and `right: auto` only ever gets `100vw - left` = 224px of
+ * available width, and that is the binding constraint. The clamp is kept as
+ * the landscape and notched-side guard it was also argued for, and because
+ * `left`/`right` may not stay 0px; its left/right inset terms are both 0px on
+ * this device in portrait, so they are inert here.
+ *
+ * There is deliberately no `display: none` and no `visibility: hidden` here.
+ * R-M14 requires that a control the active engine cannot honour is disabled
+ * and visibly so rather than removed (see the comment above
+ * `.local-tts-cb-btn:disabled`), and a mobile block that hides nothing makes
+ * that true by inspection of the diff rather than by a probe.
+ */
+
+body.is-mobile .local-tts-control-bar {
+	top: calc(var(--safe-area-inset-top) + var(--view-header-height));
+	max-width: calc(100vw - var(--safe-area-inset-left) - var(--safe-area-inset-right) - 16px);
+	flex-wrap: wrap;
+	justify-content: center;
+}
+
+/*
+ * 44x44 is Obsidian's own `--input-height`, measured at 44px on the device
+ * this session, so the touch target matches the host's own controls rather
+ * than an imported guideline. srs.md:1768 requires touch-friendly targets and
+ * names no number.
+ *
+ * `min-width`/`min-height` rather than `width`/`height` is deliberate: CSS
+ * clamps the used value to max(min-width, width), so the desktop `28px` and
+ * `20px` declarations stay literally in this file and still govern desktop.
+ */
+
+body.is-mobile .local-tts-cb-btn,
+body.is-mobile .local-tts-cb-speed-btn {
+	min-width: 44px;
+	min-height: 44px;
+}
