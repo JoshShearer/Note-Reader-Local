@@ -726,7 +726,7 @@ console.log("19. NRL-90: scroll suppression after a manual scroll, until playbac
  *   - Whether the read-and-clear `expectingOwnScroll` heuristic correctly
  *     identifies the plugin's OWN scroll versus a genuine user scroll in a
  *     real browser. This is a best-effort heuristic with no automated
- *     coverage of any kind here - see docs/adr/0027, which states plainly
+ *     coverage of any kind here - see docs/adr/0030, which states plainly
  *     that it has never been run against a real browser's actual
  *     scroll-event timing (AGENTS.md rule 13: never assert an unmeasured
  *     claim as fact).
