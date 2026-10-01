@@ -1,5 +1,5 @@
 /**
- * Linux-desktop construction gate (NRL-27, R-M01, srs.md:1023-1027).
+ * Linux-desktop construction gate (NRL-27, srs.md, R-M02 Linux Support).
  *
  * Pure over `PlatformFlags`, mirroring tests/engineSelection.test.ts's style:
  * a plain `check()` harness, no obsidian import needed since platform.ts has
