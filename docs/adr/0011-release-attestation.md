@@ -641,3 +641,105 @@ history, so its absence costs little. `srs.md` is unchanged: R-M01 states the re
 this guard is implementation of it, not a deviation. **Rule 11 is not applicable** rather
 than skipped - a CI step has no Obsidian-visible surface - and saying so is better than
 claiming a pass.
+
+## Amendment (NRL-106): the attestation's upload is ordered after the Release
+
+Date: 2026-09-30. Ticket: NRL-106 (R-M01). This section narrows decision 1 above and
+follows directly on the NRL-79 amendment's subject - the attestation and its attachment to
+the Release object.
+
+### The defect
+
+The `provenance` job declared `needs: build` and nothing else. The `release` job, which
+creates the GitHub Release, also declares `needs: build`. So the two were **siblings, not
+ordered**: the generator's `upload-assets` job, which attaches `multiple.intoto.jsonl` to the
+Release, was unordered with respect to the job that creates the thing it attaches to. Run
+first, it has no Release object to attach to.
+
+The failure mode is the bad kind. It is not a hard error that stops the run; it is a **green
+run with no attestation attached** - the same silence decision 5 of the NRL-76 amendment
+refuses, arriving by scheduling instead of by an `if:`.
+
+### What NRL-79's one successful run actually showed, and why it is luck
+
+Run `36785920227`, this repo's first successful `release.yml` run, did not race harmfully:
+
+| Job | Started | Completed |
+| -- | -- | -- |
+| `release` | 22:30:46Z | **22:30:55Z** |
+| `provenance / upload-assets` | **22:31:23Z** | 22:31:33Z |
+
+28 seconds of slack, and the attestation was attached. **Nothing in the file produced that
+margin.** `provenance / generator` happens to take about 28 s, and that is the only reason
+`upload-assets` landed behind `release`. A faster generator or a slower `release` job inverts
+it. Those timestamps are evidence about the **old** behaviour, not about this change: the
+ordering has never been enforced on any run, including the one success.
+
+### The decision
+
+`needs: [build, release]`. One line, at the `provenance` job. Both entries are load-bearing
+and neither is removable:
+
+- **`build`** so `needs.build.outputs.hashes` - the generator's `base64-subjects` input -
+  still resolves. Dropping it leaves that reference with no `needs` context to read.
+- **`release`** purely for **ordering**, so `upload-assets` cannot start before the Release
+  object exists.
+
+The comment above the job now names both halves for that reason, and
+`tests/release.test.ts`'s existing `provenance` guard was extended to assert the **set**
+`{build, release}` rather than the presence of one entry. The comparison is order-insensitive
+and spelling-tolerant on purpose: GitHub treats `needs` as a set, so `[release, build]` and a
+block sequence are the same dependency graph, and asserting a literal would pin formatting
+rather than behaviour. Two traps were measured on the job's own text while writing it. A
+slice-wide substring search for `build` is **already vacuous**, because
+`base64-subjects: ${{ needs.build.outputs.hashes }}` carries that word, so such a check would
+stay green with `build` dropped from the list - the exact regression it would exist to catch.
+And `release` occurs nowhere else in the job today, so a substring search for it would have
+appeared to work for the wrong reason. Hence the assertion is scoped to the `needs:` line.
+
+### No `if:` was added, and decision 5 is unchanged
+
+Decision 5 of the NRL-76 amendment stands and is reinforced: no `if:` of any kind is on the
+`provenance` job, and the guard test still asserts there is none. GitHub **does** permit
+`jobs.<job_id>.if` on a reusable-workflow call, so this is a policy decision and not a syntax
+restriction, which is precisely why the test has to keep enforcing it.
+
+**One consequence to record rather than guard against.** After this change, a **failed**
+`release` job skips `provenance` through ordinary `needs:` semantics - GitHub's own
+documentation for `jobs.<job_id>.needs` says so: "If a job fails or is skipped, all jobs that
+need it are skipped unless the jobs use a conditional expression that causes the job to
+continue." That is **acceptable, and categorically different from what decision 5 forbids.**
+The forbidden shape is a skip on a **green** run: the run reports success and silently ships
+no attestation. This is a skip that **follows a red run** - `release` failed, the overall run
+is already red and visibly so, and there is no Release object for `upload-assets` to attach
+`multiple.intoto.jsonl` to in any case. A skip there loses nothing that could have existed.
+Do **not** "fix" it with `if: always()` or `if: success() || failure()`: that would run the
+generator against a Release that does not exist, turning a clean red into a confusing one,
+and it is an `if:` on `provenance`, which decision 5 bans outright.
+
+### What this does not establish
+
+**This has never run on a real runner.** No tag has been pushed since NRL-79's `0.1.1`, so
+there is no run in which `upload-assets` was observed waiting on `release`, and the ordering
+this amendment claims is therefore asserted rather than demonstrated.
+
+**The two-entry form alongside a job-level `uses:` is desk evidence.** That `needs:` is
+permitted at all on a reusable-workflow call is empirical here - the job already carried
+`needs: build` alongside its job-level `uses:`, and run `36785920227` compiled and ran all six
+jobs. What is **not** empirical is that the value may be a **list**. That rests on
+github/docs read verbatim: `reusing-workflow-configurations.md`'s "Supported keywords for jobs
+that call a reusable workflow" lists `jobs.<job_id>.needs` explicitly, and
+`section-using-jobs-in-a-workflow-needs.md` says of `needs` that "It can be a string or array
+of strings", with `needs: [job1, job2]` as its documented example. So a list is the documented
+form of a permitted key - a value change, not a new key - but **GitHub has not compiled this
+file**. The only thing that would settle it empirically is a push that makes it do so.
+
+`actionlint` is **not installed on this machine** and was not run; AGENTS.md records it as
+having been silent on both halves of the compile defect that broke every run in this repo's
+history, so its absence costs little. The existing **2026-10-19** re-verification trigger for
+the release path already covers re-running it. `srs.md` is unchanged: R-M01 states the
+requirement and job ordering inside `release.yml` is implementation of it, not a deviation.
+R-M01 does not become any more met - the release path is still exercised exactly once, on a
+since-deleted tag, and the clause 3 install gap is untouched - so the `2 of 16` MUST headline
+count does not move. **Rule 11 is not applicable** rather than skipped: a CI job dependency
+has no Obsidian-visible surface, and saying so is better than claiming a pass.

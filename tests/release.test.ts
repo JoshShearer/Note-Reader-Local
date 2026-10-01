@@ -1306,10 +1306,15 @@ test("the checksum step leaves no file behind in the workspace (NRL-76)", () => 
 
 // GUARD (green on both sides), on the wiring the checks above cannot see. The
 // subject list only matters if the generator receives it, and the `if:` clause
-// is the one way to make this whole step moot with a GREEN run: `needs: build`
-// already stops `provenance` when the build fails, whereas an
-// `if: needs.build.outputs.hashes != ''` would SKIP provenance silently and
-// produce no attestation at all. See ADR 0011, Amendment (NRL-76), decision 5.
+// is the one way to make this whole step moot with a GREEN run:
+// `needs: [build, release]` already stops `provenance` when the build fails,
+// whereas an `if: needs.build.outputs.hashes != ''` would SKIP provenance
+// silently and produce no attestation at all. See ADR 0011, Amendment (NRL-76),
+// decision 5. The `needs:` membership check below is NOT a guard: it is NRL-106's
+// own assertion, red against the `needs: build` this job carried before, and the
+// `release` entry it pins is there purely for ORDERING - without it the
+// generator's `upload-assets` job is unordered with respect to the job that
+// creates the Release it attaches the attestation to.
 test("guard: the provenance job consumes the build's hashes and carries no if:", () => {
 	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
 	assertMatch(
@@ -1335,8 +1340,56 @@ test("guard: the provenance job consumes the build's hashes and carries no if:",
 	assert(
 		conditional.length === 0,
 		`the provenance job carries ${JSON.stringify(conditional)}. A failing build step already stops ` +
-			"it through `needs: build`; an `if:` would SKIP it silently and produce a green run with no " +
+			"it through `needs: [build, release]`; an `if:` would SKIP it silently and produce a green " +
+			"run with no " +
 			"attestation, which is strictly worse than the defect NRL-76 fixed.",
+	);
+
+	// NRL-106. `needs:` must hold BOTH `build` and `release`, and the comparison is a
+	// SORTED SET rather than a literal because GitHub treats `needs` as a set: its own
+	// docs' `needs: [job1, job2]` example waits for both with no ordering significance
+	// between the entries, so `[release, build]` and a block sequence are the same
+	// dependency graph and asserting a literal would pin formatting rather than
+	// behaviour. Two traps, both measured on this slice. The assertion is scoped to the
+	// `needs:` LINE and not to `jobLines`, because a slice-wide substring search for
+	// `build` is ALREADY vacuous - `base64-subjects: ${{ needs.build.outputs.hashes }}`
+	// carries it, so such a check would stay green with `build` dropped from the list,
+	// which is exactly the regression that breaks that reference at run time. And
+	// `release` occurs nowhere else in this job today, so a substring search for it would
+	// have appeared to work for the wrong reason. The set equality catches an omission on
+	// either side and a spurious third entry.
+	const needsLines = jobLines.filter((l) => /^\s{4}needs:/.test(l));
+	assertEquals(
+		needsLines.length,
+		1,
+		`the provenance job carries ${needsLines.length} \`needs:\` keys (${JSON.stringify(needsLines)}). ` +
+			"YAML resolves duplicates last-wins and silently, so exactly one is required.",
+	);
+	const needsIndex = jobLines.findIndex((l) => /^\s{4}needs:/.test(l));
+	const inline = (jobLines[needsIndex] ?? "").replace(/^\s{4}needs:\s*/, "").trim();
+	const parsedNeeds: string[] = [];
+	if (inline !== "") {
+		// Flow spelling: `needs: build` or `needs: [build, release]`.
+		for (const entry of inline.replace(/^\[/, "").replace(/\]$/, "").split(",")) {
+			const name = entry.trim().replace(/^['"]|['"]$/g, "");
+			if (name !== "") parsedNeeds.push(name);
+		}
+	} else {
+		// Block sequence: `needs:` then `      - build` / `      - release`.
+		for (let i = needsIndex + 1; i < jobLines.length; i++) {
+			const match = /^\s{6}-\s*(\S+)/.exec(jobLines[i] ?? "");
+			if (!match) break;
+			const name = (match[1] ?? "").replace(/^['"]|['"]$/g, "");
+			if (name !== "") parsedNeeds.push(name);
+		}
+	}
+	assertEquals(
+		parsedNeeds.slice().sort().join(","),
+		"build,release",
+		`the provenance job depends on ${JSON.stringify(parsedNeeds)}. Both entries are load-bearing: ` +
+			"`build` so `needs.build.outputs.hashes` resolves, and `release` so the generator's " +
+			"`upload-assets` job cannot start before the Release object it attaches " +
+			"`multiple.intoto.jsonl` to exists. See ADR 0011, Amendment (NRL-106).",
 	);
 });
 
