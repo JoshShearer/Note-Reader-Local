@@ -96,7 +96,7 @@ taken, write "no measurements taken this session" rather than leaving the sectio
 An explicit list. For each: the claim, and what would settle it.
 
 Default to listing a thing here. Anything not exercised against the deployed build in the
-native Obsidian belongs here, including changes whose unit tests are green.
+Flatpak `md.obsidian.Obsidian` belongs here, including changes whose unit tests are green.
 
 Also record:
 
