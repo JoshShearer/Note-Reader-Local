@@ -235,8 +235,11 @@ for every user, not only for engines with no rate control.
   idle bar over CDP, and `document.elementFromPoint()` at its centre plus four further
   probe points across that strip returned `.view-header` or `.cm-line`, never the bar
   or any descendant of it.
-- Desktop is untouched: `git diff -- styles.css` shows **58 insertions, 0 deletions**,
-  all appended after the previous last line (202).
+- Desktop is untouched: `git diff --numstat -- styles.css` shows **66 insertions, 0
+  deletions**, all appended after the previous last line (202). (An earlier draft of
+  this ADR and the ticket's `implementationSummary` both said 58; the difference is the
+  CSS comments added by Ship's critique corrections, and 66 is what `--numstat` reports
+  against the committed file.)
 - `src/ui/controlBar.ts`, `src/ui/affordances.ts` and `src/engines/platform.ts` are
   unchanged. `PlatformFlags` is deliberately **not** widened with an `isMobile` field;
   its docstring records that omission as deliberate, and a CSS-only fix needs no
@@ -263,9 +266,16 @@ for every user, not only for engines with no rate control.
   the bar overlaid the tab and view-header strip; at `top: ~110px` and 125.64px tall it
   occupies editor rows from y 110.3 to roughly y 236. `src/ui/highlight.ts:474` scrolls
   with `y: "center"` (NRL-110), so the spoken sentence is centred rather than parked at
-  the top and is not normally underneath it. **The case that was not measured** is a
-  note short enough that the editor cannot scroll at all, where the opening sentences
-  sit under the bar with nowhere to scroll them to. Neither direction was observed.
+  the top and is not normally underneath it. **The case this ADR first recorded as
+  unmeasured has since been observed, in the overlapping direction**, by Verify on this
+  same device: on an unscrollable note (`scrollHeight` 997 == `clientHeight` 997,
+  `scrollTop` 0, keyboard dismissed) the first chunk's sentence mark measured
+  **y 209.6 to 255.6** against a bar bottom of **236**, so **26.4px of its 46px height
+  sits behind the bar**, in the band x 112 to 336. `y: "center"` cannot help, because
+  there is nowhere to scroll. So read this bullet as a confirmed overlap on a short
+  note rather than as an open question; it is filed as **NRL-129**
+  (https://linear.app/note-reader-local/issue/NRL-129) and is not fixed here. The
+  opposite direction - a note long enough to scroll - remains unobserved.
 - **No claim is made about any Obsidian version other than 1.13.7 on this device.**
 - `src/ui/controlBar.ts` imports `obsidian` at line 1, so it has no runtime in the
   bare-Node suite. Nothing in `npm test` can observe a rect, a wrap, an inset or a
