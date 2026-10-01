@@ -238,13 +238,11 @@ three files: `main.js`, `manifest.json`, `styles.css`, and `npm run build` no lo
 `ort/`. Measured: 32,794,766 plain ORT bytes, 7,934,451 gzipped, carried as 10,579,272
 bytes of base64 inside a 13,649,236-byte `main.js`. (This line used to call 10,579,272 the
 gzipped size. It is the base64 length; corrected 2026-10-01 by re-deriving all three
-figures from `node_modules/onnxruntime-web/dist`.) `tests/release.test.ts` (82 checks as of
-NRL-122, measured off the `release` row of `npm test` on merged `main`; the `30` this line
-carried was stale by 52 and had been since long before that ticket) unpacks all four assets from the shipped
-bundle and compares them by SHA-256 against `node_modules/onnxruntime-web/dist`, so the
-pack is verified against the publisher's bytes rather than against itself; mutations that
-add a weight, drop a digest, reintroduce a download URL, or drop a file from the build's
-own list each turn it red.
+figures from `node_modules/onnxruntime-web/dist`.) `tests/release.test.ts` unpacks all four
+assets from the shipped bundle and compares them by SHA-256 against
+`node_modules/onnxruntime-web/dist`, so the pack is verified against the publisher's bytes
+rather than against itself; mutations that add a weight, drop a digest, reintroduce a
+download URL, or drop a file from the build's own list each turn it red.
 
 **What that bought, in a real Obsidian 1.13.7 on Linux** (synthetic vault, three files
 deployed and nothing else): the plugin loads and registers all ten commands; the settings
@@ -855,25 +853,26 @@ its assets as of NRL-104; the `Create GitHub Release` step this sentence used to
 deleted by that ticket). These are **filter patterns, not regexes** - `*` is a wildcard and not a quantifier,
 which is why `[0-9]*.[0-9]*.[0-9]*` was rejected as matching `0.1.0-rc1` - and the authority
 for applying `+` to a bracket class is GitHub's own row `v[12].[0-9]+.[0-9]+`, documented as
-matching `v1.10.1`. `tests/release.test.ts` pins it with three checks, and the matcher they
-depend on is validated against **every row of that published table** rather than against
-itself, because a wrong hand-rolled matcher would make the three checks green while the
-workflow behaved differently in production. Measured: the three went red against the
-unmodified file (`["*"]`, all ten operational shapes firing) and green after; the five
-guards, including the `backup/`-shaped name, were green on both sides. **NRL-79 exercised
-exactly one pair of that filter empirically**, on a single commit: the tag `0.1.1` fired
-`release.yml` in **2 seconds**, and the tag `nightly` - slash-free, so it would have matched
-the old `["*"]` - produced **no run of any workflow**. That negative is exhaustive rather
-than bounded-wait: enumerating every run ever recorded against sha `3d7b3e18` returns two,
-the branch `ci.yml` run and the `0.1.1` Release run, and assumes no waiting bound at all. So
-the narrowing is **empirically established for that one pair** and only **strongly
-supported** as a general claim. The limits are real and should stay written down: only that
-pair was tested, the other nine operational shapes `tests/release.test.ts` enumerates remain
-**desk-verified** against GitHub's published table and are reasonably left there, and GitHub
-exposes no observable that distinguishes "the filter rejected this ref" from "this ref never
-reached the dispatcher", so `nightly`'s silence rests on the single-variable design - same
-commit, same `release.yml` bytes, six minutes apart, only the tag name differing - rather
-than on a direct signal.
+matching `v1.10.1`. `tests/release.test.ts` pins it with three checks, all three parsing the
+workflow's own `on: push: tags:` list and one comparing it to `EXPECTED_TAG_PATTERNS`, and the
+matcher they depend on is validated against **every row of that published table** rather than
+against itself, because a wrong hand-rolled matcher would make the three checks green while
+the workflow behaved differently in production. Measured: the three went red against the
+unmodified file (`["*"]`, all ten operational shapes firing) and green after; the five guard
+tag shapes - the `backup/`-shaped name plus the four real version tags - were green on both
+sides. **NRL-79 exercised exactly one pair of that filter empirically**, on a single commit:
+the tag `0.1.1` fired `release.yml` in **2 seconds**, and the tag `nightly` - slash-free, so
+it would have matched the old `["*"]` - produced **no run of any workflow**. That negative
+is exhaustive rather than bounded-wait: enumerating every run ever recorded against sha
+`3d7b3e18` returns two, the branch `ci.yml` run and the `0.1.1` Release run, and assumes no
+waiting bound at all. So the narrowing is **empirically established for that one pair** and
+only **strongly supported** as a general claim. The limits are real and should stay written
+down: only that pair was tested, the other nine operational shapes `tests/release.test.ts`
+enumerates remain **desk-verified** against GitHub's published table and are reasonably left
+there, and GitHub exposes no observable that distinguishes "the filter rejected this ref"
+from "this ref never reached the dispatcher", so `nightly`'s silence rests on the
+single-variable design - same commit, same `release.yml` bytes, six minutes apart, only the
+tag name differing - rather than on a direct signal.
 Two further things about that fix are worth carrying. The `matchesFilterPattern()` oracle in
 `tests/release.test.ts` **must stay faithful to GitHub's documented semantics rather than
 convenient**, because it is the only thing standing between a green suite and a workflow that
@@ -3213,3 +3212,8 @@ rediscover them:
 - Comments explain *why*, and are worth writing when the reason is not reconstructable
   from the code. The existing comments in `player.ts` and `kokoro.ts` are the house style.
 - Say what is true, including when something failed, is unverified, or you are guessing.
+- Cite a target by a stable anchor: a function or constant name, a heading, or a quoted
+  sentence, never a line number, because a line number rots on the next edit anywhere above
+  it and nothing checks it. Measured: NRL-152 surveyed 53 `srs.md:<line>` citations across 22
+  files and found roughly half stale, with one sentence cited seven times; NRL-134's own two
+  citations rotted twice in the days it was open.
