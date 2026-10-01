@@ -997,7 +997,27 @@ worktree's INDEX. Measured during NRL-102's Verify: a
 worktree reading `MM`. The file *content* was never wrong - its sha256 matched `HEAD`'s blob
 throughout - only the index entry pointed at the merge-base blob, and `git reset HEAD -- <path>`
 restored it. The symlink trap makes the mutation invisible; this one corrupts the tree you are
-measuring against. Give the shadow its own `.git`, or never run git inside it.
+measuring against. Give the shadow its own `.git`, or never run git inside it. **It recurred in
+NRL-131's Verify on a different lane, which is why it is worth two paragraphs rather than one**:
+the defence that worked there was to `tar`-copy the tree and then DELETE the copy's `.git` before
+running any git command in it, confirmed by `git status --short` coming back empty in the real
+worktree after every step.
+
+**A third trap, on the technique those two serve rather than on the copy: hashing a function body
+can hash the TYPE ANNOTATION instead.** Measured by NRL-131 and independently reproduced twice. A
+brace-matching extractor that takes the first `{` after the function name stops at the close of an
+**object-literal return type**, so for `labelClose` it hashes a 96-byte declaration containing not
+one body statement. That is what `AGENTS.md`'s recorded `labelClose` hash `13030adc` is: the body
+alone is 427 bytes (`92023b33`) and the whole declaration including the body is 524 bytes
+(`1319d83e`). The consequence is narrow but real: a prior ticket's "proven byte-identical" claim
+for `labelClose` pins the signature and the return type and **would not have caught a body
+change**. **Scope, checked rather than assumed: `labelClose` is the ONLY one of the nine protected
+functions whose return type is an object literal**, so it is the only recorded entry affected -
+`opensMathBlock`'s `d2019f06` is a legitimate whole-declaration hash, its return type being
+`: boolean {`, and a first pass that flagged it as a second instance was the probe's own error.
+Note this trap compounds with the `flowDepthDelta` one recorded elsewhere in this file: an
+extractor has to skip regex literals, template literals and comments **and** object-literal return
+types before a body hash means what it says.
 `actionlint` 1.7.7 is not a substitute for
 running it: measured during NRL-69, it was silent on **both** halves of the compile defect
 that had broken every run in this repo's history, so its silence on this file is weak
@@ -1294,7 +1314,13 @@ its expectation must change when root 1 closes, and whose attribution of root 1 
 corrected there) and `guard-nrl63-opening-line-is-list`. **No other fixture in the suite moved.**
 **Three** of the four function bodies the must-not-weaken criterion names are **byte-identical**,
 brace-matched out of both trees and compared by sha256: `codeSpanClosesLater` `571b6d43`,
-`interruptsParagraph` `3548e825`, `labelClose` `13030adc`. `opensMathBlock` was the fourth and
+`interruptsParagraph` `3548e825`, `labelClose` `13030adc` - **and that third figure is corrected
+by NRL-131: `13030adc` is the 96-byte declaration through `labelClose`'s TypeScript RETURN-TYPE
+ANNOTATION, with not one statement of the body in it. The body alone is 427 bytes and hashes
+`92023b33`; the whole declaration including the body is 524 bytes and hashes `1319d83e`. The old
+figure is kept here rather than silently replaced so nobody reconciling an older measurement
+thinks the number changed meaning; see the method note beside the shadow-root trap for the scope,
+which is `labelClose` alone.** `opensMathBlock` was the fourth and
 **moves**, `7a37672d` -> `d2019f06`, for the ship-review correction above; that is a narrowing in
 the fail-closed direction and it does not touch `interruptsParagraph`, so ADR 0019's F5 guard is
 still green by construction. NRL-64's two-pass code block is unchanged at `e7dc204f`, and
@@ -1302,7 +1328,10 @@ still green by construction. NRL-64's two-pass code block is unchanged at `e7dc2
 `containerPrefix` is asserted to be an exact refactor of the inline peel rather than assumed to
 be: 20,782 corpus lines, 14,267 with a non-zero prefix, **0 mismatches** of `chars`, `blockType`,
 `callout`, the three derived side effects, or the iterated quote-level consumption against what
-the all-levels `BLOCKQUOTE` match consumed.
+the all-levels `BLOCKQUOTE` match consumed. **That claim is INVALIDATED by NRL-131, which rewrote
+`containerPrefix` as a loop, and its corpus is not reconstructable, so it must not be re-quoted.**
+Four computed properties replace it; see the NRL-131 paragraph below for what they are and what
+each one measured.
 
 The destination itself was enumerated directly rather than inferred from a two-class oracle,
 because a destination is an **attribute** and sits in neither the renderer's hide nor its display
@@ -1344,6 +1373,177 @@ not read at all. **R-M09 is NOT met** and
 the `2 of 16` MUST headline count does not move: roots 3 and 5, root 4's named residuals, roots 1
 and 2's three non-container shapes, and the two pre-existing image shapes
 `![a [[N|l]] b](dest.png)` and `![alt](dest(1).png)` all stay open against it.
+
+**A blockquote NESTED inside a list item is now peeled, as of NRL-131** (PR #193, squash
+`04022bd`, `docs/adr/0035`, `srs.md:317`, `:328` and `:370` amended). `containerPrefix` is now a
+**LOOP** - quote levels, then a callout marker if a quote was consumed in that same round, else a
+list marker and its task checkbox, then round again - and **not an extra arm**. That is why the fix
+went there rather than into a second predicate: `containerPrefix`'s own comment exists so there is
+ONE definition of "the prefix", and `peelQuotes` derives its budget from the `quotes` field, so
+fixing it anywhere else would split exactly the definition that comment keeps single. `- > x`,
+`> - > x`, `- - x`, `- - > x` and `- > - > x` all reduce now, where only the un-nested forms did.
+The nested `>` is **COUNTED** in `quotes`, deliberately: `peelQuotes` spends that field as
+NRL-98's same-or-shallower compatibility budget, so a peel without a count would leave a
+continuation line bearing the nested `>` rejected by the unchanged `BLOCKQUOTE` arm, aborting the
+carry and leaving the destination leak exactly where it was. **Termination is a proof rather than
+a cap**: every matcher that can fire consumes a non-empty string, so any non-breaking iteration
+strictly increases `chars`, and `chars <= line.length` bounds it. There is no iteration cap and no
+sticky regex, a `lastIndex` on the shared `BLOCKQUOTE` / `LIST_BULLET` constants being a live bug
+since `interruptsParagraph` and the dedent pass read them too. **Measured cost is LINEAR in rounds,
+not the O(prefix x length) the plan predicted**, because V8 string slices are O(1) views:
+**1.0059 ms** on the non-HR worst case `"- * ".repeat(2500)` and **0.0005 ms** on a typical
+`- > item text`. The worst case quoted is the non-HR twin because an HR-shaped marker-only line
+never reaches the function at all - `HR.test(raw)` flushes and continues 35 lines above the call
+site - which is also why the computed fixture sweep came out at zero moved fixtures.
+
+**The fifth returned field is the part a later reader would undo, so read its reason before
+touching it.** `blockType` is now `"quote"` for `- > x` where it was `"list"`, and `blockType`
+**ALSO** drove `inList`, which gates the indented-code opener. So `containerPrefix` returns a fifth
+field `outerList` ("a list marker was consumed while `quotes` was still 0", i.e. the OUTERMOST
+container is a list) and the call site drives `inList` off THAT, with `prevContainer` still off
+`blockType`. Without it a 4-space continuation under `- > x` would newly be read as indented code,
+which is **new prose loss in a diff whose whole purpose is the opposite direction**.
+`blockType: "quote"` itself is a **CONSISTENCY call, not a correctness one**: either value passes
+NRL-98's BRACKET arming guard, which accepts `paragraph || quote || list`.
+
+**The F1 guard is the newest code here, and critique caught it rather than the plan's corpus.**
+Whitespace INSIDE the list marker's lead defeated the loop. For `- <TAB>> %%`, `LIST_BULLET`'s
+greedy `\s+` ate the whole lead and round 2 ate the `>`, leaving `%%` at offset 0 of the body where
+`opensObsidianBlock`'s plain line-start rule fires and `dedentedByList` is never consulted. **Base
+was CORRECT** on that shape; the first implementation both silenced displayed prose and spoke
+author-hidden text, **2,048 cells each way**, which is the two-directional inversion AC2 exists to
+catch. The guard breaks the loop after a list marker whose consumed run past the marker's one
+separating space satisfies `INDENTED_CODE`, reusing this file's own definition of the threshold so
+the two cannot drift. Verify attacked it in **both** directions. **0 under-peel failures over 21
+shapes**: `-  > x`, `-   > x`, `-    > x`, `1. > x`, `1) > x`, `* > x`, `+ > x`, `- [ ] > x`,
+`- [x] > x`, `- - > x`, `> - > x`, `- > - > x`, `- > > x`, `- - - > x`, `2. - > x`, `- 1. > x` and
+the 2-to-3-space line leads all still peel, so the guard does not quietly reintroduce the original
+defect. Every **over-threshold** shape is **byte-identical to base**. And the threshold flips at
+**exactly 5 spaces, not off by one**, enumerated at N=1..8 for `-`, `*`, `+`, `1.` and `1)`, which
+is CommonMark's marker-plus-1-to-4 content-indent rule, the single-character discount in the guard
+being the separator the marker itself requires. One row of the ticket's own under-peel list was
+**WRONG and the guard is right**: `- <TAB>> x` renders as a pre/code block with the `>` VISIBLE, so
+declining to peel it is renderer-faithful and the fix leaves it exactly as base does. One
+divergence remains in the under-peel direction and ADR 0035 decision 7 discloses it: `- [x]` and
+`- [ ]` with 2, 3 or 4 spaces then a tab are real blockquotes for the renderer (tab-stop expansion
+from a 5-column marker) while we stop and keep speaking the `>`. All three of those cells are
+identical on base and on the fix, so they are leftovers of the original defect rather than
+regressions.
+
+**THE SIGNED TRADE, and it belongs as prominently as the fix: this closes disclosure and OPENS
+prose loss.** NRL-93's census was re-run in shape rather than replayed, because its own 140-cell
+corpus is described but not enumerated in ADR 0006 and is **NOT reconstructable** (the same caveat
+NRL-98's corpus carries): 10 opener positions x 14 container contexts, which also comes to 140
+cells by construction. On it, **disclosure 20 -> 0 and prose loss 32 -> 58**, and `srs.md:328`'s
+"a blockquote nested inside a list item (6 more)" row **does NOT close, it GROWS**, to **22 of its
+50 quote-in-list cells** from 6 on base, against 16 disclosure cells on base and 0 on the fix. The
+root of the growth is named rather than guessed: `opensObsidianBlock`'s `dedentedByList` term is
+untouched by this change, so 16 of the new cells are NRL-118's container-blind note scope reaching
+past the construct now that the opener is correctly recognised, and the rest is that boolean's own
+four-column residual, exposed on a nested list item where the base peel's leftover `-` had been
+blocking the predicate. **A 7,168-cell regression ships**, two rows of 4,096 at **0 -> 3,584**
+each: a nested prefix plus a TAB or 4-or-more spaces before `<!--`, which Obsidian **DISPLAYS** -
+its `indentedCode` block method at index 2 beats `html` at index 11 - while `opensHtmlBlock`'s
+line-start term accepts that whitespace and we now hide it. **The reason it ships rather than
+blocking is a measured control, taken independently twice, not a judgement call:** the un-nested
+twin `> <TAB><!--` loses the same prose **ON BASE** (512 of 512, and 3,072 of 3,072 on the wider
+corpus), and on the fix the nested form is **BYTE-IDENTICAL to its un-nested twin across 14,336
+comparisons with 0 differing**. So the nested shapes **JOIN an already-wrong path** rather than
+opening a class, and the mechanism is necessarily shared, `opensHtmlBlock` being byte-identical
+across the diff. **The `%%` form genuinely does NOT regress nested** - 0 cells on every arm over 9
+prefixes x 2 whitespace forms x 512 masks, for both the hidden and the displayed sentinel - and
+that had to be **MEASURED**, because ADR 0035 originally asserted it without measuring and was
+corrected in place before merge. What the trade buys, measured independently: a flush nested `%%`
+opener speaks the author-hidden sentinel **3,584 of 3,584 cells on base and 0 on the fix**, with
+every un-nested control 0 on both arms. **NRL-145 is filed for the regressing class.** ADR 0007
+clause 6's preference applies here (a near-miss spoken beats a sentence swallowed), but the point
+to carry is that the trade was **adjudicated on the control** rather than waved through on that
+preference.
+
+**A second residual Verify found and the PR had not named, 4d, and it is not a fourth signed
+regression.** `LIST_BULLET`'s lead is an unbounded whitespace star and the F1 guard inspects only
+the run PAST the marker's one separating space, so after a quote peel a later round can eat 4 or
+more LEADING spaces: `- >     - x` drops a displayed `-`, **0 -> 3,584 cells**. It is a member of
+the already-signed class, proven the same way the trade is: the un-nested control `>     - x` loses
+that marker **512 of 512 on base**, the fix's nested output is byte-identical to that twin across
+**3,584 comparisons with 0 differing**, and the prose sentinel is **never** lost (0 of 4,608
+cells). `- >    - x` at three spaces is a genuine nested list for the renderer and the fix speaks
+it correctly. A **documentation gap**, now recorded in ADR 0035 beside decision 7's task-marker
+residual.
+
+**What replaced NRL-98's invalidated proof, and the correction that was needed.** NRL-98's
+"`containerPrefix` is an exact refactor of the inline peel, 20,782 corpus lines, 0 mismatches" is
+**INVALIDATED** by the loop rewrite, that corpus is **not reconstructable**, and **it must not be
+re-quoted** - the paragraph above carrying it says so in place. Four computed properties replace
+it, measured against the OLD function lifted verbatim out of the merge base by a brace-matched
+extractor rather than retyped, over a 10,528-line corpus (every string and template literal in all
+25 test files, a hand-built nested matrix, and a 4,000-note deterministic fuzz). **(b) monotone
+extension: 0 failures.** **(c) `outerList === (OLD.blockType === "list")` wherever the four old
+fields agree: 0 failures.** **(d) the direction: 1,547 differing lines over 2 named shape classes
+with 0 UNCLASSIFIED**, and the classifier shown falsifiable (dropping its quote arm leaves 542
+lines unclassified). **(a) the pure FIXED POINT property is 309 FAILURES, not 0**, and that is not
+a defect: **the F1 guard deliberately breaks it**, the guard existing precisely to stop peeling
+where `iterate(OLD)` would keep going. All 309 are guard-caused and **all 309 are fail-CLOSED**,
+with 0 fail-open, hand-checkable on `- <TAB>> x` (NEW stops at `chars` 3 where `iterate(OLD)`
+reaches 5). ADR 0035 first recorded 0 for (a), measured on the PRE-guard implementation and never
+re-run, and was **corrected in place before merge**: (a) as originally stated is superseded by the
+weaker property the guard is compatible with, namely `NEW === iterate(OLD)` on every line the guard
+does not stop and `NEW === OLD` on every line it does. Re-quoting 0 for (a) against a
+guard-carrying tree is forbidden. (d)'s corpus is Verify's own and is distinguished in the ADR from
+the implementer's 8,189 lines over 12 classes, so neither is quoted without its corpus.
+
+**The reconciliation with NRL-120, which merged first, and this part is reusable.**
+`src/text/extract.ts` and `tests/extract.test.ts` **auto-merged with no conflict**; only `srs.md`
+conflicted and only by **ADJACENCY** - ours changed `:317`, `:328` and `:370`, theirs changed
+`:327` only, all three stages 2,361 lines, and **no line was changed by both** - so it was resolved
+as a line-wise union by a script that THROWS if any line is changed on both sides. NRL-120 did
+**not** touch `containerPrefix` (its body is byte-identical on the old base and on new `main`); it
+added a **new CALLER**, the setext-content forward pass, which reads `prefix.blockType` and
+`prefix.chars`, both of which NRL-131 redefines for a nested line. Two consequences, both measured
+rather than reasoned. That caller **fails closed on a nested line by construction**:
+`isSetextContentLine`'s quote branch requires `p.chars === quoteChars`, and `quoteChars` comes from
+`BLOCKQUOTE` anchored on the RAW line, which cannot match a line starting with a list marker, so an
+`outerList` line satisfies neither branch and the refusal is withheld, the direction NRL-120
+documents as safe. And NRL-120's `lazyInList` expression `prefix.blockType !== "list"` was shown
+**provably unobservable** against the alternative `!prefix.outerList` over 15,776 cells with **0
+differing**, so its line was left **byte-identical** rather than generalised on a guess. **The two
+changes are SET-DISJOINT, measured**: over those 15,776 cells NRL-120 alone moves **640**, NRL-131
+on the new base moves **6,496**, the merged tree moves exactly their union **7,136**, and the
+**intersection is 0**. All **12** of NRL-120's own subject shapes are byte-identical on `main` and
+on the merged tree across 4 option masks. One method note from that confinement probe, which is the
+corpus-blindness lesson landing on the prober's own instrument: the first classifier reported 928
+unclassified and was itself wrong, missing `> - > <!--` because it anchored the list marker at line
+start, found and corrected before concluding.
+
+**`opensHtmlBlock`'s body MOVED** across the merge, `e962f69f` / 59 B to `6b3bdcc3` / 79 B, **and
+that is NRL-120's change, not NRL-131's**: the merged body matches the new `origin/main` exactly.
+The other **8** protected bodies are byte-identical across all three trees, **including
+`peelQuotes`** (`interruptsParagraph` `0212b5f4`, `codeSpanClosesLater` `43ec230e`, `labelClose`
+`92023b33` as its real body, `opensMathBlock` `77f97d0a`, `opensObsidianBlock` `f3cce67c`,
+`inlineContainerClose` `8da74d5f`, `wikiTargetClose` `18052772`, `peelQuotes` `b23aa85e`), and
+`containerPrefix` moved `0c7d6d2f` / 1,372 B to `04a3492d` / 5,276 B as intended.
+**`interruptsParagraph` was NOT widened.** `flowDepthDelta` is identical at `ec178340`, which is
+this file's own extractor trap and shows the scanner is not mis-pairing the quotes inside its regex
+literal.
+
+**The limits, and they are the usual ones at full force.** **NOTHING WAS OBSERVED IN OBSIDIAN**: no
+deploy and no CDP session happened for this ticket at Implement, at Verify or at the merge. Every
+renderer verdict comes from the parser harness, which **EXECUTES Obsidian 1.13.7's own reading-view
+parser and renderer out of the installed asar**, so it is stronger than a transcription and **is
+still not the application**; Live Preview's CodeMirror/Lezer parser has never been read by any
+ticket in this family. Rule 11 applies to every number above. **AC4** (updating the four
+`pin-nrl115-*` tripwires deliberately) was **out of scope** because NRL-115 is still unmerged and
+those fixtures do not exist on `main`, and it is handed to whoever lands it. Residual **DEST-LEAK**
+families remain on the fix: **3,584 of 8,704** cells in the soft-wrapped-with-tab-interior class
+and **4,608 of 9,216** in the soft-wrapped-with-mid-line-comment class, both pre-existing. And one
+**user-visible widening past the ticket's headline**, renderer-verified and deliberate: `- - x` now
+speaks `x` where it said `- x`.
+
+**R-M08 and R-M09 each lose a leftover. NEITHER becomes met and the `2 of 16` MUST headline count
+does not move.** What stays open against them: roots 3 and 5 in full, root 4's named residuals,
+roots 1 and 2's three non-container shapes (NRL-109), the two pre-existing image shapes
+`![a [[N|l]] b](dest.png)` and `![alt](dest(1).png)`, NRL-45's `[a]: x.png "%%"` leftover, NRL-93,
+NRL-118 and now **NRL-145**.
 
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
