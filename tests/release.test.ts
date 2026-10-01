@@ -590,6 +590,197 @@ test("release.yml attests every published release asset and nothing else (NRL-76
 	);
 });
 
+// --- One pinned action creates the Release and uploads its assets (NRL-104)
+//
+// `release.yml` used to run two actions back to back: `Create GitHub Release`
+// (`actions/create-release@v1`) and then `Upload Release Assets`
+// (`softprops/action-gh-release@v1`). The second can do both jobs, and the
+// first was the sole source of the three `The set-output command is deprecated`
+// warnings NRL-79's run `36785920227` recorded, plus the only `using: node12`
+// runtime in the file and the `tag_name: ${{ github.ref }}` shape that passed a
+// full `refs/tags/0.1.1` where the adjacent line used the bare `github.ref_name`
+// and survived only on server-side normalisation this repo does not control.
+//
+// These checks read the workflow TEXT. They cannot say the path works - no tag
+// has been pushed since the change, so the shipped configuration is unexercised
+// on a real runner exactly as it was before NRL-79 (ADR 0011, Amendment NRL-104).
+//
+// Several are SCOPED to the upload step rather than to the whole file, and the
+// scoping is what makes them mean anything: `draft: false` and `prerelease: false`
+// existed file-wide before this change, inside the step being deleted, so a
+// content-wide regex would have been green on both sides and proved nothing.
+
+/**
+ * The `Upload Release Assets` step's own text, from its `- name:` line to the
+ * blank line that ends it.
+ *
+ * Defensive in the same way `extractUploadedFiles` and `parseOnPushTags` are:
+ * it THROWS rather than returning `""`, because an empty string would make
+ * every "is X inside the upload step" check below vacuously green, and a
+ * vacuous green on the step that decides what ships is the NRL-76 shape.
+ */
+function extractUploadStep(content: string): string {
+	const start = content.indexOf("- name: Upload Release Assets");
+	if (start === -1) {
+		throw new Error(
+			"could not locate the `- name: Upload Release Assets` step in the workflow text; " +
+				"refusing to return an empty step body, which would make the NRL-104 scoped checks " +
+				"vacuously green. `extractUploadedFiles` anchors on this same literal name.",
+		);
+	}
+	const end = content.indexOf("\n\n", start);
+	const step = end === -1 ? content.slice(start) : content.slice(start, end);
+	if (!step.includes("files:")) {
+		throw new Error(
+			"the `Upload Release Assets` step body was found but holds no `files:` key; " +
+				"the slice is wrong and the scoped checks below would be vacuous",
+		);
+	}
+	return step;
+}
+
+// DEFECT-SHAPED (NRL-104), red against the pre-change file at `:163-164`.
+// Scheduled work on a published deprecation path rather than an outage: nothing
+// was broken, and `actions/create-release@v1` is simply the thing being removed.
+test("release.yml no longer uses actions/create-release (NRL-104)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const uses = content.match(/^\s*uses:\s*\S+/gm) ?? [];
+	const offenders = uses.filter((line) => line.includes("actions/create-release"));
+	assert(
+		offenders.length === 0,
+		`actions/create-release is still referenced by a \`uses:\`: ${JSON.stringify(offenders)}. ` +
+			`It is the only source of the set-output deprecation warnings NRL-79 observed and the ` +
+			`only using: node12 runtime in the file.`,
+	);
+	assert(
+		!/^\s*-\s*name:\s*Create GitHub Release\s*$/m.test(content),
+		"a step is still named `Create GitHub Release`; softprops/action-gh-release creates the Release itself",
+	);
+});
+
+// RED against `@v1`. Asserts the SHAPE - a 40-hex commit plus a trailing `# v`
+// comment naming the human-readable version - and deliberately NOT the literal
+// SHA, so a future legitimate bump is one edit in the workflow rather than two.
+test("the release action is pinned to a 40-hex commit with a version comment (NRL-104)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	assertMatch(
+		content,
+		/uses:\s*softprops\/action-gh-release@[0-9a-f]{40}\s*#\s*v/,
+		"softprops/action-gh-release must be pinned by 40-hex commit SHA with a trailing `# v<version>` comment, " +
+			"not by a moving tag. A tag is rewritable by its owner; the comment is what keeps the pin readable.",
+	);
+	assert(
+		!/uses:\s*softprops\/action-gh-release@v/.test(content),
+		"softprops/action-gh-release is still pinned by tag",
+	);
+});
+
+// RED - the input is absent before this change, and it defaults to FALSE in the
+// action. Without it a missing `main.js` publishes a Release carrying fewer
+// assets than the attestation covers and still concludes success, which is
+// precisely the silent-truncation shape NRL-76 removed from `Generate checksums`.
+test("the upload step fails on an unmatched file (NRL-104)", () => {
+	const step = extractUploadStep(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	assertMatch(
+		step,
+		/^\s*fail_on_unmatched_files:\s*true\s*$/m,
+		"`fail_on_unmatched_files: true` must be set on the upload step: it defaults to false, so a " +
+			"missing asset would publish a short Release and still succeed",
+	);
+});
+
+// RED against `:168`. The action defaults its tag to `github.ref`, so naming it
+// would reintroduce the exact `refs/tags/<tag>` shape this ticket deletes.
+test("release.yml names no tag_name anywhere (NRL-104)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	// Full-line comments are stripped first, and that is deliberate rather than a
+	// loophole. The workflow's own comments describe the deleted shape at length -
+	// naming it is how the reason it went survives - so a raw text search would be
+	// red against a correct file. What must not exist is the KEY. Still red against
+	// the pre-change file, where `tag_name: ${{ github.ref }}` was a real key.
+	const yamlOnly = content
+		.split("\n")
+		.filter((line) => !line.trimStart().startsWith("#"))
+		.join("\n");
+	assert(
+		!/\btag_name\s*:/.test(yamlOnly),
+		"`tag_name:` is present. softprops/action-gh-release defaults to `github.ref`; setting it " +
+			"explicitly is how the full `refs/tags/0.1.1` shape got in, and it survived only on " +
+			"server-side normalisation this repo does not control.",
+	);
+});
+
+// RED, and only because the assertions are SCOPED. All three keys existed in the
+// pre-change file - inside the `Create GitHub Release` step being deleted - so a
+// content-wide search would pass on both sides of this diff and prove nothing.
+test("the upload step carries the Release title, draft and prerelease flags (NRL-104)", () => {
+	const step = extractUploadStep(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	assertMatch(
+		step,
+		/^\s*name:\s*Release \$\{\{ github\.ref_name \}\}\s*$/m,
+		"the upload step must carry `name: Release ${{ github.ref_name }}` - the Release title NRL-79 " +
+			"observed as `Release 0.1.1`, which the deleted step's `release_name:` used to set. " +
+			"`github.ref_name` and not `github.ref`.",
+	);
+	assertMatch(
+		step,
+		/^\s*draft:\s*false\s*$/m,
+		"`draft: false` must stay explicit on the upload step",
+	);
+	assertMatch(
+		step,
+		/^\s*prerelease:\s*false\s*$/m,
+		"`prerelease: false` must stay explicit on the upload step: NRL-75's semver-only `on: push: tags` " +
+			"filter excludes prereleases, and this is the second half of that reasoning",
+	);
+});
+
+// GUARD (green on both sides). `extractUploadedFiles` anchors on this literal
+// string, so renaming the step turns the NRL-76 subject-set check into a throw.
+test("guard: the upload step is still named literally `Upload Release Assets`", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	assertMatch(
+		content,
+		/^\s*-\s*name:\s*Upload Release Assets\s*$/m,
+		"`extractUploadedFiles` and `extractUploadStep` both anchor on this exact step name",
+	);
+});
+
+// GUARD (green on both sides), and the direct machine check on the coupling that
+// makes the key ORDER in this step load-bearing. `extractUploadedFiles`'s regex
+// is `/Upload Release Assets[\s\S]*?files:\s*\|([\s\S]*?)\n\s*\n/` - the capture
+// ends at the first BLANK LINE, not at the next YAML key. So any `with:` key
+// written after `files: |` is trimmed into the published-asset list and reported
+// by the NRL-76 subject-set check as `extra`, turning that check red for a
+// reason that has nothing to do with the attestation. `files: |` must be LAST.
+test("guard: no YAML key follows `files: |` inside the upload step", () => {
+	const step = extractUploadStep(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	const lines = step.split("\n");
+	const filesAt = lines.findIndex((line) => /^\s*files:\s*\|\s*$/.test(line));
+	assert(filesAt !== -1, "the upload step has no `files: |` block scalar");
+	const trailing = lines.slice(filesAt + 1).filter((line) => line.trim() !== "");
+	const keys = trailing.filter((line) => /^\s+[A-Za-z_][A-Za-z0-9_-]*:(\s|$)/.test(line));
+	assert(
+		keys.length === 0,
+		`a YAML key follows \`files: |\` inside the upload step: ${JSON.stringify(keys)}. ` +
+			`extractUploadedFiles captures up to the first blank line, so this key would be read as a ` +
+			`published asset and break the NRL-76 subject-set equality check.`,
+	);
+});
+
+// GUARD (green on both sides). The NRL-76 equality check above runs the real
+// shell step; this one pins the other end of the same coupling cheaply, so a
+// reorder that smuggles an extra entry into the published list is named here
+// even if the sandboxed step run is ever skipped.
+test("guard: the published asset list is still exactly the three installed files", () => {
+	const published = extractUploadedFiles(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	assertEquals(
+		published.join(","),
+		"main.js,manifest.json,styles.css",
+		"the upload step must publish exactly the three files Obsidian's installer fetches (ADR 0028)",
+	);
+});
+
 // GUARD (green on both sides). Without it the check above is satisfiable by a
 // literal string: every decoded digest must be the real sha256 of the file that
 // subject names, recomputed here.

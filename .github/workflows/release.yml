@@ -3,9 +3,9 @@ name: Release
 on:
   push:
     # NRL-75. This was `- "*"`, which cut a real, public GitHub Release
-    # (the `Create GitHub Release` step below) on ANY tag whose name holds no
-    # `/`: `nightly`, `wip`, `pre-rebase`, `v0.1.0`, `0.1.0-rc1`. A
-    # `backup/`-shaped tag was inert only because of the slash.
+    # (the release-upload step below, `softprops/action-gh-release`) on ANY tag
+    # whose name holds no `/`: `nightly`, `wip`, `pre-rebase`, `v0.1.0`,
+    # `0.1.0-rc1`. A `backup/`-shaped tag was inert only because of the slash.
     #
     # THESE ARE GITHUB FILTER PATTERNS, NOT REGEXES, and the two look alike
     # while behaving differently. `*` is a wildcard - "zero or more characters,
@@ -23,7 +23,7 @@ on:
     # starting with `[` must be quoted or YAML fails to parse the workflow.
     #
     # Prereleases are excluded deliberately. `prerelease: false` is hardcoded in
-    # the `Create GitHub Release` step below and versions.json holds no
+    # the release-upload step below and versions.json holds no
     # prerelease key, so a matching `0.1.0-rc1` would cut a Release that claims
     # to be stable.
     #
@@ -160,16 +160,6 @@ jobs:
         with:
           name: dist
 
-      - name: Create GitHub Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-
       # Exactly the three files Obsidian's own installer fetches, and nothing
       # else. The four ort/ assets used to be published here so the plugin
       # could fetch its runtime from a release URL; they do not any more,
@@ -178,9 +168,52 @@ jobs:
       # ships inside main.js. Publishing them anyway would leave a
       # downloadable copy of executable code that nothing installs and that a
       # future reader would reasonably assume is load-bearing.
+      #
+      # ONE action creates the Release and uploads the assets, as of NRL-104.
+      # A `Create GitHub Release` step (`actions/create-release@v1`) used to run
+      # immediately above this one; it was the sole source of the three `The
+      # set-output command is deprecated and will be disabled soon` warnings
+      # NRL-79's run 36785920227 recorded, the only `using: node12` runtime in
+      # the file, and the `tag_name: ${{ github.ref }}` shape that handed the
+      # full `refs/tags/0.1.1` to a step whose adjacent line used the bare
+      # `github.ref_name`. No `tag_name:` here on purpose: this action defaults
+      # its tag to `github.ref`, so naming it would put that shape straight back.
+      #
+      # Pinned by COMMIT, not by tag, and the comment is what keeps the pin
+      # readable. `efb35369...` is `v3.0.3` - the annotated tag `v3.0.3` is
+      # `e598afbe...`, which dereferences to this commit, tagged 2026-08-30, and
+      # that tree's `action.yml` declares `using: "node24"`. `v1` was NOT chosen:
+      # its tag has not moved since 2022-11-21 and declares `using: "node16"`,
+      # which is deprecated too, so pinning it would have left the ticket's
+      # runtime goal half done. The `set-output` deprecation dies with the
+      # DELETION above rather than with this version choice - both softprops
+      # dists hold zero literal `::set-output`.
+      #
+      # `fail_on_unmatched_files: true` is not optional. The action documents it
+      # as defaulting to FALSE, so without it a missing `main.js` publishes a
+      # Release carrying fewer assets than the attestation covers and still
+      # concludes success - the silent-truncation shape NRL-76 removed from
+      # `Generate checksums` (ADR 0011, NRL-76 decisions 4 and 5).
+      #
+      # THE BLOCK SCALAR BELOW MUST STAY LAST, with the blank line after it. Its
+      # reader is `extractUploadedFiles` in `tests/release.test.ts`, a regex over
+      # this text rather than a YAML parse, and it ends its capture at the first
+      # BLANK LINE and not at the next YAML key - so any `with:` key written under
+      # that scalar is read as a published asset and breaks the NRL-76 subject-set
+      # equality check. The step NAME matters for the same reason: the regex
+      # anchors on it. SO DOES THE PROSE ABOVE IT, measured while writing this
+      # comment: the regex takes the FIRST occurrence of its two anchors anywhere
+      # in the file, so a comment up here quoting either of them verbatim hijacks
+      # the capture and the NRL-76 check reports the comment as a published asset.
+      # That is why this paragraph names neither literally and why the pre-existing
+      # comment near `Generate checksums` splits the step name across two lines.
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
           files: |
             main.js
             manifest.json
