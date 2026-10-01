@@ -1663,11 +1663,18 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// RED against base 874410d, which spoke it.
 		["guard-nrl111-dash-run-off-a-second-line-is-not-an-h2", "L1.\nL2.\n--\nProse <!--\n===\nHIDDENE\n--> t.", "L1. L2. Prose t."],
 		// THREE TRIPWIRES for three roots NRL-111 deliberately does NOT fix. Each is
-		// PROSE LOSS: the renderer DISPLAYS the sentinel and we drop it. None can
-		// leak, and for the first that is structural rather than lucky - a narrow
-		// stop set used as a block-end COUNTER can only OVER-count, and over-counting
-		// only ever suppresses a stop. Each was measured on its own corpus with the
-		// real parser and renderer in NRL-111's fix-forward session.
+		// PROSE LOSS: the renderer DISPLAYS the sentinel and we drop it. None of
+		// them leaks IN ITS MEASURED CORPUS (F1 0 of 7,680 room). Do NOT restate the
+		// stronger claim an earlier revision made here - that a narrow stop set used
+		// as a block-end COUNTER "can only OVER-count", so none CAN leak. NRL-111's
+		// second Verify falsified it: the counter also UNDER-counts, because
+		// `TERM2_LIST` matches a container-OPENING marker line (a block start, not a
+		// block end) and `line.trim() === ""` reads a tab-only line as blank, and
+		// under-counting to exactly 1 turns the gate on where the renderer has no
+		// underline. Measured 55,296 and 12,288 class-A cells, both saturated, 0
+		// newly leaking and cell-for-cell identical on base and on an uncapped arm,
+		// so shipped behaviour is untouched and only the claim was wrong. Each count
+		// below was measured on its own corpus with the real parser and renderer.
 		//
 		// LABEL THEM HONESTLY: all three are RED against base 874410d, so they are
 		// prose this pass stops speaking. Base spoke the sentinel, and base was

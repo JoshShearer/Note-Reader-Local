@@ -1179,8 +1179,19 @@ lost. It is not a wash and it is not free.
   renderer block ends: blockquote, nested quote, table, `$$`, indented code,
   footnote definition, link reference definition, a bare `* + 1. 1)` marker, a
   comment block. So `paraLinesAbove` over-counts and a correct second-line stop is
-  suppressed. **Mitigating and worth stating: a narrow stop set used as a counter
-  can only OVER-count, so every F1 cell is prose loss and none can leak.** Verify
+  suppressed. **No F1 cell in the measured corpus leaks: 0 of 7,680 room.** An
+  earlier revision of this bullet generalised that into "a narrow stop set used as
+  a counter can only OVER-count, so none can leak", and **NRL-111's second Verify
+  falsified it.** The counter can also UNDER-count, two ways, and under-counting to
+  exactly 1 turns the gate on where the renderer has no underline: `TERM2_LIST`
+  matches a container-OPENING marker line, which is a block start and not a block
+  end, and `line.trim() === ""` takes a tab-only line as blank. Measured at 55,296
+  and 12,288 class-A cells, both saturated, **0 newly leaking and cell-for-cell
+  identical on base, on the first pass and on an uncapped arm** - so the shipped
+  behaviour is untouched and it was the CLAIM that was wrong. Both mechanisms are
+  listed as class-A residuals earlier in this same section, which is to say the
+  document contradicted itself. F1 is therefore prose loss **plus a disclosure
+  mechanism**, not prose-loss-only. Verify
   measured 6,656 over 13 shapes against the first pass; F4's fix closed one of them
   (`setextH2viaDash`), which is why the figure is 6,144 over 12 here. Pinned as
   `tripwire-nrl111-f1-blockquote-above-is-not-a-counted-block-end`.
