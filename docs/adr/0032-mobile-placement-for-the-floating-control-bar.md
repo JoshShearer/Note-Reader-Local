@@ -421,13 +421,18 @@ mobile while the bar is visible, **125.64 + (871.36 - 19) / 2 = 551.8** in viewp
 coordinates. **NRL-110's 489.0 is a desktop / bar-hidden figure from here on** (ADR 0022
 and NRL-110's own series are unamended and remain correct for those conditions).
 
+**Measured after the fact: 552.01 on the device, against the 551.8 predicted here.** The
+0.21 is the integer `126px` publish against the 125.64 this arithmetic used, not a flaw in
+the derivation. So the sentence below that calls 551.8 predicted rather than measured is
+history; the prediction held.
+
 The property NRL-110 cares about is preserved and strengthened: the spoken line is still
 not parked flush with an edge, and it is now centred inside the **unobstructed** band,
 which is direction 3's correctness without touching `src/ui/highlight.ts`. The
 fall-through arm (`rectHeight > boundingHeight`, ADR 0022 decision 3 as corrected by
 NRL-110) is still not reached - 19px against 871px - and `yMargin` is still unread on the
-arm that runs. **551.8 is arithmetic from the library source, not a measurement**; Verify
-measures it.
+arm that runs. **551.8 was arithmetic from the library source and not a measurement when it
+was written**; Verify then measured **552.01**, so it is now both.
 
 ### Why NRL-90's suppression is not tripped, and the one case where it is
 
@@ -447,8 +452,10 @@ padding shrinks `clientHeight`, which **enlarges** `scrollHeight - clientHeight`
 showing the bar cannot clamp. It can clamp when the bar **hides** while the note is
 scrolled to the bottom - **one** unarmed `scroll` event, which latches suppression
 *after* the read has already ended, and `resetScrollSuppression` runs at all three
-read-start sites, so the next read clears it. That is the one named, bounded case and
-Verify measures it. NRL-90's F1 residual (a dispatch that moves the DOM by zero) is
+read-start sites, so the next read clears it. That is the one named, bounded case, and
+Verify measured it: **exactly 1** clamped `scroll` event on bar-hide, `scrollTop` 9731 ->
+9605 (-126), which did **not** survive into the next read (9605 -> 0). Zero scroll events
+across the short-note read. NRL-90's F1 residual (a dispatch that moves the DOM by zero) is
 unchanged in kind, since `center` still computes `moveY` unconditionally, though **which**
 opening chunks clamp at `scrollTop` 0 will differ, the box being smaller.
 
@@ -482,20 +489,65 @@ Non-negotiable 9 is not on this path.
   block, on R-M14 grounds. Nothing here reopens it, and the chosen fix adds no
   `display: none` of its own.
 
+### Measured on the device, both arms, and one finding the derivation above missed
+
+Added after the fix shipped. Pixel 9 Pro XL, Android 17, Obsidian WebView Chromium 154,
+over `adb forward`. The pre-fix build was still on the device, so **both arms were
+measured** rather than the post-fix arm being compared against a cited number:
+
+| | mark top | bar bottom | occluded |
+| --- | --- | --- | --- |
+| pre-fix | 185.61 | 235.97 | **46 of 46px** |
+| post-fix | **311.61** | 235.97 | **0px**, 75.64px clearance |
+
+The pre-fix occlusion is *worse* than the 26.4 of 46px recorded earlier in this document,
+because this note's first line sits higher than the one NRL-112 measured. Published height
+**126px** and pane `padding-top` **126px**, exactly as the integer-rounding residual below
+predicts. Staleness guard first, before any rect was trusted: exactly one plugin `<style>`,
+`textContent.length` **12538 == the committed byte count**, and
+`local-tts-control-bar-visible` flipping false -> true. The desktop negative was
+established with a **positive control** rather than reasoned from the `body.is-mobile`
+gate: injecting the committed stylesheet into the live desktop page gave **0px** padding
+even with the class present and 126px forced, and **126px** only once `is-mobile` was
+added; reverted after.
+
+**The finding: the height publish is two-staged, and the clearance guarantee is therefore
+narrower than this document's derivation claims.** `refresh()` runs on player state events,
+and at `preparing` the bar has not yet taken its visible layout, so `offsetHeight` reads
+**109px** - the hidden-state height, **16.64px short** - and only becomes **126px** at
+`playing`, about **14.5 s** later on this device. During that window
+`barTop + 109 = 219.33` against a bar bottom of **235.97**, so the
+`firstLineTop_new >= barBottom` argument above does **not** hold for the `preparing` stage:
+what kept the mark clear on this device was **75.28px of unrelated slack**, not the
+inequality. It was measured clear in **both** stages, so acceptance holds and nothing is
+reopened, but this is a **start-of-every-read** case and is **distinct** from the
+mid-read-rotation residual below. Fixing it properly means publishing a height the bar will
+have rather than one it currently has, or re-running the publish after the bar becomes
+visible; neither was attempted here, and neither is covered by any test, `controlBar.ts`
+having no bare-Node runtime.
+
 ### Residual risk - what this amendment does NOT establish
 
-- **Nothing was observed on a device for this fix.** Every number above is either the
+- **The derivation's own evidence was arithmetic, and the section above is what replaced
+  it.** Read as history: when this amendment was written, every number in it was either the
   pre-fix measurement already recorded in this ADR, arithmetic from `app.css` and
-  `@codemirror/view`'s own source, or a derivation. `npm test` checks `styles.css` as
-  **text** and cannot observe a rect; `controlBar.ts` has no bare-Node runtime at all.
-  **A green suite is not evidence here** (rule 11), and 551.8 in particular is predicted,
-  not measured (rule 13).
+  `@codemirror/view`'s own source, or a derivation, and 551.8 in particular was predicted
+  rather than measured. `npm test` checks `styles.css` as **text** and cannot observe a
+  rect; `controlBar.ts` has no bare-Node runtime at all, so **a green suite is still not
+  evidence here** (rule 11).
+- **Nobody watched the screen.** Everything in the section above is machine measurement
+  over CDP and adb. Whether the reserved band feels right, or whether the editor losing
+  the bar's height mid-read reads as acceptable, has been judged by no human on any
+  platform.
 - **Reading view is deliberately not padded.** `.markdown-preview-view` gets no rule,
   because the highlight is a CodeMirror decoration and does not exist there. The bar can
   still overlay preview text; that is pre-existing and out of scope.
 - **A mid-read rotation leaves a stale published height** until the next player state
   event re-runs `refresh()`. No `ResizeObserver` was added: it would be more untestable
-  code in the one file the suite cannot reach.
+  code in the one file the suite cannot reach. Do **not** fold the two-staged
+  `preparing` publish measured above into this bullet: that one fires at the start of
+  every read rather than only on a rotation, and an observer on the bar would close it
+  where a rotation needs one on the viewport.
 - **`offsetHeight` is integer-rounded, so the published value will not equal the measured
   one.** The 125.64px above would publish as `126px`. The 0.36px goes into extra clearance,
   which is the fail-safe direction, but a reader comparing the two numbers on the device
@@ -509,6 +561,11 @@ Non-negotiable 9 is not on this path.
   chrome bottom, and the padding is the bar's measured height, so up to 44px of the first
   line can still be occluded.
 - **Tablet, a ~360 CSS px phone and landscape** remain unobserved, as above.
-- **Desktop rests on construction, not observation.** CDP 9222 is unreachable here, so the
-  argument is that `body.is-mobile` cannot match a desktop Obsidian and the diff deletes
-  zero lines from `styles.css`; block 21's five desktop guards stay green.
+- **Desktop rested on construction when this was written, and the positive-control
+  injection above is a narrower upgrade than it looks.** The construction argument stands:
+  `body.is-mobile` cannot match a desktop Obsidian, the diff deletes zero lines from
+  `styles.css`, and block 21's five desktop guards stay green. What was then measured is
+  that the **committed stylesheet**, injected into a live desktop page, pads by 0px with
+  the class present and a 126px height forced, and by 126px only once `is-mobile` is added.
+  That tests the rule, **not the plugin running on desktop**: the desktop deploy slot was
+  held by another lane for that run, so no desktop Obsidian ever loaded this build.
