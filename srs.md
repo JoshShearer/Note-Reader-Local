@@ -2319,11 +2319,10 @@ Acceptable:
 - Note: Measurement performed on bundled extract.ts logic with representative markdown (paragraphs, emphasis, links, code blocks)
 
 **Command-to-Speech Latency:**
-- Estimated: ~180-250 ms (warm start, speech-dispatcher + espeak-ng)
-- Method: Speech-dispatcher daemon warm, no model loading
-- Status: **PASS** (well under 500 ms target)
-- Note: Measured on speech-dispatcher engine with espeak-ng; plugin initialization + first utterance synthesis; excludes cold-start daemon initialization
-- Actual measurement requires live Obsidian instance with CDP debugging enabled (see Hardening Matrix section below)
+- Measured (NRL-141, 2026-10-01): **~5,130 ms**, native Obsidian 1.13.7 (Electron 43) on Linux, plugin at `main` `7c75866`, engine Auto, speech-dispatcher warm: `Read from cursor` reached `preparing` at +5,130 ms and `playing` at +5,133 ms, engine `speechd`. Measured in NRL-141's reproduction, not in this file's session.
+- Status: **FAIL** against the 1,000 ms acceptable bound. The earlier "Estimated ~180-250 ms ... PASS" in this block was an estimate that was never measured, and this measurement contradicts it.
+- Cause, inside plugin control: on that host `speechSynthesis.getVoices()` returns 0 voices, so the Web Speech probe polled to its 5,000 ms timeout on every call with nothing cached, and `buildProbes()` waits for every engine's probe under one `Promise.all`. Re-measured during NRL-141 in a Flatpak Obsidian 1.13.7 (CDP, read-only, 0 voices, pre-fix build): `buildProbes()` 4,909 ms and `getEngineStatuses()` 4,908 ms, both on each of two consecutive calls.
+- NRL-141 caches the confirmed-empty voice outcome per engine (ADR 0010, NRL-141 amendment). Bare-Node against the real `webspeech.ts` with real timers and 0 voices: the first probe still takes 4,911 ms, every later probe 0 ms with 0 poll timers. **The post-fix command-to-speech latency in Obsidian is unmeasured**: the Flatpak sandbox has no `spd-say`, so a speechd-on-Auto read cannot be observed there, and a read issued within the first poll window after plugin load still waits out what remains of it.
 
 ### Hardening Matrix Verification
 

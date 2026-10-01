@@ -144,3 +144,43 @@ that property exactly:
   webspeech simply never wins automatic selection, which is safe - but Web
   Speech would then be dead weight in the automatic chain on this platform.
   Worth confirming by ear, not assumed either direction.
+
+## Amendment: NRL-141, the no-voices probe is paid once per engine
+
+On a host where `speechSynthesis` exists but reports zero voices (measured on
+a Flatpak Obsidian 1.13.7 on Linux, `getVoices().length` 0), every
+`isAvailable()`/`hasLocalVoice()`/`listLocalVoices()` call polled to
+`VOICE_TIMEOUT_MS` with nothing remembered, and because `buildProbes()` waits
+for all probes, every Auto read waited too: `buildProbes()` measured 4,909 ms
+on each of two consecutive calls there, and NRL-141's reproduction in native
+Obsidian measured an Auto read reaching `playing` at +5,133 ms.
+
+Decision. The voice wait moves onto `WebSpeechEngine` as instance state:
+
+- one in-flight poll, shared by every concurrent caller;
+- a poll that runs to its timeout with no voices records a confirmed-empty
+  outcome, which later calls return without polling;
+- invalidation is by any `voiceschanged` event, through one persistent
+  listener registered lazily and removed by `dispose()` (replacing the
+  per-call `{ once: true }` listeners that leaked when the event never came),
+  **and** by a synchronous `getVoices()` read that every call makes before
+  consulting the cache, so a host that fills its list without the event is
+  still seen on the next call; `listVoices()` no longer memoises an empty list
+  either.
+
+The local-voice gate above is unchanged and still fails closed: the cache can
+hold only "no voices", never a voice list, so it cannot turn unknown into
+available, and `hasLocalVoice()` is still true only for a voice it has read
+with `localService === true`. Both `isAvailable()` reason strings are
+byte-identical.
+
+Measured, bare Node against the real module with real timers and 0 voices:
+before, each call 4,910-4,918 ms and 49 poll timers, a concurrent pair 98;
+after, the first call 4,911 ms and 49 timers, every later call 0 ms and 0
+timers; a `voiceschanged` carrying a voice 1,000 ms into a poll settles it at
+1,000 ms. Costs that remain: the first probe after load still pays up to
+`VOICE_TIMEOUT_MS` if no voices ever arrive (an Auto read inside that window
+waits out the remainder), and whether any real Linux Electron fires
+`voiceschanged` late is unobserved. The Obsidian-side Auto latency after this
+change is unmeasured.
+
