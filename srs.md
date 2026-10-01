@@ -743,7 +743,7 @@ Amended by ADR 0022 (NRL-72):
 - The scroll repositions the viewport only. The cursor, the text selection, the focused element and the undo history are untouched; measured in bare Node as a byte-identical `state.selection` with `docChanged === false`.
 - The offset is clamped to the document length, matching the clamp the two decoration fields already apply to `range.to`.
 - Known gap: a manual scroll made mid-read is overridden at the next sentence boundary. Nothing detects a manual scroll.
-- Not verified in Obsidian. No CDP session was available, and a bare-Node assertion that a `StateEffect` was dispatched is not evidence that a user sees the view move.
+- Narrowed by NRL-110. As written for NRL-72 this said "Not verified in Obsidian. No CDP session was available, and a bare-Node assertion that a `StateEffect` was dispatched is not evidence that a user sees the view move." The second clause stands as a statement about evidence, but the first is no longer true of the scroll's on-screen behaviour: NRL-110 measured `scrollDOM.scrollTop` and `coordsAtPos(chunk.sourceStart).top` per chunk over CDP in a real Obsidian on an Android device, which is what falsified the `y: "nearest"` bullet above. What remains unverified is narrower and is named in ADR 0022's NRL-110 amendment: desktop **feel**, watched on no platform; whether Obsidian's **desktop** editor extensions intercept the scroll effect, untested because desktop CDP was unreachable; and whether Live Preview's folds and widgets put `chunk.sourceStart` at the screen position a plain-text offset implies, all measurement having been taken in source mode.
 
 ---
 
