@@ -313,6 +313,38 @@ evidence, not a live Obsidian reading or highlighting observation.
    (40). The same fuzz newly leaks in **48** cells against the bare charCode-32
    scan and **72** against the uncapped-term-C `{0,3}` form, so it can fail.
 
+   **Every cell count in this subsection is corpus-specific and must be quoted
+   with its corpus attached**, the way NRL-88 root 4's three different totals are.
+   One claim in this ticket's own record was not. `919d13e`'s commit message says
+   the fix-forward pass's **370** prose-loss fuzz regressions are the SAME 370
+   cells as the first draft's, "so this pass adds none". That equality holds **on
+   that corpus** and does not hold in general: on the second independent Verify's
+   own **48,668-cell** fuzz the set is a strict SUPERSET, **515** against the first
+   draft's **487**, with **28** cells in the fix-forward pass only and **0** in the
+   first draft only. That is what the mechanism predicts, both added guards only
+   making a run harder to END. What does hold, and is the part that matters, is the
+   direction: the relation is one-way, so there are **0** cells in which this pass
+   speaks a sentinel the renderer shows where the first draft hid it, which is the
+   same fact as the 0 in the first-draft-only column.
+
+   **That cost is only half of this divergence's character, and the other half is
+   a DISCLOSURE, so the root must not be recorded as prose-loss-only.** Our `%%`
+   block state is note-scoped **and container-blind**, where Obsidian scopes a
+   block to the construct holding it, so a later `%%` at a DIFFERENT container
+   depth closes for us a block the renderer keeps open and that line's remainder is
+   SPOKEN: `>> %%` / `%% SECRET` says `SECRET`, which the renderer hides. This half
+   is **pre-existing and not opened here**. Measured by that second Verify against
+   real rendered HTML, on a corpus carrying **no tab and no four-plus-space lead
+   anywhere** - so this change provably cannot reach it - **1,088 of the 1,088
+   cells with room** on a 1,728-cell corpus leak on BASE and **1,088** on the fix,
+   **0 newly leaking**. Re-measured independently while writing this paragraph, by
+   bundling both arms from this tree: over 8 container prefixes x all 512
+   content-key combinations, **4,096 of 4,096 cells leak on base and 4,096 on the
+   fix, 0 newly leaking, and 0 cells differ between the two arms in any respect**.
+   It is tracked as **NRL-118** and pinned as a TRIPWIRE by
+   `pin-nrl118-note-scope-closes-at-another-depth` plus its control; when NRL-118
+   closes, both expectations change on purpose.
+
    A **fresh-block** tab-led or four-space line needed no change and did not get
    one: it never reaches this predicate, and the renderer agrees it is code.
    `blockMethods` is [frontmatter, blankLine, indentedCode, ..., comment,

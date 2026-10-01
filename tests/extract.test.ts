@@ -2076,6 +2076,37 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// purpose; the control's must not move at all.
 		["pin-nrl93-unmasked-label-destination", "Before ![alt\n	%% x\n%%\nZHIDEZ\n%%\nmore](zdestz.png) after.", "Before [alt %% x more](zdestz.png) after."],
 		["guard-nrl93-unmasked-label-destination-control", "Before ![alt\n	plain x\n%%\nZHIDEZ\n%%\nmore](zdestz.png) after.", "Before [alt plain x more](zdestz.png) after."],
+		// NRL-118, A TRIPWIRE AND NOT EVIDENCE OF A FIX, in the style of
+		// pin-nrl74-container-label-still-leaks-destination. This is a DISCLOSURE: we
+		// SPEAK text Obsidian HIDES, which is the direction this family treats as
+		// forbidden. It is PRE-EXISTING and was NOT introduced by NRL-93.
+		//
+		// Our `%%` block state is note-scoped AND container-blind, where Obsidian
+		// scopes a block to the construct holding it. So a later `%%` sitting at a
+		// DIFFERENT container depth closes for us a block the renderer keeps open, and
+		// the rest of that line is spoken: `>> %%` / `%% SECRET` says SECRET, which
+		// the renderer hides.
+		//
+		// THE CONTROL IS WHAT MAKES IT A TRIPWIRE RATHER THAN A MYSTERY, and it is the
+		// second fixture: the same class with no container and no lead at all answers
+		// identically, so the leak is the scope rule and not the three-term line-start
+		// rule NRL-93 shipped. Both rows were measured on BOTH ARMS before being
+		// written, by bundling this tree's extractor and base 1ed6f1c's side by side:
+		// base says SECRET and the fix says SECRET in each, so base = fix.
+		//
+		// The pure class, measured by the second independent Verify with real rendered
+		// HTML from Obsidian 1.13.7's own parser as the oracle: 1,088 of the 1,088
+		// cells with room on a 1,728-cell corpus leak on BASE and 1,088 on the fix, 0
+		// newly leaking, on a corpus carrying NO TAB and NO FOUR-PLUS-SPACE LEAD
+		// anywhere - so NRL-93's change provably cannot reach it. Re-measured here
+		// over 8 container prefixes x all 512 content-key combinations: 4,096 of 4,096
+		// cells leak on base and 4,096 on the fix, 0 newly leaking, and 0 cells differ
+		// between the arms in any respect.
+		//
+		// Tracked as NRL-118. WHEN NRL-118 CLOSES, BOTH EXPECTATIONS MUST CHANGE ON
+		// PURPOSE: SECRET stops being spoken in each.
+		["pin-nrl118-note-scope-closes-at-another-depth", ">> %%\n%% SECRET", "SECRET"],
+		["guard-nrl118-note-scope-control-no-container", "%%\n%% SECRET", "SECRET"],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
