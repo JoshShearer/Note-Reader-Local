@@ -427,10 +427,24 @@ console.log("14. NRL-72: the chunk dispatch scrolls to the chunk's sourceStart")
 	const scrolls = scrollEffects(tr);
 	check("14b exactly one scroll effect, targeting the chunk's sourceStart", scrolls.length === 1 && scrolls[0]?.range?.head === 18, JSON.stringify(scrolls));
 
-	// No options object is passed to EditorView.scrollIntoView, so CodeMirror's
-	// own defaults apply. `yMargin` is deliberately NOT asserted: it is a
-	// library default we do not own and do not rely on.
-	check("14c the scroll uses CodeMirror's nearest defaults on both axes", scrolls[0]?.y === "nearest" && scrolls[0]?.x === "nearest", JSON.stringify(scrolls[0]));
+	// REPLACED IN PLACE by NRL-110, keeping the 14c slot and ordinal (the
+	// NRL-66/NRL-67 convention) so the behaviour can only change deliberately.
+	// It used to assert `y === "nearest"` on both axes and read "the scroll uses
+	// CodeMirror's nearest defaults"; it was the ONE check in the suite that
+	// went red for NRL-110, and the whole of the fail-first evidence for it.
+	//
+	// Three things this records. `y: "center"` is NRL-110's deliberate
+	// behaviour change away from NRL-72's `"nearest"` AND away from the
+	// zero-movement property that `"nearest"` bought: measured on a real
+	// Android Obsidian, `"nearest"` parked the spoken sentence's top at 973px
+	// of a 997px viewport on every chunk from the eleventh onward - flush with
+	// the bottom edge, nothing below it - which is the defect. `x` MUST stay
+	// `"nearest"`, so a later edit cannot start yanking the view horizontally
+	// on every sentence; only the y strategy was in scope. And `yMargin` is
+	// still deliberately not asserted, now for a stronger reason than "a
+	// library default we do not own": the vendored `center` branch never reads
+	// it at all, so asserting it would pin dead config.
+	check("14c the scroll centres the sentence vertically and leaves the horizontal axis to CodeMirror", scrolls[0]?.y === "center" && scrolls[0]?.x === "nearest", JSON.stringify(scrolls[0]));
 
 	check("14d GUARD the scroll effect leaves the decoration layers alone", marks(editor.state).join() === "local-tts-reader-sentence[18,37]", marks(editor.state).join());
 
@@ -446,6 +460,28 @@ console.log("14. NRL-72: the chunk dispatch scrolls to the chunk's sourceStart")
 	// on its own, so it is relabelled rather than strengthened. Post-change it
 	// does constrain: it is what forbids a second dispatch for the scroll.
 	check("14e GUARD one transaction carries both layers and the scroll", editor.dispatched.length === 1, `${editor.dispatched.length}`);
+
+	// 14h GUARD, added by NRL-110 and green on both sides of its change, so it
+	// is not counted as evidence for anything. 14a only counts three effects
+	// and 14e only counts one transaction; neither pins identity AND order, so
+	// a tidy-up could move the scroll into a second dispatch or push it ahead
+	// of a decoration effect while both stayed green. A second dispatch is the
+	// legal intermediate state ADR 0020 and NRL-54 exist to prevent, and the
+	// scroll riding last is what makes "a third effect in the same dispatch"
+	// mean something.
+	check(
+		"14h GUARD the one dispatch carries sentence, then word, then exactly one scroll",
+		tr.effects[0]!.is(setSentenceHighlight) &&
+			tr.effects[1]!.is(setWordHighlight) &&
+			scrollEffects(tr).length === 1 &&
+			editor.dispatched.length === 1,
+		JSON.stringify({
+			zero: tr.effects[0]!.is(setSentenceHighlight),
+			one: tr.effects[1]!.is(setWordHighlight),
+			scrolls: scrollEffects(tr).length,
+			dispatches: editor.dispatched.length,
+		}),
+	);
 }
 {
 	// A stale offset from a document edited mid-read is the real case. An

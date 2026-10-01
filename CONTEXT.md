@@ -390,9 +390,18 @@ These are design-level, not bugs, and they shape any new work:
   `chunk.sourceStart` and the word handler passes nothing, so a manual mid-read scroll is
   overridden at most once a sentence. Neither the three clears nor `applySentenceHighlight`
   takes an offset, so ending a reading and flipping a settings toggle both leave the
-  viewport alone. "No jump when already visible" is CodeMirror's `y: "nearest"` default and
-  not arithmetic of ours; a `coordsAtPos` visibility test must not be added, because it
-  needs a DOM the bare-Node suite cannot build and duplicates what `nearest` does. What
+  viewport alone. **Corrected by NRL-110:** the call passes `{ y: "center" }`, so the
+  chunk's start is brought to the editor's vertical centre rather than merely inside the
+  box. "No jump when already visible" was CodeMirror's `y: "nearest"` default and is
+  **gone** - the `center` arm of `scrollRectIntoView` assigns a vertical movement
+  unconditionally, so a chunk event scrolls even when the sentence is already visible. That
+  was traded on measurement: under `"nearest"` on a real Android Obsidian the spoken line's
+  top sat at 973px of a 997px editor on every chunk from the eleventh onward, flush with the
+  bottom edge. Still no arithmetic of ours - only `y` is passed, `x` stays `"nearest"`, and
+  no `yMargin` is passed because the `center` arm never reads one. A `coordsAtPos`
+  visibility test is still not added, but only because it needs a DOM the bare-Node suite
+  cannot build; it no longer "duplicates what `nearest` does", because on this path
+  `nearest` does nothing. See ADR 0022's NRL-110 amendment. What
   survives of the old decoration-only guarantee is the cursor, the text selection, the
   focused element and the undo history. What does not is the user's scroll position, by
   design. **Nothing was observed in Obsidian:** whether Obsidian's own editor extensions

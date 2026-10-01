@@ -394,29 +394,52 @@ export function applyHighlightLayers(
 			setWordHighlight.of(layers.word),
 		];
 		if (typeof scrollTo === "number" && Number.isFinite(scrollTo) && scrollTo >= 0) {
-			// No options object, deliberately, so CodeMirror's own defaults
-			// apply. Measured in bare Node against the vendored
-			// @codemirror/view: `EditorView.scrollIntoView(5)` yields one
-			// StateEffect whose value carries `range.head 5`, `y "nearest"`,
-			// `x "nearest"`, `yMargin 5`. Under `y === "nearest"` the view
-			// assigns a vertical movement only when the target rect falls
-			// outside the visible box and gates the scroll on `moveX || moveY`,
-			// so a target already in view moves by zero. That is the whole of
-			// "no jump when the highlight is already visible", and it is the
-			// library's behaviour rather than ours.
+			// `{ y: "center" }` is NRL-110, replacing NRL-72's deliberate
+			// no-options-object. Only `y` is passed, so `x` stays the
+			// library's `"nearest"`: read in the vendored
+			// node_modules/@codemirror/view/dist/index.js, `ScrollTarget`'s
+			// constructor (:2385) defaults `y` and `x` to `"nearest"` and
+			// `yMargin`/`xMargin` to 5, so this yields one StateEffect
+			// carrying `range.head`, `y "center"`, `x "nearest"`, `yMargin 5`.
 			//
-			// Do NOT add a visibility test of our own. It would need
-			// `coordsAtPos` and a real DOM, which the bare-Node suite cannot
-			// build - `EditorView` is never instantiated in
-			// tests/highlight.test.ts - so it would be untestable here and
-			// would duplicate what `nearest` already does.
+			// What this TRADES AWAY, on purpose. In `scrollRectIntoView` the
+			// `y == "nearest"` branch (:163-174) assigns `moveY` only when the
+			// target rect falls outside the bounding box, and the scroll is
+			// gated on `if (moveX || moveY)` (:200) - that gate zeroing was the
+			// whole of NRL-72's "no jump when the highlight is already
+			// visible". The else branch (:175-181) instead computes
+			// `moveY = targetTop - bounding.top` unconditionally, and for
+			// `y == "center"` with `rectHeight <= boundingHeight` `targetTop`
+			// centres the rect, so the gate almost never zeroes and a chunk
+			// event now scrolls even when the sentence is already on screen.
+			// That property is given up knowingly: measured on a real Android
+			// Obsidian (448x997 viewport) under `"nearest"`, the spoken
+			// sentence's top sat at 973px of a 997px editor on EVERY chunk from
+			// the eleventh onward - flush with the bottom edge with nothing
+			// below it - because `"nearest"` moves the target the minimum
+			// distance into the box and a downward read always arrives at the
+			// bottom. Centring is the reported fix; the cost is that the view
+			// moves once per sentence rather than only when it has to.
+			//
+			// Do NOT pass a `yMargin` here: the `center` arm of :177 does not
+			// read it, so it would be dead config.
+			//
+			// Still no visibility test of our own, but no longer because
+			// `nearest` does it for us - it does not, on this path. It needs
+			// `coordsAtPos` and a real DOM, and `EditorView` is never
+			// instantiated in tests/highlight.test.ts, so a visibility test
+			// written here would be wholly untestable in the bare-Node suite.
+			// Suppressing the scroll when the user has scrolled by hand is a
+			// different mechanism and lives in `nextScrollSuppression`.
 			//
 			// Clamped for the same reason the two fields clamp `range.to`: a
 			// stale offset from a document edited mid-read. Measured, an
 			// out-of-range head does not throw at dispatch time, it rides
 			// forward unchanged, so this is about scrolling somewhere wrong
 			// rather than about a crash.
-			effects.push(EditorView.scrollIntoView(Math.min(scrollTo, editor.state.doc.length)));
+			effects.push(
+				EditorView.scrollIntoView(Math.min(scrollTo, editor.state.doc.length), { y: "center" }),
+			);
 			// NRL-90: arm the read-and-clear flag ONLY on this branch, right
 			// before the dispatch that will cause the native 'scroll' event -
 			// a chunk dispatch with no scroll target must never arm it, or a
