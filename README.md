@@ -14,7 +14,7 @@ Read your notes aloud with on-device text-to-speech and word highlighting. No cl
 - **Word-Level Highlighting** - Current word highlights as you read, driven by source offsets
 - **Multiple Content Exclusions** - Skip code blocks, frontmatter, headings, tables, and more
 - **Automatic Engine Selection** - Ranks available engines by confirmed real-time quality
-- **Customizable Playback** - Speed, voice, highlight color, buffer-ahead sizing
+- **Customizable Playback** - Speed, voice, highlight colour, look-ahead sizing
 - **Reading Position Memory** - Resume from where you left off
 
 ## Privacy
@@ -131,20 +131,73 @@ Try reloading Obsidian. If issues persist, check the console (Ctrl+Shift+I on de
 
 ## Settings
 
-### Reader
+The tab has two tiers. **Voice**, **Speed**, **Content**, **Highlighting** and **Sleep timer**
+are always visible. **Speech engine**, the Kokoro rows and **Look ahead** sit inside a collapsed
+**Advanced** section at the bottom of the tab; open it to reach them. The Kokoro rows render only
+while Kokoro is the active engine. Two controls are conditional on what the active engine can do,
+noted where they appear below. Every name here is the label the plugin actually shows.
 
-- **Engine** - Choose your TTS backend or use automatic selection
-- **Voice** - Select a voice for the active engine
-- **Rate** - Playback speed (0.5x - 2x)
-- **Buffer Ahead** - Number of sentences to synthesize in advance
-- **Highlight Color** - Customize word highlight (or follow your theme)
+### Voice
+
+- **Prefer voices that do not require network access** - When a voice is picked automatically,
+  prefer one that needs no network. A preference and not a guarantee, and a voice you pinned
+  yourself is left alone either way
+- **Voice** - Which voice the active engine should use, grouped by language
+
+### Speed
+
+- **Speed** - How fast the note is read aloud (0.5x - 2x). Applies immediately if something is
+  playing
+
+### Pitch
+
+Shown only when the active engine advertises pitch control, which means `espeak-ng`,
+`speech-dispatcher` and `System voices (Web Speech)`. `Kokoro (local neural)` does not, so on the
+default engine this group is absent from the tab entirely.
+
+- **Pitch** - How high or low the voice sounds, -50 to 50. Applies to future synthesis only
 
 ### Content
 
-Toggle which parts of your note are read:
-- Skip Code Blocks, Inline Code, Frontmatter
-- Speak URLs, Image Alt Text, Embeds
-- Skip Headings, Tables
+Nine toggles, one per exclusion. The three "Speak" rows read positively: on means the text is
+spoken.
+
+- **Frontmatter** - Skip the note's YAML properties block
+- **Code blocks** - Skip fenced and indented code blocks
+- **Inline code** - Skip inline code spans
+- **Speak bare links** - Read the site name of a bare URL aloud, not the whole address. A link's
+  label is always read
+- **Speak image alt text** - Read an image's alt text. The image's file path is never read
+- **Speak embeds** - Read the name an `![[embed]]` points at, not the embedded note's contents
+- **Tags** - Skip `#tags`
+- **Tables** - Skip table rows
+- **Headings** - Skip headings instead of reading them
+
+### Highlighting
+
+Two independent layers rather than one (NRL-54, `docs/adr/0020`): the sentence being spoken is
+underlined, and the current word is drawn as a filled mark on top of it, so turning the word row
+off still leaves the sentence marked.
+
+- **Highlight while reading** - Master switch. Off means no marks at all
+- **Highlight sentences** - Mark the sentence being spoken. Works on every engine
+- **Highlight words** - Mark the word being spoken, over the sentence mark. Disabled, with the
+  reason shown under the row, on an engine that reports no word timings
+- **Highlight colour** - A hex colour. Leave it empty to follow the theme's highlight colour
+
+### Sleep timer
+
+- **Sleep timer** - Stop reading automatically after Off, 5, 10, 15, 30 or 60 minutes. A
+  countdown appears while it is armed
+
+### Engine
+
+Inside **Advanced**.
+
+- **Speech engine** - Pick a backend, or leave it on Automatic quality-ranked selection
+
+While the choice is Automatic, a read-only **Automatic picked** row sits below it naming the
+engine that was resolved and the reason.
 
 ### Kokoro (Advanced)
 
@@ -186,11 +239,33 @@ Whichever you pick, the first one you choose is a download you have to approve -
 English, and a control to download other languages is deliberately absent rather than
 present and broken.
 
-The remaining Kokoro controls:
+The remaining Kokoro controls, all inside **Advanced**, rendered only while Kokoro is the active
+engine, under a **Kokoro performance** heading:
 
-- **Device** - GPU (WebGPU) if available, CPU otherwise
-- **Threads** - Number of CPU threads (multithreading may reduce latency)
-- **Model** - Download and select among published Kokoro voice models
+- **Backend** - Automatic, CPU, or GPU (WebGPU). Automatic uses the GPU only when the device
+  really has a usable one. Changing this reloads the model
+- **CPU threads** - An upper limit rather than a promise. Some runtimes refuse to start a thread
+  pool at all and fall back to one
+- **Model build** - Which weights to use: Automatic, or one of the three builds above. This is the
+  large download, 92 MB to 326 MB
+- **Download Fast (q4f16)** - The button that fetches it. Its name follows whichever build is
+  selected, and one click downloads the weights plus the selected voice file (~510 KB), which is
+  the separate, much smaller of the two downloads. The same row carries a **Remove** button,
+  enabled once that build is on disk
+
+The rest of that group reports state rather than changing it: **Currently running on**, **GPU**,
+**Kokoro model** and **Model** (the model's name, language and license), **Status**, and
+**Total on-disk usage**. A separate **ONNX Runtime** heading holds exactly one row, its own
+**Status**, saying the runtime is bundled with the plugin and there is nothing to download.
+
+### Look ahead
+
+Inside **Advanced**, and rendered only when the active engine does not drive its own playback.
+That means it appears on `Kokoro (local neural)` and `espeak-ng`, and is absent on
+`speech-dispatcher` and `System voices (Web Speech)`, which pace themselves.
+
+- **Look ahead** - How many passages are synthesised ahead of the one playing, 0 to 8. Higher is
+  smoother but does more work. Applies immediately if something is playing
 
 ## Architecture
 
