@@ -286,10 +286,24 @@ espeak-ng spd-say'` finds neither, with `FLATPAK_ID=md.obsidian.Obsidian`), and 
 `~/Documents/NoteReaderTest` vault is absent. `7c75866`'s message, that the Flatpak here
 "has been replaced by the native one", is wrong for this machine; the commit is not
 rewritten and this sentence is the correction.
-Two residuals, both reproduced and filed. **NRL-142**: two concurrent `spd-say` clients
-racing the daemon's autospawn leave one exiting 1 with `Can't set lock on pid file`, so a
-probe that runs beside another (plugin enable, or the settings tab's paired calls) reports
-speechd unreachable and Auto picks espeak. A single cold probe autospawns fine. **NRL-141**
+Two residuals were reproduced and filed, and both have since had a fix merged. **NRL-142**
+(PR #184, `d53d95c`): two concurrent `spd-say` clients racing the daemon's autospawn left
+one exiting 1, so a probe that ran beside another (plugin enable, or the settings tab's
+paired calls) reported speechd unreachable and Auto picked espeak. A single cold probe
+autospawns fine. `SpeechDispatcherEngine.isAvailable()` now coalesces concurrent callers
+onto one in-flight probe (cleared on settle, never cached) and retries `-O` exactly once,
+after 500 ms, only when the exit is non-zero, unsignalled, and stderr holds
+`Autospawn failed` plus `Can't set lock on pid file` or `already running`; a bind failure,
+a refused connection or an empty stderr is never retried. `probeAttribution`, `listVoices`
+and `synthesize` are byte-identical and do **not** retry, so a race there still fails closed
+to `"unknown"`. Measured with the real bundled `speechd.ts` against a private autospawning
+daemon (the host daemon here runs `-s -t 0` and was not touched): 6 of 6 trials lost the
+race before the fix and 0 of 6 after, across one instance, two instances, paired
+`probeEngines` and an external `spd-say` racing one probe. Two limits travel with that.
+**The loser's stderr seen in the verify run was `already running` every time**; the
+`Can't set lock on pid file` form is pinned by a unit test (C2) only. And **the acceptance
+criterion in real Obsidian is NOT VERIFIED**: the Flatpak sandbox here has no `spd-say`.
+**NRL-141**
 (PR #181, `47cf18d`, ADR 0010's NRL-141 amendment): the Web Speech probe used to wait its
 full 5,000 ms timeout on **every** call when the host had no voices, so every Auto read here
 reached `playing` at about +5.1 s, against `srs.md:2282`'s 1,000 ms acceptable bound. The
