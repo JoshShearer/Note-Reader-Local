@@ -516,8 +516,48 @@ function opensHtmlBlock(view: string, at: number, closesLater: boolean): boolean
 	return view.slice(0, at).trim() === "" || closesLater;
 }
 
-function opensObsidianBlock(view: string, at: number): boolean {
-	return view.slice(0, at).trim() === "" && view.indexOf("%", at + 2) === -1;
+/**
+ * `dedentedByList` is NRL-93's third term, and it is the renderer's own
+ * context-sensitivity rather than a convenience. It says the lines of this
+ * construct have ALREADY had their leading whitespace removed by the time
+ * Obsidian's block tokenizers run, because they are the content of a list item:
+ * module 745's `M` hands each item's value to module 5540's remove-indentation
+ * with the item's own content indent, and module 6058 counts a tab as four
+ * columns. `- item` / `\t%%` / `SECRET` therefore reaches the `%%` tokenizer as
+ * `item` / `%%` / `SECRET`, so the tab is GONE and the block really does open.
+ * When it is true the old any-whitespace test is kept, which is exactly the
+ * pre-NRL-93 behaviour and is what stops this narrowing silencing a list item's
+ * hidden text; `extractChunks`' `listDedented` pass decides it per line, and the
+ * failure direction when the pass is unsure is `true`, i.e. hide.
+ *
+ * When it is false the lead must be at most three SPACES, and both halves of
+ * that are the renderer's, read out of app.js in this session:
+ *
+ * - SPACES only. The `%%` block tokenizer's own skip loop is
+ *   `for(var i=t.length,r=0;r<i&&32===t.charCodeAt(r);)r++;` - charCode 32, with
+ *   no tab alternative. A tab-led `%%` is not an opener for it at all.
+ * - At most THREE of them. The tokenizer has no cap of its own, but it never
+ *   gets the line: module 8607's paragraph tokenizer skips the whole
+ *   `interruptParagraph` check for a continuation line indented a tab or four
+ *   or more columns (`if((h=t.charAt(c))===o){p=l;break}` ... `if(p>=l&&h!==a)
+ *   {y=t.indexOf(a,y+1);continue}` with `l=4`), so such a line is absorbed as
+ *   lazy prose and its `%%` falls to the anchored inline `/^%%(.*?)%%/`, which
+ *   has no closer and is displayed. In a FRESH block position the same four
+ *   columns are indented code instead - `blockMethods` runs `indentedCode`
+ *   before `comment`, and module 134 opens on one tab - which `extractChunks`'
+ *   own INDENTED_CODE branch already handles before this predicate is reached.
+ *   Either way four columns is not a comment opener.
+ *
+ * Note that no tab can survive the cap: module 6058 advances a tab to the next
+ * multiple of four, so any lead containing one is at least four columns, which
+ * is why one spaces-only scan plus a length test covers both halves.
+ */
+function opensObsidianBlock(view: string, at: number, dedentedByList: boolean): boolean {
+	if (view.indexOf("%", at + 2) !== -1) return false;
+	if (dedentedByList) return view.slice(0, at).trim() === "";
+	if (at > 3) return false;
+	for (let k = 0; k < at; k++) if (view.charCodeAt(k) !== 32) return false;
+	return true;
 }
 
 /**
@@ -563,6 +603,14 @@ function opensObsidianBlock(view: string, at: number): boolean {
  * TIMING: it asks nothing about this line, so it is known before the first pass
  * and adds no pass. It defaults false, the fail-toward-hiding direction, which
  * is what the recursive-label and frontmatter call sites want.
+ *
+ * `dedentedByList` is the same shape again and is `opensObsidianBlock`'s third
+ * term (NRL-93): this line is the content of a list item, so Obsidian removed its
+ * leading whitespace before any block tokenizer saw it. It reaches only the `%%`
+ * branch, and only behind `blockComments`, so the five recursive label call sites
+ * and the frontmatter one never consult it and its default is immaterial to them;
+ * it is defaulted rather than required because those six sites would otherwise
+ * each have to state an answer to a question they do not ask.
  */
 function cleanLine(
 	raw: string,
@@ -575,6 +623,7 @@ function cleanLine(
 	outgoingBracket?: BracketKind,
 	htmlClosesLater = false,
 	incomingBracketDepth = 0,
+	dedentedByList = false,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -996,7 +1045,7 @@ function cleanLine(
 		if ((htmlComment || obsidianComment) && i >= literalCodeEnd) {
 			const closer: CommentCloser = htmlComment ? "-->" : "%%";
 			const close = raw.indexOf(closer, i + (htmlComment ? 4 : 2));
-			if (close === -1 && obsidianComment && !(blockComments && opensObsidianBlock(raw, i))) {
+			if (close === -1 && obsidianComment && !(blockComments && opensObsidianBlock(raw, i, dedentedByList))) {
 				emit("%", rawStart + i);
 				emit("%", rawStart + i + 1);
 				i += 2;
@@ -1942,9 +1991,9 @@ const LINK_REF_DEF =
  * terminates the paragraph before any inline tokenizing happens and a code span
  * can never contain one. Read off the installed parser, not observed live.
  */
-function opensHiddenComment(line: string, htmlClosesLater: boolean): boolean {
+function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByList: boolean): boolean {
 	const pct = line.indexOf("%%");
-	if (pct !== -1 && opensObsidianBlock(line, pct)) return true;
+	if (pct !== -1 && opensObsidianBlock(line, pct, dedentedByList)) return true;
 	const html = line.indexOf("<!--");
 	if (html === -1 || line.indexOf("-->", html + 4) !== -1) return false;
 	return opensHtmlBlock(line, html, htmlClosesLater);
@@ -2047,7 +2096,7 @@ function endsTerm2Scan(line: string): boolean {
  * no longer a pure line predicate - the in-file precedent is opensMathBlock,
  * already document-aware and already called beside this one.
  */
-function interruptsParagraph(line: string, htmlClosesLater: boolean): boolean {
+function interruptsParagraph(line: string, htmlClosesLater: boolean, dedentedByList: boolean): boolean {
 	return (
 		line.trim() === "" ||
 		FENCE.test(line) ||
@@ -2057,7 +2106,7 @@ function interruptsParagraph(line: string, htmlClosesLater: boolean): boolean {
 		TABLE_ROW.test(line) ||
 		LIST_BULLET.test(line) ||
 		BLOCKQUOTE.test(line) ||
-		opensHiddenComment(line, htmlClosesLater)
+		opensHiddenComment(line, htmlClosesLater, dedentedByList)
 	);
 }
 
@@ -2075,11 +2124,11 @@ function interruptsParagraph(line: string, htmlClosesLater: boolean): boolean {
  * as every line scanned, because a table row reaches the carry site as plain
  * paragraph text when tables are spoken and a span cannot leave its own row.
  */
-function codeSpanClosesLater(lines: string[], from: number, len: number, htmlCloserAhead: readonly boolean[]): boolean {
-	if (interruptsParagraph(lines[from]!, htmlCloserAhead[from]!)) return false;
+function codeSpanClosesLater(lines: string[], from: number, len: number, htmlCloserAhead: readonly boolean[], listDedented: readonly boolean[]): boolean {
+	if (interruptsParagraph(lines[from]!, htmlCloserAhead[from]!, listDedented[from]!)) return false;
 	for (let n = from + 1; n < lines.length; n++) {
 		const line = lines[n]!;
-		if (interruptsParagraph(line, htmlCloserAhead[n]!)) return false;
+		if (interruptsParagraph(line, htmlCloserAhead[n]!, listDedented[n]!)) return false;
 		if (firstRunOfLength(line, len, 0) !== -1) return true;
 	}
 	return false;
@@ -2218,7 +2267,7 @@ function labelClose(line: string, from: number, depth: number): { close: number;
  * consumption site in cleanLine uses, so the two can never disagree about which
  * `]` is the label's own (NRL-88, D-88-10).
  */
-function bracketClosesLater(lines: string[], from: number, htmlCloserAhead: readonly boolean[]): boolean {
+function bracketClosesLater(lines: string[], from: number, htmlCloserAhead: readonly boolean[], listDedented: readonly boolean[]): boolean {
 	// `htmlCloserAhead` is indexed by RAW line number and stays so under the peel
 	// (NRL-95 landing under NRL-98). That is sound rather than an oversight: the
 	// array answers "is there a `-->` later in THIS line's paragraph", and
@@ -2244,7 +2293,7 @@ function bracketClosesLater(lines: string[], from: number, htmlCloserAhead: read
 	// Only where the peel exposed them. A plain-paragraph opener is left exactly
 	// as it was, pre-existing holes included.
 	const containerInPlay = op.quotes > 0 || op.blockType === "list";
-	if (interruptsParagraph(lines[from]!.slice(op.chars), htmlCloserAhead[from]!) || opensMathBlock(lines, from, op.quotes)) return false;
+	if (interruptsParagraph(lines[from]!.slice(op.chars), htmlCloserAhead[from]!, listDedented[from]!) || opensMathBlock(lines, from, op.quotes)) return false;
 	if (containerInPlay && containerCarryStops(lines[from]!.slice(op.chars), false)) return false;
 	// Starts at 0 rather than at a depth read off the opener line, and that is
 	// provable rather than an approximation: the carry is armed only when
@@ -2265,7 +2314,7 @@ function bracketClosesLater(lines: string[], from: number, htmlCloserAhead: read
 		// critique, the carry crossed a quoted math block where the plain twin
 		// aborts, silencing a line Obsidian displays as math source.
 		const line = peelQuotes(lines[n]!, op.quotes);
-		if (interruptsParagraph(line, htmlCloserAhead[n]!) || opensMathBlock(lines, n, op.quotes)) return false;
+		if (interruptsParagraph(line, htmlCloserAhead[n]!, listDedented[n]!) || opensMathBlock(lines, n, op.quotes)) return false;
 		if (containerInPlay && containerCarryStops(line, op.quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!))) return false;
 		const found = labelClose(line, 0, depth);
 		if (found.close === -1) {
@@ -2435,6 +2484,58 @@ export function extractChunks(
 		}
 		if (line.includes("-->")) ahead = true;
 	}
+	// `listDedented[n]` is "line n is the CONTENT of a list item, so Obsidian has
+	// already removed its leading whitespace before any block tokenizer sees it"
+	// (NRL-93). It is the third argument of opensObsidianBlock and the reason the
+	// `%%` line-start rule cannot be a character class: see that predicate for the
+	// three modules that do the dedenting.
+	//
+	// A forward O(L) pass with O(L) booleans, in the shape of the backward
+	// htmlCloserAhead pass above and for the same reason - codeSpanClosesLater and
+	// bracketClosesLater ask about lines they are not consuming, so a scalar
+	// carried by the per-line loop could not answer them.
+	//
+	// Three things are load-bearing. The run is tracked on the QUOTE-PEELED view,
+	// because a list inside a blockquote dedents its item content exactly as a
+	// top-level one does while `containerPrefix` calls that line a quote rather
+	// than a list - without the peel, `> - item` / `> \t%%` newly speaks the
+	// hidden text. The MARKER line itself is false, because module 745's `M`
+	// assigns the item's first line (`c[0] = s`) the text after the marker
+	// UNDEDENTED; in practice `at` is 0 there, LIST_BULLET having eaten the whole
+	// lead, so this is a statement of the rule rather than a live branch. And the
+	// run is ended by the SAME condition the per-line loop already uses for
+	// `inList`, minus its BLOCKQUOTE arm, which the peel makes wrong here: a
+	// quote line after a list item is item content for module 745, since
+	// `interruptList` holds no blockquote entry.
+	//
+	// Every approximation in it errs toward TRUE, which is the pre-NRL-93
+	// behaviour and therefore cannot regress: an indented non-item line that
+	// really did end the renderer's list (`- item` / ` # Head`) keeps the run
+	// alive here, and a line whose indent survives the dedent because an
+	// enclosing construct re-indents it (`- item` / `  > \t%%`) is likewise left
+	// hidden. Both are measured, named divergences rather than new ones.
+	const listDedented: boolean[] = new Array<boolean>(lines.length).fill(false);
+	{
+		let inItem = false;
+		let blankBefore = true;
+		for (let k = 0; k < lines.length; k++) {
+			const body = lines[k]!.replace(BLOCKQUOTE, "");
+			const blank = body.trim() === "";
+			const marker = LIST_BULLET.test(body);
+			if (
+				inItem &&
+				!blank &&
+				!marker &&
+				!/^\s/.test(body) &&
+				(blankBefore || HEADING.test(body) || FENCE.test(body) || HR.test(body))
+			) {
+				inItem = false;
+			}
+			listDedented[k] = inItem && !marker;
+			if (marker) inItem = true;
+			blankBefore = blank;
+		}
+	}
 	const segmentCtx: SegmentContext = { locale: opts.locale, src };
 	let chunkSequence = 0;
 
@@ -2557,6 +2658,8 @@ export function extractChunks(
 			undefined,
 			undefined,
 			htmlCloserAhead[lineNo]!,
+			0,
+			listDedented[lineNo]!,
 		);
 		inComment = cleaned.openComment;
 		if (cleaned.text.trim() !== "") appendToParagraph(cleaned, lineStart + from);
@@ -2793,15 +2896,16 @@ export function extractChunks(
 		 * wholly inside an already-carried span.
 		 */
 		const htmlClosesLater = htmlCloserAhead[lineNo]!;
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth);
+		const dedentedByList = listDedented[lineNo]!;
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
 			cleaned.openCode !== undefined &&
-			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlCloserAhead)
+			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlCloserAhead, listDedented)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -2840,7 +2944,7 @@ export function extractChunks(
 			(blockType === "paragraph" || blockType === "quote" || blockType === "list") &&
 			confirmed === undefined &&
 			cleaned.unclosedBracket !== undefined &&
-			bracketClosesLater(lines, lineNo, htmlCloserAhead)
+			bracketClosesLater(lines, lineNo, htmlCloserAhead, listDedented)
 		) {
 			confirmedBracket = cleaned.unclosedBracket;
 			cleaned = cleanLine(
@@ -2854,6 +2958,7 @@ export function extractChunks(
 				confirmedBracket,
 				htmlClosesLater,
 				carriedBracketDepth,
+				dedentedByList,
 			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the

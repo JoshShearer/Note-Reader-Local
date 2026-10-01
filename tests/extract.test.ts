@@ -1841,112 +1841,174 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl98-residual-table-opener", "| A ![alt |\nwords](zdestz.png) B", "words](zdestz.png) B", { speakImageAlt: false }],
 		["guard-nrl98-residual-table-interior", "A ![alt\n| a |\nwords](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
 		["guard-nrl98-residual-setext-two-lines", "A ![alt\nmore\n===\nwords](zdestz.png) B", "A [alt more words](zdestz.png) B", { speakImageAlt: false }],
-		// NRL-93, and this block is a MEASUREMENT RECORD rather than a fix: the
-		// ticket is BLOCKED and `opensObsidianBlock` is unchanged. Read the whole
-		// comment before touching any expectation below, because six of them pin
-		// behaviour that is WRONG and must only change deliberately.
+		// NRL-93. `opensObsidianBlock`'s line-start half is no longer `.trim() === ""`.
+		// It is "at most three SPACES", and the predicate takes a third argument saying
+		// whether a list item has already DEDENTED this line. Read the whole comment
+		// before touching any expectation below: eight of these moved on purpose, six
+		// are tripwires on divergences this fix does NOT close, and the rest are guards
+		// on shapes it must not move.
 		//
-		// The defect is real. Obsidian's `%%` BLOCK tokenizer skips charCode 32 and
-		// nothing else - `for(var i=t.length,r=0;r<i&&32===t.charCodeAt(r);)r++;`
-		// then `if(37===t.charCodeAt(r)&&37===t.charCodeAt(r+1))` - while our
-		// line-start half is `.trim() === ""`, which accepts a tab. Everything cited
-		// here was read verbatim out of the installed obsidian.asar's app.js, sha256
+		// Everything cited here was read verbatim out of the installed obsidian.asar's
+		// app.js, sha256
 		// 8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898
-		// (3,876,459 bytes), and NOTHING was observed in a running Obsidian.
+		// (3,876,459 bytes), and transcribed and RUN rather than reasoned about.
+		// NOTHING was observed in a running Obsidian.
 		//
-		// WHY THE ONE-LINE FIX WAS NOT SHIPPED. Replacing `.trim()` with a
-		// charCode-32 scan is right for a plain paragraph continuation and WRONG
-		// inside a list item, because a list item's content is DEDENTED before any
-		// block tokenizer sees it. Module 745's `M` calls module 5540's
-		// remove-indentation with the item's own content indent, and module 6058
-		// counts a tab as four columns; all three were transcribed and RUN this
-		// session, not reasoned about, and they turn `- item` / `\t%%` / `SECRET`
-		// into `item` / `%%` / `SECRET`. So the renderer DOES open a comment there
-		// and hides SECRET, which is what we already do. Measured: the charCode-32
-		// scan newly speaks hidden text in 6,144 of 24,576 cells on a 48-shape
-		// list census and in 1,272 of 16,000 note-option cells on a 4,000-note
-		// single-item fuzz, with ZERO leaks closed in that population. A
-		// `/^ {0,3}$/` capped form is worse still there, at 8,704 cells.
+		// THE RULE, in three terms. (1) The `%%` BLOCK tokenizer skips charCode 32 and
+		// nothing else: `for(var i=t.length,r=0;r<i&&32===t.charCodeAt(r);)r++;` then
+		// `if(37===t.charCodeAt(r)&&37===t.charCodeAt(r+1))`. (2) It never sees a line
+		// indented four or more columns, because module 8607's paragraph tokenizer
+		// skips the whole `interruptParagraph` check for such a continuation line -
+		// `if((h=t.charAt(c))===o){p=l;break}` then
+		// `if(p>=l&&h!==a){y=t.indexOf(a,y+1);continue}` with o = "\t", s = " ",
+		// a = "\n", l = 4 - so the line is absorbed as lazy prose and its `%%` falls to
+		// module 4839's ANCHORED `/^%%(.*?)%%/`, which finds no closer and is
+		// DISPLAYED. (3) But a list item's content is dedented first: module 745's `M`
+		// calls module 5540's remove-indentation with the item's own content indent and
+		// module 6058 counts a tab as four columns, so `- item` / `<TAB>%%` / `SECRET`
+		// reaches the tokenizer as `item` / `%%` / `SECRET` and the block really does
+		// open there.
 		//
-		// AND THE PLAN'S OTHER PREMISE IS ALSO FALSE. Four spaces mid-paragraph is
-		// NOT a comment opener in Obsidian either: the paragraph tokenizer (module
-		// 8607) skips the interrupt check entirely for a continuation line indented
-		// a tab or four-plus spaces -
-		// `if((h=t.charAt(c))===o){p=l;break}` ... `if(p>=l&&h!==a){y=t.indexOf(a,y+1);continue}`
-		// with o = "\t", s = " ", a = "\n", l = 4, under
-		// `VT.globalOptions={breaks:!0,commonmark:!0}` - so the line is absorbed as
-		// lazy prose and its `%%` reaches module 4839's ANCHORED `/^%%(.*?)%%/`,
-		// finds no closer on its own line and is displayed. So the line-start term
-		// is wrong in TWO ways at once, and the faithful rule is context-sensitive:
-		// dedent a list continuation first, then accept only charCode 32 and only
-		// up to three of them. That needs the item indent threaded to the predicate,
-		// which is a mechanism this ticket was not scoped for.
-		//
-		// THE SIX BELOW PIN TODAY'S WRONG ANSWER. Each silences text Obsidian
-		// displays, each was measured at this base, and each must change ON PURPOSE
-		// when the predicate learns about container indentation.
-		["pin-nrl93-tab-opener-continuation-still-silenced", "Para line.\n	%%\nSECRET\nVISIBLE", "Para line."],
-		// `BLOCKQUOTE` peels `>` plus at most one whitespace character and the
-		// renderer's own blockquote tokenizer (module 6234) consumes `>` plus at most
-		// one SPACE, so the tab survives into the body in both, is refused by the
-		// renderer's skip loop, and the quote's remaining lines are displayed there
-		// and silenced here.
-		["pin-nrl93-tab-opener-in-quote-still-silenced", "> Plain prose\n> 	%%\n> SECRET\n> VISIBLE", "Plain prose"],
-		["pin-nrl93-tab-opener-nested-quote-still-silenced", ">> Plain prose\n>> 	%%\n>> SECRET\n>> VISIBLE", "Plain prose"],
-		// Any non-space whitespace in the leading run stops the renderer's skip loop,
-		// in either order, and `.trim()` accepts both.
-		["pin-nrl93-space-tab-still-silenced", "Para line.\n 	%%\nSECRET\nVISIBLE", "Para line."],
-		["pin-nrl93-tab-space-still-silenced", "Para line.\n	 %%\nSECRET\nVISIBLE", "Para line."],
-		// A soft-wrapped code span whose interior holds only TAB-LED `%%` lines. The
-		// exact shape of pin-nrl73-span-of-only-disqualified-openers, for the same
-		// reason: `opensHiddenComment` calls the tab-led line an opener, so
-		// `interruptsParagraph` stops `codeSpanClosesLater` and the span is never
-		// confirmed, leaving an output that agrees with neither skipInlineCode
-		// position. Both positions say the same thing today, which is the symptom.
-		["pin-nrl93-tab-span-of-tab-openers-half-recognised", "Before `a\n	%%\nSPANPROSE\n	%% w\nb` after.", "Before a w b after."],
-		["pin-nrl93-tab-span-of-tab-openers-half-recognised-spoken", "Before `a\n	%%\nSPANPROSE\n	%% w\nb` after.", "Before a w b after.", { skipInlineCode: false }],
-		// The FOUR-SPACE divergence, found this session and in the same prose-loss
-		// direction. Obsidian absorbs this line into the paragraph (module 8607's
-		// four-column skip above) and displays `%%` and SECRET; we open a block.
-		// Distinct from the tab one in character class and identical in mechanism, so
-		// the `%%` divergence count is TWO and not one.
-		["pin-nrl93-four-space-opener-still-silenced", "Para line.\n    %%\nSECRET", "Para line."],
-		// WHAT IS ALREADY RIGHT, pinned so the eventual fix cannot break it. A
-		// FRESH-BLOCK tab-led or four-space line never reaches the opener test in the
-		// first place, and that matches the renderer: `blockMethods` is [frontmatter,
-		// blankLine, indentedCode, ..., comment, fencedCode, ...] because `FE` splices
-		// before its anchor (`a.splice(a.indexOf(n),0,t)`) and `indentedCode` already
-		// precedes `fencedCode`, and module 134 opens indented code on ONE tab
+		// THE EIGHT BELOW MOVED, and each now matches what the renderer displays. They
+		// used to be pinned at the silenced value with a "must change on purpose" note;
+		// this is that change, and they were replaced in place rather than added beside
+		// the old ones (the NRL-66 / NRL-67 convention).
+		["pin-nrl93-tab-opener-continuation", "Para line.\n	%%\nSECRET\nVISIBLE", "Para line. %% SECRET VISIBLE"],
+		// `BLOCKQUOTE` peels `>` plus at most one whitespace character and module 6234
+		// consumes `>` plus at most one SPACE, so a `> <TAB>%%` line keeps its tab in
+		// the body in both trees and is refused by the skip loop in both.
+		["pin-nrl93-tab-opener-in-quote", "> Plain prose\n> 	%%\n> SECRET\n> VISIBLE", "Plain prose %% SECRET VISIBLE"],
+		["pin-nrl93-tab-opener-nested-quote", ">> Plain prose\n>> 	%%\n>> SECRET\n>> VISIBLE", "Plain prose %% SECRET VISIBLE"],
+		// Any non-space whitespace in the leading run stops the skip loop, in either
+		// order, and both leads are at least four columns once module 6058 snaps the
+		// tab to the next multiple of four.
+		["pin-nrl93-space-tab", "Para line.\n 	%%\nSECRET\nVISIBLE", "Para line. %% SECRET VISIBLE"],
+		["pin-nrl93-tab-space", "Para line.\n	 %%\nSECRET\nVISIBLE", "Para line. %% SECRET VISIBLE"],
+		// A soft-wrapped code span whose interior holds only TAB-LED `%%` lines.
+		// Exactly pin-nrl73-span-of-only-disqualified-openers' shape and for the same
+		// reason: the tab-led line is no longer an opener, so `interruptsParagraph`
+		// stops stopping `codeSpanClosesLater`, the span is confirmed, and the two
+		// toggle positions stop agreeing with each other. Every line in it is
+		// displayed by Obsidian, as code, so neither position is a leak.
+		["pin-nrl93-tab-span-of-tab-openers", "Before `a\n	%%\nSPANPROSE\n	%% w\nb` after.", "Before after."],
+		["pin-nrl93-tab-span-of-tab-openers-spoken", "Before `a\n	%%\nSPANPROSE\n	%% w\nb` after.", "Before a %% SPANPROSE %% w b after.", { skipInlineCode: false }],
+		// The FOUR-SPACE divergence, found alongside the tab one and in the same
+		// prose-loss direction. Term 2 above is the whole of it: Obsidian absorbs this
+		// line into the paragraph and displays `%%` and SECRET. It is a different
+		// character class and the same mechanism, which is why one cap closes both.
+		["pin-nrl93-four-space-opener", "Para line.\n    %%\nSECRET", "Para line. %% SECRET"],
+		// WHAT IS ALREADY RIGHT, pinned so the fix cannot have broken it. A FRESH-BLOCK
+		// tab-led or four-space line never reaches the opener test at all, and that
+		// matches the renderer: `blockMethods` is [frontmatter, blankLine,
+		// indentedCode, ..., comment, fencedCode, ...] because `FE` splices before its
+		// anchor (`a.splice(a.indexOf(n),0,t)`) and `indentedCode` already precedes
+		// `fencedCode`, and module 134 opens indented code on ONE tab
 		// (`else if(l===o)` with o = "\t"). So it is code there too, never a comment.
 		["guard-nrl93-fresh-block-tab-is-indented-code", "	%%\nSECRET_TAB\nVISIBLE", "SECRET_TAB VISIBLE"],
 		["guard-nrl93-fresh-block-4sp-is-indented-code", "    %% secret\nVISIBLE AFTER 4SP", "VISIBLE AFTER 4SP"],
 		["guard-nrl93-fresh-block-tab-code-spoken", "	%%\nSECRET_TAB\nVISIBLE", "%% SECRET_TAB VISIBLE", { skipCodeBlocks: false }],
-		// A tab directly after a list marker is part of the MARKER's whitespace in
-		// both trees, so the peeled body really is `%%` at a block start and opening
-		// the block is RIGHT: module 745's item matcher is
-		// /^([ \t]*)([*+-]|\d+[.)])( {1,4}(?! )| |\t|$|(?=\n))([^\n]*)/, whose third
-		// group has `\t` as an explicit alternative, and our `LIST_BULLET` ends in
-		// `\s+`. These three are the shapes a naive character-class narrowing would
-		// break. The remaining silencing of the FOLLOWING item is a separate,
-		// pre-existing question - an unterminated `%%` is item-scoped in Obsidian and
-		// note-scoped for our per-line scanner - and is present for a bare `- %%` too.
-		["guard-nrl93-tab-after-bullet-is-marker-whitespace", "- Plain prose\n- 	%%\n- SECRET", "Plain prose"],
-		["guard-nrl93-tab-after-ordered-marker", "1. Plain prose\n1. 	%%\n1. SECRET", "Plain prose"],
-		["guard-nrl93-tab-after-task-marker", "- [ ] Plain prose\n- [ ] 	%%\n- [ ] SECRET", "Plain prose"],
-		// A tab used as a list item's CONTINUATION indentation, which is the shape
-		// that blocks the ticket. The renderer dedents it away and opens a comment,
-		// so hiding SECRET is CORRECT here and the charCode-32 narrowing broke it.
-		// Nothing in the suite caught that before these two existed.
+		// A `%%` on a list MARKER line, unmoved by this fix and divergent for reasons
+		// that are NOT the line-start rule. The prior pass recorded these three as
+		// guards whose comment said "opening the block there is RIGHT"; that is
+		// CORRECTED here, because running the transcribed module 745 says the renderer
+		// DISPLAYS SECRET in all three, and in the bare `- %%` form too. Two separate
+		// roots, both pre-existing and neither opened here. An unterminated `%%` is
+		// ITEM-SCOPED for the renderer - module 745 tokenizes each item's value on its
+		// own, so the comment cannot reach the next item - and note-scoped for our
+		// per-line scanner. And module 745's third group,
+		// /^([ \t]*)([*+-]|\d+[.)])( {1,4}(?! )| |\t|$|(?=\n))([^\n]*)/, takes the
+		// SINGLE SPACE here and leaves the tab as the item's content indent, so
+		// `- ` + tab + `%%` is indented CODE inside the item, while our `LIST_BULLET`
+		// ends in `\s+` and eats both. Only the no-space form `-` + tab + `%%` really
+		// does reduce to `%%` at a block start.
+		["pin-nrl93-tab-after-bullet-marker-still-silenced", "- Plain prose\n- 	%%\n- SECRET", "Plain prose"],
+		["pin-nrl93-tab-after-ordered-marker-still-silenced", "1. Plain prose\n1. 	%%\n1. SECRET", "Plain prose"],
+		["pin-nrl93-tab-after-task-marker-still-silenced", "- [ ] Plain prose\n- [ ] 	%%\n- [ ] SECRET", "Plain prose"],
+		["pin-nrl93-bare-marker-opener-still-silenced", "- Plain prose\n- %%\n- SECRET", "Plain prose"],
+		// A tab, or any other indent, used as a list item's CONTINUATION indentation.
+		// Term 3 is the whole reason the predicate takes a third argument: the renderer
+		// dedents these away and opens a comment, so hiding SECRET is CORRECT and a
+		// bare character-class narrowing broke every one of them. Nothing in the suite
+		// caught that before these existed.
 		["guard-nrl93-tab-list-continuation-correctly-hides", "- item\n	%%\nSECRET", "item"],
 		["guard-nrl93-tab-list-continuation-after-blank-correctly-hides", "- item\n\n	%%\nSECRET", "item"],
-		// A SPACE-led opener, one to three of them, which the skip loop accepts with
-		// no cap. Nothing pinned a genuine space-indented opener before this ticket -
-		// pin-nrl73-indented-opener-with-percent is a space-indented DISQUALIFIED one -
-		// so these are new coverage, and they are what a capped line-start test would
-		// have to keep.
+		["guard-nrl93-four-space-list-continuation-correctly-hides", "- item\n    %%\nSECRET", "item"],
+		["guard-nrl93-five-space-list-continuation-correctly-hides", "- item\n     %%\nSECRET", "item"],
+		["guard-nrl93-nested-list-continuation-correctly-hides", "- a\n  - b\n	%%\nSECRET", "a b"],
+		["guard-nrl93-ordered-list-continuation-correctly-hides", "1. item\n	%%\nSECRET", "item"],
+		["guard-nrl93-task-list-continuation-correctly-hides", "- [ ] item\n	%%\nSECRET", "item"],
+		// The `listDedented` pass tracks its run on the QUOTE-PEELED view, and this is
+		// the shape that makes that load-bearing rather than tidy: `containerPrefix`
+		// calls `> - item` a quote, not a list, so without the peel this line would
+		// lose its dedent and newly speak SECRET. Module 745 runs inside the quote's
+		// stripped content and dedents exactly as it does at the top level.
+		["guard-nrl93-quoted-list-continuation-correctly-hides", "> - item\n> 	%%\n> SECRET", "item"],
+		// The run has to END, or nothing after the first list in a note would ever be
+		// fixed. Both of these DID move, and the ender is the same condition the
+		// per-line loop already uses for `inList`.
+		["pin-nrl93-after-list-ends-at-blank", "- item\n\npara\n\nother\n	%%\nSECRET", "item para other %% SECRET"],
+		["pin-nrl93-after-list-ends-at-heading", "- item\n\n# Head\nPara.\n	%%\nSECRET", "item Head Para. %% SECRET"],
+		// A SPACE-led opener, one to three of them, which the skip loop accepts and the
+		// cap keeps. Nothing pinned a genuine space-indented opener before this ticket
+		// - pin-nrl73-indented-opener-with-percent is a space-indented DISQUALIFIED
+		// one.
 		["guard-nrl93-one-space-opener", "Para line.\n %%\nSECRET\nVISIBLE", "Para line."],
 		["guard-nrl93-three-space-opener", "Para line.\n   %%\nSECRET", "Para line."],
 		["guard-nrl93-space-opener-in-quote", "> Plain\n>  %%\n> SECRET", "Plain"],
+		// SIX MORE TRIPWIRES on divergences this fix does NOT close, each measured as
+		// IDENTICAL on both sides of it and each in the prose-loss direction, never
+		// disclosure. They must change on purpose if any of the three roots is ever
+		// picked up.
+		//
+		// 1. `listDedented` is a BOOLEAN, so a list item's content keeps the old
+		// any-whitespace rule rather than having the item's content indent SUBTRACTED.
+		// `- item` dedents by two columns, so eight spaces leaves six and two tabs
+		// leave one - both four or more columns, both absorbed as lazy prose by the
+		// renderer, both still hidden here. Measured at 11 cells of the 140-cell
+		// position census, plus 6 more for a blockquote nested INSIDE a list item,
+		// where the item dedent runs first and the surviving indent lands in the
+		// quote's own content.
+		["pin-nrl93-deep-indent-in-list-still-silenced", "- item\n        %%\nSECRET", "item"],
+		["pin-nrl93-double-tab-in-list-still-silenced", "- item\n		%%\nSECRET", "item"],
+		["pin-nrl93-quote-inside-list-still-silenced", "- item\n  > Plain\n  > 	%%\n  > SECRET", "item Plain"],
+		// 2. Our `BLOCKQUOTE` is /^(?:\s{0,3}>\s?)+/ and its `\s?` eats a TAB, where
+		// module 6234 consumes `>` plus at most one SPACE (`t.charAt(D)===a&&D++` with
+		// a = " "). So `>` + tab + `%%` keeps its tab for the renderer and loses it for
+		// us, and no `%%` predicate can see the difference. Not opened by this fix. Two
+		// cells of the census, the second being `>` + tab + space + `%%`.
+		["pin-nrl93-quote-tab-eaten-by-prefix-still-silenced", "> Plain prose\n>	%%\n> SECRET", "Plain prose"],
+		["pin-nrl93-quote-tab-space-eaten-by-prefix-still-silenced", "> Plain prose\n>	 %%\n> SECRET", "Plain prose"],
+		// 3. Our `LIST_BULLET` is /^\s*([-*+]|\d+[.)])\s+/ and its `\s+` eats the WHOLE
+		// lead after a marker, where module 745's third group takes at most four spaces
+		// or one tab. So `-` plus eight spaces plus `%%` reaches the renderer as seven
+		// spaces and `%%`, which is indented code, and reaches us as `%%` at offset 0.
+		// Three cells of the census, the other two being `- ` + tab and two tabs.
+		["pin-nrl93-list-marker-lead-eaten-still-silenced", "- Plain prose\n-        %%\n- SECRET", "Plain prose"],
+		// 4. A COST this fix carries, measured and pinned rather than hidden. Our `%%`
+		// block is NOTE-scoped (ADR 0006 clause 5) where Obsidian scopes an
+		// unterminated one to the construct that holds it - module 745 tokenizes each
+		// item's value on its own and module 6234 each quote's content. Base was
+		// accidentally PAIRING a wrongly-recognised over-indented opener with a real
+		// one and so closing the block early; declining the wrong opener leaves the
+		// real one's note-scope reaching further, and text Obsidian displays goes
+		// quiet. The scope rule itself is untouched. Measured by the 4,000-note fuzz:
+		// 157 of 16,000 cells newly lost against 833 losses closed and 0 cells newly
+		// leaking, and all 157 are notes whose surviving opener sits inside a list item
+		// (117) or a blockquote (40). The structured corpora found none of this, which
+		// is why the fuzz carries tabs, multi-space leads and a list-bearing
+		// population.
+		["pin-nrl93-scope-cost-four-space-then-bullet", "Para.\n    %%\n- %%\n\nVISIBLE", "Para. %%"],
+		["pin-nrl93-scope-cost-tab-then-bullet", "Para.\n	%%\n- %%\n\nVISIBLE", "Para. %%"],
+		["pin-nrl93-scope-cost-tab-then-quote", "Para.\n	%%\n> %%\n\nVISIBLE", "Para. %%"],
+		// 5. ADR 0019's designed literal, in its own bucket and NOT a disclosure. A
+		// tab-led `%%` line inside a soft-wrapped code span is now part of a CONFIRMED
+		// span, so the span is silenced whole when inline code is skipped and spoken
+		// verbatim when it is not - destination included, because inside a code span
+		// the raw text is what the renderer shows (ADR 0019, srs.md R-M08). Base agreed
+		// with NEITHER position, which is the half-recognised symptom. 256 of the 512
+		// cells P3's controls report, all at skipInlineCode false.
+		["pin-nrl93-adr0019-span-destination-skipped", "Before `a\n	%% x ![alt](zdestz.png)\nb` after.", "Before after."],
+		["pin-nrl93-adr0019-span-destination-spoken", "Before `a\n	%% x ![alt](zdestz.png)\nb` after.", "Before a %% x ![alt](zdestz.png) b after.", { skipInlineCode: false }],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
