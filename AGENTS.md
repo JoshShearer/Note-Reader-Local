@@ -1464,6 +1464,59 @@ rediscover them:
   in `preparing` indefinitely until a `disablePlugin`/`enablePlugin` cycle, on the pre-fix and
   post-fix builds alike. R-S03 is a SHOULD, so the `2 of 16` MUST headline count does not
   move.
+- **The floating control bar is reachable and touch-sized on mobile as of NRL-112** (PR #164,
+  `0455aa9`, `docs/adr/0032`). The bar used to be `position: fixed; top: 0` with no mobile
+  branch anywhere in the UI layer, so on a phone it sat behind the device safe-area inset and
+  Obsidian's own view header, with 28x28 transport buttons and 20x20 speed buttons against
+  `srs.md:1768`'s touch-target MUST. The fix is **CSS only** under `body.is-mobile`: `top:
+  calc(var(--safe-area-inset-top) + var(--view-header-height))`, which on the Pixel 9 Pro XL
+  resolved to **110.333px** from two Obsidian-owned variables measured on device
+  (66.333336 + 44), and `min-width`/`min-height: 44px` on all seven controls (authority:
+  Obsidian's own `--input-height`, measured at 44px on that device). `src/ui/controlBar.ts`,
+  `src/ui/affordances.ts` and `src/engines/platform.ts` are untouched, there is no `Platform`
+  import under `src/ui/`, and `PlatformFlags` was deliberately not widened.
+  **The methodological finding here is worth more than the fix, and anyone "simplifying" the
+  verification would re-open the defect with a green result.
+  `document.elementFromPoint()` is the WRONG ORACLE for whether a control is reachable.** On
+  the pre-fix broken layout it returned the correct button at **all seven** control centres,
+  while real OS-level `adb shell input tap` touches at **three** of those centres (play/pause,
+  **stop**, faster) did **nothing at all** - state stayed `playing` / 18 / 1.5 throughout -
+  with a positive control proving the taps reached the WebView at all (an editor tap moved the
+  cursor head 530 -> 2200 and focused `.cm-content`). `stop` is the decisive control to tap,
+  because a landed tap gives `idle` unambiguously where play/pause can be confused with a
+  double toggle. Verify a touch target by tapping it through the OS, never by hit-testing it
+  from inside the page.
+  On-device evidence for the fix: all seven controls **44 x 44**, wrapped into **3 rows**,
+  `scrollWidth 222 == clientWidth 222`, occupying x 112 -> 336 of 448; **all seven real taps
+  landed** (play/pause `playing`->`paused`->`playing`, next `14`->`15`, previous `15`->`14`,
+  faster `1.50`->`1.55`, slower `1.55`->`1.50`, replay held index 16 with `currentTime`
+  6.80 -> 0, stop -> `idle`); `audio.playbackRate` exactly 1.5, so non-negotiable 9 holds; and
+  **R-M14 survived** - all four affected controls stayed present at 44 x 44, `display: flex`,
+  `visibility: visible`, reachable, `disabled: true`, opacity 0.45, `cursor: not-allowed`, with
+  the reason in `title`, so the relayout disables rather than hides.
+  **`flex-wrap` does the work, not the `max-width` clamp.** The clamp computes 432px against a
+  bar that settled at 224px, because a `position: fixed` shrink-to-fit box with `left: 50%` /
+  `right: auto` only gets `100vw - left`. The ~464px content-sum arithmetic in ADR 0032 and in
+  `styles.css` establishes that the content cannot fit on one row; it is **arithmetic, not the
+  observed cause of the wrap**, and must not be quoted as the latter.
+  The staleness guard is what makes those figures trustworthy and is worth reusing: exactly one
+  injected `<style>` holds the plugin CSS, and `.includes("is-mobile")` flipping false -> true
+  was checked **before** any rect was measured. Verify additionally caught the device running a
+  7,867-byte pre-correction stylesheet when the committed file is 8,366, redeployed, and
+  re-measured against the committed bytes.
+  **Desktop is unobserved** - CDP 9222 was unreachable for the whole run - and rests on a
+  **zero-deletion diff** (`styles.css` 66/0, `tests/highlight.test.ts` 171/0,
+  `git diff --name-only -- src/` empty) plus `body.is-mobile` being unable to match on desktop.
+  Also unestablished: tablet, a ~360 CSS px phone, landscape, and the view-header-disabled case.
+  One confirmed overlap came out of Verify and is **filed as NRL-129, not fixed here**: on an
+  unscrollable note (`scrollHeight 997 == clientHeight 997`) the first chunk's sentence mark
+  measured y 209.6-255.6 against a bar bottom of 236, so 26.4px of its 46px height sits behind
+  the bar in the band x 112-336, and `y: "center"` cannot help because there is nowhere to
+  scroll. ADR 0032's "neither direction was observed" was corrected to say so.
+  **No requirement moves and the `2 of 16` MUST headline count does not move.** `srs.md:1768`'s
+  touch-target MUST is satisfied on the one device tested, but R-M07 is a MUST about exposing
+  the five transport controls and was never on the met list; this fixes the bar's reachability,
+  which is a necessary part of it rather than the whole.
 - A selection-scoped read clips its queue by **scanning** `sourceIndex` as of NRL-57
   (`src/audio/clip.ts`, `srs.md` R-M11). This defect was not recorded here before, and it
   shipped inside NRL-52. The deleted expression was `textStart = from - chunk.sourceStart`
