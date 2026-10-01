@@ -362,11 +362,12 @@ export function isScrollSuppressed(editor: EditorView): boolean {
  * that flag before every scrolling dispatch, but the dispatch does not always
  * move the DOM: `scrollRectIntoView` passes its `if (moveX || moveY)` gate
  * (node_modules/@codemirror/view/dist/index.js:200) and then has its
- * `cur.scrollTop += moveY / scaleY` write CLAMPED by the browser (:208-213),
- * and a `scrollTop` write that changes nothing fires no 'scroll' event. That is
- * the ordinary case at the opening of a read, where centring a chunk in the
+ * `cur.scrollTop += moveY / scaleY` write CLAMPED by the browser (:207-209;
+ * the `scrollLeft` twin is at :211-214), and a `scrollTop` write that changes
+ * nothing fires no 'scroll' event. That is the ordinary case at the opening of
+ * a read, where centring a chunk in the
  * first half-viewport would need a negative `scrollTop` - measured on a real
- * device at docs/adr/0022:245-249, chunks 0-4 holding `scrollTop` 0. So an arm
+ * device at docs/adr/0022:242-243, chunks 0-4 holding `scrollTop` 0. So an arm
  * can be left set with no event to consume it, and without this line it
  * survived into the next read and swallowed the first genuine user scroll of
  * it, which contradicts this function's own claim to restore normal follow
