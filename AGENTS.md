@@ -25,7 +25,7 @@ backstop, not a substitute. Run them locally first.
 ```bash
 npm test          # 24 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, modelStore, adrNumbers, vaultPersistence, loadingNotice, suiteRegistry
 npm run typecheck # tsc --noEmit --skipLibCheck
-npm run build     # typecheck + esbuild production (main.js, kokoro-worker.js, ort/)
+npm run build     # typecheck + esbuild production (main.js only; the worker and ONNX runtime are inlined into it)
 ```
 
 Both must pass before any commit. `npm run build` before anything that touches the
@@ -171,9 +171,14 @@ Each of these is a promise the product makes. Breaking one is a BLOCK, not a con
 
 7. **`manifest.json` declares `isDesktopOnly: false`.** No node builtin may be imported
    in a way that evaluates on mobile. `child_process` is type-only plus two dynamic
-   `await import()` calls inside method bodies, behind `Platform.isMobile`. Keep it that
-   way, and check `main.js`'s `require()` list after any dependency change - it should
-   contain only `obsidian`, `@codemirror/view`, `@codemirror/state`.
+   `await import()` calls inside method bodies (`src/engines/system/spawn.ts`), and the
+   engines that reach them are constructed only when `shouldConstructLinuxDesktopEngines`
+   (`src/engines/platform.ts`) passes, which is Linux desktop specifically and narrower
+   than not-mobile: a macOS or Windows desktop is not mobile and still gets neither.
+   `Platform.isMobile` does appear in `registry.ts`, in `resolveWeights` and
+   `probeEngines`, but it is not what gates that construction. Keep it that way, and
+   check `main.js`'s `require()` list after any dependency change - it should contain
+   only `obsidian`, `@codemirror/view`, `@codemirror/state`.
 
 ### Correctness
 
