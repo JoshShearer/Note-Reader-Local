@@ -20,8 +20,88 @@ import {
 	removeModelBuild,
 	shouldClearPinnedKokoro,
 	getTotalUsage,
+	downloadModel,
+	voiceForModelDownload,
+	describeModelDownload,
 	type ModelDirAdapter,
 } from "../src/ui/modelStore.ts";
+import { KokoroEngine, KOKORO_WEIGHTS } from "../src/engines/onnx/kokoro.ts";
+import type { ModelStore } from "../src/engines/onnx/kokoro.ts";
+
+/** A Kokoro engine with nothing on disk: only its label and listVoices() are used. */
+function kokoroForVoices(): KokoroEngine {
+	const store: ModelStore = {
+		dir: "models",
+		modelBase: "local-model://kokoro/",
+		workerPath: "plugin/kokoro-worker.js",
+		async readPluginFile() {
+			return new ArrayBuffer(0);
+		},
+		async exists() {
+			return false;
+		},
+		async read() {
+			return new ArrayBuffer(0);
+		},
+		async readOptional() {
+			return null;
+		},
+	};
+	return new KokoroEngine(store);
+}
+
+/**
+ * The slice of `app.vault.adapter` that `downloadModel` touches, in memory,
+ * plus a `fetch` stub that records every URL and answers 404 for any path a
+ * predicate names. Network is never reached: the stub replaces the global for
+ * the duration of one call and is restored in `finally`.
+ */
+async function runDownload(
+	voiceFile: string,
+	fail404: (path: string) => boolean,
+): Promise<{
+	result: Awaited<ReturnType<typeof downloadModel>>;
+	fetched: string[];
+	written: string[];
+}> {
+	const folders = new Set<string>();
+	const written: string[] = [];
+	const app = {
+		vault: {
+			adapter: {
+				async exists(p: string) {
+					return folders.has(p);
+				},
+				async mkdir(p: string) {
+					folders.add(p);
+				},
+				async writeBinary(p: string) {
+					written.push(p);
+				},
+			},
+		},
+	};
+	const fetched: string[] = [];
+	const realFetch = globalThis.fetch;
+	globalThis.fetch = (async (input: string) => {
+		const path = String(input).replace(/^.*\/resolve\/main\//, "");
+		fetched.push(path);
+		if (fail404(path)) return new Response("not found", { status: 404 });
+		return new Response(new Uint8Array(8), { status: 200, headers: { "content-length": "8" } });
+	}) as typeof fetch;
+	try {
+		const result = await downloadModel(
+			app as never,
+			"model",
+			KOKORO_WEIGHTS.fast.path,
+			voiceFile,
+			() => undefined,
+		);
+		return { result, fetched, written };
+	} finally {
+		globalThis.fetch = realFetch;
+	}
+}
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = ""): void {
@@ -237,6 +317,108 @@ async function run(): Promise<void> {
 			usage.totalBytes === 3500 + 155_000_000 + 522_240 + 21_596_019,
 			String(usage.totalBytes),
 		);
+	}
+
+	console.log("NRL-144: a voice 404 after a good model download is reported as the voice");
+	{
+		const { result, written } = await runDownload("af_heart.bin", (p) => p.startsWith("voices/"));
+		// CORE (red at 079cf0c: one flat downloadFiles call returned only
+		// {ok:false, error}, so the caller could not tell the model had landed).
+		check("CORE stage is voice", result.stage === "voice", JSON.stringify(result));
+		// GUARD (green both sides): the model files really were written first.
+		check(
+			"GUARD all four model files written before the voice failed",
+			["config.json", "tokenizer.json", "tokenizer_config.json", KOKORO_WEIGHTS.fast.path].every((f) =>
+				written.includes(`model/${f}`),
+			),
+			JSON.stringify(written),
+		);
+		// NEW CAPABILITY (not counted): which file and why, for the message.
+		check("NEW file names the voice", result.file === "voices/af_heart.bin", JSON.stringify(result));
+		check("NEW detail is the status", result.detail === "404", JSON.stringify(result));
+		const described = describeModelDownload(result, null);
+		check("NEW model reported installed", described.modelInstalled === true, JSON.stringify(described));
+		check(
+			"NEW message says the model installed and names the voice file",
+			described.message ===
+				"Kokoro model installed, but voice voices/af_heart.bin could not be downloaded (404). Pick a voice under Voice to retry.",
+			described.message,
+		);
+		check("NEW message is not the generic failure", !described.message.startsWith("Download failed"), described.message);
+	}
+
+	console.log("NRL-144: Download with a foreign stored voice id fetches a Kokoro voice, never the foreign one");
+	{
+		const engine = kokoroForVoices();
+		const voices = await engine.listVoices();
+		const choice = voiceForModelDownload(engine, "speechd:English (America)", voices, "en", false);
+		const { result, fetched } = await runDownload(choice.file, () => false);
+		// CORE (red at 079cf0c, whose handler passed
+		// voiceFileFor(voiceId).replace(/^voices\//, "") straight through).
+		check(
+			"CORE no fetched path names the speechd voice",
+			fetched.every((p) => !p.includes("speechd")),
+			JSON.stringify(fetched),
+		);
+		const voiceFetches = fetched.filter((p) => p.startsWith("voices/"));
+		const kokoroFiles = new Set(voices.map((v) => `voices/${v.id.replace(/^kokoro:/, "")}.bin`));
+		check(
+			"CORE exactly one Kokoro voice file requested",
+			voiceFetches.length === 1 && kokoroFiles.has(voiceFetches[0]!),
+			JSON.stringify(voiceFetches),
+		);
+		// NEW CAPABILITY (not counted).
+		check("NEW download succeeded", result.ok === true, JSON.stringify(result));
+		check("NEW substituted id is persisted", choice.persist === true, JSON.stringify(choice));
+		check("NEW substituted id is a Kokoro id", choice.voiceId.startsWith("kokoro:"), choice.voiceId);
+		check("NEW en resolves to the en-US default", choice.voiceId === "kokoro:af_heart", choice.voiceId);
+		check("NEW a notice explains the substitution", typeof choice.notice === "string" && choice.notice.length > 0, String(choice.notice));
+		const described = describeModelDownload(result, choice.notice);
+		check(
+			"NEW success message carries the substitution notice",
+			described.message.startsWith("Kokoro model ready.") && described.message.includes(choice.notice ?? "\u0000"),
+			described.message,
+		);
+		const empty = voiceForModelDownload(engine, "", voices, "en", false);
+		check("NEW empty stored id is resolved and persisted", empty.voiceId === "kokoro:af_heart" && empty.persist, JSON.stringify(empty));
+	}
+
+	console.log("NRL-144: a Kokoro id is used as-is; locale; model failure stops before the voice");
+	{
+		const engine = kokoroForVoices();
+		const voices = await engine.listVoices();
+		const pinned = voiceForModelDownload(engine, "kokoro:bm_george", voices, "en", false);
+		check(
+			"GUARD a stored kokoro id is kept, not persisted, no notice",
+			pinned.voiceId === "kokoro:bm_george" && pinned.file === "bm_george.bin" && !pinned.persist && pinned.notice === null,
+			JSON.stringify(pinned),
+		);
+		// NEW CAPABILITY (not counted): red against 079cf0c, which never resolved.
+		const gb = voiceForModelDownload(engine, "speechd:English (Britain)", voices, "en-GB", false);
+		check("NEW en-GB app locale picks an en-GB voice", voices.find((v) => v.id === gb.voiceId)?.lang === "en-GB", JSON.stringify(gb));
+
+		const modelFail = await runDownload("af_heart.bin", (p) => p === KOKORO_WEIGHTS.fast.path);
+		check(
+			"GUARD a model 404 requests no voice",
+			modelFail.fetched.every((p) => !p.startsWith("voices/")) && !modelFail.result.ok,
+			JSON.stringify(modelFail.fetched),
+		);
+		check("NEW model 404 is stage model", modelFail.result.stage === "model", JSON.stringify(modelFail.result));
+		const describedFail = describeModelDownload(modelFail.result, null);
+		check(
+			"NEW model failure keeps the generic wording and is not installed",
+			describedFail.message === `Download failed: ${modelFail.result.error}` && !describedFail.modelInstalled,
+			JSON.stringify(describedFail),
+		);
+
+		const allOk = await runDownload("af_heart.bin", () => false);
+		check(
+			"GUARD all-ok writes the model and the voice",
+			allOk.result.ok && allOk.written.length === 5 && allOk.written.includes("model/voices/af_heart.bin"),
+			JSON.stringify(allOk.written),
+		);
+		const describedOk = describeModelDownload(allOk.result, null);
+		check("NEW plain success message", describedOk.message === "Kokoro model ready." && describedOk.modelInstalled, JSON.stringify(describedOk));
 	}
 
 	if (failures > 0) {

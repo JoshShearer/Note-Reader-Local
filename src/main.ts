@@ -62,6 +62,8 @@ import {
 } from "./ui/highlightColour";
 import {
 	createModelStore,
+	voiceForModelDownload,
+	type ModelDownloadVoice,
 	type VaultModelStore,
 } from "./ui/modelStore";
 import { withLoadingNotice } from "./ui/loadingNotice";
@@ -1413,9 +1415,29 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 
-	/** Vault path of the style vector a voice id needs. */
-	voiceFileFor(voiceId: string): string {
+	/** Vault path of the style vector a voice id needs, or null for a non-Kokoro id. */
+	voiceFileFor(voiceId: string): string | null {
 		return voiceFilePath(voiceId);
+	}
+
+	/**
+	 * The Kokoro voice the model Download should fetch (NRL-144).
+	 *
+	 * Called from the Download click only. `setEngine` deliberately does not
+	 * reconcile the stored voice, so switching engines never fetches anything
+	 * (non-negotiable 6).
+	 */
+	async resolveKokoroDownloadVoice(): Promise<ModelDownloadVoice> {
+		const kokoro = this.getKokoro();
+		if (!kokoro) throw new Error("Kokoro is not available on this device.");
+		const voices = await kokoro.listVoices();
+		return voiceForModelDownload(
+			kokoro,
+			this.settings.voiceId,
+			voices,
+			appLocale(),
+			this.settings.offlinePreferred,
+		);
 	}
 
 	async setVoice(voiceId: string): Promise<void> {

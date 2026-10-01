@@ -255,8 +255,21 @@ export interface KokoroOptions {
 
 const DEFAULT_OPTIONS: KokoroOptions = { device: "auto", threads: 4, weights: "fast" };
 
-/** Vault-relative path of the style vector for a voice id like `kokoro:af_heart`. */
-export function voiceFilePath(voiceId: string): string {
+/**
+ * Vault-relative path of the style vector for a voice id like `kokoro:af_heart`.
+ *
+ * Null when the id is empty or carries another engine's prefix
+ * (`speechd:English (America)`). Switching the engine dropdown to Kokoro leaves
+ * the previous engine's voice in `settings.voiceId`, and building a path from
+ * it sent a request for `voices/speechd:English (America).bin` to the model
+ * host and reported the whole model download as failed (NRL-144). A bare id
+ * (`bm_george`) is still accepted, since that is the shape `KOKORO_VOICES`
+ * files and older settings use.
+ */
+export function voiceFilePath(voiceId: string): string | null {
+	if (voiceId === "") return null;
+	const prefix = /^([^:]+):/.exec(voiceId)?.[1];
+	if (prefix !== undefined && prefix !== "kokoro") return null;
 	return `voices/${voiceId.replace(/^kokoro:/, "")}.bin`;
 }
 
@@ -650,6 +663,7 @@ export class KokoroEngine implements SpeechEngine {
 
 	private async sendVoice(voice: VoiceInfo): Promise<void> {
 		const path = voiceFilePath(voice.id);
+		if (path === null) throw new Error(`${voice.id} is not a Kokoro voice. Pick one in settings.`);
 		if (this.sentVoices.has(path)) return;
 		const bytes = await this.store.readOptional(path);
 		if (!bytes) {
@@ -783,6 +797,9 @@ export class KokoroEngine implements SpeechEngine {
 			const dtype = plan.weights.dtype;
 
 			const voicePath = voiceFilePath(this.voice.id);
+			if (voicePath === null) {
+				throw new Error(`${this.voice.id} is not a Kokoro voice. Pick one in settings.`);
+			}
 			const voiceBytes = await this.store.readOptional(voicePath);
 			if (!voiceBytes) {
 				throw new Error(

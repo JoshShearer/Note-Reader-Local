@@ -19,6 +19,7 @@ import {
 } from "../engines/onnx/kokoro";
 import { RUNTIME_FILES } from "../engines/onnx/runtime";
 import {
+	describeModelDownload,
 	downloadModel,
 	downloadVoice,
 	getInstalledSizeMb,
@@ -389,28 +390,34 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 						button.setButtonText("Downloading...");
 						const notice = new Notice("Downloading Kokoro model...", 0);
 						try {
+							// A stored voice from another engine (or none) is
+							// resolved to a Kokoro voice here, at the click,
+							// never on engine switch (NRL-144, rule 6).
+							const choice = await this.plugin.resolveKokoroDownloadVoice();
 							const result = await downloadModel(
 								this.app,
 								this.plugin.settings.kokoroModelPath,
 								wanted.path,
-								this.plugin
-									.voiceFileFor(this.plugin.settings.voiceId)
-									.replace(/^voices\//, ""),
+								choice.file,
 								({ file, loaded, total }) => {
 									const pct =
 										total > 0 ? ` (${Math.round((loaded / total) * 100)}%)` : "";
 									notice.setMessage(`Downloading ${file}${pct}`);
 								},
 							);
-							if (!result.ok) {
-								notice.setMessage(`Download failed: ${result.error}`);
-							} else {
-								notice.setMessage("Kokoro model ready.");
-								setTimeout(() => notice.hide(), 3000);
+							const described = describeModelDownload(result, choice.notice);
+							notice.setMessage(described.message);
+							// Only once the voice file is on disk, so the stored
+							// id never names a voice that is not there.
+							if (result.ok && choice.persist) await this.plugin.setVoice(choice.voiceId);
+							if (result.ok) setTimeout(() => notice.hide(), choice.notice ? 8000 : 3000);
+							if (described.modelInstalled) {
 								// The engine may be holding an older build open.
 								await this.plugin.reloadKokoro();
 								this.display();
 							}
+						} catch (err) {
+							notice.setMessage(`Download failed: ${errText(err)}`);
 						} finally {
 							button.setDisabled(false);
 							button.setButtonText("Download");
@@ -632,16 +639,21 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 
 		if (engine.id === "kokoro") {
 			const note = containerEl.createDiv({ cls: "local-tts-engine-row" });
-			void this.plugin
-				.getModelStore()
-				.exists(this.plugin.voiceFileFor(this.plugin.settings.voiceId))
-				.then((present) => {
-					note.setText(
-						present
-							? "Voice downloaded."
-							: "This voice is not downloaded yet; it will be fetched when you pick it.",
-					);
-				});
+			const voicePath = this.plugin.voiceFileFor(this.plugin.settings.voiceId);
+			if (voicePath === null) {
+				note.setText("No Kokoro voice selected.");
+			} else {
+				void this.plugin
+					.getModelStore()
+					.exists(voicePath)
+					.then((present) => {
+						note.setText(
+							present
+								? "Voice downloaded."
+								: "This voice is not downloaded yet; it will be fetched when you pick it.",
+						);
+					});
+			}
 		}
 	}
 
@@ -649,6 +661,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	private async ensureVoiceDownloaded(voiceId: string): Promise<boolean> {
 		const store = this.plugin.getModelStore();
 		const path = this.plugin.voiceFileFor(voiceId);
+		if (path === null) return false;
 		if (await store.exists(path)) return true;
 
 		const file = path.replace(/^voices\//, "");
