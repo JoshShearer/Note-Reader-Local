@@ -2322,6 +2322,105 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// PURPOSE: SECRET stops being spoken in each.
 		["pin-nrl118-note-scope-closes-at-another-depth", ">> %%\n%% SECRET", "SECRET"],
 		["guard-nrl118-note-scope-control-no-container", "%%\n%% SECRET", "SECRET"],
+		// NRL-115. `opensHtmlBlock`'s term 1 (`<!--` begins its line, any leading
+		// whitespace) is module 8776's own rule, and it is right only where module
+		// 8776 is REACHED. For an indented line it often is not: module 8607 absorbs
+		// a paragraph continuation led by a tab or four columns as lazy prose without
+		// running the interrupt check, and inside a quote or a list item a fresh block
+		// led by a tab or four spaces is indented code (module 134 runs before html).
+		// "Indented" is measured AFTER the renderer's own container dedent, which is
+		// what `rendererLeads` models. We hid the rest of the note in every one of the
+		// shapes below while Obsidian displays it. Every PIN here was measured RED
+		// against base 7965da2 and the expectation is renderer-faithful: real rendered
+		// HTML from Obsidian 1.13.7's parser shows both sentinels. The `<!--` itself is
+		// spoken because it is displayed, as lazy prose or as code.
+		["pin-nrl115-after-paragraph-tab", "Before x.\n\t<!--\nSECRET\nVISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		["pin-nrl115-after-paragraph-space-tab", "Before x.\n \t<!--\nSECRET\nVISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		["pin-nrl115-after-paragraph-tab-space", "Before x.\n\t <!--\nSECRET\nVISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		["pin-nrl115-after-paragraph-4sp", "Before x.\n    <!--\nSECRET\nVISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		["pin-nrl115-after-paragraph-8sp", "Before x.\n        <!--\nSECRET\nVISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		["pin-nrl115-quote-continuation-tab", "> Before x.\n> \t<!--\n> SECRET\n> VISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		// After a `>` blank line the line is a FRESH block in the quote's content, so
+		// it is indented code there, not lazy prose. Same visible outcome.
+		["pin-nrl115-quote-after-blank-tab", "> Before x.\n>\n> \t<!--\n> SECRET\n> VISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		["pin-nrl115-quote-after-blank-4sp", "> Before x.\n>\n>     <!--\n> SECRET\n> VISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		// Inside a list item the lead is judged after module 5540 removes the item's
+		// content indent: two spaces then a tab loses the two spaces and keeps the
+		// tab, and eight spaces keep six, so both survive as indented code.
+		["pin-nrl115-list-after-blank-2sp-tab", "- Before x.\n\n  \t<!--\nSECRET\nVISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		["pin-nrl115-list-after-blank-8sp", "- Before x.\n\n        <!--\nSECRET\nVISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		["pin-nrl115-list-continuation-2sp-tab", "- Before x.\n  \t<!--\nSECRET\nVISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		// The dedent is the smaller of the marker width and the item's least indent,
+		// so the same `   \t` line is lazy here, where every item line is indented
+		// three, and an opener in the guard below, where the lazy lines are not.
+		["pin-nrl115-ordered-continuation-indented-item", "1. Before x.\n   \t<!--\n   SECRET\n   VISIBLE", "Before x. <!-- SECRET VISIBLE"],
+		// The leading `> ` is a pre-existing divergence of ours (a quote inside a list
+		// item is not peeled) and identical on base; pinned as we really say it.
+		["pin-nrl115-quote-in-list-tab", "- > Before x.\n  > \t<!--\n  > SECRET\n  > VISIBLE", "> Before x. <!-- SECRET VISIBLE"],
+		// An item's or a quote's FIRST line is a fresh block too. Module 745's marker
+		// regex takes one space after `-` and leaves the tab as content indent.
+		["pin-nrl115-item-first-line-tab", "- \t<!--\nSECRET\nVISIBLE", "<!-- SECRET VISIBLE"],
+		["pin-nrl115-quote-first-line-tab", "> \t<!--\n> SECRET\n> VISIBLE", "<!-- SECRET VISIBLE"],
+		// GUARDS, green on base and on the fix and counted as nothing: each is a shape
+		// where the renderer DOES open a comment (or where this ticket deliberately
+		// leaves the old answer), so a widening of the rule would turn it red.
+		//
+		// The item dedent eats a lone tab whole, so `<!--` reaches column 0 and opens.
+		["guard-nrl115-list-continuation-tab-dedented-away", "- Before x.\n\t<!--\nSECRET\nVISIBLE", "Before x."],
+		// `1. ` pads to FOUR columns (module 745's odd-width bump), and the unindented
+		// lazy lines do not lower it, so `   \t` loses everything.
+		["guard-nrl115-ordered-continuation-unindented-item", "1. Before x.\n   \t<!--\nSECRET\nVISIBLE", "Before x."],
+		// Three spaces is under module 8607's four-column threshold.
+		["guard-nrl115-after-paragraph-3sp-still-opens", "Before x.\n   <!--\nSECRET\nVISIBLE", "Before x."],
+		// ` \t` is four columns and lazy after a paragraph, but at a FRESH block start
+		// it is not indented code (module 134 needs a tab or four spaces FIRST), so it
+		// reaches module 8776 and opens. This is why the two thresholds differ.
+		["guard-nrl115-quote-after-blank-space-tab-still-opens", "> Before x.\n>\n>  \t<!--\n> SECRET\n> VISIBLE", "Before x."],
+		// Decision Q3: only term 1 is narrowed. A lazy `<!--` whose `-->` sits later in
+		// the same paragraph is an inline comment for the renderer and stays hidden.
+		["guard-nrl115-term2-same-paragraph-closer-still-hides", "Before x.\n\t<!--\nSECRET\n--> VISIBLE", "Before x. VISIBLE"],
+		// Decision Q2: top-level fresh-block positions are NRL-113's and unmoved. This
+		// one is a DISCLOSURE on both arms (` \t` is not code for the renderer, so it
+		// hides SECRET; our INDENTED_CODE branch speaks it), recorded as a tripwire.
+		["guard-nrl115-fresh-block-space-tab-is-nrl113", "Before x.\n\n \t<!--\nSECRET\nVISIBLE", "Before x. SECRET VISIBLE"],
+		// Decision Q5: a top-level line after a heading is a fresh block, indented code
+		// for the renderer, and still silenced here - prose loss, recorded and left.
+		["guard-nrl115-after-heading-tab-left", "# Head\n\t<!--\nSECRET\nVISIBLE", "Head"],
+		// An HTML block of kinds 6 and 7 ends only at a TRULY empty line, so a line
+		// holding a tab does not end it and the `<!--` below is raw HTML the browser
+		// treats as a comment. Resetting the model's `unknown` state on a
+		// whitespace-only line was measured to claim this line, and would speak SECRET.
+		["guard-nrl115-html-block-not-ended-by-tab-line", "<div>\n \t\n- \t<!--\nSECRET\nVISIBLE", ""],
+		// A lazy line after a quote may end the quote (indented code interrupts it), so
+		// the model records nothing and the old answer stands: prose loss, left.
+		["guard-nrl115-lazy-line-after-quote-left", "> Before x.\n\t<!--\nSECRET\nVISIBLE", "Before x."],
+		// THE UNMASKED CLASS, pinned as a TRIPWIRE and not as evidence of a fix, in
+		// the style of pin-nrl74-container-label-still-leaks-destination. This IS a
+		// disclosure: Obsidian hides ZHIDEZ and the fix speaks it. It is NOT a new
+		// mechanism. The first line is indented code for the renderer, base wrongly
+		// opened a comment there and hid the rest of the note, and that over-hiding
+		// was masking a PRE-EXISTING leak on the second line: a blockquote nested in
+		// a list item is not peeled by `containerPrefix`, so its `<!--` is never
+		// line-start for us. The control below is the second line alone, and base
+		// speaks ZHIDEZ there too. In the 4,000-note fuzz every newly leaking cell
+		// (29, in 3 notes) and every newly lost one (6, in 1 note) reproduces on BASE
+		// once the line the fix declines is defused, and in all four notes defusing
+		// that line changes nothing the renderer shows. Keeping the over-hiding to
+		// mask the leak is the trade NRL-74 refused. When the nested-container peel
+		// is fixed (NRL-131), this expectation must change on purpose.
+		["pin-nrl115-unmasked-quote-in-list-leak", "> -   \t<!--\n- >   \t<!-- ZHIDEZ\nmore", "<!-- > <!-- ZHIDEZ more"],
+		["guard-nrl115-unmasked-quote-in-list-control", "- >   \t<!-- ZHIDEZ\nmore", "> <!-- ZHIDEZ more"],
+		// The same root's DESTINATION face, found by the lookahead probe, and the
+		// only class in it that moved toward disclosure: a lazy `<!--` line inside a
+		// blockquote nested in a list item no longer interrupts, so the soft-wrapped
+		// label is spoken through to its destination. Measured 0 -> 8,192 cells (8
+		// leads x image and link x 512 content-key combinations), while the CONTROL -
+		// the identical shape with plain prose on that line - speaks the destination
+		// in 8,192 of 8,192 cells on base AND on the fix. Base's 0 was the over-hiding
+		// swallowing `after.`, which the renderer displays. Plain, quote, nested-quote,
+		// bullet, ordered and list-in-quote shapes moved 0 cells toward disclosure.
+		["pin-nrl115-unmasked-quote-in-list-destination", "- > Before ![alt\n  > \t<!-- x\n  > more](zdestz.png) after.", "> Before [alt <!-- x more](zdestz.png) after."],
+		["guard-nrl115-unmasked-quote-in-list-destination-control", "- > Before ![alt\n  > \tplain x\n  > more](zdestz.png) after.", "> Before [alt plain x more](zdestz.png) after."],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });

@@ -9,6 +9,10 @@
   ADR 0023.
 - NOTE ON THE TITLE: "document-scoped" describes term 1 only as of NRL-95. The
   file name is kept so existing references still resolve.
+- Amended by NRL-115 (R-M08): term 1's `.trim()` is right only where module 8776
+  is REACHED, and for an indented paragraph continuation or an indented fresh
+  block inside a container it is not. See "AMENDED by NRL-115" at the end; the
+  decision 1 paragraph calling `.trim()` correct for `<!--` carries a pointer.
 
 ## Context
 
@@ -84,6 +88,15 @@ the time rather than as current state.
    our `view.slice(0, at).trim() === ""` is **correct** for `<!--`. The same
    expression is *wrong* for `%%`, whose tokenizer skips charCode 32 only - that
    is NRL-93, and it is not shared.
+
+   **AMENDED by NRL-115: half of that paragraph is wrong.** The skip loop does
+   accept tabs, and `.trim()` is the right test for an UNINDENTED mid-line or
+   line-start `<!--`, which is the shape NRL-74 was fixing. But module 8776 is
+   never reached for a paragraph continuation led by a tab or four columns, nor
+   for a fresh block inside a quote or a list item led by a tab or four spaces,
+   so for those lines `.trim()` opened a block the renderer never opens. The
+   `<!--` and `%%` defects are different defects, and they do share that
+   root (module 8607's lazy-continuation branch). See "AMENDED by NRL-115".
 
    **Term 2 is the renderer's INLINE path, and it is weaker evidence.** A
    mid-line `<!--` reaches module 4839's `.T` regex via module 7648, whose
@@ -1264,3 +1277,143 @@ pipeline only, and **Live Preview is separate code that no ticket in this family
 ever read or run**. The hast transformers are stubbed empty in the render harness
 (they only decorate `<a>` elements). Rule 11 applies to every number in this
 section.
+
+## AMENDED by NRL-115: term 1 is right only where module 8776 is reached
+
+**The defect.** Term 1 asked whether only whitespace precedes `<!--` on the line,
+with `.trim()`, and decision 1 recorded that as correct because module 8776's skip
+loop accepts spaces and tabs with no cap. The premise is true and the conclusion
+does not follow, because module 8776 is not reached for two kinds of indented line:
+
+- **A paragraph continuation led by a tab or four or more columns.** Module 8607
+  (paragraph), on the `commonmark: true` branch Obsidian always runs, counts each
+  following line's indent, sets it to four on a tab, and at four `continue`s
+  WITHOUT running the `interruptParagraph` check at all. The line is lazy prose;
+  no block tokenizer sees it.
+- **A fresh block inside a quote or a list item led by a tab or four spaces.**
+  `blockMethods` runs `indentedCode` (module 134) before `html`, so the line is
+  indented code. At the top level our INDENTED_CODE branch already consumes such a
+  line before any predicate runs and is untouched here (decision Q2: NRL-113 owns
+  those positions); inside a container no branch of ours did.
+
+`Before x.` / tab `<!--` / `SECRET` / `VISIBLE` spoke `"Before x."` and Obsidian
+displays all four lines. Reproduced on base `7965da2` by running the real
+extractor against Obsidian 1.13.7's own parser and renderer executed in Node
+(`app.js` sha256 `8efbf581...9898` re-verified): **6,656 prose-loss cells**, exactly
+the ticket's count, on its 9-lead x 5-position x 512-combination corpus.
+
+**The decision.** `opensHtmlBlock` takes a fourth argument, `leadIndented`, and it
+refuses TERM 1 ONLY: `(!leadIndented && view.slice(0, at).trim() === "") ||
+closesLater`. Term 2 is unchanged (decision Q3): a lazy `<!--` whose `-->` is later
+in the same paragraph is an inline comment for module 4839 and stays hidden. It is a
+conjunctive refusal, so the new predicate implies the old one for every argument:
+**0 violations over 145,636 tuples** (every string on {space, tab, `<`, `x`} up to
+length 6, every `at`, both flags), against 21,531 for a deliberately widened variant.
+
+The argument is computed per line by a new forward pass, `rendererLeads`, because
+"indented" is measured **after the renderer's own container dedent** and a
+line-local predicate cannot see that. Module 6234 strips `>` and one SPACE (never a
+tab). Module 745 hands each list item to module 5540, which removes `p` columns from
+every line, `p` being the smaller of the marker's padded width and the least indent of
+any indented line in the WHOLE item, by module 6058's tab stops, so a tab straddling
+the boundary goes entirely. So `- a` / tab `<!--` reaches the item's tokenizer as
+`<!--` at column 0 and DOES open, while `- a` / two spaces, tab `<!--` keeps the tab and
+is lazy prose; and `1. ` pads to FOUR columns (module 745's odd-width bump). Each item
+is collected whole before any of its lines is judged.
+
+The pass is a model of the container structure and it FAILS CLOSED: it records
+nothing where it is unsure, and an unrecorded line keeps the old answer. The default
+classification of a block is FRESH, never paragraph, because claiming a fresh line
+needs a tab or four spaces FIRST and the renderer shows such a line in both positions;
+the reverse mistake is the dangerous one (` \t<!--` is lazy after a paragraph and an
+opener at a block start). Unmodelled constructs put the frame into `unknown`, which
+ends only at a TRULY empty line followed by a column-0 line.
+
+The `leadIndented` array is threaded explicitly, never ambient, through
+`opensHiddenComment` and `interruptsParagraph` into `codeSpanClosesLater` and
+`bracketClosesLater`, and into `cleanLine` at the main per-line site only. The
+recursive label sites and `appendRemainder` keep the default `false`, which is right
+for them rather than merely harmless: the claim is about a whole line, and they pass
+a slice that does not start where the line does. `opensObsidianBlock` and
+`listDedented` are untouched (decision Q1): the per-line arrays are shareable, but
+moving the `%%` side needs its own invariance probe.
+
+**Evidence, all bare-Node against the executed reading-view parser and renderer.**
+
+- **The model's own claims**, checked with a causal oracle (the sentinel after a
+  `<!--` line is hidden in the note but shown once that one `<!--` is defused): **0
+  wrong claims** over the 338-cell open-shape census and **24,000 fuzz notes** with
+  tabs, multi-space leads and nested quotes and lists. Dropping the item dedent gives
+  702 wrong claims, a three-column lazy threshold 32, and resetting `unknown` on a
+  whitespace-only line 1, so the check can fail.
+- **Position census**, 26 positions (after paragraph, document start, after blank,
+  quote continuation and after-blank, quote lazy line, quote-in-quote, five list
+  continuation forms, list after blank, loose lists, quote-in-list, list-in-quote,
+  nested list, and six predecessor controls: heading, HR, fence close, table-row
+  line, real table, list marker line) x 13 leads (tab, ` \t`, `  \t`, `   \t`,
+  `\t `, `\t\t`, 2, 3, 4, 5, 6 and 8 spaces, none) x 2 shapes (unterminated, and
+  a closer later in the same paragraph) x 512 combinations = **346,112 cells**,
+  signed per sentinel at its own position. Displayed-text loss **121,856 ->
+  50,176**; leaks **6,144 -> 6,144** (NRL-113's fresh-block ` \t` family, unmoved);
+  **0 newly leaking, 0 newly lost**; every one of the **218,112 cells where base
+  already agreed with the renderer is byte-identical** on the fix; and all 71,680
+  moved cells are loss closures. Two deliberately wrong arms fail it: dropping the
+  continuation/fresh distinction gives 9,728 newly leaking, dropping the item dedent
+  25,600.
+- **`sourceIndex`** by numeric UTF-16 index over the census plus 4,000 fuzz notes
+  with a math block each, four option sets: base 54,500 chunks / 486,367 units, fix
+  59,736 / 532,075, **0 length, bounds, monotonicity or identity failures on either
+  arm**; all four mutators nonzero on both (drop 54,500 / 59,736 length; shift
+  10,892 / 11,900 bounds and 339,571 / 371,373 identity; swap 80,606 / 88,056
+  monotonic and 76,586 / 84,380 identity; zero 429,254 / 469,639 identity); the
+  equation exemption, keyed on the synthetic TEXT, is mandatory on both (85,184 /
+  93,088 identity failures without it).
+
+**Two classes moved toward disclosure, both UNMASKED rather than introduced, and
+they are recorded here rather than under "0 newly leaking" because that is how
+NRL-74's container class got through.**
+
+- **The lookahead probe** (soft-wrapped code span, image, link and image-with-closer
+  across a `<!--` line, 8 container shapes x 11 leads x 512 = 180,224 cells, signed
+  per token with alt text judged for loss only): displayed-text loss 307,200 ->
+  30,720 and **8,192 cells newly speak a destination**, every one of them in the
+  QUOTE-INSIDE-A-LIST-ITEM shape. The control, the identical shape with plain prose
+  on that line, speaks the destination in **8,192 of 8,192 cells on base and on the
+  fix**: a blockquote nested in a list item is not peeled by `containerPrefix`, and
+  base's 0 was the over-hiding swallowing text the renderer displays. Plain, quote,
+  nested-quote, bullet, ordered and list-in-quote shapes moved 0 cells toward
+  disclosure; dropping the item dedent gives 56,832 newly leaking.
+- **The 4,000-note fuzz x 4 option sets** (63,812 token-cells, 4,404 with room):
+  loss 12,433 -> 10,111, and **29 newly leaking cells in 3 notes plus 6 newly lost in
+  1 note**. Attributed by ablation, not by pattern: in all four notes defusing the
+  line the fix declines changes nothing the renderer shows (so the decline is right),
+  and **all 35 cells reproduce on BASE** once that line is defused. The roots are the
+  same unpeeled quote-in-list (2 notes) and our `FENCE` regex taking a six-space-led
+  backtick run as a fence where the renderer sees indented code (1 note). The
+  deliberately wrong arms give 336 and 181 newly leaking.
+
+Keeping the over-hiding to mask those leaks is the trade NRL-74 refused, so both are
+pinned as tripwires with their controls (`pin-nrl115-unmasked-quote-in-list-leak`,
+`pin-nrl115-unmasked-quote-in-list-destination`). Both roots were filed at ship
+review: **NRL-131** (the unpeeled quote inside a list item) and **NRL-132** (`FENCE`
+accepting any indent). The attribution was re-checked there independently: a fresh
+4,000-note fuzz with its own generator found 1 distinct newly-leaking note (the
+quote-in-list root, reproducing on base once the declined line is defused) and 0
+newly lost, and over 24,000 further notes the model made 5,604 not-an-opener claims
+with 0 wrong against the executed renderer, where a naive any-lead rule made 2,646
+wrong.
+
+**Known misses, left on purpose and pinned as guards.** Top-level fresh-block
+positions after a heading, a thematic break, a fence close, a real table or a lazy
+line after a quote are indented code for the renderer and still silenced here
+(decisions Q2 and Q5: NRL-113's territory, fail-closed). A table-row-shaped line is
+classified FRESH, so a lazy line after `| a | b |` stays silenced although the
+renderer continues the paragraph. Term 2 still hides an indented code line inside a
+container whose `-->` follows in the same paragraph by our scan, where the renderer
+shows the code (Q3). And a container's indented-code line is spoken as prose rather
+than as code, so `skipCodeBlocks` does not remove its `<!--`; that is the pre-existing
+absence of any indented-code handling inside a container, not new.
+
+**NOT VERIFIED IN OBSIDIAN.** No deploy and no CDP session happened. The oracle is the
+shipped reading-view parser and renderer executed in Node; **Live Preview is separate
+code and was not examined**. Rule 11 applies to every number in this section.

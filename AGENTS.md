@@ -2126,7 +2126,27 @@ rediscover them:
   line" and omitted the same-line stage; corrected at ship review by re-reading module 8776,
   and it matters - it is what makes `<!--x--> prose <!--` a one-line block with the next line
   displayed.) So the line-start term is the renderer's own rule, and our `.trim()` is
-  **correct** here where it is wrong for `%%` (NRL-93 is not shared). The second term is the
+  **correct** here where it is wrong for `%%` (NRL-93 is not shared). **NRL-115 corrected
+  half of that sentence.** `.trim()` is right for an UNINDENTED `<!--`, which is what NRL-74
+  fixed, but module 8776 is never REACHED for a paragraph continuation led by a tab or four
+  columns (module 8607's lazy branch skips the interrupt check) or for a fresh block inside a
+  quote or list item led by a tab or four spaces (indented code), both after the renderer's
+  container dedent. So the `<!--` and `%%` defects are different defects that DO share the
+  module 8607 root; `opensHtmlBlock` now takes a fourth argument from a per-line
+  `rendererLeads` pass and refuses term 1 only (ADR 0025 "AMENDED by NRL-115"). **NRL-115
+  UNMASKS a disclosure class, the same shape as NRL-74's 5,120 cells, and it was kept on the
+  same reasoning.** Its lookahead probe (8 container shapes x 11 leads x 512 = 180,224 cells)
+  newly speaks an image/link **destination in 8,192 cells**, every one a blockquote nested
+  inside a list item; the control, the identical shape with plain prose on that line, speaks
+  the destination in **8,192 of 8,192 on base and on the fix**, because `containerPrefix` does
+  not peel a quote inside a list item (**NRL-131**). Its 4,000-note fuzz newly leaks 29 cells
+  in 3 notes and newly loses 6 in 1, and all 35 reproduce on base once the declined line is
+  defused (roots: NRL-131, and `FENCE` accepting any indent, **NRL-132**). Ship review re-ran
+  the attribution with its own 4,000-note generator: 1 distinct newly-leaking note, the
+  NRL-131 root, base-reproducing; 0 newly lost. Tripwires: `pin-nrl115-unmasked-quote-in-list-leak`
+  and `pin-nrl115-unmasked-quote-in-list-destination` with their controls - they pin wrong
+  output and must change on purpose when NRL-131 lands. **NOT VERIFIED IN OBSIDIAN**,
+  reading-view parser only. The second term is the
   renderer's **inline** path instead (module 4839's `.T`,
   `<!--(?:-?[^>-])(?:-?[^-])*-->`), which requires a closer - and that path is
   **paragraph-scoped** where NRL-74's was document-scoped.
