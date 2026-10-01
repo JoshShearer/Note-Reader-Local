@@ -262,11 +262,46 @@ zero non-local network requests. The **JSEP/WebGPU claim is still open**: this d
 has no GPU-loadable weights downloaded, so the packed JSEP build remains verified-but-
 unexecuted on both platforms tested so far. Two new, real findings came out of that same
 session, filed rather than folded in here: a Kokoro ONNX crash that leaves the session
-poisoned until Obsidian reloads, trigger unidentified (NRL-101), and the 4-thread WASM load
+poisoned until Obsidian reloads, trigger unidentified (NRL-101, since **half** closed - the
+paragraph after this one is the whole of what moved), and the 4-thread WASM load
 failing reproducibly on a desktop Flatpak install, falling back to ~2.7x-real-time
 single-threaded synthesis rather than the README's assumed near-1x (NRL-102). Full
 measurement detail for both the Android acceptance and the two findings is in NRL-96's
 comment thread, not duplicated here.
+
+**NRL-101 is HALF closed, and the two halves must not be collapsed into one: the poisoning is
+fixed, the trigger is still unidentified and unreproduced.** `src/engines/onnx/kokoro.ts` now
+marks a posted worker synthesis failure (`sessionFailed`) and the next request recycles the
+worker, once per successful-synthesis epoch (`recycleSpent`), instead of leaving a poisoned
+ONNX session in place for the rest of the Obsidian session; a failure that survives the
+recycle gets the distinct `KOKORO_RELOAD_REQUIRED` message rather than the engine's own text a
+third time (`docs/adr/0031-recycling-a-poisoned-kokoro-session.md`). Measured on the Pixel 9
+Pro XL: read 1 failed in **8 ms** with the engine's own message and `isPrepared()` false; read 2
+produced a **complete second load** (`recycling the Kokoro worker...` then a fresh
+`kokoro ready on CPU (WASM, 1 thread)`) in **3,475 ms**; read 3 gave `KOKORO_RELOAD_REQUIRED`
+in **0 ms with no third load**; and a failure followed by a good request produced **115,244
+bytes** of real audio with both flags cleared. Independently reproduced by a second agent,
+which measured **133,244 B** on different text. **Zero non-local network requests** across the
+recycle on the CDP `Network` domain - 10 `requestWillBeSent` across four captures, every one
+`_capacitor_file_` or `blob:` - so non-negotiable 6 is **measured** here rather than reasoned:
+the recycle re-reads the 155 MB of weights locally and downloads nothing. `setRate(1.5)` gave
+an element `playbackRate` of exactly 1.5, so non-negotiable 9 still holds.
+
+**The honest limit is large and must travel with every number above.** The deterministic
+trigger used was an **unknown voice id**, which does **not** corrupt the ONNX session, so this
+evidence establishes the *handling* and the UI - it does **not** establish that recycling cures
+real ORT corruption, which is still exactly the unreproduced thing the ticket was filed about.
+Desktop is **entirely unobserved** (CDP 9222 unreachable throughout). **No requirement moves,
+`srs.md` was deliberately not amended, and the `2 of 16` MUST count does not move.**
+
+**One classification from that work, recorded so it is not re-litigated: a `preparing` stall is
+a THIRD case, neither this defect nor "the worker never answers".** A live stall showed
+`pending: 0`, `sessionFailed: false`, and a direct `synthesize()` returning real audio in
+**9,369 ms** - the engine healthy while the read orchestration never reached it. The trigger was
+self-inflicted (three overlapping `read-note` commands), and Verify could **not** replicate it
+(the same trigger reached `playing` in 5,012 ms), so the classification stands unchallenged but
+unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
+forbade.
 
 Two confirmed moves: R-M01 (standard Obsidian Community Plugin) is met as of NRL-16, with
 all release infrastructure in place (README.md, LICENSE, versions.json, SLSA Level 3 workflow,

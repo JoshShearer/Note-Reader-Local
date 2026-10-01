@@ -178,8 +178,15 @@ path is read a second time.
 - `prepare()` can now spend the recycle budget, so `warmUpEngine()` reaches it
   too: a settings change that triggers a prewarm on a marked engine recycles
   there instead of on the next read. That is the same work in a better place,
-  and it is why the mark is cleared by a successful synthesis rather than by a
-  successful load - a load proves the worker boots, not that it can speak.
+  and it is why the **budget** (`recycleSpent`) is cleared by a successful
+  synthesis rather than by a successful load - a load proves the worker boots,
+  not that it can speak. Read that precisely, because a looser wording of this
+  bullet contradicted the accepted-cost bullet above: a success clears the
+  budget, **not** the mark, and only while the budget is still unspent. Once
+  `sessionFailed` and `recycleSpent` are both true the engine is terminally
+  stuck until a `dispose()` - a good request gets `KOKORO_RELOAD_REQUIRED` in
+  0 ms and never reaches the line that would refill the budget. That is the
+  accepted cost stated above, not a softer second rule.
 - Rate application (non-negotiable 9) is untouched: Kokoro's capabilities have
   `ownsPlayback: false`, the worker always receives `rate: 1`, and the recycle
   re-issues no speak, so there is no second application anywhere.
