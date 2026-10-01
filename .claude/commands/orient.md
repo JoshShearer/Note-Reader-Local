@@ -170,11 +170,11 @@ the authoritative text; these are pointers, not replacements.
 | `src/text/extract.ts` | **Known defects**: speaks `[` and `]` for wikilinks, loses embed content, returns **zero chunks** when line 1 is `---` because a horizontal rule is parsed as frontmatter. `ExtractOptions.skipCode` and `.skipUrls` are wired from settings and rendered as toggles but never read. **Non-negotiable 8**: every dropped span still pushes a `sourceIndex` entry, or highlighting silently corrupts. |
 | `src/audio/player.ts` | **Known defects**: `replayCurrent` truncates the chunk array and resets the index, corrupting `n / total`. `primeBuffer` prefetches against engines where `synthesize()` *is* speaking, so speechd and webspeech overlap. Pause is a no-op on both: it pauses an `<audio>` element they never use. **Non-negotiable 9**: rate is applied exactly once, by the player or by an `ownsPlayback` engine, never both. |
 | `src/engines/system/speechd.ts` | **Known defect**: malformed `-y` / `-t` voice args, and `spd-say` prints `Invalid voice` on **stdout with exit 0** while the guard reads stderr, so it fails silently. **Non-negotiable 2**: text goes in on stdin, never argv. |
-| `src/engines/system/espeak.ts`, `spawn.ts` | **Non-negotiable 2** (stdin, not argv) and **7** (`child_process` stays type-only plus dynamic `await import()` inside method bodies). |
+| `src/engines/system/espeak.ts`, `spawn.ts` | **Non-negotiable 2** (stdin, not argv) and **7** (`child_process` stays type-only plus one call-time `require` reached from method bodies, never `import()`; ADR 0033). |
 | `src/engines/onnx/kokoro.worker.ts` | **Non-negotiables 5 and 6**: `isRemote` + `assertLocal` stay. If a load path breaks, fix the path, not the guard. Nothing fetches on load or prewarm. |
 | `src/settings/index.ts`, `src/ui/settingsTab.ts` | **Non-negotiable 10**: `normaliseSettings` must not drop keys it does not recognise. Plugin data holds reading positions too, and a whitelist rebuild erases them on the next rate nudge. |
 | `src/diagnostics.ts` or any new logging | **Non-negotiable 1**: counts, ids and durations only. Never interpolate note, chunk or selection text, not even into an error message. |
-| `manifest.json`, `package.json`, `esbuild.config.mjs` | **Non-negotiable 7**: after any dependency change, check `main.js`'s `require()` list contains only `obsidian`, `@codemirror/view`, `@codemirror/state`. |
+| `manifest.json`, `package.json`, `esbuild.config.mjs` | **Non-negotiable 7**: after any dependency change, check `main.js`'s `require()` list contains only `obsidian`, `@codemirror/view`, `@codemirror/state`, plus `child_process` as a call-time `require` in `src/engines/system/spawn.ts` only (ADR 0033), and no `import()` of any builtin. |
 
 ## Step 7: Output
 

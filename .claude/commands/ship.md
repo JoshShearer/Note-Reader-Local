@@ -171,7 +171,7 @@ git diff "$BASE" -- src/text/extract.ts | grep -cE '^\+.*sourceIndex'
 | 4, network | A cloud TTS endpoint, an API key, an account, or an automatic fallback to one. |
 | 5, network | `isRemote` or `assertLocal` weakened or removed in `kokoro.worker.ts`. Fix the load path, not the guard. |
 | 6, network | A fetch on load, on prewarm, or on first read. Downloads are user-initiated only. |
-| 7, mobile | A node builtin imported so it evaluates on mobile, or `isDesktopOnly` flipped. Verify after build: the `require()` list in `main.js` must hold only `obsidian`, `@codemirror/view`, `@codemirror/state`. |
+| 7, mobile | A node builtin imported so it evaluates on mobile, or `isDesktopOnly` flipped. Verify after build: the `require()` list in `main.js` must hold only `obsidian`, `@codemirror/view`, `@codemirror/state`, plus `child_process` as a call-time `require` in `src/engines/system/spawn.ts` only (ADR 0033), and no `import()` of any builtin. |
 | 8, offsets | Stripping changed in `extract.ts` without a matching `sourceIndex` push for every dropped span, or highlighting done by searching the editor for the spoken string. |
 | 9, rate | The rate applied both by an `ownsPlayback` engine and by `Player`. Check the player test still asserts it and was not softened. |
 | 10, settings | `normaliseSettings` rebuilding from a whitelist and dropping unrecognised keys. |
@@ -180,6 +180,7 @@ The `require()` audit, after a build:
 
 ```bash
 grep -oE 'require\("[^"]+"\)' main.js | sort -u
+grep -oE 'import\("[^"]+"\)' main.js | sort -u   # must list no node builtin (ADR 0033)
 ```
 
 A grep returning nothing is not proof of cleanliness when the diff clearly touches `src/`.
@@ -327,7 +328,7 @@ Body template. Every section is filled or explicitly marked `none`:
 - [ ] No note text in any log
 - [ ] Speech text on stdin, not argv
 - [ ] No network added; Kokoro worker guards intact
-- [ ] `main.js` require() list unchanged: `obsidian`, `@codemirror/view`, `@codemirror/state`
+- [ ] `main.js` require() list unchanged: `obsidian`, `@codemirror/view`, `@codemirror/state`, `child_process`; no `import()` of a builtin
 - [ ] sourceIndex in lockstep with stripping
 - [ ] Playback rate applied exactly once
 - [ ] Settings normalisation preserves unknown keys

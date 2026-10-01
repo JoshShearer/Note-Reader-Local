@@ -584,7 +584,8 @@ edit tracked files.
 
 1. Confirm the working tree is clean and `HEAD` equals `commitSha`. Run `npm test`,
    `npm run typecheck` and `npm run build`. Check that `main.js`'s `require()` list is only
-   `obsidian`, `@codemirror/view` and `@codemirror/state`.
+   `obsidian`, `@codemirror/view`, `@codemirror/state` and `child_process` (ADR 0033), and that
+   it holds no `import()` of a node builtin.
 2. End-to-end probes: bundle the real changed module from the scratchpad and run **every input the
    acceptance criteria and the PR's manual test plan name**, including the original reproduction.
    Compare the actual output to the expected output. For `extract.ts` changes, also check

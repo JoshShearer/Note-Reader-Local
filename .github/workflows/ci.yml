@@ -50,7 +50,12 @@ jobs:
         run: npm run build
 
       # Mobile safety, AGENTS.md rule 7: manifest.json declares
-      # isDesktopOnly: false, so main.js must not require a node builtin. This
+      # isDesktopOnly: false, so main.js must not require a node builtin at
+      # module scope. child_process is the one exception (NRL-135, ADR 0033):
+      # it is require()d at call time inside src/engines/system/spawn.ts, on a
+      # path constructed only on Linux desktop, because a native import() of a
+      # builtin cannot resolve in Obsidian's renderer. So the step also fails on
+      # any import() of a builtin, the shape that shipped broken. This
       # sits before the test step as its own named step so the require() verdict
       # is reported separately from the suites, and is reported even if the test
       # step is red. NRL-80 replaced `npm test`'s `&&` chain with
@@ -67,14 +72,17 @@ jobs:
           cat > "$RUNNER_TEMP/require-check.cjs" <<'EOF'
           const fs = require("node:fs");
           const main = fs.readFileSync("main.js", "utf8");
-          const allowed = ["@codemirror/state", "@codemirror/view", "obsidian"];
+          const allowed = ["@codemirror/state", "@codemirror/view", "child_process", "obsidian"];
           const found = [...new Set([...main.matchAll(/require\("([^"]+)"\)/g)].map((m) => m[1]))].sort();
           console.log("require(): " + found.join(", "));
           const extra = found.filter((m) => !allowed.includes(m));
           const missing = allowed.filter((m) => !found.includes(m));
           if (extra.length) console.error("FAIL unexpected require(): " + extra.join(", "));
           if (missing.length) console.error("FAIL missing require(): " + missing.join(", "));
-          process.exit(extra.length || missing.length ? 1 : 0);
+          const builtins = new Set(require("node:module").builtinModules.flatMap((m) => [m, "node:" + m]));
+          const dyn = [...new Set([...main.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]))].filter((m) => builtins.has(m));
+          if (dyn.length) console.error("FAIL import() of a node builtin: " + dyn.join(", "));
+          process.exit(extra.length || missing.length || dyn.length ? 1 : 0);
           EOF
           node "$RUNNER_TEMP/require-check.cjs"
 

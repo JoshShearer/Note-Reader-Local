@@ -132,10 +132,12 @@ npm run build
 grep -oE 'require\("[^"]+"\)' main.js | sort -u
 ```
 
-Must be exactly `obsidian`, `@codemirror/view`, `@codemirror/state`. The esbuild `external` list
-names a dozen more packages plus every node builtin, so it is not the check. BLOCK on any other
-entry, on `isDesktopOnly` flipped to true, or on a static `child_process` import replacing the
-`await import()` inside a method body in `spawn.ts`.
+Must be exactly `obsidian`, `@codemirror/view`, `@codemirror/state`, `child_process` (ADR 0033).
+The esbuild `external` list names a dozen more packages plus every node builtin, so it is not the
+check. BLOCK on any other entry, on `isDesktopOnly` flipped to true, on a static top-level
+`child_process` import replacing the call-time `require` inside `spawn.ts`'s `loadChildProcess`,
+or on any `import()` of a node builtin in `main.js` (`grep -oE 'import\("[^"]+"\)' main.js`),
+which Obsidian's renderer cannot resolve (NRL-135).
 
 If the diff touches no import and adds no dependency, N-A and say the bundle was not rebuilt.
 
