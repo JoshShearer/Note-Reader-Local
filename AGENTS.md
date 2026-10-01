@@ -132,9 +132,14 @@ leaves the player terminal and a naive check reads that as instant success.
 `tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running
 speech-dispatcher daemon (here with the `speech-dispatcher-espeak-ng` output module). It
 is a Linux desktop test and will fail elsewhere. `tests/espeak.test.ts` covers `espeak.ts`
-with a fake `ProcessRunner` only. The `espeak-ng` binary has been installed here since
-2026-10-01 (1.52.0, pacman), but no suite spawns it, so there is still no automated
-real-binary coverage for that engine, only for speech-dispatcher. The two regions of `tests/engine.test.ts` that
+with a fake `ProcessRunner` only: the `espeak-ng` binary itself is not installed on this
+machine, so there is still no real-binary coverage for that engine, only for
+speech-dispatcher. Re-measured 2026-10-01 on this Pop!_OS 24.04 host: `which espeak-ng`
+prints nothing, `/usr/bin/espeak*` does not exist, and `dpkg -l` lists only
+`espeak-ng-data` and `libespeak-ng1` (1.51) plus `speech-dispatcher-espeak-ng`, the data,
+the shared library and the speechd output module, none of which gives `espeak.ts` a command
+to spawn. (Commit `7c75866`'s "1.52.0, pacman" install does not exist here; `which pacman`
+prints nothing either. Corrected by NRL-138.) The two regions of `tests/engine.test.ts` that
 need the daemon - the preamble checks and the real-binary block that speaks aloud and
 asserts wall-clock duration - are bypassed when `NRL_SKIP_REAL_SPEECHD` is exactly `"1"`,
 which is what both workflows set. A skip prints one `SKIP <name>` line per bypassed check
@@ -269,8 +274,18 @@ speech tooling rather than a gap in the plugin. **That last clause was only half
 corrected by NRL-135:** with the tooling present, both Linux engines would still have
 reported unavailable, because `spawn.ts`'s `import("child_process")` could not resolve in
 Obsidian's renderer. NRL-135 (PR #177, `docs/adr/0033`) replaced it with a call-time
-`require`; on 2026-10-01 in native Obsidian 1.13.7 both reported available and a read on
-Auto went `preparing` -> `playing` on `speechd`, advancing a chunk. Not listened to by ear.
+`require`; on 2026-10-01, on a host with a native `/usr/bin/obsidian` 1.13.7 per commit
+`7c75866`, both reported available and a read on Auto went `preparing` -> `playing` on
+`speechd`, advancing a chunk. Not listened to by ear. **That host is not this Pop!_OS
+machine, and the run is not reproducible here** (NRL-138, measured 2026-10-01): the only
+Obsidian on this machine is the Flatpak (`flatpak list --app` gives `md.obsidian.Obsidian
+1.13.7 user`, the live process is `/app/obsidian` under `bwrap`, and `which obsidian`,
+`ls /usr/bin/obsidian` and `dpkg -l | grep -i obsidian` find nothing), the sandbox sees
+neither speech binary (`flatpak run --command=sh md.obsidian.Obsidian -c 'command -v
+espeak-ng spd-say'` finds neither, with `FLATPAK_ID=md.obsidian.Obsidian`), and the
+`~/Documents/NoteReaderTest` vault is absent. `7c75866`'s message, that the Flatpak here
+"has been replaced by the native one", is wrong for this machine; the commit is not
+rewritten and this sentence is the correction.
 Two residuals, both reproduced and filed. **NRL-142**: two concurrent `spd-say` clients
 racing the daemon's autospawn leave one exiting 1 with `Can't set lock on pid file`, so a
 probe that runs beside another (plugin enable, or the settings tab's paired calls) reports

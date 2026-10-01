@@ -157,11 +157,10 @@ This builds and copies into `~/Documents/Notes/.obsidian/plugins/local-tts-reade
 Only one worktree at a time may hold the deployed build, because the destination is a single
 fixed folder. Say in the Linear comment which worktree deployed.
 
-Obsidian on this machine is the native `/usr/bin/obsidian` (Electron 43; the Flatpak `md.obsidian.Obsidian` was removed, checked 2026-10-01 with `flatpak list`). After deploying, reload the
+Obsidian on this machine is the Flatpak `md.obsidian.Obsidian` (`flatpak list --app`; `which obsidian` finds nothing, checked 2026-10-01 under NRL-138). After deploying, reload the
 plugin (toggle it off and on in Community Plugins, or run Obsidian's reload command).
-WebGPU needs `--enable-features=Vulkan`. The Flatpak read it from
-`~/.var/app/md.obsidian.Obsidian/config/obsidian/user-flags.conf`; where the native build
-reads its flags has not been checked. If the change touches
+WebGPU needs `--enable-features=Vulkan`, which lives in
+`~/.var/app/md.obsidian.Obsidian/config/obsidian/user-flags.conf`. If the change touches
 Kokoro on GPU and that flag is absent, the run tells you nothing about the GPU path; note
 that rather than reporting a WASM result as a GPU result.
 
