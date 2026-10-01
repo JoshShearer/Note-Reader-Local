@@ -1,4 +1,4 @@
-# 0027. Suppressing auto-scroll after a manual scroll
+# 0030. Suppressing auto-scroll after a manual scroll
 
 - Status: accepted
 - Date: 2026-09-30

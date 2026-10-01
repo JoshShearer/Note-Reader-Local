@@ -29,7 +29,7 @@ import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
  * rather than a `SelectionRange`. What is no longer promised is the user's
  * scroll position: moving it is the feature (docs/adr/0022).
  *
- * Since NRL-90 (docs/adr/0027, amending 0022) a manual scroll made mid-read is
+ * Since NRL-90 (docs/adr/0030, amending 0022) a manual scroll made mid-read is
  * no longer overridden at the next sentence boundary unconditionally: a
  * `scrollDOM` listener distinguishes a user-caused scroll from the plugin's
  * own and suppresses further auto-scroll on that editor until playback
@@ -38,7 +38,7 @@ import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
  * the editor, never on `sentenceHighlightField`/`wordHighlightField` state,
  * and suppressing the scroll never suppresses a decoration. See
  * `registerScrollSuppression`, `nextScrollSuppression` and the extended
- * `scrollTargetForChunk` below, and ADR 0027 for why the own-vs-user
+ * `scrollTargetForChunk` below, and ADR 0030 for why the own-vs-user
  * detection is a heuristic that has never been run against a real browser.
  *
  * Two layers means two ways to clear, and they are not interchangeable. Ending
@@ -120,7 +120,7 @@ export function highlightPlan(toggles: HighlightToggles, hasWordTiming: boolean)
  * can ever show. A gate that depended on the word row would leave the one engine
  * that most needs the viewport to follow playback without it.
  *
- * `suppressed` is a third REQUIRED parameter, added by NRL-90 (ADR 0027), not
+ * `suppressed` is a third REQUIRED parameter, added by NRL-90 (ADR 0030), not
  * optional or defaulted. Required so `tsc` fails every call site that does not
  * yet know about suppression rather than silently keeping the old
  * always-scroll behaviour - the same reasoning CONTEXT.md gives for
@@ -174,7 +174,7 @@ export function shouldHighlightLeaf(
  * until an explicit `resetScrollSuppression` call, which is a separate
  * function and not an input here, because "reset" and "no user scroll seen"
  * are different facts - conflating them would let a later `false` argument
- * silently un-suppress, which is not the policy (docs/adr/0027: suppression
+ * silently un-suppress, which is not the policy (docs/adr/0030: suppression
  * lapses only when playback restarts).
  *
  * Written as two explicit branches rather than the one-line
@@ -315,7 +315,7 @@ export function registerHighlighting(editor: EditorView): void {
  * as `isUserScroll`.
  *
  * BEST-EFFORT HEURISTIC, not a proof: this has never been run against a real
- * browser's actual scroll-event timing (AGENTS.md rule 13; docs/adr/0027).
+ * browser's actual scroll-event timing (AGENTS.md rule 13; docs/adr/0030).
  * `main.ts` has no runtime in the bare-Node suite, and `tests/highlight.test.ts`
  * never instantiates a real `EditorView`, so the listener itself has no
  * automated coverage - only the pure `nextScrollSuppression` it delegates to
