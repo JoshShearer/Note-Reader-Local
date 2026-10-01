@@ -224,8 +224,10 @@ plugin in a real Obsidian.** The runtime is packed into `main.js` by
 because Obsidian's community-plugin policy prohibits installing or updating dependencies
 at runtime and a release-URL runtime is that however carefully it is verified. Install is
 three files: `main.js`, `manifest.json`, `styles.css`, and `npm run build` no longer emits
-`ort/`. Measured: 32,794,766 plain ORT bytes, 10,579,272 gzipped into a 13,649,236-byte
-`main.js`. `tests/release.test.ts` (30 checks) unpacks all four assets from the shipped
+`ort/`. Measured: 32,794,766 plain ORT bytes, 7,934,451 gzipped, carried as 10,579,272
+bytes of base64 inside a 13,649,236-byte `main.js`. (This line used to call 10,579,272 the
+gzipped size. It is the base64 length; corrected 2026-10-01 by re-deriving all three
+figures from `node_modules/onnxruntime-web/dist`.) `tests/release.test.ts` (30 checks) unpacks all four assets from the shipped
 bundle and compares them by SHA-256 against `node_modules/onnxruntime-web/dist`, so the
 pack is verified against the publisher's bytes rather than against itself; mutations that
 add a weight, drop a digest, reintroduce a download URL, or drop a file from the build's
@@ -261,11 +263,16 @@ speech tooling rather than a gap in the plugin.
 Pro XL (Android 17, WebView `app.vanium.webview`, Chromium 154) loaded the identical
 13,649,236-byte `main.js`, all 9 commands registered, and the runtime unpacked with
 matching digests (SIMD 354.2 ms, JSEP 524.9 ms). A real Kokoro read produced real-time
-audio, stop/restart survived an actual `adb shell am force-stop` process kill and resumed
+audio **(corrected 2026-10-01: what was observed is the audio element's `currentTime`
+advancing in real time inside a chunk, which says nothing about whether synthesis keeps up
+across chunks. Measured for sustained throughput on this same device, Kokoro misses 1x by
+roughly 3-4x and 2x by 8.2x; see "Android playback throughput" below)**, stop/restart survived an actual `adb shell am force-stop` process kill and resumed
 mid-chunk, `setRate(1.5)` gave exactly 1.5 with no doubling, and the whole session captured
 zero non-local network requests. The **JSEP/WebGPU claim is still open**: this device also
 has no GPU-loadable weights downloaded, so the packed JSEP build remains verified-but-
-unexecuted on both platforms tested so far. Two new, real findings came out of that same
+unexecuted on both platforms tested so far. **(Closed negative for this device on
+2026-10-01: `navigator.gpu` exists but `requestAdapter()` returns `null` inside Obsidian's
+WebView, so there is nothing for JSEP to execute on. See below.)** Two new, real findings came out of that same
 session, filed rather than folded in here: a Kokoro ONNX crash that leaves the session
 poisoned until Obsidian reloads, trigger unidentified (NRL-101, since **half** closed - the
 paragraph after this one is the whole of what moved), and the 4-thread WASM load
@@ -307,6 +314,244 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 (the same trigger reached `playing` in 5,012 ms), so the classification stands unchallenged but
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
+
+### Android playback throughput, and the native-TTS bridge (2026-10-01)
+
+Every number in this section was measured on 2026-09-30 / 2026-10-01 against `main` at
+`abfcb85`, on the Pixel 9 Pro XL above (GrapheneOS, Android 17, Obsidian Android, WebView
+`Chrome/154.0.8037.57`, `navigator.hardwareConcurrency` 8, `navigator.deviceMemory` 8),
+driven over CDP through `adb forward ... localabstract:webview_devtools_remote_<pid>`. All
+synthesis runs were **genuinely offline**: airplane mode on, Wi-Fi disabled, and
+`adb shell ping -c1 1.1.1.1` returning `connect: Network is unreachable`. The device was
+restored afterwards (airplane off, default engine unchanged, test note deleted, the
+`synthesize` wrapper removed). The requirement being tested is the owner's: **offline
+playback on Android at 2x or faster, sustained.** 2x playback needs synthesis at RTF
+(compute seconds per audio second) of 0.5 or lower.
+
+**Kokoro fails it, on the fast build, by 8.2x.** Weights on disk were
+`onnx/model_q4f16.onnx`, 154,586,422 bytes. Note that `resolveWeights("auto")` returned
+`"small"` (q8) on this device, as `Platform.isMobile` dictates, and q4f16 ran only because
+q8 was not on disk and `weightsOrder` falls through to whatever is present - so a fresh
+Android install would download q8, which `kokoro.ts`'s own comment records as about 2.5x
+slower than q4f16. Test: a 5,008-character synthetic English note (41 chunks), rate 2.0,
+`bufferAhead` 2, `kokoroThreads` 4, model warm before the measured run was attempted:
+
+```
+preparing -> first audio       72.0 s     (cold load; the warm-up was reset before it held)
+playing window                351.9 s     (72.0 s -> 423.9 s)
+audio delivered                86.0 s     11 chunks: 7.175 7.7 6.875 9.375 7.675 7.125
+                                          10.1 8.225 7.175 7.7 6.875
+same audio at 2x should take   43.0 s     -> 8.2x too slow
+stalled                       304.6 s     11 distinct events = 87% of the window silent
+reached                      chunk 24 of 41, never finished
+element playbackRate          exactly 2   (rule 9 holds; rate was not the problem)
+```
+
+Effective RTF is **roughly 3 to 4**. That figure is a range on purpose: the harness wrapped
+`player.synthesize`, whose per-call times overlap the `bufferAhead` prefetch, so per-call
+milliseconds are not clean RTF and only the window totals above are. A stall was counted as
+`currentTime` unchanged for more than 300 ms while the player reported `playing`. **Method
+trap:** the first harness appended one stall per 100 ms poll and reported 2,425 "stalls";
+count open/close intervals, not polls. And at about 421 s the probe found
+`app.plugins.plugins['local-tts-reader']` momentarily `undefined` with the Obsidian pid
+unchanged; on re-probe the plugin was loaded and idle but `app.plugins.enabledPlugins` was
+empty. **Unexplained**, possibly adjacent to NRL-101, and recorded rather than guessed at.
+
+**The root cause is a host ceiling, not plugin code.** Inside Obsidian's Android WebView:
+
+```
+crossOriginIsolated             false
+typeof SharedArrayBuffer        "undefined"; new SharedArrayBuffer(8) throws
+WebAssembly SIMD validate       true
+navigator.gpu                   object, but requestAdapter() -> null
+```
+
+ONNX Runtime Web's multi-threaded WASM needs `SharedArrayBuffer`, which needs cross-origin
+isolation (COOP/COEP response headers). Obsidian serves its page from `http://localhost`
+without them and **a plugin cannot set response headers**. So **`kokoroThreads` cannot
+take effect on Android at all** - eight cores, one doing the work - and with no WebGPU
+adapter there is no faster backend to fall to. No weights choice fixes this. The owner's
+position, recorded 2026-10-01: **Kokoro is not an acceptable Android solution**, and likely
+not for desktops without a usable GPU either. The desktop half of that is **consistent with
+the existing record but was not re-measured here**: `kokoro.ts` records q4f16 at about 1x on
+a 4-thread desktop CPU, which already fails a 2x bar, and NRL-102 records 2.7x slower than
+real time when threads fail.
+
+**NRL-102 is probably a different bug from the Android ceiling.** Desktop Obsidian 1.13.7
+(Flatpak) renderer pid 51787's `/proc/<pid>/cmdline` carries
+`--enable-features=GlobalShortcutsPortalPreferredTrigger,PdfUseShowSaveFilePicker,SharedArrayBuffer,Vulkan`.
+So desktop Electron explicitly enables `SharedArrayBuffer`, and whatever defeats the
+4-thread load there is something else. **Limit:** this proves the flag reaches the
+renderer; `typeof SharedArrayBuffer` was not evaluated inside the desktop page, because CDP
+9222 was not listening and Obsidian was not restarted to open it.
+
+**The direct native route is still closed on a current WebView.** NRL-35's BLOCKED_BY_HOST
+was measured on Chrome/88; re-measured on Chromium 154 it holds: `typeof speechSynthesis`
+and `typeof SpeechSynthesisUtterance` are `"undefined"`;
+`Capacitor.isPluginAvailable('TextToSpeech')` is `false`; the full Capacitor plugin list is
+`App, Browser, CapacitorCookies, CapacitorHttp, Clipboard, Device, Filesystem, Haptics,
+KeepAwake, Keyboard, Preferences, RateApp, SecureStorage, SplashScreen, StatusBar, WebView`;
+and `AndroidInterface`, `ObsidianBridge`, `electron` and `require` are all undefined.
+Obsidian's own manifest also matters here: `dumpsys package md.obsidian` shows exactly one
+intent query, `queriesIntents=[Intent { act=android.support.customtabs.action.CustomTabsService }]`,
+so **even a Capacitor TextToSpeech plugin would fail to bind an engine on Android 11+**
+until Obsidian also declared the `TTS_SERVICE` query. That is the concrete, two-part ask if
+a feature request is ever filed with Obsidian.
+
+**The door that is open: loopback HTTP.** The WebView page origin is `http://localhost`, so
+`http://127.0.0.1:<port>` is same-scheme. With a listener on device loopback (an
+`adb reverse tcp:8771` socket), both a plain `fetch` and
+`Capacitor.Plugins.CapacitorHttp.get` returned **200** from inside Obsidian.
+
+**A prebuilt bridge failed, and why is worth knowing.** `it.eja.ttsserver` v1.6.5 (GPL-3.0,
+APK sha256 `09d6da4d67c3446bb6d837bb4dce5ccda43cf764b03aa417fca759969b555cc4`) hung on
+every synthesis with `W TextToSpeech: synthesizeToFile failed: not bound to TTS engine`.
+`dumpsys` showed `targetSdk=34` and **no `queriesIntents` line at all**: an app targeting
+API 30+ cannot see or bind a TTS engine without declaring
+`<queries><intent><action android:name="android.intent.action.TTS_SERVICE"/></intent></queries>`.
+It was broken on every modern Android, not just this one. It also bound `0.0.0.0:35248`,
+LAN-exposed, and was uninstalled.
+
+**A purpose-built bridge works.** `io.loopstring.ttsbridge`, one 393-line Java Activity, a
+16,797-byte APK built without gradle (Android build-tools 34.0.0 and platform android-34 in
+`~/Android/Sdk`; Temurin JDK 21.0.12.1 in `~/Android/tools`, because this machine had a JRE
+and no `javac`). **Source, build script and measurement script are in
+`companion/android/`** (README there). It declares the `TTS_SERVICE` query, binds
+**127.0.0.1 only**, requires a random 32-hex token on every route but `/health`, and takes
+text in a **POST body, never a query string** (non-negotiable 2's reasoning: a URL lands in
+logs the way argv lands in `ps`). Result: `queriesIntents=[Intent { act=android.intent.action.TTS_SERVICE }]`,
+`TTS init: SUCCESS`, zero "not bound" errors. **The query is proven causal, not inferred**:
+the same Java with only `<queries>` removed gave `queriesIntents=[]`,
+`TTS init: FAILED (-1)` and a 503 from `/synthesize`. Obsidian itself targets SDK 36, so
+package visibility applies to it too.
+
+Three defects in the first committed version were found by `/critique` running the bridge
+on the device, and are fixed; each is worth not reintroducing. **The bind address.**
+`InetAddress.getLoopbackAddress()` returned **`::1`** on Android 17, so the socket sat in
+`/proc/net/tcp6` while every document said `127.0.0.1`: on device, `nc 127.0.0.1 8787` was
+refused and `nc ::1 8787` answered, and from inside Obsidian both `fetch` and
+`CapacitorHttp` failed at `127.0.0.1` (`CapacitorHttp` also failed at `localhost`, which
+Java resolves to `127.0.0.1`). It now binds the IPv4 loopback explicitly and logs the address
+actually bound rather than a literal. **An unauthenticated crash.** The body buffer was sized
+from the `Content-Length` header before the token check, and the `OutOfMemoryError` escaped
+a `catch (Exception)`, so one request with no token and `Content-Length: 2000000000` gave
+`FATAL EXCEPTION: tts-bridge-http ... at MainActivity.handle` and killed the process. Headers
+are now capped at 16 KiB, the body at 64 KiB, the token is checked before the body is read,
+and each connection catches `Throwable`; re-run, seven hostile inputs (no token or token,
+`Content-Length` of 2000000000, 65537, -5, `abc` and 9999999999, and a 20 KB unterminated
+header) drew 401, 413, 400 or 431 from one surviving process. **Overstated provenance.** An
+earlier draft of this paragraph said the repo copy was byte-identical to "the build that
+produced the numbers below". Only some rows came from that build; three came from a superseded
+one. Every bridge number below has since been re-measured on the current committed source
+(`classes.dex` sha256 `c81e9ceea4edf09170d6becb778c59cefb992ad451ec7d1a753727ac67aba646`),
+by `companion/android/measure.sh`, in two fresh app sessions.
+
+Build trap: **d8 8.2.2 cannot dex an anonymous `UtteranceProgressListener`** here
+(`NullPointerException: Cannot invoke "String.length()"`); `-g:none` and `--release 11` did
+not help, a named nested class did.
+
+**Native TTS passes the requirement with margin.** All offline (airplane mode, ping
+unreachable), engine `app.grapheneos.speechservices`, committed build above, two fresh app
+sessions:
+
+```
+input       rate   audio out    session A           session B           2x target
+482 chars   1.0    32.276 s     3,734 ms  RTF 0.116  5,106 ms  RTF 0.158  PASS
+482 chars   2.0    16.138 s     3,838 ms  RTF 0.238  4,023 ms  RTF 0.249  PASS
+ 72 chars   1.0     5.097 s       681 ms  RTF 0.134    859 ms  RTF 0.169  PASS
+```
+
+Read the 2.0 row as the requirement itself: that audio is already rendered at 2x, so
+synthesis outruns 2x playback by **4.0x to 4.2x**. Against Kokoro's roughly 3 to 4 on the
+same phone that is **roughly 20 to 35 times the throughput**, with zero download. (An
+earlier draft quoted RTF 0.108 to 0.120, 4.6x and "roughly 30 times"; those came from a
+superseded build and are replaced, not averaged in.) A 72-character sentence synthesizes in
+681 to 859 ms with the engine already bound. That is synthesis time measured from the host
+over `adb forward`, **not** time to first audio inside the plugin, which has not been
+measured, and it must not be set against Kokoro's 72 s cold load as if it were.
+
+Two integration facts follow. Synthesis time is roughly independent of rate (3,734 vs
+3,838 ms in session A; session B's first call ran slower at 5,106 ms). And **the engine
+applies rate at synthesis time** - at 2.0 the file itself is half as long, 16.138 s against
+32.276 s - so an engine built on it must own its rate and the Player must not apply rate
+again, or the result is 4x. That is exactly the defect non-negotiable 9 exists to prevent.
+
+**No word timings, by either API.** `onRangeStart` fired **zero** times across all six
+`synthesizeToFile` calls above **and** both `speak()` probes (72 characters, `rc` 0,
+finished, 5,502 and 5,355 ms wall for 5.097 s of audio). So this engine simply does not
+implement it. That needs no new architecture: `speechd.ts:24` already declares
+`timing: "none"`, and `src/ui/highlight.ts:69-75` already keeps the sentence layer and
+NRL-72's scroll while disabling only the word row for such an engine. **The owner accepted
+losing the word highlight on Android on 2026-10-01.**
+
+**One engine, one voice, on this device.** `tts.getEngines()` lists only
+`app.grapheneos.speechservices`, with one voice (`en_US`, quality 500,
+`isNetworkConnectionRequired` false). Google TTS (`com.google.android.tts`) is installed as
+a package but registers no `TTS_SERVICE` (`cmd package query-services -a
+android.intent.action.TTS_SERVICE` returns one service), `secure tts_enabled_plugins` is
+`null`, and writing `secure tts_default_synth` to Google TTS did **not** change
+`getDefaultEngine()`. This is a GrapheneOS characteristic and says nothing about stock
+Android's voice count. The bridge's `/setengine` route rebinds through the three-argument
+`TextToSpeech(ctx, listener, enginePackage)` constructor, which is the only engine switch an
+app controls, but it is **untested** for lack of a second engine.
+
+**Distribution precedent for a companion app exists.** Matching names and descriptions in
+the live `community-plugins.json` (8,259 entries): 51 mention Ollama, 32 Zotero, 12 LM
+Studio, 5 AnkiConnect - all plugins that only work with a separately installed local app or
+server. These are regex hits on listing text, not audited dependency counts, but they
+establish that "plugin plus local companion over loopback" is an accepted directory shape.
+
+**The WebView-to-bridge path has now run end to end**, from inside Obsidian on the device,
+against the fixed build: `GET /health` at `127.0.0.1` and at `localhost` returned 200 by both
+`fetch` and `CapacitorHttp`, and `POST /synthesize` through `CapacitorHttp` at `127.0.0.1`
+returned 200 with audio. A `fetch` POST carrying `Authorization` still fails, because the
+bridge has **no `OPTIONS` handler** and the CORS preflight is refused, so the plugin side
+must use `CapacitorHttp` or the bridge must answer preflight.
+
+**What is NOT yet established, and must not be read as done:** no sustained multi-chunk read
+went through the real Player; the bridge handles requests on its single accept thread with
+no read timeout, so one connected-but-silent client stalls every other request until it
+closes (reproduced: `/health` answered at t0, went silent while such a client was open, and
+answered again once it closed), and a long synthesis blocks `/health` the same way; a
+synthesis that fails or times out can leave its WAV in the app cache; no foreground service
+exists, so the bridge serves only while its Activity is alive, and whether the plugin can
+launch it (an intent or custom-scheme URL from the WebView) is untested; the token still goes
+to logcat; Play and F-Droid distribution are unexplored; and nothing here amends `srs.md` or
+adds an ADR, both of which a shipped companion-app engine will need under the deviation rule
+at the top of this file. The `2 of 16` count does not move.
+
+**Supertonic 3 was evaluated and rejected for Android.** `Supertone/supertonic-3` on
+Hugging Face: four ONNX graphs totalling **398,075,273 bytes** (`vector_estimator`
+256,534,781, `vocoder` 101,424,195, `text_encoder` 36,416,150, `duration_predictor`
+3,700,147), fp32 only with no quantized variant published - 99M parameters at 4 bytes is
+the whole explanation. That is 2.7x Kokoro's real 148 MB download. Its weights are BigScience
+OpenRAIL-M (use-restricted, not OSI); the code repo, `supertone-oss-archive/supertonic`, was
+archived with its last push on 2026-09-09. Its one real advantage is 31 languages from one
+checkpoint with no phonemizer, where `kokoro-js@1.2.1` is English-only. It would run on the
+ORT already bundled, but on Android it would hit the same single-thread ceiling, and its
+`vector_estimator` reads like an iterative sampler (a hypothesis from file names and sizes,
+not measured).
+
+### Community-directory submission state (measured 2026-09-30)
+
+Submission now happens at community.obsidian.md with a linked GitHub account, reading
+`manifest.json` from the default branch HEAD; the old pull request to `obsidian-releases`
+is no longer the route. The id `local-tts-reader` is free. No release and no tag exist on
+`origin`. Two gaps would plausibly fail review. **Third-party license text is absent from
+the bundle**: `kokoro-js@1.2.1` is Apache-2.0 and `onnxruntime-web` is MIT, both are packed
+into `main.js`, and `main.js` contains zero license comments, while the developer policies
+require complying with bundled code's licenses. **Nothing lints**: the official
+`eslint-plugin-obsidianmd` (0.4.2, `obsidianmd/eslint-plugin`) has never been run, there is
+no eslint in `devDependencies`, and `ci.yml` has no lint step. A hand grep found no
+`innerHTML`, `activeLeaf`, `console.log`, `var` or regex lookbehind in `src/`, and four inline
+`style.display` writes in `src/ui/settingsTab.ts:775-798`.
+
+`main.js` composition at 13,650,767 bytes: ORT base64 payload **10,579,272** (77.5%), the
+inlined Kokoro worker as base64 **2,956,176** (21.7%, decoding to 2,217,132 bytes of JS),
+and everything else **115,319** (0.8%). Two levers, measured: the worker is base64'd but
+**not** gzipped, and gzip-then-base64 would be 1,223,852 bytes, saving **1,732,324**; and the
+two `.jsep.*` files alone cost **6,749,720** bytes of the bundle while being unexecutable on
+the one Android device measured, since it has no WebGPU adapter.
 
 Two confirmed moves: R-M01 (standard Obsidian Community Plugin) is met as of NRL-16, with
 all release infrastructure in place (README.md, LICENSE, versions.json, SLSA Level 3 workflow,
