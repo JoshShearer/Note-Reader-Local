@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-09-29
 - Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44, NRL-64, NRL-74 and
-  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74 and NRL-95
+  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74, NRL-95 and NRL-93
 
 ## Context
 
@@ -26,7 +26,10 @@ evidence, not a live Obsidian reading or highlighting observation.
    including trailing prose on the closing line and subsequent comments there.
 
 2. **Distinguish block and inline openers.** At the start of a prose line
-   (allowing whitespace) **and with no further `%` before the end of that
+   (leading **spaces** only, charCode 32, and at most **three** of them - but any
+   whitespace in any quantity when a list item has already dedented the line, which
+   is the renderer's own context-sensitivity and is spelled out in the three terms
+   below) **and with no further `%` before the end of that
    line**, an unmatched `%%` opens a block that hides through
    the first later `%%`, or through EOF when none exists. Apply this to the
    line body after structural prefixes are peeled and to closing-line prose
@@ -186,13 +189,187 @@ evidence, not a live Obsidian reading or highlighting observation.
    paragraph, so stopping there was a measured disclosure. See ADR 0025 decisions
    3 and 4, and the residual list there.
 
-   One known miss, not opened by NRL-73 and not fixed by it: the line-start half
-   uses `.trim()`, which accepts a **tab**, where the tokenizer's skip loop
-   accepts charCode 32 only. So `\t%%` opens a block for us and not for Obsidian.
+   **The line-start half is now the renderer's own rule, in three terms (NRL-93).**
+   It was `view.slice(0, at).trim() === ""`, any whitespace in any quantity.
+   Replaced in place, per the NRL-66/NRL-67 convention; the paragraphs that
+   recorded two open misses and then recorded them as BLOCKED are superseded,
+   because both are closed and the reason the earlier "do not ship a one-line
+   `.trim()` fix" warning gave is now the third term rather than a reason to stop.
 
-   This was read off the installed parser's own source and was **NOT observed
-   live** in Obsidian - the same standing this ADR's other tokenizer citations
-   have. Every number above is bare-Node measurement against base `bb77b77`.
+   Term A is SPACES ONLY. The `%%` block tokenizer's skip loop is
+   `for(var i=t.length,r=0;r<i&&32===t.charCodeAt(r);)r++;` immediately before
+   `if(37===t.charCodeAt(r)&&37===t.charCodeAt(r+1))`, so it accepts charCode 32
+   and nothing else. `\t%%` was opening a block for us and not for Obsidian, which
+   silenced a paragraph's remaining lines and a blockquote whole.
+
+   Term B is AT MOST THREE of them. The tokenizer's own loop really has no cap,
+   but a continuation line indented a tab or four-plus columns never reaches it:
+   the paragraph tokenizer (module 8607) skips the interrupt check for such a line
+   outright -
+   `if((h=t.charAt(c))===o){p=l;break}` ... `if(p>=l&&h!==a){y=t.indexOf(a,y+1);continue}`
+   with `o = "\t"`, `s = " "`, `a = "\n"`, `l = 4`, gated on
+   `options.commonmark`, which `VT.globalOptions={breaks:!0,commonmark:!0}` sets.
+   So the line is absorbed as lazy prose and its `%%` reaches the **inline**
+   tokenizer, `/^%%(.*?)%%/`, which is anchored and whose `.` does not match a
+   newline, so an unmatched one is literal and displayed. Note that no tab can
+   survive term B: module 6058 advances a tab to the next multiple of four, so any
+   lead holding one is at least four columns, which is why one spaces-only scan
+   plus a length test implements both terms.
+
+   Term C is the third ARGUMENT, `dedentedByList`, and it is the renderer's own
+   context-sensitivity rather than a convenience. A LIST ITEM's content is
+   dedented by the item's own content indent before any block tokenizer sees it:
+   module 745's `M` calls module 5540's remove-indentation with that indent, and
+   module 6058 counts a tab as four columns. Transcribed and RUN rather than
+   reasoned about, those three turn `- item` / `\t%%` / `SECRET` into
+   `item` / `%%` / `SECRET`, so the renderer DOES open a comment there. When the
+   argument is true the old any-whitespace test is kept, which is byte-for-byte
+   the pre-NRL-93 behaviour. Omitting term C is not a smaller version of this
+   change, it is a regression: measured, a bare charCode-32 scan newly speaks
+   hidden text in **14,336 of 46,080** list-interior and fresh-block cells and a
+   `{0,3}`-capped scan with no term C in **21,504**, where this fix moves **0**.
+
+   `extractChunks` decides term C per line, in a forward O(L) pass with O(L)
+   booleans, in the shape of the `htmlCloserAhead` pass and for the same reason:
+   `codeSpanClosesLater` and `bracketClosesLater` ask about lines they are not
+   consuming, so a scalar carried by the per-line loop could not answer them. The
+   pass tracks its run on the QUOTE-PEELED view, because a list inside a
+   blockquote dedents its item content exactly as a top-level one does while
+   `containerPrefix` calls that line a quote rather than a list; it reports false
+   on the MARKER line itself, because module 745 assigns the item's first line
+   (`c[0] = s`) the text after the marker undedented; and it ends a run by roughly
+   the condition the per-line loop uses for `inList`, minus that condition's
+   BLOCKQUOTE arm, which the peel makes wrong here because `interruptList` holds
+   no blockquote entry.
+
+   **"Every approximation in it errs toward TRUE, which is the old behaviour and
+   therefore cannot regress" was written here and in `extract.ts`, and NRL-93's own
+   Verify pass FALSIFIED it.** Two of the run-ending terms asked their question of
+   the quote-peeled body, which is not the view the renderer decides on, and both
+   ended a run that the renderer keeps alive - so `listDedented` read FALSE where
+   the renderer had dedented the line, the predicate declined a real opener, and
+   author-hidden text was SPOKEN in **1,780 of 3,360** cells of a two-arm corpus
+   oracled on real rendered HTML, with base correct in every one of the 1,780. The
+   absolute is deleted rather than weakened, and these are the two terms as fixed,
+   each measured:
+
+   - HEADING / FENCE / HR end a run only when the line is **not quoted**. `> ---`
+     inside a list item is a thematic break inside a blockquote nested in that
+     item; it ends neither the item nor the list. **1,480 of 2,464** cells leaked
+     without this term, **0** with it.
+   - `blankBefore` ends a run only when the line's **raw** indent is empty as well
+     as its peeled body's, because the peel removes an indent that is what keeps a
+     quoted line inside the item. **368 of 896** cells leaked without this term,
+     **0** with it.
+
+   What is true of the fixed pass, and all that should be relied on, is split in
+   two. The **structural** half is proved: `opensObsidianBlock` can only decline an
+   opener the pre-NRL-93 rule accepted and can never accept one it declined, since
+   both added terms are conjunctive refusals in front of the old body - 0
+   violations over **263,672** triples covering every string over
+   {space, tab, `%`, `x`, `>`} up to length 6, every `at` in range and both values
+   of `dedentedByList`, with a deliberately widened variant giving 575 violations
+   to show the check can fail. The **behavioural** half is only measured, never
+   proved: `listDedented` is an approximation of three bundle modules, its
+   remaining divergences from them are the ones enumerated below and they are
+   measured identical on both sides of this change, and nothing here rules out a
+   further shape in which it reads FALSE where the renderer dedented. The
+   structural half bounds the damage such a shape can do to *this predicate's*
+   direction; it does not bound `listDedented`'s own, which is exactly what the
+   deleted sentence wrongly implied.
+
+   **The argument is a BOOLEAN and not the indent itself, and that is a scoping
+   decision with a measured residual.** Subtracting the amount needs a stack of
+   enclosing item content indents plus module 5540's stop-based slice, because the
+   effect does not compose by column arithmetic - a tab is consumed whole for as
+   little as one column of credit, so a doubly nested `\t\t%%` ends at zero
+   columns and not at four. Underestimating that stack speaks hidden text, which
+   is the dangerous direction, so the boolean is the conservative member of the
+   family. What it leaves open, all in the prose-loss direction and all measured
+   as IDENTICAL on both sides of this change: a list item's content indented
+   enough that the dedent still leaves four columns (eight spaces, or two tabs
+   against a two-column item), **11 cells** of a 140-cell position census, and a
+   blockquote nested INSIDE a list item, where the item dedent runs first and the
+   surviving indent lands in the quote's own content, **6 more**.
+
+   **Three divergences in the same census are NOT this predicate's and were not
+   opened here.** Our `BLOCKQUOTE` is `/^(?:\s{0,3}>\s?)+/` and its `\s?` eats a
+   TAB, where module 6234 consumes `>` plus at most one SPACE
+   (`t.charAt(D)===a&&D++` with `a = " "`), 2 cells. Our `LIST_BULLET` is
+   `/^\s*([-*+]|\d+[.)])\s+/` and its `\s+` eats the whole lead after a marker,
+   where module 745's third group takes at most four spaces or one tab, 3 cells.
+   And an unterminated `%%` is NOTE-scoped for us (clause 5) where Obsidian scopes
+   it to the construct that holds it, which is why a `%%` on a list marker line
+   silences the following items.
+
+   **That last one is also the cost this change carries, and it is pinned rather
+   than hidden.** Base was accidentally PAIRING a wrongly-recognised
+   over-indented opener with a real one and so closing the block early; declining
+   the wrong opener leaves the real one's note-scope reaching further. Measured by
+   a 4,000-note fuzz with tabs, multi-space leads and a list-bearing population:
+   **157 of 16,000 cells newly lose text the renderer displays**, against **833
+   losses closed**, **12 leaks closed** and **0 cells newly leaking**; all 157 are
+   notes whose surviving opener sits inside a list item (117) or a blockquote
+   (40). The same fuzz newly leaks in **48** cells against the bare charCode-32
+   scan and **72** against the uncapped-term-C `{0,3}` form, so it can fail.
+
+   **Every cell count in this subsection is corpus-specific and must be quoted
+   with its corpus attached**, the way NRL-88 root 4's three different totals are.
+   One claim in this ticket's own record was not. `919d13e`'s commit message says
+   the fix-forward pass's **370** prose-loss fuzz regressions are the SAME 370
+   cells as the first draft's, "so this pass adds none". That equality holds **on
+   that corpus** and does not hold in general: on the second independent Verify's
+   own **48,668-cell** fuzz the set is a strict SUPERSET, **515** against the first
+   draft's **487**, with **28** cells in the fix-forward pass only and **0** in the
+   first draft only. That is what the mechanism predicts, both added guards only
+   making a run harder to END. What does hold, and is the part that matters, is the
+   direction: the relation is one-way, so there are **0** cells in which this pass
+   speaks a sentinel the renderer shows where the first draft hid it, which is the
+   same fact as the 0 in the first-draft-only column.
+
+   **That cost is only half of this divergence's character, and the other half is
+   a DISCLOSURE, so the root must not be recorded as prose-loss-only.** Our `%%`
+   block state is note-scoped **and container-blind**, where Obsidian scopes a
+   block to the construct holding it, so a later `%%` at a DIFFERENT container
+   depth closes for us a block the renderer keeps open and that line's remainder is
+   SPOKEN: `>> %%` / `%% SECRET` says `SECRET`, which the renderer hides. This half
+   is **pre-existing and not opened here**. Measured by that second Verify against
+   real rendered HTML, on a corpus carrying **no tab and no four-plus-space lead
+   anywhere** - so this change provably cannot reach it - **1,088 of the 1,088
+   cells with room** on a 1,728-cell corpus leak on BASE and **1,088** on the fix,
+   **0 newly leaking**. Re-measured independently while writing this paragraph, by
+   bundling both arms from this tree: over 8 container prefixes x all 512
+   content-key combinations, **4,096 of 4,096 cells leak on base and 4,096 on the
+   fix, 0 newly leaking, and 0 cells differ between the two arms in any respect**.
+   It is tracked as **NRL-118** and pinned as a TRIPWIRE by
+   `pin-nrl118-note-scope-closes-at-another-depth` plus its control; when NRL-118
+   closes, both expectations change on purpose.
+
+   A **fresh-block** tab-led or four-space line needed no change and did not get
+   one: it never reaches this predicate, and the renderer agrees it is code.
+   `blockMethods` is [frontmatter, blankLine, indentedCode, ..., comment,
+   fencedCode, ...], because `FE` splices before its anchor
+   (`a.splice(a.indexOf(n),0,t)`) and `indentedCode` already precedes
+   `fencedCode`, and module 134 opens indented code on ONE tab
+   (`else if(l===o)` with `o = "\t"`). `interruptParagraph` holds no
+   `indentedCode` entry at all, and both its `setextHeading` and `definition`
+   entries carry `{commonmark:!1}`, which module 6047's
+   `(void 0===o.commonmark||o.commonmark===n.options.commonmark)` gate disables
+   under `commonmark:!0` - worth writing down because an oracle that keeps either
+   of them models the wrong parser.
+
+   `opensHtmlBlock` keeps `.trim()` deliberately and shares none of this: module
+   8776's skip loop is `(C === "\t" || C === " ")`, so Obsidian really does
+   accept a tab before `<!--`. The two predicates answer different questions and
+   must not be merged (D-73-4, and NRL-66's note about two scans).
+
+   All of this was read off the installed parser's own source - `app.js` sha256
+   `8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898`,
+   3,876,459 bytes - transcribed into a recursive block-level model and RUN, and
+   was **NOT observed live** in Obsidian, the same standing this ADR's other
+   tokenizer citations have. NRL-73's numbers above are bare-Node measurement
+   against base `bb77b77`; NRL-93's are bare-Node measurement against base
+   `1ed6f1c`, whose `src/` is identical to `f27517d`'s.
 
 3. **Only the active comment's first matching closer ends it.** Comments do
    not nest. HTML comments end at `-->`; Obsidian comments end at `%%`.
