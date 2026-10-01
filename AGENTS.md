@@ -2685,15 +2685,25 @@ rediscover them:
   lookaheads, and the threaded arm turns two NRL-42 "hidden text not disclosed" guards red.
   `TERM2_MATH` is `/^ {0,3}\$\$+[^$]*$/`, 0 disagreements with the executed renderer over
   48,018 exhaustive cases; `opensMathBlock` is untouched and is the wrong predicate for it. All
-  censuses, the fuzz and the wrong arms are in the ADR; the headline is **0 newly leaking and 0
-  newly lost** over every census corpus, each shown able to fail.
+  censuses, the fuzz and the wrong arms are in the ADR. The headline this line used to carry,
+  **"0 newly lost" over every corpus, was false**: Verify's 24.4M-cell census found **2,436 cells
+  newly losing displayed text**, all through `TERM2_MATH` and all under `skipHeadings`, because
+  the `$$` stop exposed the heading site's CommonMark-wide `SETEXT`. **Fixed at the root before
+  merge**: Obsidian's own `MarkdownRenderer`, called in the running app over CDP, renders a setext
+  heading only for an underline of the exact shape `^(?:=+|-+)$` under exactly one content line,
+  and the heading site now tests exactly that (`SETEXT_UNDERLINE_EXACT` plus
+  `paraStart >= lineStarts[lineNo - 1]`). An Obsidian-oracle fuzz over the 5,123 cells that differ
+  from the first revision found **0 newly lost and 2,113 loss cells closed**; Verify's census itself
+  was not re-run. Details, the seven moved expectations and the NRL-119 tripwire it leaves, in
+  the ADR.
   **Two pre-existing Class A classes are UNMASKED, not opened** (corrected at Ship: Implement's
   censuses had no raw-HTML or reopen row after a refused heading, so their "0 newly leaking" does
   not cover them). Ship's own census, 989,184 cells against real rendered HTML, found **73,728
   newly speaking, every one reproduced on base** once the heading's `<!--` becomes plain text:
   the same-line reopen (`<!-- y --> <!--` is raw HTML to the renderer, which hides the rest of the
   note; **NRL-136**), which part 2's `$$` stop also unmasks by a second route; and raw HTML blocks
-  spoken as prose, `<?x` and a `<div>` holding a mid-line `<!--` (**NRL-137**). The
+  spoken as prose, `<?x` and a `<div>` holding a mid-line `<!--` (**NRL-137**). Verify added a
+  fourth, **736 cells** of a space-tab `<!--`, the NRL-93 / NRL-115 family. The
   `pin-nrl120-unmasked-*` rows are the tripwires, each beside a base control. **NRL-115 overlaps term 1**: whichever
   of NRL-115 and NRL-120 merges second must rebase and re-run both censuses (the `after setext`
   rows with leads ` `, `  `, `   `, ` \t`, `\t` are in NRL-120's corpus for that). **NOTHING WAS

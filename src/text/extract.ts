@@ -3295,7 +3295,26 @@ export function extractChunks(
 		// under a paragraph line is an underline, not a rule. Never inside a
 		// list: an unindented underline is outside the item, so it is a rule,
 		// and erring that way speaks the text instead of dropping it.
-		if (wasPara && !wasInList && paraText !== "" && SETEXT.test(raw)) {
+		//
+		// The underline is Obsidian's EXACT shape, not CommonMark's: no leading
+		// and no trailing whitespace, and exactly ONE content line above it
+		// (the buffer started on the previous line). Read off Obsidian 1.13.7's
+		// own MarkdownRenderer on 2026-10-01 (NRL-120): `x` / ` ===`, `x` /
+		// `=== ` and `a` / `x` / `===` all render as one <p> showing the `===`,
+		// while `x` / `===` and `x` / `=` render <h1>. Under skipHeadings the
+		// wide `SETEXT` dropped those paragraphs as headings, which is what let
+		// NRL-120's `$$` stop newly lose prose: once the stop kept a `<!--`
+		// literal, the loose underline after it was reached. A shape refused
+		// here falls through to HR (` ---` is a rule in Obsidian too) or to
+		// the paragraph, both of which speak; this can only stop dropping text.
+		// `SETEXT` itself is unchanged, because interruptsParagraph shares it.
+		if (
+			wasPara &&
+			!wasInList &&
+			paraText !== "" &&
+			SETEXT_UNDERLINE_EXACT.test(raw) &&
+			paraStart >= lineStarts[lineNo - 1]!
+		) {
 			if (opts.skipHeadings) {
 				paraText = "";
 				paraIndex = [];

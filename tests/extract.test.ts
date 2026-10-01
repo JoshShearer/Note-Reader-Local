@@ -816,9 +816,20 @@ console.log("block markup (NRL-8)");
 	add("My Title\n========\nBody.", ["Body."], HEAD_OFF, " (skipHeadings)");
 	add("Sub Title\n--------\nBody.", ["Sub Title", "Body."]);
 	add("Sub Title\n--------\nBody.", ["Body."], HEAD_OFF, " (skipHeadings)");
-	add("Line one\nline two\n===\nBody.", ["Line one line two", "Body."]);
-	add("Line one\nline two\n===\nBody.", ["Body."], HEAD_OFF, " (skipHeadings)");
-	add("Intro.\n\nMy Title\n===   \nBody.", ["Intro.", "My Title", "Body."]);
+	// NRL-120 Verify follow-up. Obsidian's setext underline is EXACT: no leading
+	// or trailing whitespace and exactly one content line above it. Both notes
+	// below render as one <p> that SHOWS the `===` in Obsidian 1.13.7's own
+	// MarkdownRenderer (read 2026-10-01). These used to expect a heading, and
+	// under skipHeadings that dropped both displayed lines.
+	add("Line one\nline two\n===\nBody.", ["Line one line two === Body."]);
+	add("Line one\nline two\n===\nBody.", ["Line one line two === Body."], HEAD_OFF, " (skipHeadings)");
+	add("Intro.\n\nMy Title\n===   \nBody.", ["Intro.", "My Title === Body."]);
+	// The exact shape is still a heading, and still dropped under skipHeadings.
+	add("Intro.\n\nMy Title\n===\nBody.", ["Intro.", "My Title", "Body."]);
+	add("Intro.\n\nMy Title\n===\nBody.", ["Intro.", "Body."], HEAD_OFF, " (skipHeadings)");
+	add("My Title\n=\nBody.", ["My Title", "Body."]);
+	// One leading space: a paragraph in Obsidian, so never dropped.
+	add("Intro.\n\nMy Title\n ===\nBody.", ["Intro.", "My Title === Body."], HEAD_OFF, " (skipHeadings)");
 	// A "---" with no paragraph line directly above is still a rule.
 	add("Para.\n\n---\n\nNext.", ["Para.", "Next."], HEAD_OFF, " (skipHeadings)");
 	add("# Head\n---\nNext.", ["Head", "Next."]);
@@ -1618,13 +1629,20 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// while `pin-nrl95-hr-between`'s `***` goes red). It is kept as a record of
 		// the `---` shape's renderer verdict and is NOT evidence for this fix.
 		["guard-nrl111-hr-dashes-third-line", "Prose <!--\nmore\n---\nHIDDENE\n--> t.", "Prose <!-- more HIDDENE --> t."],
-		// The `--` itself is not spoken, and that is a SEPARATE pre-existing
-		// divergence rather than part of this stop: `extractChunks`' own heading
-		// tracking takes `more` / `--` as a setext heading and drops the underline,
-		// where the renderer keeps both as prose in one paragraph. Nothing NRL-111
-		// touches moves it, it loses no word, and it is not opened here.
-		["guard-nrl111-dash-pair-third-line", "Prose <!--\nmore\n--\nHIDDENE\n--> t.", "Prose <!-- more HIDDENE --> t."],
-		["guard-nrl111-lone-dash-third-line", "Prose <!--\nmore\n-\nHIDDENE\n--> t.", "Prose <!-- more HIDDENE --> t."],
+		// The `--` is spoken. It used not to be: `extractChunks`' own heading
+		// tracking took `more` / `--` as a setext heading and dropped the underline,
+		// where the renderer keeps both as prose in one paragraph. That divergence
+		// closed with NRL-120's exact-shape setext rule (two content lines above,
+		// so no heading), re-read on Obsidian 1.13.7's MarkdownRenderer 2026-10-01.
+		["guard-nrl111-dash-pair-third-line", "Prose <!--\nmore\n--\nHIDDENE\n--> t.", "Prose <!-- more -- HIDDENE --> t."],
+		// TRIPWIRE, NRL-119. Obsidian renders the lone `-` as an EMPTY LIST BULLET
+		// (`<p>Prose &lt;!-- more</p><ul><li>HIDDENE --&gt; t.</li></ul>`), so the
+		// `-` is markup and should not be spoken. We do not recognise a bare marker
+		// alone on a line (NRL-119), and since NRL-120's exact-shape setext rule
+		// stopped swallowing it as an underline, it is spoken as a glyph. No word is
+		// lost or leaked; under skipHeadings the old rule dropped `Prose <!-- more`
+		// with it. Change this on purpose when NRL-119 closes.
+		["guard-nrl111-lone-dash-third-line", "Prose <!--\nmore\n-\nHIDDENE\n--> t.", "Prose <!-- more - HIDDENE --> t."],
 		// The content-line count must RESET at a block end, or an opener that is not
 		// on line 0 never sees its own `===` as a second line and the fix hides text
 		// the renderer shows. The blank line here is the reset. Measured RED against
@@ -1660,8 +1678,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// ungated SCAN stop while only `TERM2_SETEXT_DASH` is a block end. Here the
 		// `--` has TWO content lines above it, so it is paragraph prose rather than
 		// an `<h2>`, the `===` has three, and the renderer HIDES HIDDENE - measured.
-		// RED against base 874410d, which spoke it.
-		["guard-nrl111-dash-run-off-a-second-line-is-not-an-h2", "L1.\nL2.\n--\nProse <!--\n===\nHIDDENE\n--> t.", "L1. L2. Prose t."],
+		// RED against base 874410d, which spoke it. The `--` is spoken since NRL-120's
+		// exact-shape setext rule: the renderer displays it (`<p>L1. L2. -- Prose
+		// t.</p>`, read 2026-10-01), and HIDDENE stays hidden, which is the point.
+		["guard-nrl111-dash-run-off-a-second-line-is-not-an-h2", "L1.\nL2.\n--\nProse <!--\n===\nHIDDENE\n--> t.", "L1. L2. -- Prose t."],
 		// THREE TRIPWIRES for three roots NRL-111 deliberately does NOT fix. Each is
 		// PROSE LOSS: the renderer DISPLAYS the sentinel and we drop it. None of
 		// them leaks IN ITS MEASURED CORPUS (F1 0 of 7,680 room). Do NOT restate the
@@ -2055,7 +2075,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// on purpose, and guard-nrl98-setext-one-content-line must NOT.
 		["guard-nrl98-residual-table-opener", "| A ![alt |\nwords](zdestz.png) B", "words](zdestz.png) B", { speakImageAlt: false }],
 		["guard-nrl98-residual-table-interior", "A ![alt\n| a |\nwords](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
-		["guard-nrl98-residual-setext-two-lines", "A ![alt\nmore\n===\nwords](zdestz.png) B", "A [alt more words](zdestz.png) B", { speakImageAlt: false }],
+		// Since NRL-120 the `===` is spoken with the rest: two content lines above it
+		// is not a setext heading in Obsidian, so it is not dropped as an underline.
+		// Still the root 2d destination leak, unchanged in kind.
+		["guard-nrl98-residual-setext-two-lines", "A ![alt\nmore\n===\nwords](zdestz.png) B", "A [alt more === words](zdestz.png) B", { speakImageAlt: false }],
 		// NRL-93. `opensObsidianBlock`'s line-start half is no longer `.trim() === ""`.
 		// It is "at most three SPACES", and the predicate takes a third argument saying
 		// whether a list item has already DEDENTED this line. Read the whole comment
@@ -2411,6 +2434,16 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// OUR comment and happened to hide the same text; the refusal removes that
 		// mask. The fuzz found this as its only remaining newly-spoken class. When
 		// the same-line reopen is fixed, both expectations change on purpose.
+		// NRL-120 Verify blockers. The `$$` stop kept the `<!--` literal, which
+		// let the line after it be read as a setext underline, and skipHeadings
+		// then dropped the displayed paragraph. Obsidian 1.13.7's MarkdownRenderer
+		// (2026-10-01) renders A as `<p>Prose VISIBLEP &lt;!--<br>===</p>` then
+		// math, and B as a raw `<div>` block showing VISIBLED. Both were RED on
+		// 8add7ba (`$$ VISIBLEM --> t.` and `$$ HIDDENM --> t.`). B's HIDDENM is
+		// the NRL-137 raw-HTML class, already recorded as an unmasking; what this
+		// pins is that VISIBLED is spoken.
+		["pin-nrl120-setext-needs-exact-underline", "Prose VISIBLEP <!--\n ===\n$$\nVISIBLEM --> t.", "Prose VISIBLEP <!-- === $$ VISIBLEM --> t.", { skipHeadings: true }],
+		["pin-nrl120-setext-needs-one-content-line", "<div>\nVISIBLED\n<div><!--\n===\n$$\nHIDDENM --> t.", "VISIBLED <!-- === $$ HIDDENM --> t.", { skipHeadings: true }],
 		["pin-nrl120-unmasked-same-line-reopen", "<!-- SECRETH\n---\n<!-- y --> <!--\nHIDDENA", "<!-- SECRETH <!-- HIDDENA"],
 		["guard-nrl120-same-line-reopen-on-base", "SEEN\n---\n<!-- y --> <!--\nHIDDENA", "SEEN <!-- HIDDENA"],
 		// Three more unmaskings, found by NRL-120's Ship census (73,728 newly

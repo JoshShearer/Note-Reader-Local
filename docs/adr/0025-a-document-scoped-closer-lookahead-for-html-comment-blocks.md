@@ -1424,6 +1424,42 @@ in a defused form: a display-math block we consume as "equation" (ADR 0004's
 design, which the oracle counts as loss), and our CommonMark-wide `SETEXT` taking
 `===  ` under a paragraph that an unclosed `$$` had already ended for the renderer.
 
+**Corrected at Verify, and the second of those two classes is now CLOSED at its root.**
+Verify blocked the first revision (`8add7ba`): over its own 24.4M-cell census,
+**2,436 cells newly lost displayed text**, every one through `TERM2_MATH` and every one
+needing `skipHeadings`, so this section's "0 newly lost" was false for that route. The
+mechanism: once the `$$` stop kept a `<!--` literal, the line after the paragraph was
+reached by the heading site in `extractChunks`, whose wide `SETEXT`
+(`/^ {0,3}(?:=+|-+)\s*$/`, any number of content lines) called it an underline, and
+`skipHeadings` dropped the whole paragraph. Verify's two reproductions:
+`Prose VISIBLEP <!--` / ` ===` / `$$` / `VISIBLEM --> t.` lost VISIBLEP, and
+`<div>` / `VISIBLED` / `<div><!--` / `===` / `$$` / `HIDDENM --> t.` lost VISIBLED.
+Obsidian 1.13.7's own `MarkdownRenderer`, called in the running app over CDP on
+2026-10-01 (a stronger oracle than the asar parser executed in Node, and the first
+time this family used it), renders a setext heading ONLY for an underline of the
+exact shape `^(?:=+|-+)$` - no leading and no trailing whitespace - under exactly ONE
+content line: `x` / ` ===`, `x` / `=== `, `x` / `\t===` and `a` / `x` / `===` are all a
+`<p>` showing the `===`, and `x` / ` ---` is a `<p>` plus `<hr>`. The heading site now
+tests `SETEXT_UNDERLINE_EXACT` and `paraStart >= lineStarts[lineNo - 1]`, the same
+shape `isSetextContentLine` and `endsTerm2Block` already used, so the three no longer
+disagree. `SETEXT` itself is unchanged because `interruptsParagraph` shares it, which
+keeps every carry stopping where it did. A refused shape falls to `HR` or to the
+paragraph, both of which speak, so the change can only stop dropping text. Evidence:
+both reproductions are pinned (`pin-nrl120-setext-needs-exact-underline`,
+`pin-nrl120-setext-needs-one-content-line`, RED on `8add7ba`); seven earlier
+expectations moved, each checked against the same renderer, six to what it displays
+and one, `guard-nrl111-lone-dash-third-line`, to a spoken `-` that the renderer shows
+as an empty list bullet, which is NRL-119's bare-marker gap and is now a tripwire; and
+an Obsidian-oracle fuzz (3 seeds x 4,000 notes x 2 skipHeadings positions, every one
+of the 5,123 cells that differ from `8add7ba` rendered in the app) found **0 newly
+lost and 2,113 cells of loss closed**. Its 9 newly-speaking cells are 3 notes: two are
+image alt text spoken by design (the oracle reads `textContent`, not `alt`), and one is
+a `<div>` raw HTML block that `main` already speaks with `skipHeadings` off, i.e. the
+NRL-137 class, uncovered when `skipHeadings` stopped over-dropping. Verify's 24.4M-cell
+census was NOT re-run; its harness did not survive the run. Verify also counted
+**736 cells of a space-tab `<!--` class** (the NRL-93 / NRL-115 family) among the
+newly-spoken unmaskings, which this section did not list; it is listed here.
+
 **`sourceIndex` lockstep**, by numeric UTF-16 index, both arms: 0 length, monotonicity, bounds or identity failures on
 NRL-111's corpus (512 masks; 1,012,224 chunks / 15,476,224 units on the fix), the
 reduced part 1 corpus (16 masks; 726,208 / 3,609,440), the math census corpus (16
