@@ -445,10 +445,40 @@ control. NRL-104 deleted the `actions/create-release@v1` step that carried it, a
 replacement names **no `tag_name:` at all** - deliberately, because
 `softprops/action-gh-release` defaults its tag to `github.ref` and writing the key would put
 the same shape straight back. `tests/release.test.ts` pins the absence by name. The
-second is **unchanged by NRL-79 and by NRL-104**: **nothing anywhere checks that a pushed tag matches
-`manifest.json`'s version**, or that `versions.json` holds a key for it, so the trigger
-admits only bare semver but admits any bare semver. Obsidian's installer reads both files off
-the Release, which makes this the one item here with a user-visible failure mode.
+second **closed with NRL-105** (`8215bd2`, PR #153, `docs/adr/0011`'s NRL-105 amendment). It
+used to read that nothing anywhere checked a pushed tag against `manifest.json`'s version or
+`versions.json`'s keys, so the trigger admitted only bare semver but admitted any bare semver -
+the one item on this path with a user-visible failure mode. A `build`-job step named
+**`Verify the tag matches the version files`** now sits between `Install dependencies` and
+`Run quality gates` and makes three comparisons against `github.ref_name`, which reaches the
+body through `env: TAG:` rather than a `${{ }}` interpolation: `manifest.json`'s `version` must
+equal it exactly, `package.json`'s `version` must equal it exactly, and `versions.json` must
+hold that exact key with a non-empty value. It **fails loudly and rewrites none of the three
+files** - a workflow that edits the version it is releasing would leave the tag, the reviewed
+commit and the signed attestation describing three different things - and it reports every
+disagreement rather than the first, because a tag is expensive to retry. It carries **no `if:`**
+deliberately: `on:` is `push.tags` with the bare-semver filter only, so `github.ref_name` is
+always the pushed tag and a condition that could silently skip would be the worse failure
+(ADR 0011 decision 5). **The guard has never run on a GitHub runner.** No tag has been pushed
+since NRL-79's `0.1.1`, so every behavioural claim about it is `bash -e` against fixture trees
+in a sandbox on this machine, which is a weaker class of evidence than the run log NRL-79 left.
+One scope limit, identified at Verify: the guard reads the **tagged commit's** three files,
+while Obsidian's installer reads `versions.json` from the **repository at `HEAD`**, so a
+`versions.json` edited after the tag was cut is outside what the guard can see. That is a real
+limit of where the two sides look, not a defect in the step.
+Correcting a claim this paragraph used to make, and that three other places made with it:
+Obsidian's installer does **not** read `versions.json` off the Release. Read out of the
+installed `obsidian.asar` (flatpak Obsidian 1.13.7, this session): `manifest.json`, `main.js`
+and `styles.css` are fetched through `Py(repo, tag, file)` = `https://github.com/` + repo +
+`/releases/download/` + tag + `/` + file, while the string `versions.json` appears **exactly
+once in the whole asar** and is fetched through `Dy(repo, "versions.json")` =
+`https://raw.githubusercontent.com/` + repo + `/HEAD/versions.json`, whose loop keeps the
+greatest key whose value satisfies the running app version. So `versions.json` is read **from
+the repository at `HEAD`**, never from the Release.
+**R-M01 does not move and the `2 of 16` headline count does not move.** R-M01's binding gap is
+still `srs.md:106`'s "MUST install as an ordinary Obsidian Community Plugin", which nobody has
+ever observed - nothing has been installed into Obsidian from a Release - and NRL-105 does not
+touch that. What closed is a hazard on the path, not the gap.
 **NRL-76 is fixed** (`8797745`), and the defect it closed was worse than the ticket recorded.
 The old step's `cd dist || true` plus its `if [ -f ... ]` guard did not merely hash the repo
 root by accident: with one published asset missing it exited **0** and wrote a *silently
