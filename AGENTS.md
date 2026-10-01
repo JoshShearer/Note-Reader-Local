@@ -1815,15 +1815,82 @@ rediscover them:
   **zero-deletion diff** (`styles.css` 66/0, `tests/highlight.test.ts` 171/0,
   `git diff --name-only -- src/` empty) plus `body.is-mobile` being unable to match on desktop.
   Also unestablished: tablet, a ~360 CSS px phone, landscape, and the view-header-disabled case.
-  One confirmed overlap came out of Verify and is **filed as NRL-129, not fixed here**: on an
+  One confirmed overlap came out of Verify and was **filed as NRL-129, not fixed here**: on an
   unscrollable note (`scrollHeight 997 == clientHeight 997`) the first chunk's sentence mark
   measured y 209.6-255.6 against a bar bottom of 236, so 26.4px of its 46px height sits behind
   the bar in the band x 112-336, and `y: "center"` cannot help because there is nowhere to
-  scroll. ADR 0032's "neither direction was observed" was corrected to say so.
+  scroll. ADR 0032's "neither direction was observed" was corrected to say so. **NRL-129 has
+  since CLOSED it** - see the next bullet, and read its pre-fix figure (46 of 46px occluded on
+  its own note) rather than this one, because how much of the mark the bar covers depends on
+  where that note's first line sits.
   **No requirement moves and the `2 of 16` MUST headline count does not move.** `srs.md:1768`'s
   touch-target MUST is satisfied on the one device tested, but R-M07 is a MUST about exposing
   the five transport controls and was never on the met list; this fixes the bar's reachability,
   which is a necessary part of it rather than the whole.
+- **The mobile editor reserves the control bar's band as of NRL-129** (PR #180, `04a95b8`,
+  `docs/adr/0032`'s NRL-129 amendment). The defect was NRL-112's own leftover above: 44px touch
+  targets made the bar wrap to three rows, so it grew from 41px to 125.64px and its bottom edge
+  moved to about y 236, while NRL-110's `y: "center"` cannot rescue a note too short to scroll
+  because there is nowhere to move the sentence to. The fix is **one declaration**, a mobile-only
+  `padding-top` on the editor **PANE**:
+  `body.is-mobile.local-tts-control-bar-visible .view-content > .markdown-source-view.mod-cm6`.
+  **The pane and not the scroller**, and that is load-bearing rather than taste: Obsidian 1.13.7
+  already owns the phone scroller's `padding-top` at specificity **(0,7,0)** (`app.css:20426`),
+  `padding-top` is ONE property so a rule there **replaces** that host value rather than adding
+  to it, and its base differs by configuration. `.markdown-source-view` in this position carries
+  no padding declaration, so our rule is uncontested at (0,5,1). The `.view-content >` child
+  boundary is load-bearing too, because `app.css:11953` pads a NESTED source view and a
+  descendant selector would pad every inline embed and table-cell editor for the duration of a
+  read. The height is **published by JS** as `--local-tts-control-bar-height` from the bar's
+  `offsetHeight`, in the same `refresh()` statement group that toggles `.is-visible` so the two
+  can never disagree, **because CSS cannot ask how many rows `flex-wrap` produced** - a frozen
+  row count under-pads a narrower phone (the defect partly returns) and over-pads a tablet. The
+  two string names live in a new DOM-free, `obsidian`-free `src/ui/controlBarCss.ts` so the
+  bare-Node suite can pin that the TypeScript and the stylesheet agree.
+  **On-device evidence, and it is unusually strong for this repo because BOTH ARMS were measured**
+  on a Pixel 9 Pro XL (Android 17, Obsidian WebView Chromium 154) over `adb forward`, the pre-fix
+  build still being on the device rather than merely cited. Pre-fix the sentence mark's top sat at
+  **185.61** against a bar bottom of **235.97**, so **46 of 46px occluded** - worse than the
+  26.4 of 46 NRL-112 recorded, because that note's first line sits higher. Post-fix **311.61**,
+  so **0px occluded with 75.64px clearance**. Published height **126px** and pane `padding-top`
+  **126px**, matching the integer-rounding prediction exactly. All seven control-bar buttons
+  landed real `adb shell input tap` presses with an editor tap as the positive control and `stop`
+  giving `idle`, and `audio.playbackRate` was exactly 1.5, so non-negotiable 9 holds.
+  **Two arithmetic-only predictions were then measured and both held.** NRL-110's `y: "center"`
+  landing moves from 489.0 to **552.01 measured** against 551.8 predicted, the 0.21 being the
+  integer 126px publish against the 125.64 the arithmetic used - so **489.0 is a desktop /
+  bar-hidden figure from here on**, and ADR 0022 and NRL-110's own series stay correct for those
+  conditions. And NRL-90's named residual gave **exactly 1** clamped scroll event on bar-hide
+  (`scrollTop` 9731 -> 9605, -126) which did **not** survive into the next read (9605 -> 0), with
+  zero scroll events across the short-note read.
+  **The staleness guard is what makes those rects trustworthy**: exactly one plugin `<style>`,
+  `textContent.length` **12538 == the committed byte count**, and
+  `local-tts-control-bar-visible` flipping false -> true, all asserted BEFORE any rect was read.
+  **The desktop negative was established with a positive control**, not reasoned from the
+  `body.is-mobile` gate: injecting the committed stylesheet into the live desktop page gave
+  **0px** padding even with the class present and 126px forced, and **126px** only once
+  `is-mobile` was added. Reverted after.
+  **One NEW finding came out of Verify and the ADR carries it too: the height publish is
+  two-staged.** It reads **109px** during `preparing` - the bar's hidden-state height, 16.64px
+  short - then **126px** at `playing` about 14.5 s later. During that window
+  `barTop + 109 = 219.33` against a bar bottom of **235.97**, so the clearance guarantee is
+  **narrower than the ADR's derivation claims**; what saved it on this device is 75.28px of
+  unrelated slack. Measured clear in **both** stages, so acceptance holds. This is a
+  start-of-**every**-read case and is DISTINCT from the mid-read-rotation residual the ADR
+  already records.
+  **The limits are real and travel with every number above.** `src/ui/controlBar.ts` imports
+  `obsidian` and has no bare-Node runtime, so the publish, its `> 0` guard and the `destroy()`
+  teardown have **no automated coverage of any kind** - only the two string names are pinned, and
+  the eight new red-before checks assert `styles.css` as **text**. Reading view is **deliberately
+  unpadded** (`.markdown-preview-view` gets no rule, the highlight being a CodeMirror decoration
+  that does not exist there), so the bar can still overlay preview text. A mid-read rotation
+  leaves a stale published height until the next player state event re-runs `refresh()`. The
+  view-header-disabled case compounds with this ADR's existing `--view-header-height` residual
+  and can still leave up to **44px** occluded. Tablet, a ~360 CSS px phone and landscape are all
+  unobserved. And **nobody watched the screen** or judged whether the reserved band feels right -
+  everything above is machine measurement over CDP and adb, so rule 11's human half is unmet.
+  **No requirement moves and the `2 of 16` MUST headline count does not move.** R-S03 is a
+  SHOULD, and R-M07 was never on the met list.
 - A selection-scoped read clips its queue by **scanning** `sourceIndex` as of NRL-57
   (`src/audio/clip.ts`, `srs.md` R-M11). This defect was not recorded here before, and it
   shipped inside NRL-52. The deleted expression was `textStart = from - chunk.sourceStart`
