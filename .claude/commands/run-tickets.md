@@ -290,11 +290,19 @@ Then make the lane usable, and **prove it before any ticket touches it**:
 
 ```bash
 npm ci
-npm test && npm run typecheck
+npm run typecheck && npm run build && npm test
 ```
 
 `npm ci` rather than `npm install`: `package-lock.json` is committed and `ci` reproduces it exactly.
-This is not fast - `onnxruntime-web` is large, and `ort/` does not exist until a build has run.
+This is not fast - `onnxruntime-web` is large, and the build packs its runtime into `main.js`
+(ADR 0028), so there is no `ort/` directory and nothing to download. The build is **not optional
+here** the way it is for a per-ticket diff: `tests/release.test.ts` unpacks `main.js` and compares
+it by SHA-256 against `node_modules/onnxruntime-web/dist`, so on an unbuilt lane it fails on
+`ENOENT` for that reason alone. The order is `.github/workflows/release.yml`'s (L74-78), verbatim -
+that workflow hit this first and its comment at L64-67 records why. One thing does **not** transfer:
+`release.yml` also sets `NRL_SKIP_REAL_SPEECHD=1`, because its stock `ubuntu-latest` runner has no
+speech-dispatcher daemon. Step 0c must **not** set it - this machine has `spd-say` and a live
+daemon, and a skipped run must never read as a full one.
 
 **A gate failing here stops the whole run.** It is `origin/main` that is broken, not any ticket, and
 branching further tickets off it compounds the problem. That is the existing "main fails its gates"
@@ -822,7 +830,7 @@ next run leaves a second sibling beside it.
 | A permission prompt appears mid-run | The run was launched wrong; see "How to launch it, per runtime". Stop and report which command was gated. Never edit `opencode.json` or the Claude Code settings from inside a run to get past it. |
 | `npm test` reports a failure | Nothing is hidden: the runner runs every registered suite and names each failure. Read its per-suite table, its aggregate counts and its `FAILING SUITES:` line, as `AGENTS.md`'s quality-gates block describes, rather than re-running suites individually. |
 | `tests/engine.test.ts` fails | It shells out to the real `spd-say` binary and needs a running speech-dispatcher daemon, not `espeak-ng`. Check `spd-say --version` and `spd-say -O` before assuming the code broke. |
-| `origin/main` fails its gates in the fresh lane at Step 0c | Something already merged is broken. Stop the run and report it; branching tickets off a broken base compounds it. Check `spd-say --version` and `spd-say -O` first: `tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running speech-dispatcher daemon. |
+| `origin/main` fails its gates in the fresh lane at Step 0c | Something already merged is broken. Stop the run and report it; branching tickets off a broken base compounds it. Check `spd-say --version` and `spd-say -O` first: `tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running speech-dispatcher daemon. Also check the lane was built: a `release`-suite `ENOENT` on `main.js` means Step 0c's `npm run build` did not run, not that `main` is broken. |
 | `gh` auth expires mid-run | Stop the run and report which step failed. Every later ticket would fail the same way. |
 | A phase needs a decision not covered above | Decide it with a recorded default if one is defensible, otherwise block the ticket. Never wait. |
 | Another run's `pipeline-state.*.json` is present and in progress | Expected: runs are parallel. Name it in the first message and carry on. Read it once to compare ticket sets, and block only the tickets both runs hold. Never write it. |
