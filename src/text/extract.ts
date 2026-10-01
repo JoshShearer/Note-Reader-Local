@@ -1937,6 +1937,73 @@ function containerCarryStops(peeled: string, lazy: boolean): boolean {
  */
 const SETEXT = /^ {0,3}(?:=+|-+)\s*$/;
 /**
+ * The `=` half of `SETEXT`, at the EXACT shape Obsidian's own setextHeading
+ * block tokenizer accepts, for the one caller that needs the renderer's rule
+ * rather than CommonMark's (`endsTerm2Scan`, NRL-111).
+ *
+ * No leading whitespace and no trailing whitespace, where `SETEXT` allows up to
+ * three leading spaces and any trailing run. Measured against real rendered
+ * HTML out of the installed obsidian.asar 1.13.7 in this session: `Title` /
+ * `===` is `<h1>`, while `Title` / ` ===`, `Title` / `===  `, `Title` / `===\t`
+ * and `Title` / `\t===` are each one `<p>` with the `===` as prose. A single
+ * `=` is enough, so the run length is unbounded downward.
+ *
+ * `\r?` is there because `extractChunks` splits on `\n` alone, so a CRLF note
+ * hands every line a trailing `\r`; measured, `Prose` / `=\r` still renders as
+ * a heading, so the `\r` is a line ending to the renderer and not content.
+ *
+ * The DASH half deliberately keeps `SETEXT`'s wide shape instead of being given
+ * an exact twin, because a dash-only line stops the term-2 scan for a reason
+ * that does not depend on being an underline at all. See `TERM2_LONE_DASH` and
+ * `TERM2_DASH_RUN`.
+ */
+const TERM2_SETEXT_EQ = /^=+\r?$/;
+/**
+ * A dash-only line with exactly ONE dash. It ends the block it follows, and
+ * therefore resets `endsTerm2Scan`'s paragraph-line count, for a reason that has
+ * nothing to do with setext: module 745's list tokenizer accepts a marker with
+ * NOTHING after it (`if (next!==" " && next!=="\t" && (pedantic || next!=="\n"
+ * && next!=="")) return;` - a newline or end of input passes), so a bare `-` is
+ * a list item starting, and `list` is in `u.interruptParagraph`
+ * unconditionally. Measured: `Prose <!--` / `more` / `-` / `HIDDENE` /
+ * `--> t.` renders `<p>Prose &#x3C;!--<br>more</p><ul><li>HIDDENE...`, so the
+ * paragraph really does end there and `HIDDENE` is DISPLAYED.
+ *
+ * When such a line IS the block's second line the setextHeading tokenizer gets
+ * it first and it is an `<h2>` instead - measured as well - which ends the block
+ * too, so the stop holds in both positions and needs no gate.
+ *
+ * `TERM2_LIST` does not cover it: that pattern requires `[ \t]` after the
+ * marker. Widening `TERM2_LIST` to end-of-line would cover `*`, `+`, `1.` and
+ * `1)` alone on a line as well, all four of which are measured interrupters, but
+ * that is a widening NRL-111 is not scoped for and those four stay fail-closed.
+ */
+const TERM2_LONE_DASH = /^ {0,3}-\s*$/;
+/**
+ * A dash-only line with TWO OR MORE dashes. This one is a term-2 stop WITHOUT
+ * being a block end, and that distinction is the whole reason it is separate.
+ *
+ * Why it stops: module 4839's inline comment regex is
+ * `<!--(?:-?[^>-])(?:-?[^-])*-->`, and neither branch of the body can consume
+ * two consecutive dashes, so a `--` anywhere between the opener and the closer
+ * makes the whole construct fail to match and the `<!--` literal. Measured:
+ * `Prose <!--` / `more` / `--` / `HIDDENE` / `--> t.` renders as ONE paragraph
+ * with every line visible, `HIDDENE` included.
+ *
+ * Why it must NOT reset the paragraph-line count: that same measurement shows
+ * the renderer treats `--` as paragraph CONTENT. `--` / `Prose <!--` / `===` /
+ * `HIDDENE` / `--> t.` therefore gives the `===` two content lines above it, so
+ * it is not an underline and `HIDDENE` is HIDDEN - measured. An arm that reset
+ * the count here would call that `===` a second line, stop, and speak
+ * `HIDDENE`: a disclosure of exactly the kind NRL-111 exists to remove.
+ *
+ * Three or more dashes are also `HR`, so only the two-dash case is reachable
+ * through this constant alone; it is written as a run rather than a pair so the
+ * union of this and `TERM2_LONE_DASH` is `SETEXT`'s dash half exactly, leaving
+ * every dash shape's stop byte-for-byte where NRL-95 put it.
+ */
+const TERM2_DASH_RUN = /^ {0,3}--+\s*$/;
+/**
  * Four columns of indent. A tab after up to three spaces reaches the next tab
  * stop, which is column four, so it counts too. Whether the line is code
  * depends on state: CommonMark only starts indented code after a blank line
@@ -2030,21 +2097,33 @@ function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByLi
  *   if (next!==" " && next!=="\t" && (pedantic || next!=="\n" && next!=="")) return;
  *
  * So a bullet at ANY indent interrupts a paragraph, and an ordered marker
- * interrupts only when it is literally `1.` - Obsidian runs with `commonmark`
- * falsy (that is why its `interruptParagraph` list uses the `{commonmark:!1}`
- * setext and definition entries at all), so `)` is not a marker there either.
- * `LIST_BULLET`'s `\d+[.)]` accepts `7.`, `01.` and `1)`, and remark lets none
- * of those interrupt. Stopping at one of them would make term 2 false, the
- * `<!--` literal, and text the renderer HIDES spoken - which is why the ordered
- * half stays out of the stop set below while the bullet half is in it. Each
- * half is pinned in tests/extract.test.ts.
+ * interrupts when its digit string is exactly `"1"` and its delimiter is `.`
+ * OR `)`.
+ *
+ * NRL-95 wrote `1\.` here on the premise that "Obsidian runs with `commonmark`
+ * falsy, so `)` is not a marker either". **That premise was BACKWARDS and the
+ * `)` half of this pattern was wrong** (NRL-111). `VT.globalOptions` is
+ * `{breaks:!0, commonmark:!0}` and the sole parse entry applies it, so
+ * `options.commonmark` is TRUE; what the `{commonmark:!1}` entries in
+ * `u.interruptParagraph` mean is that module 6047's gate
+ * (`o.commonmark === n.options.commonmark`) DISABLES them. Module 745's marker
+ * test is `y === h || z && y === v` with `z = options.commonmark` and `v = ")"`,
+ * so with `commonmark` true `1)` IS a marker and DOES interrupt. Measured
+ * against real rendered HTML in this session: `Prose <!--` / `1) HIDDENE` /
+ * `more -->` renders `<p>Prose &#x3C;!--</p><ol><li>HIDDENE...`, so the
+ * paragraph ends at the marker and `HIDDENE` is DISPLAYED. `7.`, `7)`, `01.` and
+ * `01)` all render as one paragraph with `HIDDENE` inside the comment, so
+ * `if (silent && o !== "1") return` really does gate on the digit string and
+ * excluding them is right. Each case is pinned in tests/extract.test.ts.
  *
  * Narrower than remark in one direction only, deliberately: a marker alone on
  * its line (`1.`, `*`) is not matched here, because `[ \t]` is required rather
- * than end-of-line. That fails CLOSED, toward hiding, and a lone `-` is already
- * caught by `SETEXT`.
+ * than end-of-line. All four of `*`, `+`, `1.` and `1)` alone on a line are
+ * measured interrupters, so that is a real fail-CLOSED gap and not a statement
+ * about the renderer; widening it is out of NRL-111's scope. A lone `-` is the
+ * one that is covered, by `TERM2_LONE_DASH` rather than by this pattern.
  */
-const TERM2_LIST = /^[ \t]*(?:[-*+]|1\.)[ \t]/;
+const TERM2_LIST = /^[ \t]*(?:[-*+]|1[.)])[ \t]/;
 
 /**
  * Does this line end the paragraph a `<!--` on an earlier line belongs to, for
@@ -2085,16 +2164,50 @@ const TERM2_LIST = /^[ \t]*(?:[-*+]|1\.)[ \t]/;
  * toward hiding, so the set of lines this answers `true` for stays a strict
  * subset of the document-scoped predicate it replaces. ADDING one is the
  * dangerous direction and is what the guards above exist to hold.
+ *
+ * NRL-111 split `SETEXT` into three terms and gave the `=` half a POSITION
+ * GATE, because `SETEXT` as a whole was a stop the renderer does not have and
+ * the `=` half was a live 2,048-cell disclosure. `setextHeading` IS in
+ * `u.interruptParagraph`, but it carries `{commonmark:!1}` and module 6047 gates
+ * an entry on `o.commonmark === n.options.commonmark` with
+ * `options.commonmark === true`, so it and `definition` are both DISABLED as
+ * interrupters. A setext underline ends a paragraph only through the
+ * setextHeading BLOCK tokenizer (module 8671), which takes exactly ONE content
+ * line - so only when the underline is the block's second line. That is why
+ * `paraLinesAbove` is a parameter: a LINE-LOCAL predicate cannot answer it at
+ * all, and the caller supplies it from a forward pass.
+ *
+ * `endsTerm2Block` is split out from `endsTerm2Scan` rather than folded in
+ * because the two sets are genuinely different, and conflating them is a
+ * measured disclosure. Every term here ends a BLOCK for the renderer, so the
+ * caller's content-line count resets on it; `TERM2_DASH_RUN`, the one term
+ * `endsTerm2Scan` adds, stops the scan without ending a block, and resetting the
+ * count on it would call a later `===` a second line when it is not. See that
+ * constant for the measurement.
  */
-function endsTerm2Scan(line: string): boolean {
+function endsTerm2Block(line: string, paraLinesAbove: number): boolean {
 	return (
 		line.trim() === "" ||
 		FENCE.test(line) ||
 		HEADING.test(line) ||
 		HR.test(line) ||
-		SETEXT.test(line) ||
+		TERM2_LONE_DASH.test(line) ||
+		(paraLinesAbove === 1 && TERM2_SETEXT_EQ.test(line)) ||
 		TERM2_LIST.test(line)
 	);
+}
+
+/**
+ * The term-2 scan's own stop set: every line that ends the opener's block, plus
+ * the one line shape that stops the scan without ending anything.
+ *
+ * `paraLinesAbove` is how many lines immediately above this one are neither
+ * stops nor block ends, i.e. how many content lines the block this line would
+ * continue already has. Only the value `1` matters, and it is module 8671's
+ * one-content-line rule rather than a heuristic.
+ */
+function endsTerm2Scan(line: string, paraLinesAbove: number): boolean {
+	return endsTerm2Block(line, paraLinesAbove) || TERM2_DASH_RUN.test(line);
 }
 
 /**
@@ -2487,12 +2600,40 @@ export function extractChunks(
 	// cannot see past its own end. And a `-->` sitting ON a stop line is
 	// deliberately unreachable from earlier lines, while the stop line itself
 	// still gets the following run's answer.
+	//
+	// NRL-111 added `term2Stop`, a FORWARD pass, because one term of the stop set
+	// is no longer answerable from the line alone. A setext `=` underline ends a
+	// paragraph only when it is the block's SECOND line (module 8671 takes exactly
+	// one content line, and `setextHeading` is disabled as an interrupter), so
+	// `endsTerm2Scan` needs the count of content lines above. That count depends
+	// on lines BEFORE k and the `-->` carry depends on lines AFTER k, so the two
+	// cannot share one loop in either direction; both are O(L) and the pair is
+	// still O(L).
+	//
+	// `paraLinesAbove` resets on `endsTerm2Block` and NOT on `endsTerm2Scan`. The
+	// difference is exactly `TERM2_DASH_RUN`, which is a stop without being a
+	// block end: resetting there would make `--` / `Prose <!--` / `===` /
+	// `HIDDENE` / `--> t.` treat its `===` as a second line and speak `HIDDENE`,
+	// which the renderer hides. Measured, both arms, in NRL-111's Implement
+	// session.
+	const term2Stop: boolean[] = new Array<boolean>(lines.length).fill(false);
+	{
+		let paraLinesAbove = 0;
+		for (let k = 0; k < lines.length; k++) {
+			const line = lines[k]!;
+			// Both predicates are asked with the SAME count, before it is updated.
+			// `endsTerm2Scan` is called rather than its one extra term inlined, so
+			// the scan's stop set keeps exactly one definition.
+			term2Stop[k] = endsTerm2Scan(line, paraLinesAbove);
+			paraLinesAbove = endsTerm2Block(line, paraLinesAbove) ? 0 : paraLinesAbove + 1;
+		}
+	}
 	const htmlCloserAhead: boolean[] = new Array<boolean>(lines.length).fill(false);
 	let ahead = false;
 	for (let k = lines.length - 1; k >= 0; k--) {
 		const line = lines[k]!;
 		htmlCloserAhead[k] = ahead;
-		if (endsTerm2Scan(line)) {
+		if (term2Stop[k]!) {
 			ahead = false;
 			continue;
 		}
