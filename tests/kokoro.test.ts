@@ -256,6 +256,22 @@ console.log("voice ids map to voice files");
 	check("bare id", voiceFilePath("bm_george") === "voices/bm_george.bin");
 }
 
+console.log("NRL-144: a voice id owned by another engine maps to no Kokoro voice file");
+{
+	// CORE (red against 079cf0c, which only stripped a `kokoro:` prefix and so
+	// built `voices/speechd:English (America).bin` and asked the model host
+	// for it). Switching the engine dropdown to Kokoro leaves the previous
+	// engine's id in settings.voiceId; that id must not become a file path.
+	check(
+		"speechd id -> null",
+		voiceFilePath("speechd:English (America)") === null,
+		JSON.stringify(voiceFilePath("speechd:English (America)")),
+	);
+	check("espeak id -> null", voiceFilePath("espeak:en") === null, JSON.stringify(voiceFilePath("espeak:en")));
+	check("webspeech id -> null", voiceFilePath("webspeech:x") === null, JSON.stringify(voiceFilePath("webspeech:x")));
+	check("empty id -> null", voiceFilePath("") === null, JSON.stringify(voiceFilePath("")));
+}
+
 console.log("NRL-26: every kokoro voice reports local: true, requiresNetwork: false");
 {
 	// Genuinely true for every voice: kokoro.worker.ts's fetch shim plus

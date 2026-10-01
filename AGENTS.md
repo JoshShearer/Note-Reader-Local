@@ -2892,6 +2892,57 @@ rediscover them:
   ones NRL-74 read, so rule 11 applies to every number above. `interruptsParagraph`'s answer set
   moved for the third time in this family, so **NRL-98 and NRL-93, which both sit downstream,
   must re-measure**. R-M08 is still **NOT** met and the `2 of 16` MUST count does not move.
+- **NRL-120 closed two of NRL-111's five recorded Class B components** (`docs/adr/0025`'s
+  NRL-120 section, `srs.md`'s `<!--` bullet). Both were prose loss and both reproduced on base
+  `f250ddd` at exactly the recorded size before any change: NRL-111's corpus lost **51,200**
+  cells on base and loses **15,360** now, the difference being exactly **30,720** (a line-start
+  `<!--` over a setext underline, which is heading TEXT because `setextHeading` precedes `html`
+  in `blockMethods`) plus **5,120** (a `$$` line, which `math` in `u.interruptParagraph` makes a
+  paragraph end). The other three components (skipCodeBlocks, bare `1)` = NRL-119, the NRL-88
+  root-1 quote class) are unchanged. Four things are load-bearing and each was added because a
+  probe caught the version without it NEWLY SPEAKING hidden text: the refusal is withheld inside
+  any raw HTML block and after a ` \t<!--` block (the `rawHtml` state), on any lazy list
+  continuation including one under a BARE marker (`listDedented` plus `listInRun`), and on a list
+  item whose later lines sit shallower than the marker (module 5540 strips the smallest non-zero
+  indent across the item). And the refusal is **NOT threaded into `opensHiddenComment`**,
+  deliberately against the plan: a refused `<!--` line still ends the paragraph for the
+  lookaheads, and the threaded arm turns two NRL-42 "hidden text not disclosed" guards red.
+  `TERM2_MATH` is `/^ {0,3}\$\$+[^$]*$/`, 0 disagreements with the executed renderer over
+  48,018 exhaustive cases; `opensMathBlock` is untouched and is the wrong predicate for it. All
+  censuses, the fuzz and the wrong arms are in the ADR. The headline this line used to carry,
+  **"0 newly lost" over every corpus, was false**: Verify's 24.4M-cell census found **2,436 cells
+  newly losing displayed text**, all through `TERM2_MATH` and all under `skipHeadings`, because
+  the `$$` stop exposed the heading site's CommonMark-wide `SETEXT`. **Fixed at the root before
+  merge**: Obsidian's own `MarkdownRenderer`, called in the running app over CDP, renders a setext
+  heading only for an underline of the exact shape `^(?:=+|-+)$` under exactly one content line,
+  and the heading site now tests exactly that (`SETEXT_UNDERLINE_EXACT` plus
+  `paraStart >= lineStarts[lineNo - 1]`). An Obsidian-oracle fuzz over the 5,123 cells that differ
+  from the first revision found **0 newly lost and 2,113 loss cells closed**. A second,
+  independent Verify then ran its own census on the merged revision against `079cf0c`:
+  **30,906,816 cells, 240 newly lost (all heading text inside a rendered `<h1>` under
+  `skipHeadings`, the exclusion working) and 249,508 newly leaking, every one reproducing on
+  base in a defused form**, so unmaskings rather than new disclosures (NRL-136, NRL-137 and the
+  space-tab class). It also found an unmasking route the PR did not describe: the exact-underline
+  heading site itself, **792 cells** where base dropped hidden text as a two-or-more-line
+  "heading" under `skipHeadings`, **8** of them a code-span plus inline-comment shape outside the
+  four recorded classes (``QPAQ `code`` / `` `<!--` `` / `QUAQ -->` / `===` / `QTJQ`), no ticket
+  filed. Details, the seven moved expectations and the NRL-119 tripwire it leaves, in the ADR.
+  **Two pre-existing Class A classes are UNMASKED, not opened** (corrected at Ship: Implement's
+  censuses had no raw-HTML or reopen row after a refused heading, so their "0 newly leaking" does
+  not cover them). Ship's own census, 989,184 cells against real rendered HTML, found **73,728
+  newly speaking, every one reproduced on base** once the heading's `<!--` becomes plain text:
+  the same-line reopen (`<!-- y --> <!--` is raw HTML to the renderer, which hides the rest of the
+  note; **NRL-136**), which part 2's `$$` stop also unmasks by a second route; and raw HTML blocks
+  spoken as prose, `<?x` and a `<div>` holding a mid-line `<!--` (**NRL-137**). Verify added a
+  fourth, **736 cells** of a space-tab `<!--`, the NRL-93 / NRL-115 family. The
+  `pin-nrl120-unmasked-*` rows are the tripwires, each beside a base control. **NRL-115 overlaps term 1**: whichever
+  of NRL-115 and NRL-120 merges second must rebase and re-run both censuses (the `after setext`
+  rows with leads ` `, `  `, `   `, ` \t`, `\t` are in NRL-120's corpus for that). **NOT VERIFIED
+  IN OBSIDIAN BY A HUMAN, and the new extractor never ran inside Obsidian**: Obsidian's live
+  `MarkdownRenderer` was used over CDP as an oracle (45 named inputs, structurally identical to
+  the Node harness), but the deployed build was not loaded because Obsidian was not restarted.
+  Live Preview unread, rule 11 applies. R-M08 is still **NOT** met and the `2 of 16` count
+  does not move.
 - R-C02's Context table named three gaps: three of five install-time fields missing (language,
   installed size, license), and no remove action at all, so up to 573 MB across three Kokoro
   builds plus the ~31 MB ORT runtime could accumulate in a directory deliberately hidden from

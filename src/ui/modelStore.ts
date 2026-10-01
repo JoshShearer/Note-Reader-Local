@@ -7,6 +7,8 @@ import {
 	type ModelStore,
 } from "../engines/onnx/kokoro";
 import type { EngineSelection } from "../engines/selection";
+import type { SpeechEngine, VoiceInfo } from "../audio/types";
+import { resolveStoredVoice } from "../audio/voiceChoice";
 import { modelStorePaths, normaliseVaultPath, pluginVaultPath } from "./paths";
 
 export { modelStorePaths, normaliseVaultPath, pluginVaultPath } from "./paths";
@@ -111,7 +113,18 @@ export interface DownloadProgress {
 export interface DownloadResult {
 	ok: boolean;
 	error?: string;
+	/** On failure, the model-relative path that failed (`voices/af_heart.bin`). */
+	file?: string;
+	/** On failure, the HTTP status as a string, or the error text. */
+	detail?: string;
 }
+
+/**
+ * Which half of a model download failed (NRL-144). `voice` means the shared
+ * files and weights are on disk and only the style vector is missing, which
+ * the user needs to be told differently from a model that did not arrive.
+ */
+export type ModelDownloadResult = DownloadResult & { stage?: "model" | "voice" };
 
 /**
  * Fetch the model into the vault.
@@ -129,9 +142,92 @@ export async function downloadModel(
 	weightsPath: string,
 	voiceFile: string,
 	onProgress: (progress: DownloadProgress) => void,
-): Promise<DownloadResult> {
-	const paths = [...MODEL_FILES, weightsPath, `voices/${voiceFile}`];
-	return await downloadFiles(app, modelDir, paths, onProgress);
+): Promise<ModelDownloadResult> {
+	// Two stages so a voice failure cannot be reported as the model failing,
+	// and so a model failure never goes on to request a voice (NRL-144).
+	const model = await downloadFiles(app, modelDir, [...MODEL_FILES, weightsPath], onProgress);
+	if (!model.ok) return { ...model, stage: "model" };
+	const voice = await downloadFiles(app, modelDir, [`voices/${voiceFile}`], onProgress);
+	if (!voice.ok) return { ...voice, stage: "voice" };
+	return { ok: true };
+}
+
+/** The voice a model Download should fetch, and whether to store it (NRL-144). */
+export interface ModelDownloadVoice {
+	/** The Kokoro voice id to fetch and, when `persist`, to store. */
+	voiceId: string;
+	/** The file name under `voices/`, as `downloadModel` takes it. */
+	file: string;
+	/** True when the stored id was not a Kokoro voice and this one replaces it. */
+	persist: boolean;
+	/** Why the stored voice was replaced, or null when it was used as-is. */
+	notice: string | null;
+}
+
+/**
+ * Pick the voice the Kokoro model Download fetches alongside the model.
+ *
+ * The stored id is used as-is when it is a Kokoro id (prefixed or bare).
+ * Otherwise - another engine's voice left behind by an engine switch, or no
+ * voice at all - it goes through the same `resolveStoredVoice` the first read
+ * uses, over Kokoro's own voice list, so the voice downloaded is the voice
+ * that read would pick. The caller persists it only after the file is on
+ * disk. Reconciling here, at the Download click, rather than on engine switch
+ * keeps non-negotiable 6 trivially true: nothing is fetched without a click.
+ */
+export function voiceForModelDownload(
+	engine: Pick<SpeechEngine, "label" | "resolveVoiceId">,
+	storedId: string,
+	voices: VoiceInfo[],
+	appLocale: string,
+	preferOffline: boolean,
+): ModelDownloadVoice {
+	const own = voiceFilePath(storedId);
+	if (own !== null) {
+		return { voiceId: storedId, file: own.replace(/^voices\//, ""), persist: false, notice: null };
+	}
+	const resolution = resolveStoredVoice(
+		engine as SpeechEngine,
+		storedId,
+		voices,
+		undefined,
+		appLocale,
+		preferOffline,
+	);
+	const path = voiceFilePath(resolution.id);
+	if (path === null) throw new Error(`${resolution.id} is not a Kokoro voice.`);
+	return {
+		voiceId: resolution.id,
+		file: path.replace(/^voices\//, ""),
+		persist: true,
+		notice: resolution.notice,
+	};
+}
+
+/**
+ * The Notice text for a model Download, and whether the model is now usable.
+ *
+ * A voice failure after the model landed says so and keeps `modelInstalled`
+ * true, because the caller should still reload the engine and redraw the
+ * settings tab: the model is on disk, only the voice needs another try.
+ */
+export function describeModelDownload(
+	result: ModelDownloadResult,
+	notice: string | null,
+): { message: string; modelInstalled: boolean } {
+	if (result.ok) {
+		return {
+			message: notice ? `Kokoro model ready. ${notice}` : "Kokoro model ready.",
+			modelInstalled: true,
+		};
+	}
+	if (result.stage === "voice") {
+		return {
+			message: `Kokoro model installed, but voice ${result.file ?? "file"} could not be downloaded (${result.detail ?? result.error ?? "unknown error"}). Pick a voice under Voice to retry.`,
+			modelInstalled: true,
+		};
+	}
+	return { message: `Download failed: ${result.error}`, modelInstalled: false };
 }
 
 /**
@@ -165,7 +261,12 @@ async function downloadFiles(
 			}
 		}
 	} catch (err) {
-		return { ok: false, error: `Could not create model folder: ${errText(err)}` };
+		return {
+			ok: false,
+			error: `Could not create model folder: ${errText(err)}`,
+			file: paths[0],
+			detail: errText(err),
+		};
 	}
 
 	for (const path of paths) {
@@ -173,7 +274,12 @@ async function downloadFiles(
 			onProgress({ file: path, loaded: 0, total: 0 });
 			const res = await fetch(`${HF_BASE}/${path}`);
 			if (!res.ok) {
-				return { ok: false, error: `Download failed for ${path} (${res.status})` };
+				return {
+					ok: false,
+					error: `Download failed for ${path} (${res.status})`,
+					file: path,
+					detail: String(res.status),
+				};
 			}
 			const total = Number(res.headers.get("content-length") ?? 0);
 
@@ -208,7 +314,12 @@ async function downloadFiles(
 				await app.vault.adapter.writeBinary(normaliseVaultPath(`${dir}/${path}`), buffer);
 			}
 		} catch (err) {
-			return { ok: false, error: `Download failed for ${path}: ${errText(err)}` };
+			return {
+				ok: false,
+				error: `Download failed for ${path}: ${errText(err)}`,
+				file: path,
+				detail: errText(err),
+			};
 		}
 	}
 
@@ -398,7 +509,9 @@ export async function getTotalUsage(
 
 	let voicesBytes = 0;
 	for (const voice of KOKORO_VOICES) {
-		voicesBytes += await statSize(voiceFilePath(voice.file));
+		// A bare table file name is never null; the guard only satisfies the type.
+		const path = voiceFilePath(voice.file);
+		if (path !== null) voicesBytes += await statSize(path);
 	}
 
 	let ortBytes = 0;
