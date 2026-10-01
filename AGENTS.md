@@ -498,8 +498,19 @@ them together. `set -euo pipefail` is not
 decoration: without `pipefail` a missing asset still gives exit 0 and 720 bytes of truncated
 `hashes=`, because the failing `sha256sum` sits upstream of a pipe. The non-empty guard lives
 **in the build step**, and there is deliberately **no `if:` on the provenance job** - a
-failing step already stops it through `needs: build`, whereas an `if:` would SKIP provenance
-silently and produce a green run with no attestation, which is the same silence being removed.
+failing step already stops it through `needs: [build, release]`, whereas an `if:` would SKIP
+provenance silently and produce a green run with no attestation, which is the same silence
+being removed. **That list is two entries as of NRL-106 and both are load-bearing.** `release`
+is in it purely to **order** `provenance`'s `upload-assets` job after the Release object it
+attaches `multiple.intoto.jsonl` to exists; before NRL-106 the two were siblings on
+`needs: build` and the attachment could have run first, which on NRL-79's one success was
+avoided only by 28 s of accidental slack. `build` must stay, because the generator's input
+`base64-subjects: ${{ needs.build.outputs.hashes }}` has no `needs` context to read without it. No `if:` is present on that job and **none may be added**
+(ADR 0011 decision 5 of the NRL-76 amendment, which `tests/release.test.ts` still enforces).
+**This has never run on a real runner**: no tag has been pushed since NRL-79's `0.1.1`, so
+GitHub has never compiled the two-entry form, and that a `needs:` value may be a **list**
+beside a job-level `uses:` rests on github/docs read verbatim plus SchemaStore - desk evidence,
+not a run.
 And the `ort/` path prefixes are safe in the SLSA input format, settled at source rather than
 assumed: the generator's `parseSubjects` validates the **digest** only, and `verifyDigest`
 never reads `subject.Name`. In `tests/release.test.ts`, `extractUploadedFiles` is the single
