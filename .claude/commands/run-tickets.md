@@ -924,8 +924,10 @@ bounded wait in this repo lives in `/test-issue`**, at `test-issue.md:125-128`
 `CI INCONCLUSIVE`), and `/test-issue` is human-invoked precisely because a wait does not belong in
 an unattended phase.
 
-Three known limits, recorded rather than fixed. The snippet needs `jq` on `PATH`, which every other
-snippet in this file already assumes. `--limit 20` could in principle miss a matching run behind 20
-newer ones on the same branch, which cannot happen on a fresh ticket branch. And it reads each
-run's *status*, not the `gates` job's own conclusion; a workflow that grew a second job would need
-`gh run view <id> --json jobs`, which the comment in the snippet names.
+Three known limits, recorded rather than fixed. The snippet needs `jq` on `PATH`, and it is the
+first thing in this file to need it - the other `--jq` uses here are gh's own built-in flag, which
+needs nothing installed; external `jq` is used only because `--jq` does not accept `--arg`.
+`--limit 20` could in principle miss a matching run behind 20 newer ones on the same branch, which
+cannot happen on a fresh ticket branch but could on `main`, which carries over a hundred. And it
+reads each run's *status*, not the `gates` job's own conclusion; a workflow that grew a second job
+would need `gh run view <id> --json jobs`, which the comment in the snippet names.
