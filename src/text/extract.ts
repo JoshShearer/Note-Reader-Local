@@ -1990,12 +1990,25 @@ const TERM2_LONE_DASH = /^ {0,3}-\s*$/;
  * `Prose <!--` / `more` / `--` / `HIDDENE` / `--> t.` renders as ONE paragraph
  * with every line visible, `HIDDENE` included.
  *
- * Why it must NOT reset the paragraph-line count: that same measurement shows
- * the renderer treats `--` as paragraph CONTENT. `--` / `Prose <!--` / `===` /
- * `HIDDENE` / `--> t.` therefore gives the `===` two content lines above it, so
- * it is not an underline and `HIDDENE` is HIDDEN - measured. An arm that reset
- * the count here would call that `===` a second line, stop, and speak
- * `HIDDENE`: a disclosure of exactly the kind NRL-111 exists to remove.
+ * Why it must not reset the paragraph-line count BY ITSELF: that same
+ * measurement shows the renderer treats `--` as paragraph CONTENT in that
+ * position. `--` / `Prose <!--` / `===` / `HIDDENE` / `--> t.` therefore gives
+ * the `===` two content lines above it, so it is not an underline and `HIDDENE`
+ * is HIDDEN - measured. An arm that reset the count here unconditionally would
+ * call that `===` a second line, stop, and speak `HIDDENE`: a disclosure of
+ * exactly the kind NRL-111 exists to remove.
+ *
+ * BUT NOT NEVER, and this is NRL-111's second pass correcting its own first.
+ * The first draft gated the `=` run on block position and left the dash run
+ * UNCONDITIONALLY not-a-block-end, which repeats for dashes the exact
+ * position-independent error it had just fixed for `=`. A dash run that IS its
+ * block's second line is a setext `<h2>` and therefore a real block end.
+ * Measured on real rendered HTML: `Lead.` / `--` is
+ * `<h2 data-heading="Lead.">Lead.</h2>`, so `Lead.` / `--` / `Prose <!--` /
+ * `===` / `HIDDENE` / `--> t.` DISPLAYS `HIDDENE` and the first draft dropped
+ * it, 512 cells of prose loss. `TERM2_SETEXT_DASH` carries that position-gated
+ * block end; this constant keeps the ungated SCAN stop, which is why the two are
+ * separate rather than one pattern with one gate.
  *
  * Three or more dashes are also `HR`, so only the two-dash case is reachable
  * through this constant alone; it is written as a run rather than a pair so the
@@ -2003,6 +2016,20 @@ const TERM2_LONE_DASH = /^ {0,3}-\s*$/;
  * every dash shape's stop byte-for-byte where NRL-95 put it.
  */
 const TERM2_DASH_RUN = /^ {0,3}--+\s*$/;
+/**
+ * The dash twin of `TERM2_SETEXT_EQ`: a dash run at the EXACT shape Obsidian's
+ * setextHeading block tokenizer accepts, so a real block end when it is the
+ * block's second line. Same no-leading-and-no-trailing-whitespace shape as the
+ * `=` half, and measured the same way rather than assumed symmetric:
+ * `Lead.` / `--` is `<h2>`, while `Lead.` / ` --`, `Lead.` / `-- ` and
+ * `Lead.` / `--\t` are each one `<p>` with the dashes as prose. `\r?` for the
+ * same CRLF reason, measured: `Lead.\r\n--\r\n` is still an `<h2>`.
+ *
+ * Gated on `paraLinesAbove === 1` at its call site, exactly as the `=` half is.
+ * Three or more dashes are `HR` as well, so the only shape this adds over what
+ * `endsTerm2Block` already had is a bare `--` on a block's second line.
+ */
+const TERM2_SETEXT_DASH = /^--+\r?$/;
 /**
  * Four columns of indent. A tab after up to three spaces reaches the next tab
  * stop, which is column four, so it counts too. Whether the line is code
@@ -2116,14 +2143,34 @@ function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByLi
  * `if (silent && o !== "1") return` really does gate on the digit string and
  * excluding them is right. Each case is pinned in tests/extract.test.ts.
  *
+ * THE INDENT CAP IS LOAD-BEARING AND THE REASON THIS PATTERN IS NOT
+ * `^[ \t]*`. NRL-95 wrote `^[ \t]*` and its own comment said "a bullet at ANY
+ * indent interrupts a paragraph", which is false: module 745's list tokenizer
+ * gives up past three columns of indent, and a tab reaches column four on its
+ * own. Measured against real rendered HTML across the whole indent axis, with
+ * all five markers (`-`, `*`, `+`, `1.`, `1)`) and a `Prose <!--` opener above:
+ * indent 0, 2 and 3 spaces DISPLAY the sentinel, while 4 spaces, 5 spaces,
+ * `\t`, ` \t`, `  \t`, `   \t` and `\t\t` all HIDE it - the line is a lazy
+ * paragraph continuation there, so the inline comment regex crosses it. The
+ * split is total, 15 shown cells and 35 hidden with no mixed row.
+ *
+ * So `^[ \t]*` made this a stop on 35 shapes the renderer HIDES, which is a
+ * live DISCLOSURE and not a fail-closed gap. It was inherited from NRL-95 and
+ * NRL-111's first draft widened it further by adding `1)` to it, taking the
+ * disclosure from 4 markers to 5 before this second pass capped it. A tab is
+ * Obsidian's own default indent for a nested list item, so the leaking shape is
+ * the ordinary one, not an exotic one. Closing it here closes NRL-119's first
+ * half as well as NRL-111's own.
+ *
  * Narrower than remark in one direction only, deliberately: a marker alone on
  * its line (`1.`, `*`) is not matched here, because `[ \t]` is required rather
  * than end-of-line. All four of `*`, `+`, `1.` and `1)` alone on a line are
  * measured interrupters, so that is a real fail-CLOSED gap and not a statement
- * about the renderer; widening it is out of NRL-111's scope. A lone `-` is the
- * one that is covered, by `TERM2_LONE_DASH` rather than by this pattern.
+ * about the renderer; widening it is NRL-119's second half and deliberately not
+ * done here. A lone `-` is the one that is covered, by `TERM2_LONE_DASH` rather
+ * than by this pattern.
  */
-const TERM2_LIST = /^[ \t]*(?:[-*+]|1[.)])[ \t]/;
+const TERM2_LIST = /^ {0,3}(?:[-*+]|1[.)])[ \t]/;
 
 /**
  * Does this line end the paragraph a `<!--` on an earlier line belongs to, for
@@ -2182,8 +2229,15 @@ const TERM2_LIST = /^[ \t]*(?:[-*+]|1[.)])[ \t]/;
  * measured disclosure. Every term here ends a BLOCK for the renderer, so the
  * caller's content-line count resets on it; `TERM2_DASH_RUN`, the one term
  * `endsTerm2Scan` adds, stops the scan without ending a block, and resetting the
- * count on it would call a later `===` a second line when it is not. See that
- * constant for the measurement.
+ * count on it unconditionally would call a later `===` a second line when it is
+ * not. See that constant for the measurement.
+ *
+ * The dash run is therefore in BOTH functions and in neither one the same way:
+ * ungated in the scan set, and position-gated here through
+ * `TERM2_SETEXT_DASH`, because a `--` on a block's second line is a setext
+ * `<h2>` and a real block end while the same `--` anywhere else is prose. The
+ * `=` and dash halves get the identical `paraLinesAbove === 1` gate, which is
+ * the symmetry NRL-111's first draft lacked.
  */
 function endsTerm2Block(line: string, paraLinesAbove: number): boolean {
 	return (
@@ -2192,7 +2246,8 @@ function endsTerm2Block(line: string, paraLinesAbove: number): boolean {
 		HEADING.test(line) ||
 		HR.test(line) ||
 		TERM2_LONE_DASH.test(line) ||
-		(paraLinesAbove === 1 && TERM2_SETEXT_EQ.test(line)) ||
+		(paraLinesAbove === 1 &&
+			(TERM2_SETEXT_EQ.test(line) || TERM2_SETEXT_DASH.test(line))) ||
 		TERM2_LIST.test(line)
 	);
 }
@@ -2611,11 +2666,12 @@ export function extractChunks(
 	// still O(L).
 	//
 	// `paraLinesAbove` resets on `endsTerm2Block` and NOT on `endsTerm2Scan`. The
-	// difference is exactly `TERM2_DASH_RUN`, which is a stop without being a
-	// block end: resetting there would make `--` / `Prose <!--` / `===` /
+	// difference is a dash run OFF a block's second line, which is a stop without
+	// being a block end: resetting there would make `--` / `Prose <!--` / `===` /
 	// `HIDDENE` / `--> t.` treat its `===` as a second line and speak `HIDDENE`,
-	// which the renderer hides. Measured, both arms, in NRL-111's Implement
-	// session.
+	// which the renderer hides. ON a block's second line the same dash run IS an
+	// `<h2>` and does reset, through `TERM2_SETEXT_DASH`. Both directions measured
+	// against real rendered HTML.
 	const term2Stop: boolean[] = new Array<boolean>(lines.length).fill(false);
 	{
 		let paraLinesAbove = 0;
