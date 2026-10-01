@@ -73,7 +73,46 @@ interface Cleaned {
 	 * 0 unless one does.
 	 */
 	openBracketDepth?: number;
+	/**
+	 * Set only beside an `openComment` of `-->`, and true when that comment was
+	 * opened as a document-level HTML BLOCK - the line was raw HTML for the
+	 * renderer - rather than by the paragraph-scoped term 2 (NRL-136). The line
+	 * that closes it is then the last line of a raw HTML block too, so its
+	 * remainder is raw and any later unclosed `<!--` on it opens a browser
+	 * comment. extractChunks hands it back as `htmlContext: "raw"`.
+	 */
+	openCommentBlock?: boolean;
+	/**
+	 * Set only beside an `openComment` of `-->` that NRL-136's term opened: a
+	 * BROWSER comment inside rendered output rather than an HTML block. The
+	 * markdown under it is still parsed, so a fence it covers is still a fence
+	 * and a `-->` inside that fence's code closes it (GT emits `>` raw in
+	 * `<pre>`), and a `%%` block it covers is still removed, `-->` and all.
+	 * extractChunks keeps both across the hidden lines for it.
+	 */
+	openCommentBrowser?: boolean;
 }
+
+/**
+ * Where the view handed to cleanLine sits, for the one question NRL-136 adds:
+ * can a LATER unclosed `<!--` on this line open a document-level comment even
+ * though the slice before it is not blank?
+ *
+ * - `"none"`: no. Inline context only - a heading, a re-cleaned label, a
+ *   frontmatter value, or the remainder of a comment term 2 opened. This is
+ *   byte-for-byte the pre-NRL-136 behaviour, and it is the default.
+ * - `"start"`: the view begins at a block-start position (a fresh line, a
+ *   paragraph continuation, a container's content, or the remainder after a
+ *   `%%` block closes). A later unclosed `<!--` opens when the view's FIRST
+ *   `<!--` is itself an HTML-block start, `htmlBlockLine`.
+ * - `"raw"`: the view is the remainder of the last line of a raw HTML block,
+ *   so every unclosed `<!--` on it opens, at any column.
+ * - `"inline"`: the view is what follows a BROWSER comment's `-->` on a line
+ *   that is not an HTML block, i.e. the rest of an ordinary line. Its `<!--`
+ *   is inline, so only term 2 can open it; term 1's line-start test would be
+ *   asking about a position that is not a line start for the renderer.
+ */
+type HtmlContext = "none" | "start" | "raw" | "inline";
 
 /**
  * Which construct a soft-wrapped label belongs to. The two differ in exactly one
@@ -517,6 +556,92 @@ function opensHtmlBlock(view: string, at: number, closesLater: boolean): boolean
 }
 
 /**
+ * Is this line an HTML BLOCK for the renderer, because its FIRST `<!--` starts
+ * one (NRL-136)? Asked about a line whose first comment CLOSES on it and whose
+ * later `<!--` does not, a shape neither of opensHtmlBlock's terms can see: the
+ * slice before the later opener is not blank, and the line is not in a
+ * paragraph, so term 2's paragraph-scoped lookahead is the wrong question.
+ *
+ * Executed, not read: Obsidian 1.13.7's WT parser and GT renderer turn
+ * `x` / blank / `<!-- y --> <!-- Q1Z` / `TAIL` into
+ * `<p>x</p>\n<!-- y --> <!-- Q1Z\n<p>TAIL</p>`. Module 8776 opens an HTML block
+ * at the line-start `<!--` and closes it on that same line at its `-->`, the
+ * whole line passes through raw under `allowDangerousHtml`, and the second,
+ * unclosed `<!--` then becomes a BROWSER comment that swallows the rendered
+ * output up to the next `-->` anywhere later. That scope is the document, not
+ * the paragraph, and the existing textual `-->` scan in extractChunks is the
+ * faithful closer: GT emits `>` raw inside `<code>` and `<pre>`, so a `-->` in
+ * code closes it as well.
+ *
+ * The column test is the block-start rule, and it is CAPPED where
+ * opensHtmlBlock's term 1 uses an uncapped `.trim()`. Measured with the same
+ * harness: `Para` / four spaces + `<!-- y --> <!-- Q` / `TAIL` displays TAIL,
+ * because module 8607 absorbs a continuation indented four or more columns as
+ * lazy prose without asking `interruptParagraph`, and in a fresh-block position
+ * the same line is indented code. So fewer than four columns, a tab advancing
+ * to the next multiple of four (module 6058), unless the line is list-item
+ * content whose leading whitespace the renderer has already removed
+ * (`dedentedByList`, NRL-93's term).
+ *
+ * One helper for both askers, cleanLine and opensHiddenComment, because they
+ * are the same question (D-74-10).
+ */
+function htmlBlockLine(view: string, dedentedByList: boolean): boolean {
+	const first = view.indexOf("<!--");
+	if (first === -1) return false;
+	let col = 0;
+	for (let k = 0; k < first; k++) {
+		const c = view.charCodeAt(k);
+		if (c === 32) col += 1;
+		else if (c === 9) col += 4 - (col % 4);
+		else return false;
+	}
+	if (!dedentedByList) return col < 4;
+	// List-item content. The renderer has already stripped the item's content
+	// indent, so a deeper lead is still a block start - but how much it strips
+	// depends on the marker in ways module 745 does not make uniform (measured:
+	// after `- item` up to five spaces still open a block and six do not, after
+	// `1. item` seven still do, and `  \t` does not while a lone `\t` does). So
+	// accept only the lead every measured marker accepts: at most four spaces, or
+	// one tab. Anything else keeps the pre-NRL-136 answer, i.e. spoken, which
+	// is a residual disclosure the base already had rather than new prose loss.
+	const lead = view.slice(0, first);
+	return lead.indexOf("\t") === -1 ? col <= 4 : lead === "\t";
+}
+
+/**
+ * Does a browser comment's `-->` on this line close inside the line's
+ * `data-heading` attribute, so the reader sees the WHOLE line (NRL-136)? True
+ * for an ATX heading: GT writes `<h1 data-heading="<raw heading text>">` before
+ * the heading's own text, so `# S6 `c --> d` S7` closing a comment opened above
+ * it renders `S6 c --> d S7` visible in full, measured with Obsidian 1.13.7's
+ * own parser and renderer.
+ */
+function closesInHeadingAttribute(raw: string): boolean {
+	return containerPrefix(raw).blockType === "heading";
+}
+
+/**
+ * The whitespace a list marker, a task checkbox or a callout title consumed in
+ * front of this line's content, when that is all that separates the content
+ * from them (NRL-136). The content is an HTML-block start only when it is one
+ * to four spaces or a single tab, measured against Obsidian 1.13.7's own
+ * parser for `-`, `*`, `+`, `1.`, `1)`, `- [ ]`, `- [x]`, `> - [ ]` and
+ * `> [!note]`: five spaces, or a space then a tab, makes the line indented code
+ * inside the item, which the renderer displays. A quote's own `>` and its one
+ * optional space are not counted here - `htmlBlockLine` measures what follows
+ * them on `body`.
+ */
+function containerLeadOk(raw: string, prefixChars: number): boolean {
+	const q = raw.match(BLOCKQUOTE);
+	const quoteChars = q ? q[0].length : 0;
+	if (prefixChars <= quoteChars) return true;
+	const prefix = raw.slice(0, prefixChars);
+	const ws = prefix.slice(prefix.trimEnd().length);
+	return /^(?: {1,4}|\t)$/.test(ws);
+}
+
+/**
  * `dedentedByList` is NRL-93's third term, and it is the renderer's own
  * context-sensitivity rather than a convenience. It says the lines of this
  * construct have ALREADY had their leading whitespace removed by the time
@@ -638,6 +763,7 @@ function cleanLine(
 	htmlClosesLater = false,
 	incomingBracketDepth = 0,
 	dedentedByList = false,
+	htmlContext: HtmlContext = "none",
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -852,6 +978,11 @@ function cleanLine(
 	};
 
 	let openComment: CommentCloser | undefined;
+	let openCommentBlock = false;
+	let openCommentBrowser = false;
+	// NRL-136's third way in, decided once per view: does a later unclosed
+	// `<!--` here open a document-level comment? See HtmlContext.
+	const htmlRawLine = htmlContext === "raw" || (htmlContext === "start" && htmlBlockLine(raw, dedentedByList));
 	// A carried span that this line does not close stays open, so a span may
 	// cross several soft line breaks. It owns the carry ahead of any run opened
 	// on this line, being the outer and earlier opener.
@@ -1079,13 +1210,28 @@ function cleanLine(
 			// advances past them, mirroring the two-and-two above. Emitting only
 			// `<` would re-enter the loop at `!--` and risk another branch (the
 			// autolink or raw-HTML one) claiming it.
-			if (close === -1 && htmlComment && blockComments && !opensHtmlBlock(raw, i, htmlClosesLater)) {
+			const blockOpens = htmlContext === "inline" ? htmlClosesLater : opensHtmlBlock(raw, i, htmlClosesLater);
+			if (close === -1 && htmlComment && blockComments && !blockOpens && !htmlRawLine) {
 				for (let k = 0; k < 4; k++) emit(raw[i + k]!, rawStart + i + k);
 				i += 4;
 				continue;
 			}
 			if (close === -1) {
 				openComment = closer;
+				// Block, not term 2: the line was raw HTML for the renderer, so the
+				// line that closes this comment is raw too. `blockComments` keeps a
+				// recursive label out of it; the "start" test keeps a heading and a
+				// term-2 remainder exactly as they were.
+				//
+				// Only a FIRST `<!--` that is itself an HTML-block start does that.
+				// A later opener on a block line (the NRL-136 shape) or any opener in
+				// a "raw" remainder is a BROWSER comment inside rendered output whose
+				// HTML block already ended on this line, so the line that closes it
+				// is ordinary markdown again: measured, `<!-- y --> <!-- Q1Z` /
+				// `mid --> M2 <!-- Q2` / `TAIL` displays Q2 and TAIL.
+				openCommentBlock =
+					htmlComment && blockComments && htmlContext === "start" && raw.indexOf("<!--") === i && htmlRawLine;
+				openCommentBrowser = htmlComment && blockComments && htmlRawLine && !openCommentBlock;
 				// The space before the comment would double with the line join.
 				if (chars[chars.length - 1] === " ") {
 					chars.pop();
@@ -1389,7 +1535,7 @@ function cleanLine(
 		i += 1;
 	}
 
-	return { text: chars.join(""), index, openComment, openCode, openBracket, openBracketDepth, unclosedBracket };
+	return { text: chars.join(""), index, openComment, openCode, openBracket, openBracketDepth, unclosedBracket, openCommentBlock, openCommentBrowser };
 }
 
 interface StripOptions {
@@ -2103,8 +2249,20 @@ function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByLi
 	const pct = line.indexOf("%%");
 	if (pct !== -1 && opensObsidianBlock(line, pct, dedentedByList)) return true;
 	const html = line.indexOf("<!--");
-	if (html === -1 || line.indexOf("-->", html + 4) !== -1) return false;
-	return opensHtmlBlock(line, html, htmlClosesLater);
+	if (html === -1) return false;
+	if (line.indexOf("-->", html + 4) === -1) return opensHtmlBlock(line, html, htmlClosesLater);
+	// The first comment closes on this line. Pair the rest in sequence, as
+	// cleanLine's loop does, and ask about a trailing unclosed opener the one
+	// question cleanLine asks of it in the "start" context: is this line an HTML
+	// block (NRL-136)? Term 2 is deliberately NOT asked about a later opener
+	// here, which is the pre-NRL-136 answer for it and out of this ticket.
+	let at = line.indexOf("<!--", line.indexOf("-->", html + 4) + 3);
+	while (at !== -1) {
+		const close = line.indexOf("-->", at + 4);
+		if (close === -1) return htmlBlockLine(line, dedentedByList);
+		at = line.indexOf("<!--", close + 3);
+	}
+	return false;
 }
 
 /**
@@ -2788,6 +2946,16 @@ export function extractChunks(
 
 	let inFence = false;
 	let inComment: CommentCloser | undefined;
+	// Whether the open `-->` comment was opened as an HTML block (NRL-136), so
+	// the line that closes it is raw HTML and its remainder is cleaned in the
+	// "raw" context. Only read while inComment is "-->".
+	let inCommentBlock = false;
+	// Whether it is NRL-136's browser comment, under which fences and `%%`
+	// blocks still count.
+	let inCommentBrowser = false;
+	// A `%%` block opened UNDER a browser comment: when it closes, the browser
+	// comment is still open and its `-->` is still to be found (NRL-136).
+	let resumeBrowser = false;
 	// Length of a confirmed inline code span left open by the previous line.
 	// Armed only on the plain-paragraph path and only once codeSpanClosesLater
 	// has found the closing run, so every other path clears it.
@@ -2884,8 +3052,34 @@ export function extractChunks(
 		}
 	};
 
+	/**
+	 * The context for what follows a BROWSER comment's `-->` (NRL-136). The
+	 * comment lives in rendered output, so the line that closes it is whatever
+	 * the markdown made it: a raw HTML block line when its own first `<!--`
+	 * starts one (`<!-- a --> <!-- R` hides R), and otherwise an ordinary line
+	 * whose remaining `<!--` is inline. The second case must NOT get term 1's
+	 * line-start test on the remainder, which would treat `--> <!-- R` as a
+	 * line-start opener: measured, that silenced text Obsidian displays as code
+	 * in 10 of the first fuzz run's notes.
+	 */
+	const browserCloseContext = (raw: string, lineNo: number): HtmlContext => {
+		const p = containerPrefix(raw);
+		return p.blockType !== "heading" &&
+			containerLeadOk(raw, p.chars) &&
+			htmlBlockLine(raw.slice(p.chars), listDedented[lineNo]!)
+			? "raw"
+			: "inline";
+	};
+
 	/** Clean closing-line prose, including any further comments. */
-	const appendRemainder = (raw: string, from: number, lineStart: number, lineNo: number): void => {
+	const appendRemainder = (raw: string, from: number, lineStart: number, lineNo: number, override?: HtmlContext): void => {
+		// What the closed comment was decides what its closing line is (NRL-136).
+		// An HTML block ends on this line, so the remainder is raw HTML; a `%%`
+		// block's remainder is read as a fresh block start, which is the harness
+		// verdict for `%%` / `a %% <!-- y --> <!-- Q` at under four columns; and
+		// a comment term 2 opened was inline, so its remainder keeps the
+		// pre-NRL-136 behaviour exactly.
+		const htmlContext: HtmlContext = override ?? (inComment === "%%" ? "start" : inCommentBlock ? "raw" : "none");
 		const cleaned = cleanLine(
 			raw.slice(from),
 			lineStart + from,
@@ -2898,8 +3092,11 @@ export function extractChunks(
 			htmlCloserAhead[lineNo]!,
 			0,
 			listDedented[lineNo]!,
+			htmlContext,
 		);
 		inComment = cleaned.openComment;
+		inCommentBlock = cleaned.openCommentBlock === true;
+		inCommentBrowser = cleaned.openCommentBrowser === true;
 		if (cleaned.text.trim() !== "") appendToParagraph(cleaned, lineStart + from);
 	};
 
@@ -2961,13 +3158,94 @@ export function extractChunks(
 			continue;
 		}
 
-		// Hidden lines must not change blank, paragraph, list, code or math state.
+		// Hidden lines must not change blank, paragraph, list, code or math state,
+		// with one exception below: NRL-136's browser comment keeps fences and `%%` blocks.
 		// In particular, a different comment delimiter cannot close this one.
 		if (inComment) {
-			const close = raw.indexOf(inComment);
-			if (close === -1) continue;
-			appendRemainder(raw, close + inComment.length, lineStart, lineNo);
-			continue;
+			/*
+			 * NRL-136's browser comment is the one exception, and the reason is
+			 * that its region is RENDERED OUTPUT rather than markdown the parser
+			 * skipped. The markdown under it is still parsed, so two of its
+			 * constructs still act, both measured against Obsidian 1.13.7's own
+			 * parser and renderer:
+			 *
+			 * - A fence is still a fence. One opened under the comment and closed
+			 *   after it would otherwise be read as an OPENER at its closing line
+			 *   and swallow the prose that follows; and a `-->` inside that
+			 *   fence's code still closes the comment, because GT emits `>` raw in
+			 *   `<pre>`, leaving the rest of the line as code.
+			 * - A `%%` block still opens, and the parser REMOVES it, `-->` and
+			 *   all. So the browser comment survives it and resumes looking for
+			 *   its `-->` after the `%%` closer. Without this, a `%%` that hid the
+			 *   rest of the note on base was skipped as hidden text here and the
+			 *   lines after the `-->` inside it were read aloud: 112 of 112 newly
+			 *   disclosing cells in the first fuzz run.
+			 *
+			 * Nothing else is kept. An inline `%%...%%` pair holding a `-->` is
+			 * removed by the parser too and is NOT modelled; it is pinned as a
+			 * residual.
+			 */
+			let readWhole = false;
+			if (inComment === "-->" && inCommentBrowser) {
+				const close = raw.indexOf("-->");
+				const peeled = raw.slice(containerPrefix(raw).chars);
+				const pct = peeled.indexOf("%%");
+				const pctAt = raw.length - peeled.length + pct;
+				if (!inFence && pct !== -1 && (close === -1 || pctAt < close) && opensObsidianBlock(peeled, pct, listDedented[lineNo]!)) {
+					inComment = "%%";
+					inCommentBrowser = false;
+					resumeBrowser = true;
+					continue;
+				}
+				if (close === -1) {
+					if (FENCE.test(raw)) {
+						flushParagraph();
+						inFence = !inFence;
+					}
+					continue;
+				}
+				inComment = undefined;
+				inCommentBrowser = false;
+				if (inFence) {
+					// The `-->` sits in a fence's code: the rest of the line is code
+					// content, governed by skipCodeBlocks as the fence lines after it.
+					const from = close + 3;
+					const rest = raw.slice(from);
+					if (!opts.skipCodeBlocks && rest.trim() !== "") appendToParagraph(verbatimLine(rest, lineStart + from), lineStart + from);
+					continue;
+				}
+				readWhole = closesInHeadingAttribute(raw);
+				if (!readWhole) {
+					appendRemainder(raw, close + 3, lineStart, lineNo, browserCloseContext(raw, lineNo));
+					continue;
+				}
+			} else {
+				const close = raw.indexOf(inComment);
+				if (close === -1) continue;
+				if (!resumeBrowser) {
+					appendRemainder(raw, close + inComment.length, lineStart, lineNo);
+					continue;
+				}
+				// The `%%` block opened under a browser comment has closed; the
+				// browser comment has not, unless its `-->` follows on this line.
+				resumeBrowser = false;
+				const browserClose = raw.indexOf("-->", close + 2);
+				if (browserClose === -1) {
+					inComment = "-->";
+					inCommentBrowser = true;
+					continue;
+				}
+				inComment = undefined;
+				readWhole = closesInHeadingAttribute(raw);
+				if (!readWhole) {
+					// appendRemainder reads `inComment` for the remainder's context,
+					// and a browser comment's closing line is ordinary markdown.
+					appendRemainder(raw, browserClose + 3, lineStart, lineNo, browserCloseContext(raw, lineNo));
+					continue;
+				}
+			}
+			// Falls through only for readWhole: the heading is processed below as an
+			// ordinary line, with no comment open.
 		}
 
 		const blank = raw.trim() === "";
@@ -3135,7 +3413,10 @@ export function extractChunks(
 		 */
 		const htmlClosesLater = htmlCloserAhead[lineNo]!;
 		const dedentedByList = listDedented[lineNo]!;
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList);
+		// A heading's content is inline, so it never reaches NRL-136's block term:
+		// `# <!-- y --> <!-- Q` renders the second `<!--` escaped and displays it.
+		const htmlContext: HtmlContext = blockType !== "heading" && containerLeadOk(raw, prefixChars) ? "start" : "none";
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, htmlContext);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
@@ -3143,7 +3424,7 @@ export function extractChunks(
 			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlCloserAhead, listDedented)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, htmlContext);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -3197,6 +3478,7 @@ export function extractChunks(
 				htmlClosesLater,
 				carriedBracketDepth,
 				dedentedByList,
+				htmlContext,
 			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the
@@ -3206,6 +3488,13 @@ export function extractChunks(
 		// comment open is an opensHiddenComment line, and codeSpanClosesLater
 		// rejects those at both ends, so no confirmation exists on such a line.
 		inComment = cleaned.openComment;
+		// Only a TOP-LEVEL HTML block is trusted to run to its `-->` line. Inside
+		// a list item or a quote the block ends with its container, so the line
+		// that closes the comment need not be raw at all: measured, `- [ ] <!-- Q`
+		// / a fence / ` x --> y <!-- Z` displays Z as code. Such an opener keeps
+		// the pre-NRL-136 remainder behaviour.
+		inCommentBlock = cleaned.openCommentBlock === true && prefixChars === 0 && !dedentedByList;
+		inCommentBrowser = cleaned.openCommentBrowser === true;
 		// A link reference definition renders as nothing, so the whole line goes
 		// (docs/adr/0018). Deliberately AFTER cleanLine and after `inComment` is
 		// assigned, for the same reason the skipTables branch below is: a title

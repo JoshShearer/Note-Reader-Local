@@ -2366,6 +2366,110 @@ console.log("Obsidian comment exclusion (NRL-38)");
 			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
 		));
 	}
+	// NRL-136 (R-M08, disclosure direction). A line whose FIRST `<!--` starts an
+	// HTML block and closes on that line, with a LATER `<!--` that does not, is
+	// raw HTML for the renderer: Obsidian 1.13.7's own WT parser and GT renderer
+	// turn `x` / blank / `<!-- y --> <!-- Q1Z` / `TAIL` into
+	// `<p>x</p>\n<!-- y --> <!-- Q1Z\n<p>TAIL</p>`, and the second, unclosed
+	// `<!--` becomes a BROWSER comment that hides the rendered output up to the
+	// next `-->` anywhere later. Neither of opensHtmlBlock's terms could see it:
+	// the slice before the later opener is not blank, and the line is not in a
+	// paragraph, so term 2's paragraph-scoped lookahead was the wrong question.
+	//
+	// Every expectation below was decided against real rendered HTML (the
+	// parser harness, app.js sha256 8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898,
+	// oracle111.rendererHides), not by hand. Reading view only; NOT OBSERVED IN
+	// A RUNNING OBSIDIAN (rule 11).
+	//
+	// CORE rows are red against the pre-NRL-136 tree and green after. GUARDS are
+	// green on both sides and are evidence of nothing; each one is what a
+	// specific wrong variant of the fix breaks (named per row). TRIPWIRES pin
+	// residuals the fix does not close, at today's output, so they change only on
+	// purpose.
+	const nrl136: Array<[string, string, string, Partial<typeof OPTS>?]> = [
+		// CORE. The two base-reproducing rows the ticket names.
+		["pin-nrl136-same-line-reopen", "x\n\n<!-- y --> <!-- Q1Z\nTAIL", "x"],
+		["pin-nrl136-reopen-blank-stop", "<!-- y --> <!--\nHIDDENA\n\n--> t.", "t."],
+		// CORE. The same class in the other shapes and positions it reaches.
+		["pin-nrl136-text-between-openers", "<!-- y --> x <!-- H1\n\nT2", "x"],
+		["pin-nrl136-empty-first-comment", "<!----> <!-- Q2Z\nTAIL", ""],
+		// `html` is in interruptParagraph, so the line ends the paragraph above it.
+		["pin-nrl136-paragraph-continuation", "Para\n<!-- y --> <!-- Q1Z\nTAIL", "Para"],
+		["pin-nrl136-in-quote", "> <!-- y --> <!-- Q1Z\n> TAIL", ""],
+		["pin-nrl136-list-marker", "- <!-- y --> <!-- Q1Z\nTAIL", ""],
+		["pin-nrl136-list-continuation", "- item\n  <!-- y --> <!-- Q1Z\nTAIL", "item"],
+		["pin-nrl136-task", "- [ ] <!-- y --> <!-- Q1Z\nTAIL", ""],
+		// The closing line of a top-level HTML block is raw too, so an unclosed
+		// `<!--` anywhere on it opens a browser comment.
+		["pin-nrl136-html-block-remainder-text", "<!-- a\nb --> x <!-- Q1Z\nTAIL", "x"],
+		// The markdown under a browser comment is still parsed. A `-->` inside a
+		// fence's code closes it (GT emits `>` raw in `<pre>`), the rest of that
+		// line is code, and the fence's own closer must not be read as an opener.
+		["pin-nrl136-fence-closer", "<!-- y --> <!-- Q4Z\n```\nco --> de\n```\nTAIL", "TAIL"],
+		["pin-nrl136-fence-closer-spoken", "<!-- y --> <!-- Q4Z\n```\nco --> de\n```\nTAIL", "de TAIL", { skipCodeBlocks: false }],
+		// What follows a browser comment's `-->` on an ordinary line is inline,
+		// so a `<!--` there is not a line-start opener. Base hid R2 and TAIL
+		// (prose loss) by asking term 1 about the remainder.
+		["pin-nrl136-browser-close-remainder-inline", "<!-- y --> <!-- Q1Z\nmid --> <!-- R2\nTAIL", "<!-- R2 TAIL"],
+		// A `%%` block under a browser comment is removed by the parser, `-->` and
+		// all, so the browser comment survives it and closes at the NEXT `-->`.
+		["pin-nrl136-pct-block-under-comment", "<!-- y --> <!-- Q1Z\n%%\nmid --> M2\n%%\nN3 --> after.", "after."],
+		// A `-->` on an ATX heading closes inside its `data-heading` attribute,
+		// which GT writes before the heading text, so the whole heading is shown.
+		["pin-nrl136-heading-closer", "<!-- y --> <!-- Q1Z\n# Head --> line\nTAIL", "Head --> line TAIL"],
+		// The line is an HTML block, so it interrupts the paragraph and a code
+		// span cannot cross it: opensHiddenComment now says so (D-74-10).
+		["pin-nrl136-code-carry-refused", "A `x\n<!-- y --> <!-- Q1Z\nz` B\nTAIL", "A x", { skipInlineCode: false }],
+		// GUARDS.
+		// Base already hid this through its remainder rule; kept so the fix
+		// cannot regress it.
+		["guard-nrl136-html-block-remainder", "<!-- a\nb --> <!-- Q1Z\nTAIL", ""],
+		// A browser comment's closing line is ORDINARY markdown, not raw HTML: its
+		// block ended on the opener line. Red on the arm that marks every comment
+		// a block.
+		["guard-nrl136-closer-line-is-inline", "<!-- y --> <!-- Q6Z\nmid --> M2 <!-- Q7Z\nTAIL", "M2 <!-- Q7Z TAIL"],
+		// Four columns: a lazy continuation (module 8607 never asks
+		// interruptParagraph) or, in a fresh block, indented code. Red on the
+		// uncapped `.trim()` arm the plan named as the wrong one.
+		["guard-nrl136-lazy-four-space", "Para\n    <!-- y --> <!-- Q1Z\nTAIL", "Para <!-- Q1Z TAIL"],
+		["guard-nrl136-fresh-four-space-is-code", "x\n\n    <!-- y --> <!-- Q1Z\nTAIL", "x TAIL"],
+		// A heading's content is inline; the second `<!--` is escaped and shown.
+		["guard-nrl136-heading-is-inline", "# <!-- y --> <!-- Q1Z\nTAIL", "<!-- Q1Z TAIL"],
+		// The remainder of a comment term 2 opened is inline.
+		["guard-nrl136-term2-remainder-inline", "Prose <!-- a\nb --> <!-- y --> <!-- Q1Z\nTAIL", "Prose <!-- Q1Z TAIL"],
+		// Five spaces after a list marker make the content indented code.
+		["guard-nrl136-list-marker-five-spaces-is-code", "-     <!-- y --> <!-- Q1Z\nTAIL", "<!-- Q1Z TAIL"],
+		["guard-nrl136-closed-second-comment", "<!-- y --> V1Z\nTAIL", "V1Z TAIL"],
+		// A `-->` inside inline code closes the browser comment too.
+		["guard-nrl136-inline-code-closer", "x\n\n<!-- y --> <!-- Q5Z\nA `c --> d` E\nTAIL", "x d E TAIL"],
+		// An HTML block inside a list item ends with the item, so ITS closing
+		// line is not trusted to be raw. Red on the arm without that restriction.
+		["guard-nrl136-container-block-remainder", "- [ ] <!-- Q3\n```\n x --> y <!-- Z9\n```\nTAIL", "y <!-- Z9 TAIL", { skipCodeBlocks: false }],
+		// TRIPWIRES - residuals NOT closed, pinned at today's output.
+		// An inline `%%...%%` holding the `-->` is removed by the parser, so the
+		// browser comment really continues and the renderer hides the rest; we
+		// close at the `-->` and speak it. Not modelled (pipeline decision 4).
+		["pin-nrl136-residual-inline-pct-closer", "<!-- y --> <!-- Q1Z\nA %%x --> y%% B\nTAIL", "y%% B TAIL"],
+		// A non-comment HTML block start (`<div>`) followed by `<!--` hides TAIL
+		// in the renderer too. Out of scope for NRL-136.
+		["pin-nrl136-residual-div-opener", "<div> <!-- Q1Z\nTAIL", "<!-- Q1Z TAIL"],
+		// List-item content led by five spaces: the renderer still opens a block
+		// after `- item` (and up to seven after `1. item`), but module 745's
+		// dedent is not uniform across markers, so only <= 4 spaces or one tab is
+		// accepted. Spoken, as on base.
+		["pin-nrl136-residual-list-five-space-content", "- item\n     <!-- y --> <!-- Q1Z\nTAIL", "item <!-- Q1Z TAIL"],
+	];
+	for (const [id, src, expected, overrides] of nrl136) {
+		const chunks = extractChunks(src, { ...OPTS, ...overrides });
+		check(`NRL-136 ${id}: visible output`, chunks.map((c) => c.text).join(" ") === expected, `got: ${chunks.map((c) => c.text).join(" ")}`);
+		check(`NRL-136 ${id}: sourceIndex lockstep by UTF-16 unit`, chunks.every((k) =>
+			k.sourceIndex.length === k.text.length &&
+			k.sourceStart === k.sourceIndex[0] &&
+			k.sourceEnd === k.sourceIndex[k.text.length - 1]! + 1 &&
+			k.sourceIndex.every((at, i) => at >= 0 && at < src.length && (i === 0 || at >= k.sourceIndex[i - 1]!)) &&
+			unitsMatch(k.text, k.sourceIndex, src),
+		));
+	}
 	const paced = extractChunks("Before.\n\n%%\nhidden\n%%\n\nafter.", OPTS);
 	check("NRL-38 paragraph boundaries retained", paced.length === 2);
 }

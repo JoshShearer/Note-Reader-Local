@@ -1264,3 +1264,98 @@ pipeline only, and **Live Preview is separate code that no ticket in this family
 ever read or run**. The hast transformers are stubbed empty in the render harness
 (they only decorate `<a>` elements). Rule 11 applies to every number in this
 section.
+
+## NRL-136 (2026-10-01): a third way in - a later `<!--` on an HTML-block line
+
+**Defect (R-M08, disclosure direction), reproduced on `508b79e` before any edit** by
+bundling the real `extract.ts`: `x` / blank / `<!-- y --> <!-- Q1Z` / `TAIL` spoke
+`x | <!-- Q1Z TAIL`, and `<!-- y --> <!--` / `HIDDENA` / blank / `--> t.` spoke
+`<!-- HIDDENA | --> t.`. Obsidian 1.13.7's own WT parser and GT renderer, executed in
+Node (harness `app.js` sha256 `8efbf581...9898`, re-verified against the installed
+flatpak asar this session; selftest 6/6, oracle111 selftest 9/9), render the first as
+`<p>x</p>\n<!-- y --> <!-- Q1Z\n<p>TAIL</p>`: module 8776 opens an HTML block at the
+line-start `<!--`, closes it on the same line, the whole line passes through raw, and
+the second `<!--` becomes a **browser** comment over the rendered output, closing at
+the next `-->` anywhere later. Neither term of decision 1 sees it: the slice before
+the later opener is not blank (term 1), and the line is not in a paragraph (term 2).
+
+**Decision.** A third term, `htmlBlockLine`, asked from both `cleanLine` and
+`opensHiddenComment` (D-74-10): a later unclosed `<!--` opens when the line's FIRST
+`<!--` is an HTML-block start. `opensHtmlBlock`, `opensObsidianBlock`,
+`endsTerm2Scan`, `endsTerm2Block`, `labelClose`, `opensMathBlock`,
+`interruptsParagraph`, `codeSpanClosesLater` and `bracketClosesLater` are
+byte-identical (sha256 of brace-matched bodies); `interruptsParagraph` moves only
+through `opensHiddenComment`. Every edge below was decided against
+`oracle111.rendererHides`, not by hand:
+
+1. **Column cap.** Fewer than four columns (tab = next multiple of four), NOT term 1's
+   uncapped `.trim()`: `Para` / four spaces + `<!-- y --> <!-- Q` / `TAIL` displays
+   TAIL (lazy continuation; indented code in a fresh block). On list-item content
+   `listDedented` already stripped, only at most four spaces or one tab: module 745's
+   dedent is not uniform (after `- item` five spaces still open a block, after
+   `1. item` seven do, `  \t` does not), so the conservative lead keeps every
+   mis-call on the base side. The plan's literal "listDedented means any lead" lost
+   35,328 census cells.
+2. **Container lead.** On a list-marker, task or callout line, the whitespace the
+   marker consumed must be one to four spaces or one tab (measured for `-`, `*`, `+`,
+   `1.`, `1)`, `- [ ]`, `> - [ ]`, `> [!note]`); five spaces is indented code. A
+   heading is never a block start (`# <!-- y --> <!-- Q` shows Q).
+3. **The remainder of a top-level HTML block's closing line is raw**
+   (`<!-- a` / `b --> x <!-- Q` hides Q), but only when the opener had no container
+   prefix: an HTML block in a list item ends with the item.
+4. **A browser comment's region is rendered markdown, still parsed.** Fences toggle
+   under it (a `-->` in fenced code closes it, the rest of that line is code); a `%%`
+   block under it is removed, `-->` and all, so the browser comment resumes after the
+   `%%` closer; a `-->` on an ATX heading closes inside `data-heading`, so the whole
+   heading is read; and what follows the `-->` on an ordinary line is inline
+   (term 2 only), so `--> <!-- R2` no longer silences R2 (a base prose loss this
+   fixes). The first fuzz run without the `%%` rule newly disclosed 112 cells, all in
+   notes with a `%%` under the comment.
+
+**Evidence (bare Node, Reading view only).** Tests: 16 core fixtures red on the
+pre-fix tree, 0 after; 10 guards and 3 tripwires green on both; each guard is red on
+the wrong arm it names (uncapped `.trim()`, no container-lead test, every comment a
+block, no top-level restriction, no fence tracking, no inline remainder). Signed
+census, 12 positions x 8 indents (0-6, tab) x 10 shapes x 512 content-key
+combinations, 1,703,936 cells: room 388,608 base-disclosing cells, **370,944 closed,
+0 newly disclosing, 0 newly losing**; wrong arms newly lose 129,536 (`.trim()`),
+35,328 (any dedent), 94,208 (no lead test), 80,640 (every comment a block), 16,128
+(no fence tracking). The top-level and inline-remainder arms have no room in that
+census and are caught only by their guards and the fuzz. Carry probe (code span and
+label across the line, plain and quoted, 430,080 cells): disclosure 122,880 ->
+15,360, prose loss 32,256 -> 26,112, 0 new in either direction. Fuzz, 4 seeds x
+4,000 adversarial notes x 2 option sets: per seed 0 newly disclosing, about 3,800
+disclosing cells closed and 155-171 lost cells restored, against **132-142 newly lost
+cells from 18 distinct notes of 16,000**. Every one of the 18 was read: each puts the
+reopen line or its closer where the renderer has code or math we already misparse
+(an unclosed `$$`, tab-led or four-space code inside lists and quotes, a fence in a
+task item) or a `%%` our `listDedented` approximation over-accepts, so base was right
+there by accident. **Ship review re-derived that classification by control rather than by
+reading**, over the same 18 notes plus 6 more from 4 further seeds (5-8, which newly lose
+128-144 cells each, 0 newly disclosing, 0 `sourceIndex` failures): in **19 of the 24** the
+reopen line alone was replaced by a plain line-start `<!--`, the renderer's output still
+displayed every lost sentinel, and **base itself drops exactly those sentinels** in that
+control, so the loss is the pre-existing misread with term 1's own answer. The other 5 change
+the render under that ablation and were each matched to a named control that loses on base:
+an unclosed `$$` inside a list (`- $$` / `> -   %% S1Z` / `TAIL` speaks `$$` only) and at
+top level (`  $$` / `- %% S8Z` / `TAIL`), a `%%` whose list scope we over-extend
+(`-   %%` / fence / `VIS` / `x %% S3Z` drops `VIS`), a six-space `%%` after a raw HTML line in
+a list item (`- a` / `<!-- a --> S2Z` / `      %%` / `S4Z` drops `S4Z`), and a lazy setext
+underline we do not recognise (`> - S1Z <!-- S2Z -->` / `===` speaks `===`), where the same
+note without the underline is spoken exactly as the renderer shows it. `sourceIndex` clean by numeric UTF-16 index over 151,811 chunks /
+1,050,245 units, all four mutators nonzero.
+
+**Residuals, pinned as tripwires:** a `-->` inside an inline `%%...%%` pair (removed
+by the parser, closed here); `<div> <!--` (non-comment HTML blocks, out of scope);
+list-item content led by five or more spaces. Also unchanged and unclaimed: a fully
+closed line-start comment line (`<!-- y --> <!-- Q -->`) inside a code-span carry is
+still crossed, because a closed comment never made `opensHiddenComment` true.
+
+**NRL-120 reconciliation.** NRL-120 was unmerged when this landed and its pins
+(`pin-nrl120-unmasked-same-line-reopen`, `pin-nrl120-unmasked-reopen-by-math-stop`
+and their base controls) exist only on its branch. Whichever of NRL-120 and NRL-136
+merges second must reconcile those pins against this rule and re-measure.
+
+**NOT OBSERVED IN A RUNNING OBSIDIAN.** The oracle is the shipped reading-view parser
+and renderer run in Node; Live Preview has not been read. Rule 11 applies to every
+number here. R-M08 is not met and the `2 of 16` count does not move.
