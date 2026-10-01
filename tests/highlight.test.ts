@@ -32,6 +32,9 @@ import {
 	nextScrollSuppression,
 	scrollTargetForChunk,
 	shouldHighlightLeaf,
+	registerScrollSuppression,
+	resetScrollSuppression,
+	isScrollSuppressed,
 } from "../src/ui/highlight.ts";
 import type { HighlightLayers, HighlightToggles } from "../src/ui/highlight.ts";
 import {
@@ -162,9 +165,21 @@ console.log('3. An engine reporting timing "none" draws no word mark');
  * NRL-72's scroll effect is only observable on the transaction and the "one
  * transaction, not two" property is only observable as a count. Blocks 4 and 5
  * read none of that and are unaffected.
+ *
+ * NRL-90 added `scrollDOM` ADDITIVELY, so `registerScrollSuppression`'s
+ * listener body gets its first coverage of any kind. It is a stub, not a DOM:
+ * it records how many `scroll` listeners were attached (which is the only way
+ * to observe the WeakSet dedupe the function's docstring claims) and keeps the
+ * captured handlers so `fireScroll()` can invoke them directly. Invoking the
+ * handler directly is NOT the same as a real browser `scroll` event - see the
+ * amended KNOWN GAP at the end of block 19 for exactly what that still leaves
+ * uncovered. No pre-NRL-90 check reads `scrollDOM`, `addCount` or
+ * `fireScroll`, so blocks 4-18 are untouched by its presence.
  */
 type DispatchSpec = Parameters<EditorState["update"]>[0];
 function fakeEditor(initial: EditorState) {
+	const scrollHandlers: (() => void)[] = [];
+	let scrollListenerCount = 0;
 	const editor = {
 		state: initial,
 		dispatched: [] as { spec: DispatchSpec; tr: Transaction }[],
@@ -172,6 +187,21 @@ function fakeEditor(initial: EditorState) {
 			const tr = editor.state.update(spec);
 			editor.dispatched.push({ spec, tr });
 			editor.state = tr.state;
+		},
+		scrollDOM: {
+			addEventListener(type: string, fn: () => void) {
+				if (type !== "scroll") return;
+				scrollListenerCount += 1;
+				scrollHandlers.push(fn);
+			},
+		},
+		/** Invoke every captured 'scroll' handler once, modelling one scroll event. */
+		fireScroll() {
+			for (const fn of scrollHandlers) fn();
+		},
+		/** How many 'scroll' listeners `registerScrollSuppression` attached. */
+		scrollListenerCount() {
+			return scrollListenerCount;
 		},
 	};
 	return editor as typeof editor & { state: EditorState };
@@ -747,28 +777,231 @@ console.log("19. NRL-90: scroll suppression after a manual scroll, until playbac
 	check("a user scroll while clear -> suppression latches on", nextScrollSuppression(false, true) === true);
 	check("already suppressed, no new user scroll -> stays suppressed (latches, no auto-clear)", nextScrollSuppression(true, false) === true);
 	check("already suppressed, another user scroll -> stays suppressed (idempotent)", nextScrollSuppression(true, true) === true);
+
+	/*
+	 * ----------------------------------------------------------------------
+	 * NRL-90 follow-up (Q6): `registerScrollSuppression`'s LISTENER BODY,
+	 * covered here for the first time via `fakeEditor`'s additive `scrollDOM`
+	 * stub.
+	 *
+	 * THE DEFECT, reproduced before it was fixed. `resetScrollSuppression`
+	 * wrote only `scrollSuppressed.set(editor, false)` and left
+	 * `expectingOwnScroll` alone. That matters because a scroll dispatch can
+	 * arm the flag and then move the DOM by zero pixels, in which case no
+	 * native 'scroll' event ever fires and nothing consumes the arm:
+	 * `scrollRectIntoView` computes a non-zero `moveY` and passes the
+	 * `if (moveX || moveY)` gate at node_modules/@codemirror/view/dist/
+	 * index.js:200, but the write twenty lines later
+	 * (`cur.scrollTop += moveY / scaleY`, :208-213) is CLAMPED by the browser,
+	 * and a `scrollTop` write that does not change the value fires no event.
+	 * This is the ordinary case at the opening of a read: centring a chunk in
+	 * the first half-viewport needs a negative `scrollTop`. It is measured on
+	 * a real device already, in this repo - docs/adr/0022:245-249 records
+	 * chunks 0-4 holding `scrollTop` 0 on NRL-110's own post-`center` series,
+	 * five of twenty-two dispatches moving the DOM by zero.
+	 *
+	 * So a stale arm survived a playback restart, and the FIRST genuine user
+	 * scroll after that restart was misread as the plugin's own - which
+	 * contradicts `resetScrollSuppression`'s own claim to return the editor to
+	 * normal follow behaviour, and is acceptance criterion 4 of the ticket
+	 * ("playback restarting resets to the normal follow behaviour").
+	 *
+	 * Measured against the unfixed `resetScrollSuppression` by staging these
+	 * checks before the one-line fix: 19h and 19i RED, every guard and the
+	 * tripwire below GREEN on both sides.
+	 */
+	const defaultToggles: HighlightToggles = { enabled: true, sentence: true, word: true };
+	/** A chunk dispatch in main.ts's own shape, with suppression consulted. */
+	function suppressibleChunkDispatch(
+		editor: ReturnType<typeof fakeEditor>,
+		sourceStart: number,
+		sourceEnd: number,
+	): void {
+		const plan = highlightPlan(defaultToggles, true);
+		applyHighlightLayers(
+			editor as never,
+			{ sentence: plan.sentence ? { from: sourceStart, to: sourceEnd } : null, word: null },
+			scrollTargetForChunk(plan, sourceStart, isScrollSuppressed(editor as never)),
+		);
+	}
+
+	// 19h REPRO. Arm via a real scroll dispatch, then model the zero-movement
+	// case by firing NO scroll event (R1), restart playback, and let the user
+	// scroll once. The stale arm must not eat that event.
+	{
+		const editor = fakeEditor(fresh());
+		registerScrollSuppression(editor as never);
+		suppressibleChunkDispatch(editor, 0, 17); // arms expectingOwnScroll
+		// (no fireScroll here: the DOM did not move, so no event exists)
+		resetScrollSuppression(editor as never); // playback restarts
+		editor.fireScroll(); // the user's first scroll of the restarted read
+		check(
+			"19h REPRO a pre-restart arm does not survive resetScrollSuppression",
+			isScrollSuppressed(editor as never) === true,
+			`isScrollSuppressed=${isScrollSuppressed(editor as never)}`,
+		);
+	}
+
+	// 19i REPRO, the same defect observed where the user actually sees it: on
+	// the next chunk dispatch. main.ts reads the flag through
+	// `scrollTargetForChunk`, not directly, so this is a second observable of
+	// one defect and worth pinning separately.
+	{
+		const editor = fakeEditor(fresh());
+		registerScrollSuppression(editor as never);
+		suppressibleChunkDispatch(editor, 0, 17);
+		resetScrollSuppression(editor as never);
+		editor.fireScroll();
+		const before = editor.dispatched.length;
+		suppressibleChunkDispatch(editor, 18, 37);
+		const tr = editor.dispatched[before]!.tr;
+		check(
+			"19i REPRO after a restart and one user scroll, the next chunk carries no scroll effect",
+			scrollEffects(tr).length === 0,
+			JSON.stringify(scrollEffects(tr)),
+		);
+	}
+
+	// 19j GUARD, green on both sides: a chunk dispatch with no scroll target
+	// must not arm, so the very next scroll event latches immediately.
+	{
+		const editor = fakeEditor(fresh());
+		registerScrollSuppression(editor as never);
+		applyHighlightLayers(
+			editor as never,
+			{ sentence: null, word: null },
+			scrollTargetForChunk({ sentence: false, word: false }, 0, false),
+		);
+		editor.fireScroll();
+		check(
+			"19j GUARD a dispatch with no scroll target does not arm, so one event latches",
+			isScrollSuppressed(editor as never) === true,
+			`${isScrollSuppressed(editor as never)}`,
+		);
+	}
+
+	// 19k GUARD, green on both sides, and the PREMISE 19h depends on: the arm
+	// is consumed by exactly one scroll event, never more. Stated separately
+	// so 19h cannot be read as gating on something else.
+	{
+		const editor = fakeEditor(fresh());
+		registerScrollSuppression(editor as never);
+		suppressibleChunkDispatch(editor, 0, 17);
+		editor.fireScroll();
+		const afterOwn = isScrollSuppressed(editor as never);
+		editor.fireScroll();
+		check(
+			"19k GUARD the arm is consumed exactly once (first event ours, second latches)",
+			afterOwn === false && isScrollSuppressed(editor as never) === true,
+			`${afterOwn} then ${isScrollSuppressed(editor as never)}`,
+		);
+	}
+
+	// 19l GUARD, green on both sides: the idempotence `registerScrollSuppression`'s
+	// docstring claims, observable only as a listener count.
+	{
+		const editor = fakeEditor(fresh());
+		registerScrollSuppression(editor as never);
+		registerScrollSuppression(editor as never);
+		registerScrollSuppression(editor as never);
+		check(
+			"19l GUARD registerScrollSuppression attaches exactly one listener however often it is called",
+			editor.scrollListenerCount() === 1,
+			`${editor.scrollListenerCount()}`,
+		);
+	}
+
+	// 19m GUARD, green on both sides: the pre-existing half of
+	// `resetScrollSuppression` still works - a LATCHED suppression clears.
+	{
+		const editor = fakeEditor(fresh());
+		registerScrollSuppression(editor as never);
+		editor.fireScroll(); // unarmed, so this latches
+		const latched = isScrollSuppressed(editor as never);
+		resetScrollSuppression(editor as never);
+		check(
+			"19m GUARD resetScrollSuppression still clears a latched suppression",
+			latched === true && isScrollSuppressed(editor as never) === false,
+			`${latched} then ${isScrollSuppressed(editor as never)}`,
+		);
+	}
+
+	/*
+	 * 19n TRIPWIRE, green on both sides, and NOT a fix - the same convention
+	 * `pin-nrl74-container-label-still-leaks-destination` uses in
+	 * tests/extract.test.ts. This pins F1's ACCEPTED residual, both halves of
+	 * it, so either half can only change deliberately.
+	 *
+	 * F1: within a single read (no restart, so Q6's fix does not apply), a
+	 * zero-movement scroll dispatch leaves the arm set, and the FIRST event of
+	 * the user's next gesture is swallowed. That is accepted rather than
+	 * fixed: the alternative - clearing the arm on a microtask or a single
+	 * rAF - lands BEFORE the scroll event exists, because CodeMirror does not
+	 * scroll inside `dispatch` (index.js:7714-7715 requests a measure,
+	 * :8003-8005 schedules it on `requestAnimationFrame`) and a `scrollTop`
+	 * write fires `scroll` asynchronously after that. It would therefore read
+	 * every one of our own scrolls as a user scroll and kill auto-scroll from
+	 * chunk 1 - fail-CLOSED, where F1 is fail-OPEN at a cost of one swallowed
+	 * event. See docs/adr/0030.
+	 *
+	 * The bound rests on `expectingOwnScroll` being a single read-and-cleared
+	 * boolean: however many no-op dispatches pile up, at most ONE stale arm is
+	 * pending, so a gesture emitting two or more scroll events still latches.
+	 * Whether a real gesture does emit two or more is a device measurement,
+	 * not something this suite can judge.
+	 */
+	{
+		const editor = fakeEditor(fresh());
+		registerScrollSuppression(editor as never);
+		suppressibleChunkDispatch(editor, 0, 17); // arms; DOM moves zero (R1)
+		editor.fireScroll(); // first event of the user's gesture - SWALLOWED
+		const afterFirst = isScrollSuppressed(editor as never);
+		editor.fireScroll(); // second event of the same gesture - latches
+		check(
+			"19n TRIPWIRE F1 accepted residual: a zero-movement arm swallows the first user scroll event, the second latches",
+			afterFirst === false && isScrollSuppressed(editor as never) === true,
+			`${afterFirst} then ${isScrollSuppressed(editor as never)}`,
+		);
+	}
 }
 
 /*
- * KNOWN GAP, stated honestly rather than left implicit: this block covers
- * only the two PURE pieces of NRL-90 - `nextScrollSuppression`'s state
- * transitions and `scrollTargetForChunk`'s new `suppressed` parameter. It
- * does NOT cover, and CANNOT cover in this suite:
+ * KNOWN GAP, stated honestly rather than left implicit. AMENDED by NRL-90's
+ * follow-up rather than deleted: the gap got NARROWER, not empty, and what is
+ * left has to be said precisely or the new coverage will be read as more than
+ * it is.
  *
- *   - `registerScrollSuppression`'s actual `scrollDOM.addEventListener("scroll", ...)`
- *     wiring. This file never instantiates a real `EditorView` (ADR 0022
- *     decision 3's own comment already says so, and it remains true), only
- *     the `fakeEditor` object above, which has no `scrollDOM` at all.
- *   - Whether the read-and-clear `expectingOwnScroll` heuristic correctly
- *     identifies the plugin's OWN scroll versus a genuine user scroll in a
- *     real browser. This is a best-effort heuristic with no automated
- *     coverage of any kind here - see docs/adr/0030, which states plainly
- *     that it has never been run against a real browser's actual
- *     scroll-event timing (AGENTS.md rule 13: never assert an unmeasured
- *     claim as fact).
+ * WHAT IS NOW COVERED, where nothing was before. The checks 19h-19n above drive
+ * `registerScrollSuppression`'s listener BODY, via `fakeEditor`'s additive
+ * `scrollDOM` stub: the read-and-clear of `expectingOwnScroll`, the WeakSet
+ * dedupe observed as a listener count, the arming site inside
+ * `applyHighlightLayers`, and `resetScrollSuppression` clearing both pieces of
+ * state. So the sentence this comment used to carry - that the listener has no
+ * automated coverage of any kind - is no longer true and has been removed
+ * rather than left standing.
  *
- * Both gaps require a real EditorView and a real DOM `scroll` event, neither
- * of which bare Node can build. main.ts's three call-site edits
+ * WHAT IS STILL NOT COVERED, and cannot be in this suite:
+ *
+ *   - EVENT TIMING. `fireScroll()` invokes the captured handler directly, in
+ *     the same task as the dispatch. A real browser fires 'scroll'
+ *     asynchronously, at least one frame after the `scrollTop` write, which
+ *     CodeMirror itself performs in a `requestAnimationFrame` measure pass
+ *     (index.js:7714-7715 requests, :8003-8005 schedules) rather than inside
+ *     `dispatch`. Nothing here tests that ordering, and it is exactly what
+ *     docs/adr/0030 rejects the self-expiring-arm alternative on.
+ *   - GESTURE MULTIPLICITY. 19n pins that the second event of a gesture
+ *     latches, but how many 'scroll' events one real touch drag or wheel
+ *     gesture emits is a device fact. It is the single measurement that decides
+ *     whether F1's accepted residual has any user-visible consequence at all.
+ *   - WHETHER `scrollDOM` IS THE ELEMENT OBSIDIAN SCROLLS. This file never
+ *     instantiates a real `EditorView` (ADR 0022 decision 3's own comment says
+ *     so, and that remains true), so the stub asserts our own contract with
+ *     ourselves. If Obsidian scrolls an ancestor instead - which
+ *     `scrollRectIntoView`'s parent walk at index.js:152-155 can reach - the
+ *     listener never fires and none of this would show it.
+ *
+ * All three need a real EditorView and a real DOM `scroll` event, neither of
+ * which bare Node can build. main.ts's three call-site edits
  * (`registerScrollSuppression`/`resetScrollSuppression` at readActiveNote,
  * readSelection and readFromCursor) also have no automated coverage: main.ts
  * imports `obsidian` and cannot run in this suite, the same gap every prior

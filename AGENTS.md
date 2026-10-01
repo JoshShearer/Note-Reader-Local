@@ -1220,14 +1220,19 @@ rediscover them:
   recorded in ADR 0022 rather than here: two early post-fix runs scrolled not at all right
   after a `disablePlugin`/`enablePlugin` reload, cause **unidentified**, not reproduced
   from a clean state by either the implementer or the independent re-measure, and not
-  attributable to this change. **Not solved, and an explicit follow-up:** nothing
-  detects a manual mid-read scroll, so one is overridden at the next sentence boundary.
+  attributable to this change. The sentence that used to sit here - "**Not solved, and
+  an explicit follow-up:** nothing detects a manual mid-read scroll, so one is overridden
+  at the next sentence boundary" - is **no longer true in either half** and is corrected
+  rather than left standing: NRL-90 added the `scrollDOM` detection and the suppression
+  policy, so see the NRL-90 bullet below for what detects it, what the policy is, and the
+  one case in which a scroll event is still misattributed.
   R-S03 is a SHOULD, so the `2 of 16` MUST headline count does not move.
 - A note switch mid-read no longer drags the highlight or the NRL-72 scroll onto the
   wrong document, as of NRL-89 (PR #116, `2b4c18a`). This is a **separate** gap from the
-  "not solved" follow-up in the bullet above - that one is about a manual scroll *within*
-  the note being read getting overridden, this one is about a **different note entirely**
-  getting decorated and scrolled - and NRL-89 closes only the second. Before it, nothing
+  manual-scroll one the bullet above used to carry as "not solved" and NRL-90 has since
+  closed - that one is about a manual scroll *within* the note being read getting
+  overridden, this one is about a **different note entirely** getting decorated and
+  scrolled - and NRL-89 closes only the second. Before it, nothing
   in the plugin listened for `active-leaf-change` at all, so the chunk/word handlers'
   `if (!this.activeEditor) return;` guard kept pointing at whichever editor
   `retargetHighlightEditor` last touched: the note a read STARTED on, not the one now in
@@ -1263,8 +1268,88 @@ rediscover them:
   `instanceof MarkdownView` check fails closed in that case, which is under-highlighting,
   not the wrong-note failure mode this fixes, so the failure direction stays safe either way
   but the premise itself is unverified. R-S03 is a SHOULD, so the `2 of 16` MUST headline
-  count does not move, and this bullet does not touch the still-open manual-scroll follow-up
-  recorded immediately above.
+  count does not move, and this bullet does not touch the manual-scroll follow-up recorded
+  in the bullet above, which NRL-90 closed separately.
+- **A manual scroll made mid-read is detected and respected as of NRL-90** (PR #127,
+  `fe867f8`, plus this ticket's follow-up; `docs/adr/0030`, `srs.md` R-S03). A `scroll`
+  event on `editor.scrollDOM` that the plugin's own dispatch did not cause latches
+  suppression on that editor, and `scrollTargetForChunk` then returns `null` so the chunk
+  dispatch carries no scroll effect at all. Suppression lapses only when playback restarts
+  (`resetScrollSuppression`, called at all three read-start sites and deliberately **not**
+  on the NRL-89 leaf-reattach path, since reattaching to a note whose read is still in
+  flight is not a fresh `play()`). Attribution is a read-and-clear boolean armed
+  immediately before a scrolling dispatch, not a timer and not viewport arithmetic: ADR
+  0022 decision 3 forbids `coordsAtPos` in this file and the bare-Node suite cannot
+  instantiate an `EditorView`. No timer, no sentence count and no toggle - all three were
+  considered and rejected in ADR 0030.
+  **The follow-up shipped one line**, `expectingOwnScroll.delete(editor)` inside
+  `resetScrollSuppression`, and the defect it closes is worth stating because it reverses
+  what two ADRs predicted. `applyHighlightLayers` arms the flag before every scrolling
+  dispatch, but a dispatch does not always move the DOM: `scrollRectIntoView` passes its
+  `if (moveX || moveY)` gate at `node_modules/@codemirror/view/dist/index.js:200` and then
+  has its `cur.scrollTop += moveY / scaleY` write **clamped** by the browser at `:208-213`,
+  and a `scrollTop` write that changes nothing fires **no `scroll` event**. So the arm
+  survives unconsumed, and before this line it survived a playback restart too and
+  swallowed the first genuine user scroll of the next read - contradicting
+  `resetScrollSuppression`'s own claim to restore normal follow behaviour. Reproduced in
+  bare Node against the real `src/ui/highlight.ts` before anything was changed; `19h` and
+  `19i` in `tests/highlight.test.ts` block 19 are red against the unfixed function and
+  green after, with four guards and one tripwire green on both sides and labelled as such.
+  **F1 is REACHABLE, and the earlier "measure-zero" reading was wrong.** Both
+  `docs/adr/0030`'s own Consequences and `docs/adr/0022`'s NRL-110 amendment expected
+  `{ y: "center" }` to make the zero-movement case vanish, because the `center` arm
+  computes `moveY` unconditionally. That reasoning stops at the gate and misses `movedY`
+  twenty lines later; `moveY != 0` with the DOM not moving is ordinary. Both documents are
+  corrected in place rather than left standing, and the superseded reading must not be
+  restated. The strongest evidence was already in the repo: NRL-110's own post-`center`
+  on-device series at `docs/adr/0022:240-249` records chunks 0-4 holding `scrollTop` 0,
+  **five of twenty-two dispatches moving the DOM by zero**, at the opening of every read.
+  Three further reachable cases are named in ADR 0030; R2 (a note's tail) and R3 (a note
+  shorter than the viewport, taking the parent walk at `index.js:152-155`) stay **reasoned,
+  not measured**.
+  **The residual is accepted, not fixed, and the reason is fail-direction.** Clearing the
+  arm on a microtask or a single animation frame would land before the scroll event exists,
+  because CodeMirror does not scroll inside `dispatch` (`index.js:7714-7715` requests a
+  measure, `:8003-8005` schedules it on `requestAnimationFrame`) and the native event is
+  asynchronous after that write. It would read every one of our own scrolls as a user
+  scroll and kill auto-scroll from chunk 1 - fail-closed. F1 is fail-open and costs exactly
+  one swallowed `scroll` event, because the flag is a single read-and-cleared boolean, so a
+  gesture emitting two or more events still latches. `19n` pins both halves as a tripwire.
+  Build on the NRL-110 decision-3 correction recorded above rather than the superseded
+  `side === 1` reasoning.
+  **OBSERVED IN A REAL OBSIDIAN, for the first time for this feature, on Android** - so
+  ADR 0030's original "NOT VERIFIED IN OBSIDIAN" is superseded for these four facts and
+  stands for everything else. Pixel 9 Pro XL, Obsidian WebView Chrome/154, vault
+  `AcceptanceTest`, `ScrollAcceptance.md`, driven over `adb forward tcp:9333` with a probe
+  hooking `EditorView.dispatch` and counting native `scroll` events on the same
+  `scrollDOM`. **F1 observed, not inferred**: four consecutive opening chunk dispatches each
+  carried a `y: "center"` scroll effect (heads 2, 21, 128, 290) with `scrollTop` **0 before,
+  0 two frames after and 0 at 100 ms**, and **zero native scroll events** across the whole
+  window. **The falsifiable prediction came out favourable**: one real touch drag through
+  CDP `Input.synthesizeScrollGesture` emitted **54, 46 and 33** native `scroll` events on
+  three gestures, so swallowing one has **no user-visible consequence under a gesture** -
+  which is why **no follow-up ticket is filed** (the exposure is a single-event scroll
+  source only, and a programmatic `scrollTop +=` is exactly that, so the worst case is real
+  but narrow). **The feature works**: after a 54-event gesture moved `scrollTop` 0 -> 400
+  mid-read, the next two chunk dispatches carried two effects and **zero** scroll effects and
+  `scrollTop` held at 400 while the read advanced from chunk 4 to 6. **The one-liner measured
+  on both sides**, same device, same note, same sequence, only `main.js` differing: before,
+  the restarted read's chunk dispatch carried a scroll effect at head 2 and dragged
+  `scrollTop` **300 back to 0**; after, it carried **zero** scroll effects and `scrollTop`
+  held at **300**. And a restart does restore follow - with suppression latched, a fresh read
+  dispatched scroll effects again at heads 2 and 21.
+  **Limits.** `main.ts` imports `obsidian` and has no bare-Node runtime, so the three
+  register/reset call sites and the `isScrollSuppressed` read are **unexercised by
+  `npm test`**. The suite invokes the captured handler directly, so real event timing
+  relative to CodeMirror's measure pass and whether `scrollDOM` is the element Obsidian
+  actually scrolls are still uncovered by it - the amended KNOWN GAP comment at the end of
+  block 19 states exactly that. **Desktop is unobserved**: CDP port 9222 is unreachable in
+  this environment and the Flatpak Obsidian must not be restarted, so every on-device figure
+  is Android-only. Nothing was listened to or watched for feel. One unrelated thing recurred
+  three times and is NRL-101's, not this ticket's: a `read-note` after a stop left the player
+  in `preparing` indefinitely until a `disablePlugin`/`enablePlugin` cycle, on the pre-fix and
+  post-fix builds alike. R-S03 is a SHOULD, so the `2 of 16` MUST headline count does not
+  move.
 - A selection-scoped read clips its queue by **scanning** `sourceIndex` as of NRL-57
   (`src/audio/clip.ts`, `srs.md` R-M11). This defect was not recorded here before, and it
   shipped inside NRL-52. The deleted expression was `textStart = from - chunk.sourceStart`

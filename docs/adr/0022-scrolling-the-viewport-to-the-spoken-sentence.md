@@ -322,7 +322,31 @@ direction: the fall-through arm computes
 `moveY = rect.bottom - boundingHeight + yMargin - bounding.top`, which is non-zero
 in general, so a rect taller than the viewport stops being **centred** - it becomes
 end-aligned - rather than becoming motionless. It therefore still fires a native
-`scroll` event and still consumes the arm. What is left of the zero-movement set is
-a rect already exactly centred, and nothing else that has been identified.
-**NRL-90 must re-derive F1 against what this ticket
-actually landed and must not reuse any pre-NRL-110 measurement of it.**
+`scroll` event and still consumes the arm.
+
+**CORRECTED BY NRL-90 (docs/adr/0030), and the correction reverses the
+conclusion.** The paragraph above ended by saying "what is left of the
+zero-movement set is a rect already exactly centred, and nothing else that has
+been identified", and asked NRL-90 to re-derive F1. NRL-90 did, and that sentence
+is **false**: the zero-movement set is large, not measure-zero, and F1 is reachable
+at the opening of every read. The error is identifiable - every claim in this
+paragraph reasons about `moveY` at the `if (moveX || moveY)` gate
+(`node_modules/@codemirror/view/dist/index.js:200`) and stops there, missing
+`movedY` twenty lines later. At `:208-213` the library does
+`let start = cur.scrollTop; cur.scrollTop += moveY / scaleY; movedY = (cur.scrollTop - start) * scaleY;`
+The browser **clamps** an out-of-range `scrollTop`, and a `scrollTop` write that
+does not change the value fires **no `scroll` event at all**. So "`moveY` is
+non-zero" and "the DOM moved" are different facts, and only the second one
+consumes the arm.
+
+The strongest evidence is **already in this ADR, in this ticket's own on-device
+series**: at the `y: "center"` measurement above, "Chunks 0-4 are unchanged from
+the baseline ... `scrollTop` 0 - because centring them would mean scrolling up past
+the top of the document and `scrollTop` cannot go negative". Five of that run's
+twenty-two chunk dispatches moved the DOM by **zero**, and they are the first five
+of every read. ADR 0030's NRL-90 amendment carries the full re-derivation, the
+four reachable sub-cases (clamped at the document top, clamped at the tail, a note
+shorter than the viewport taking the parent walk at `:152-155`, and the genuinely
+measure-zero already-centred rect), and the reason F1 is nevertheless accepted as
+a bounded fail-open residual rather than fixed. Do not restate the superseded
+"measure-zero" reading anywhere.
