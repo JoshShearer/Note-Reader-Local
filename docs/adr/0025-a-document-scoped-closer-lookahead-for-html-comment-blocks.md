@@ -1456,7 +1456,8 @@ lost and 2,113 cells of loss closed**. Its 9 newly-speaking cells are 3 notes: t
 image alt text spoken by design (the oracle reads `textContent`, not `alt`), and one is
 a `<div>` raw HTML block that `main` already speaks with `skipHeadings` off, i.e. the
 NRL-137 class, uncovered when `skipHeadings` stopped over-dropping. Verify's 24.4M-cell
-census was NOT re-run; its harness did not survive the run. Verify also counted
+census was not re-run on that harness, which did not survive the run; a second,
+independent Verify built its own and is recorded below. Verify also counted
 **736 cells of a space-tab `<!--` class** (the NRL-93 / NRL-115 family) among the
 newly-spoken unmaskings, which this section did not list; it is listed here.
 
@@ -1485,6 +1486,49 @@ class), unchanged. A quoted or listed setext heading still speaks its underline
 ticket must re-run NRL-115's if NRL-115 lands first. The `after setext` rows with
 leads ` `, `  `, `   `, ` \t` and `\t` are in this corpus for that purpose.
 
-**NOTHING IN NRL-120 WAS OBSERVED IN A RUNNING OBSIDIAN.** No deploy and no CDP
-session. The oracle is the shipped reading-view parser and renderer executed in
-Node; Live Preview has never been read. Rule 11 applies to every number here.
+**Second Verify, on the merged revision `e448540` (recorded at Finish).** An
+independent census against base `079cf0c`, oracle111 on rendered HTML:
+PRE(34) x OPEN(34) x UL(40) x TAIL(17) = 786,080 notes x 16 masks =
+**30,906,816 sentinel cells**, room 9,906,212 hidden cells and 14,730,136 loss
+cells. **Newly lost: 240, every one heading text inside a rendered `<h1>` under
+`skipHeadings`**, which is that exclusion working (base spoke it because it did
+not recognise the heading). **Newly leaking: 249,508, every one reproducing on base
+in a defused form at the same mask** (opener defused 93,616, underline blanked
+149,868, `$$` blanked plus dedent 3,600, all `$$` blanked 1,632, tail underline
+blanked 792); by class NRL-136 140,320, NRL-137 `<div>` 53,616, NRL-137
+processing instruction 50,844, space-tab `<!--` 4,720, other 8. So they are
+unmaskings in the sense used above, not new disclosures, and the counts supersede
+Ship's 73,728 and Verify-1's 736 for scale, on a different corpus. Ablation
+without `TERM2_MATH`: 148,140 newly leaking, all explained, 0 newly lost. Wrong
+arms were caught on the same census: the previous revision `8add7ba` 3,036 newly
+lost outside headings, a `\s*` lead with no `rawHtml` or lazy guards 57,152
+unexplained leaks, `TERM2_MATH = /^\s*\$\$/` 8,064 unexplained. NRL-111's corpus
+re-measured: Class B 51,200 -> 15,360, Class A 0 -> 0. `sourceIndex` 0 failures on
+every chunk of every arm, the equation exemption mandatory (6,040 base / 6,280
+merge failures without it), all four mutators nonzero on both arms.
+
+**A further unmasking route this section did not describe, found by that Verify.**
+The exact-underline heading site (`SETEXT_UNDERLINE_EXACT` plus the one-content-line
+test) is itself a route: where base treated a two-or-more-line paragraph over `===`
+as a setext heading and `skipHeadings` dropped renderer-hidden text with it, the
+fix no longer calls it a heading and speaks that text. **792 cells**, all
+reproducing on base with the underline blanked (the `tailUlBlank` row above), so
+again an unmasking and not a new disclosure. Example:
+`<?x QPAQ` / `QOAQ plain` / `QUAQ -->` / `===` / `QTJQ` (NRL-137's
+processing-instruction class). **8 of the 792 belong to none of the four classes
+recorded here**: a code span plus an inline comment,
+``QPAQ `code`` / `` `<!--` `` / `QUAQ -->` / `===` / `QTJQ`, where at mask 418 the
+fix speaks QUAQ and base speaks it too once the `===` is blanked. No ticket is filed
+for that 8-cell shape; it is recorded here so it is not rediscovered as new.
+
+**NOT VERIFIED IN OBSIDIAN BY A HUMAN, and the extractor change was never run inside
+Obsidian.** What did touch the running app: the heading-site correction above used
+Obsidian 1.13.7's own `MarkdownRenderer` over CDP as an oracle, and the second Verify
+rendered all 45 of its named inputs through that live renderer into a detached
+element and found them structurally identical to the Node harness in all 45. It then
+deployed the test-merge, but Obsidian was not restarted, so the in-memory plugin was
+the previous build and `npm run test:obsidian` (which failed at its
+remote-runtime-guard assertion after synthesis and playback succeeded) exercised
+`main`, not this `extract.ts`. Nobody listened to a read. Live Preview has never been
+read. Rule 11 applies to every number here. R-M08 is still NOT met and the `2 of 16`
+count does not move.
