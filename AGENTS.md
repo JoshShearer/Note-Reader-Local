@@ -1245,17 +1245,41 @@ rediscover them:
   not decoration**: without it the case degrades into being caught by the loop's abort clause
   with an identical verdict, leaving the closing clause unpinned again, which is the exact
   failure the ticket exists to fix.
-  **Four clauses still survive deletion, recorded rather than fixed so they are not
-  rediscovered as new:** **O1**, the opening `-O`'s `controller.signal.aborted`; **O3**, the
-  opening `-O`'s `code !== 0`; **P3**, the per-module loop's `code !== 0`; and **S3**, a
-  count-instead-of-set module comparison. No case in the suite exercises a deadline or a
-  non-zero exit on the opening `-O`, or a non-zero exit on a per-module listing. **No follow-up
-  ticket has been filed.** Do not read the ADR table's "nothing" rows as saying those clauses
-  are dispensable - every clause is load-bearing per the comments on it.
-  All of the above is **bare-Node mutation evidence**: 21 mutations of
+  **Those four clauses are now PINNED, by NRL-94**, and the paragraph that stood here - "four
+  clauses still survive deletion ... no case in the suite exercises a deadline or a non-zero
+  exit on the opening `-O`, or a non-zero exit on a per-module listing ... no follow-up ticket
+  has been filed" - is **false and deleted rather than left standing**. **O1**, the opening
+  `-O`'s `controller.signal.aborted`, is pinned by **case J2**, by CALL TRACE and not by
+  verdict: the reply is otherwise clean, so the per-module loop's own abort clause catches an O1
+  deletion one step later and `scopedCalls` (0 -> 1) is the only observable that moves.
+  **O3**, the opening `-O`'s `code !== 0`, is pinned by **case J3**, which needs a VALID
+  two-module stdout - case E2's `{ code: 1, stdout: "" }` is already caught by the arity guard -
+  and an explicit clean `modulesAgain`, or the injected exit replays onto the closing `-O` and
+  is caught there instead. **P3**, the per-module loop's `code !== 0`, is pinned by **case D4**,
+  whose failing listing must carry PARSEABLE rows (case D's has none, so `rows.length === 0`
+  catches it) and must have dropped the SHARED row, or the mutant's verdict does not move.
+  **S3**, the count-instead-of-set module comparison, is pinned by **case M8**: a same-size but
+  different module set, which is the half M2 cannot cover because the count mutation leaves M2
+  green. Each was **reproduced as a survivor first** - mutation applied, full 24-suite
+  `npm test` observed exiting 0 with the engine suite green at 207 checks - and then measured
+  red with the new case present. NRL-94 is **test-only**: `git diff origin/main...HEAD -- src/`
+  is empty, `speechd.ts` is byte-identical, so no behaviour changed and no requirement became
+  met. Its own sweep was **re-derived from the clauses present today** rather than replayed -
+  22 mutations, 19 single-clause plus 3 combined (each of the three guards dropped whole) - and
+  **no mutation that was red before is green after**. It turned up **one further survivor that
+  is not a coverage gap**: **L1**, the `mods.size > 0` term of the attribution condition, which
+  is **unreachable-false** rather than untested, since a `servedBy` key is only ever created in
+  the same step that adds its first module, so `mods.size` can never be 0 and no fixture can
+  kill it. None was written, and this is recorded so the probe is not read as fully
+  mutation-covered. Do not read those ADR rows as saying the clauses are dispensable - every clause is
+  load-bearing per the comments on it. R-S01 is a SHOULD and stays narrowed, not closed, and the
+  `2 of 16` MUST headline count does not move. **Nothing was observed in Obsidian**, which here
+  is NOT APPLICABLE rather than skipped, nothing under `src/` having changed.
+  **NRL-87's own** evidence is **bare-Node mutation evidence**: 21 mutations of
   `src/engines/system/speechd.ts` (19 single-clause plus 2 combined), the full `npm test` after
   each, the file restored and its sha256 re-asserted every time, with no mutation that was red
-  before going green after. **Nothing was observed in Obsidian**, and that caveat is unusually
+  before going green after. That count is NRL-87's and not NRL-94's - NRL-94 re-derived its own
+  sweep at 22, above - so do not read "21" as covering the paragraph before it. **Nothing was observed in Obsidian**, and that caveat is unusually
   toothless here because the change has no user-visible surface to observe. R-S01 is a SHOULD
   and stays narrowed, not closed; the `2 of 16` MUST headline count does not move.
   **NRL-83 added the harness contract those tests now rest on, and is likewise test-only** -
