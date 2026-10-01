@@ -440,3 +440,185 @@ were measured red against the unedited workflow. `actionlint` is **not installed
 machine** and was not run; AGENTS.md records it as having been silent on both halves of the
 compile defect that broke every run in this repo's history, so its absence costs little.
 Nothing about the Release this produces has been seen, because none has been cut.
+
+## Amendment (NRL-105): the pushed tag is checked against the version files
+
+NRL-75 narrowed `on: push: tags` to `[0-9]+.[0-9]+.[0-9]+`, so the workflow admits only a
+bare-semver tag. It admits **any** bare semver. Nothing anywhere read `manifest.json`,
+`package.json` or `versions.json`, so pushing `9.9.9` at a commit whose manifest says
+`0.1.0` would cut a public Release named `9.9.9` carrying a manifest that says `0.1.0`.
+
+Obsidian's community-plugin installer reads `manifest.json` off the Release to learn the
+plugin's version and `versions.json` to decide which Obsidian versions may install it. A tag
+that disagrees with either publishes a Release whose name and contents contradict each
+other, and the user-facing symptom is an install reporting the wrong version or being
+silently filtered out of the compatible set. Every other item left open on this path - the
+`set-output` deprecation, the `tag_name` shape, the provenance job's `needs:` - is a CI-side
+hazard; AGENTS.md records this one as "the one item here with a user-visible failure mode",
+and this amendment is what retires that sentence.
+
+A new `build`-job step, `Verify the tag matches the version files`, closes it.
+
+### Decision
+
+Numbered **1-8 within this amendment**. They do not continue the NRL-76 amendment's
+decisions 1-5, which are referenced below by their own numbers.
+
+1. **Three comparisons, exactly the three the ticket names.** `manifest.json`'s `version`
+   must equal `github.ref_name`; `package.json`'s `version` must equal it; and
+   `versions.json` must hold a key equal to it, tested with
+   `Object.prototype.hasOwnProperty.call` rather than a substring or `grep` search. The key
+   test is deliberately exact in both directions: `0.1.01` *contains* `0.1.0` and `0.1` is a
+   *prefix* of `0.1.0`, and both must fail. Nothing normalises the tag - a `v`-prefixed tag
+   fails rather than being stripped - because normalising is how the class of mismatch this
+   step exists to catch would come straight back.
+2. **Fail, and never rewrite.** The step does not touch any of the three files. A workflow
+   that edits the version it is releasing is a worse failure mode than a stopped release:
+   the pushed tag, the reviewed commit and the signed SLSA attestation would then describe
+   three different things, and the attestation would be *correct* about bytes nobody
+   reviewed.
+3. **The tag arrives through `env:`, and the body reads `"$TAG"`.** Two reasons, and both
+   matter. It is the documented script-injection-safe shape: a `${{ }}` expanded into a
+   shell body is expanded by the expression engine before bash ever sees it. And it is what
+   makes the body testable at all - `extractRunBlock` in `tests/release.test.ts` returns the
+   `run:` block **verbatim**, so a `${{ }}` written inside it would survive into the
+   extracted script as an unevaluable literal and every execution check in the suite would
+   be exercising something the runner never runs. A check pins that the body contains no
+   `${{` at all.
+4. **node, not jq.** `Setup Node.js` (`actions/setup-node@v4`) runs two steps upstream, so
+   node is on PATH by an explicit step rather than by whatever `ubuntu-latest` happens to
+   preinstall. The test harness guarantees node where it does not guarantee `jq`. (`jq` *is*
+   installed on the machine this was written on, `/usr/bin/jq`, so the decision rests on the
+   runner rather than on the sandbox.)
+5. **Shell options live in the body**, `set -euo pipefail` as its first line, per this ADR's
+   NRL-76 amendment decision 4: the body is what the suite executes, and a `shell: bash` key
+   would be a guarantee no test covers. Honestly, per option: `-u` is **load-bearing** - it
+   turns a typo'd variable name into a hard error instead of an empty comparison, which here
+   is the difference between a failed run and a Release nothing checked. `-e` and
+   `-o pipefail` are **precedent and future-proofing, not load-bearing today**: the `node -e`
+   is the last command in the body so its exit status ends the script either way, and there
+   is no pipeline in the body at all. They are kept because `Generate checksums` has them,
+   because NRL-76's whole defect was a missing `pipefail` under a `sha256sum | base64`, and
+   because the next person to add a second command here should not have to remember.
+   Note the `-z "${TAG:-}"` form: the `:-` is deliberate, so an *unset* `TAG` produces this
+   step's own named message rather than bash's `TAG: unbound variable`.
+6. **No `if:` on the step, deliberately.** `release.yml`'s `on:` mapping is exactly
+   `{push: {tags: ["[0-9]+.[0-9]+.[0-9]+"]}}` - measured, not assumed, by parsing the whole
+   file with PyYAML and by slicing the text from `on:` to `jobs:` and listing its keys by
+   indentation depth. There is no `workflow_dispatch`, no `workflow_call`, no `schedule`, no
+   `repository_dispatch` and no `branches:` anywhere in the file, so the `build` job cannot
+   run with `github.ref_name` being anything but the pushed bare-semver tag. A condition's
+   only possible effect would therefore be to make the step skippable, and this ADR's
+   NRL-76 amendment decision 5 refuses exactly that: a silent skip on a real tag push is
+   strictly worse than a failure. What replaces the condition is a **tripwire test** on the
+   `on:` block, green on both sides of this change, which fails the moment a non-tag trigger
+   is added and forces whoever adds it to decide what the guard does on a branch ref -
+   instead of the guard quietly failing every such run. The body also fails loudly when
+   `TAG` is empty or unset, which is the fail-closed answer to that same hypothetical; it is
+   not a skip.
+7. **Every disagreement is reported, not the first.** The body collects into a `problems[]`
+   array and prints all of it to stderr, each line naming the file, the value found and the
+   tag. A release is cut by pushing a tag, and a tag is expensive to retry: it has to be
+   deleted locally and remotely, and every failed attempt leaves a permanent run in Actions
+   history (AGENTS.md records 106 `release.yml` failures already). Stopping at the first
+   mismatch would mean three push-fail-delete cycles for one half-finished version bump.
+8. **A `versions.json` key must map to a non-empty string**, and the sentinel for an
+   unreadable or malformed file is **`undefined`, not `null`**. That second half is not
+   stylistic. A first draft used `null` as the sentinel and skipped the `versions.json`
+   checks when `load()` returned it, so a `versions.json` whose entire content is the
+   literal `null` **exited 0** - measured during prototyping. `JSON.parse` can return `null`
+   and can never return `undefined`, so `undefined` is the only safe sentinel, and the
+   object test rejects `null` and arrays explicitly. The empty-value rule follows from what
+   the key is for: it carries the minimum Obsidian version string the installer reads, so an
+   empty or non-string value is indistinguishable in effect from the missing key the ticket
+   already requires failing on.
+
+   **What is deliberately NOT checked**: `versions.json`'s value is not compared against
+   `manifest.json`'s `minAppVersion`; there is no semver ordering; there is no monotonicity
+   check against the keys already present; and nothing checks that the tagged commit is
+   reachable from a branch. The first of those was scoped out explicitly, and the rest were
+   never in scope.
+
+### Placement in the job
+
+After `Install dependencies` (`npm ci`) and **before** `Run quality gates`. The guard reads
+three small JSON files, so it costs seconds; running it after the gates would mean a
+mismatched tag had already paid for a full typecheck, build and test. It needs `npm ci`
+before it only incidentally - it imports nothing - and sits after it because that is where
+the first cheap check belongs in this job's existing shape.
+
+The explanatory comment block that sits above `Run quality gates` (the build-before-test
+ordering and `NRL_SKIP_REAL_SPEECHD`) belongs to that step and was **not** detached: the new
+step goes in above it, not between it and the step it documents.
+
+One fragility of the test extractor had to be respected while writing the new comment, and
+it is the same one the NRL-104 amendment records: `extractUploadedFiles` anchors on the
+**first** occurrence of its two literal anchors anywhere in the file, so a comment quoting
+the upload step's name or its block scalar verbatim hijacks the published-asset capture. The
+new comment quotes neither, and the real regex was re-run against the edited file to confirm
+it still captures exactly `main.js`, `manifest.json`, `styles.css`.
+
+### What this does not establish
+
+**The guard has never run on a GitHub runner.** No tag has been pushed to this repo since
+NRL-79's `0.1.1` on 2026-09-30, and this ticket pushes none, so like the NRL-104 amendment
+this is desk-verified only and the existing **2026-10-19** re-verification trigger (the
+`ubuntu-latest` migration to Ubuntu 26) is what covers it. Nothing here establishes that
+`github.ref_name` arrives in `TAG` as expected on a real runner, only that the body behaves
+correctly when it does.
+
+All evidence for this amendment is: the workflow text; a PyYAML parse of the whole edited
+file (no `yaml` or `js-yaml` is installed in `node_modules`, which is why the suite's own
+helpers remain regexes) confirming the `build` job's step order as
+`checkout, Setup Node.js, Install dependencies, Verify the tag matches the version files,
+Run quality gates, Generate checksums, Upload build artifacts`; a replay of the real
+`extractUploadedFiles` regex against the edited file; and **18 checks in
+`tests/release.test.ts`, 17 of which were measured red before the step existed** - 16 because
+`extractRunBlock` throws a named diagnosis when the step is absent, plus the check on this
+amendment's own existence. The 18th is the `on:`-block tripwire, green on both sides and
+labelled as a guard rather than counted. The checks execute the extracted body as
+`bash -e <script>` in an `os.tmpdir()` sandbox holding three planted JSON files, which is
+strong evidence about that shell and no evidence about the release path.
+
+A **mutation pass** over the shipped step establishes that the new checks discriminate rather
+than merely pass. Each mutation was applied **in place in the worktree** - never through a
+symlinked shadow root, because node resolves symlinks back to the real tree and the mutation
+is then never read (AGENTS.md's NRL-76 trap) - the full `npm test` was run, and the file was
+restored from a byte-identical copy with its sha256 re-asserted every time. Thirteen
+mutations, and the honest results:
+
+| mutation | checks turned red |
+| --- | --- |
+| report only `problems[0]` | report-every-disagreement, and only that |
+| `hasOwnProperty` -> `Object.keys(...).some(k => k.includes(tag))` | **none** |
+| the complete substring variant, value read through the found key | key-contains-tag, tag-is-prefix-of-key |
+| strip a leading `v` from the tag | nothing-normalises-the-tag |
+| delete the `package.json` clause | the `package.json` check, and report-every-disagreement |
+| delete the non-empty-value clause | the empty-value check |
+| delete the `-z "${TAG:-}"` clause | empty-or-unset-`TAG`-by-name |
+| `load()` -> a bare `require()` | malformed-JSON-is-diagnosed, and only that |
+| a missing file is silently skipped instead of pushed | missing-file-is-named |
+| move the step below the gates | the ordering check, and only that |
+| inline the tag as a `${{ }}` expression | the `env:` check plus eleven execution checks |
+| add `if: startsWith(github.ref, 'refs/tags/')` | the `shell:`/`if:` check, and only that |
+| restore the `null` sentinel | not-a-map-of-version-keys, and only that |
+
+**One planned mutation turned nothing red, and the reason is worth keeping.** Replacing the
+`hasOwnProperty` key test with a one-clause `includes` substring test leaves the step still
+failing both cases, because decision 8's non-empty-value clause catches it as a second line of
+defence: with the key `0.1.01` and the tag `0.1.0`, `versions[tag]` is `undefined`, so the step
+exits 1 reporting `versions.json["0.1.0"] is undefined`. Measured directly, not inferred. So
+that mutation is not an escaping one at all; the **complete** substring variant, which also
+reads the value through the key it found, is - and the two key-exactness checks catch it. Two
+other mutations were weaker than planned for the same kind of reason and each needed a
+supplementary one: a bare `require()` still names the missing file in its `MODULE_NOT_FOUND`
+message, so only the stack-trace check reds, and the missing-file check is pinned instead by
+silently skipping the push; and the `undefined` sentinel is pinned by restoring the `null` one
+rather than by any of the planned ten.
+
+`actionlint` is **not installed on this machine** and was not run; AGENTS.md records it as
+having been silent on both halves of the compile defect that broke every run in this repo's
+history, so its absence costs little. `srs.md` is unchanged: R-M01 states the requirement and
+this guard is implementation of it, not a deviation. **Rule 11 is not applicable** rather
+than skipped - a CI step has no Obsidian-visible surface - and saying so is better than
+claiming a pass.

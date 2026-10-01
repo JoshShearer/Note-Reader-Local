@@ -61,6 +61,103 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # NRL-105. Obsidian's community-plugin installer reads `manifest.json` off
+      # the Release to learn the plugin's version, and `versions.json` to decide
+      # which Obsidian versions may install it. NRL-75 narrowed the tag trigger
+      # to bare semver, but it admits ANY bare semver: pushing `9.9.9` at a
+      # commit whose manifest says `0.1.0` would cut a Release whose name and
+      # contents contradict each other. This is the one hazard on this path that
+      # reaches a user rather than only CI.
+      #
+      # It FAILS and never rewrites a file. A workflow that edits the version it
+      # is releasing is a worse failure mode than a stopped release: the tag, the
+      # reviewed commit and the signed attestation would then describe three
+      # different things.
+      #
+      # Every disagreement is reported, not the first. A tag is expensive to
+      # retry - delete it locally and remotely, and every attempt leaves a
+      # permanent run in Actions history - so stopping at the first mismatch
+      # would mean three push-fail-delete cycles for one half-finished bump.
+      #
+      # The tag arrives through `env:` and is read as "$TAG". That is the
+      # documented script-injection-safe shape, and it is also what makes the
+      # body testable: tests/release.test.ts extracts this block VERBATIM, so a
+      # GitHub expression written inside it would survive as an unevaluable
+      # literal and the extracted script could never be exercised.
+      #
+      # node, not jq: the Setup Node.js step above puts node on PATH, and the
+      # test harness guarantees node where it does not guarantee jq.
+      #
+      # `set -euo pipefail` is in the BODY, not in `shell:` - ADR 0011's NRL-76
+      # amendment, decision 4. The body is what the suite executes; a
+      # harness-level flag would be a guarantee no test covers.
+      #
+      # No `if:` on this step, deliberately. `on:` is `push.tags` only, so
+      # `github.ref_name` is always the pushed tag; and per the same amendment's
+      # decision 5, a condition that can silently skip is worse than a failure.
+      - name: Verify the tag matches the version files
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAG:-}" ]; then
+            echo "NRL-105: TAG is empty or unset. This step must receive github.ref_name; refusing to build a Release whose version nothing checked." >&2
+            exit 1
+          fi
+          node -e '
+            const fs = require("node:fs");
+            const tag = process.env.TAG;
+            const problems = [];
+            const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+            // The sentinel is `undefined` and NOT `null`: `JSON.parse` can return
+            // `null`, so a `null` sentinel made a versions.json whose whole content
+            // is the literal `null` skip every check and exit 0. Measured.
+            const load = (file) => {
+              let raw;
+              try {
+                raw = fs.readFileSync(file, "utf-8");
+              } catch {
+                problems.push(file + ": missing or unreadable in the checkout root");
+                return undefined;
+              }
+              try {
+                return JSON.parse(raw);
+              } catch (err) {
+                problems.push(file + ": not valid JSON (" + err.message + ")");
+                return undefined;
+              }
+            };
+            const checkVersionField = (file, parsed) => {
+              if (parsed === undefined) return;
+              if (!isObject(parsed)) {
+                problems.push(file + ": not a JSON object, so it carries no version field");
+                return;
+              }
+              if (parsed.version !== tag) {
+                problems.push(file + " version is " + JSON.stringify(parsed.version) + ", tag is " + JSON.stringify(tag));
+              }
+            };
+            checkVersionField("manifest.json", load("manifest.json"));
+            checkVersionField("package.json", load("package.json"));
+            const versions = load("versions.json");
+            if (versions !== undefined) {
+              if (!isObject(versions)) {
+                problems.push("versions.json: not a JSON object mapping plugin version to minimum Obsidian version");
+              } else if (!Object.prototype.hasOwnProperty.call(versions, tag)) {
+                problems.push("versions.json has no key " + JSON.stringify(tag) + "; its keys are " + JSON.stringify(Object.keys(versions)));
+              } else if (typeof versions[tag] !== "string" || versions[tag] === "") {
+                problems.push("versions.json[" + JSON.stringify(tag) + "] is " + JSON.stringify(versions[tag]) + ", which must be a non-empty minimum Obsidian version string");
+              }
+            }
+            if (problems.length > 0) {
+              console.error("NRL-105: the pushed tag does not agree with the version files. Obsidian reads manifest.json and versions.json off the Release, so this run would publish a Release whose name and contents contradict each other. Every disagreement found:");
+              for (const problem of problems) console.error("  - " + problem);
+              console.error("Fix the files and push a new tag. This step never rewrites them.");
+              process.exit(1);
+            }
+            console.log("tag " + tag + " agrees with manifest.json, package.json and versions.json");
+          '
+
       # Build strictly before test: tests/release.test.ts asserts main.js
       # exists and carries the packed ORT runtime, so on a fresh checkout it
       # fails for that reason alone. This step used to run typecheck, test,
