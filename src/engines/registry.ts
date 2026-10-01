@@ -34,8 +34,8 @@ export function createEngines(
 
 	// espeak-ng and spd-say are Linux-only system binaries: constructing
 	// these engines on macOS/Windows desktop would only produce `which`
-	// failures at probe time (registry.ts:64), so the guard is Linux desktop
-	// specifically, not desktop-vs-mobile (srs.md:1023-1027).
+	// failures in `probeEngines` below, so the guard is Linux desktop
+	// specifically, not desktop-vs-mobile (srs.md, R-M02 Linux Support).
 	if (shouldConstructLinuxDesktopEngines(Platform)) {
 		const runner = getProcessRunner();
 		engines.push(new EspeakEngine(runner), new SpeechDispatcherEngine(runner));
