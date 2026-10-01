@@ -62,8 +62,15 @@ jobs:
         run: npm ci
 
       # NRL-105. Obsidian's community-plugin installer reads `manifest.json` off
-      # the Release to learn the plugin's version, and `versions.json` to decide
-      # which Obsidian versions may install it. NRL-75 narrowed the tag trigger
+      # the Release to learn the plugin's version, and reads `versions.json` to
+      # decide which Obsidian versions may install it - but NOT off the Release.
+      # Read out of the installed `obsidian.asar`: `manifest.json`, `main.js` and
+      # `styles.css` come from `github.com/<repo>/releases/download/<tag>/<file>`,
+      # while `versions.json` appears exactly once in the whole asar and comes
+      # from `raw.githubusercontent.com/<repo>/HEAD/versions.json`. So the
+      # `versions.json` key this step checks on the TAGGED COMMIT is read by the
+      # installer from the repository at HEAD; a `versions.json` edited after the
+      # tag is cut is outside what this step can see. NRL-75 narrowed the tag trigger
       # to bare semver, but it admits ANY bare semver: pushing `9.9.9` at a
       # commit whose manifest says `0.1.0` would cut a Release whose name and
       # contents contradict each other. This is the one hazard on this path that
@@ -150,7 +157,9 @@ jobs:
               }
             }
             if (problems.length > 0) {
-              console.error("NRL-105: the pushed tag does not agree with the version files. Obsidian reads manifest.json and versions.json off the Release, so this run would publish a Release whose name and contents contradict each other. Every disagreement found:");
+              // No apostrophe anywhere in this body: the whole script is a
+              // single-quoted shell argument to `node -e`, so one would end it.
+              console.error("NRL-105: the pushed tag does not agree with the version files. The Obsidian installer reads manifest.json off the Release (github.com/<repo>/releases/download/<tag>/manifest.json) and reads versions.json from the repository at HEAD (raw.githubusercontent.com/<repo>/HEAD/versions.json), so this run would publish a Release whose name and contents contradict each other. Every disagreement found:");
               for (const problem of problems) console.error("  - " + problem);
               console.error("Fix the files and push a new tag. This step never rewrites them.");
               process.exit(1);

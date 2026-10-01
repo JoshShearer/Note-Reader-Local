@@ -449,8 +449,27 @@ bare-semver tag. It admits **any** bare semver. Nothing anywhere read `manifest.
 `0.1.0` would cut a public Release named `9.9.9` carrying a manifest that says `0.1.0`.
 
 Obsidian's community-plugin installer reads `manifest.json` off the Release to learn the
-plugin's version and `versions.json` to decide which Obsidian versions may install it. A tag
-that disagrees with either publishes a Release whose name and contents contradict each
+plugin's version, and reads `versions.json` to decide which Obsidian versions may install it.
+**The two come from different places, and an earlier draft of this amendment got the second
+one wrong by saying both are read off the Release.** Read out of the installed `obsidian.asar`
+(flatpak Obsidian 1.13.7, measured during NRL-105's Verify): the install path fetches
+`manifest.json`, `main.js` and `styles.css` through `Py(repo, tag, file)` =
+`https://github.com/` + repo + `/releases/download/` + tag + `/` + file, while the string
+`versions.json` occurs **exactly once in the whole asar** and is fetched through
+`Dy(repo, "versions.json")` = `https://raw.githubusercontent.com/` + repo +
+`/HEAD/versions.json`, whose loop keeps the greatest key whose value satisfies the running app
+version. So `versions.json` is read **from the repository at `HEAD`**, never from the Release.
+
+That gives this step a real scope limit, and it is a limit of where the two sides look rather
+than a defect in the step: **the guard reads the tagged commit's three files, while the
+installer reads `versions.json` at `HEAD`.** A `versions.json` edited after the tag was cut -
+a key removed, or its value changed - is therefore outside what the guard can see, and the
+guard's agreeing at tag time is not a promise about what the installer will read later. The
+guard is not widened to chase it: a step that fetched `HEAD` would make the release path depend
+on a mutable ref, which is the opposite of what the rest of this ADR is for. The honest
+statement is that the guard pins the tagged commit, and nothing pins `HEAD`.
+
+A tag that disagrees with either file publishes a Release whose name and contents contradict each
 other, and the user-facing symptom is an install reporting the wrong version or being
 silently filtered out of the compatible set. Every other item left open on this path - the
 `set-output` deprecation, the `tag_name` shape, the provenance job's `needs:` - is a CI-side
