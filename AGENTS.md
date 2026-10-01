@@ -801,7 +801,18 @@ assumed: the generator's `parseSubjects` validates the **digest** only, and `ver
 never reads `subject.Name`. In `tests/release.test.ts`, `extractUploadedFiles` is the single
 source of truth tying the hashed set to the published set, and it and `extractRunBlock` both
 **throw** rather than returning empty, so a parser that stops matching fails the suite instead
-of passing vacuously. Every number above is a local bash execution of the step body, but the
+of passing vacuously. **That sentence is still true and was never the whole protection; NRL-124
+(`f250ddd`) added the half it missed.** A throw catches a parser that stops matching, not one
+that matches the WRONG text. `extractUploadedFiles` used to take the first match of
+`Upload Release Assets` or `files: |` anywhere in the file and end its capture at the first
+blank line, so a comment quoting either literal hijacked the slice while `files:` stayed inside
+it and nothing threw: measured at **11 reported entries instead of three**, with the slice
+widening from 11 lines to 12. Both extractors now locate their step by an exact `- name:` line
+at its own indentation, through a shared `extractStepText`, and end a block at the next key
+indented at or shallower than it, so a `#`-prefixed line can never satisfy the match. The
+throws are unchanged. This is test-only: no `src/` change, `srs.md` byte-identical, **R-M01 does
+not move** and the `2 of 16` count does not move. Full measurements, including two shapes found
+for the first time there, are in `docs/adr/0011-release-attestation.md`. Every number above is a local bash execution of the step body, but the
 step itself is **no longer unexercised**: NRL-79's run `36785920227` ran it on a GitHub
 runner, `Generate checksums` concluded success under `set -euo pipefail` with the non-empty
 guard in place, and the attestation it fed carried all **seven** subjects the published set held
