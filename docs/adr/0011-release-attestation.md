@@ -394,26 +394,65 @@ subject set does not describe what the Release holds - which decisions 4 and 5 a
 refuse. It is the same fail-closed reasoning as the non-empty guard in `Generate
 checksums`, applied at the publishing end.
 
-### `files:` stays last, and the prose above the step matters too
+### The extractor is scoped to the step it names (amended by NRL-124)
 
 `extractUploadedFiles` in `tests/release.test.ts` is the single source of truth tying the
-hashed set to the published set (decision 1). It is a regex over the workflow text, not a
-YAML parse, and its capture ends at the **first blank line**, not at the next YAML key. So
-the replacement's `with:` block puts `files: |` **last**, with the blank line after it, and
-`name:`, `draft:`, `prerelease:` and `fail_on_unmatched_files:` all above it. A key written
-below it would be trimmed into the published-asset list and reported by the NRL-76
-subject-set check as `extra`.
+hashed set to the published set (decision 1). There is no yaml dependency, so it is a text
+scan rather than a YAML parse, and **how it finds the step used to constrain whoever edited
+the workflow**. NRL-124 removed those constraints. This section records what they were,
+because the failure they produced looks like an attestation defect and is not one.
 
-One thing here was **measured during implementation rather than reasoned, and it is new**:
-the regex takes the **first** occurrence of its anchors anywhere in the file, so a *comment*
-above the step quoting `Upload Release Assets` or the `files:` block scalar verbatim also
-hijacks the capture. A first draft of the explanatory comment did exactly that, and the
-NRL-76 equality check went red with comment prose reported as published assets. The comment
-now names neither literally - which is why the pre-existing comment near `Generate
-checksums` splits the step name across two lines - and the two reworded comments at the top
-of the file say "the release-upload step below" rather than the literal name. This is a
-fragility of the extractor, not of the workflow, and it is written down here because the
-failure looks like an attestation defect and is not one.
+**The constraints, as NRL-104 shipped them.** The extractor was one regex,
+`/Upload Release Assets[\s\S]*?files:\s*\|([\s\S]*?)\n\s*\n/`, with two parser artefacts.
+Its capture ended at the **first blank line** rather than at the next YAML key, so `files: |`
+had to be **last** in `with:` with a blank line after it, and any key written below the
+scalar was trimmed into the published-asset list and reported by the NRL-76 subject-set
+check as `extra`. And it took the **first** occurrence of either anchor anywhere in the
+file, so a *comment* quoting `Upload Release Assets` or a `files:` block scalar verbatim
+hijacked the capture. That second half was **measured during implementation rather than
+reasoned**: a first draft of the explanatory comment above the step did exactly that, the
+NRL-76 equality check went red with comment prose reported as published assets, and it was
+routed around by naming neither literal in nearby prose - which is why the pre-existing
+comment near `Generate checksums` splits the step name across two lines. The constraints
+were real and enforced by nothing but that prose.
+
+**What NRL-124 changed.** `extractUploadStep` is now a thin wrapper over `extractStepText`,
+which locates a step by `line.trim() === "- name: X"` at its own indentation, so a
+`#`-prefixed line can never satisfy it and comment lines are skipped **by construction**.
+There is deliberately no separate comment filter: NRL-75's rule is that the oracle must stay
+faithful to what GitHub actually parses, and a throw - or a filter that can never fire - on
+text GitHub treats as ordinary is the same failure in the other direction.
+`extractUploadedFiles` reads that slice and ends the block at the first line indented at or
+shallower than its own `files:` key, skipping blank lines, which are legal inside a YAML
+literal block scalar. Key order, the trailing blank line and the wording of nearby comments
+are therefore no longer load-bearing. **The step NAME still is**, and a guard pins it.
+
+**Both hijack shapes are now pinned by tests**, measured red against the pre-NRL-124
+extractors and green after: a comment quoting the step name and a `files: |` block made
+`extractUploadedFiles` report **11 entries** instead of three, and a comment quoting the step
+name alone widened `extractUploadStep`'s slice from **11 lines to 12** with `files:` still
+inside it, so the fail-closed throw never fired. Two further shapes were measured for the
+first time during NRL-124: a `with:`-indent key after the scalar gave **4** entries, and a
+blank line inside the scalar gave **2**, silently dropping `styles.css`. The comment above the
+step now quotes `- name: Upload Release Assets` and `files: |` **verbatim on purpose**, so a
+green `npm test` demonstrates the fix against the real workflow rather than only against the
+synthetic fixtures.
+
+**One deliberate divergence survives**, recorded rather than fixed. Inside a literal block
+scalar `# x` is a **glob**, not a comment, so GitHub would treat it as a pattern to publish
+while the extractor skips it. Nothing in the real workflow has such a line, and
+`fail_on_unmatched_files: true` makes GitHub fail that run loudly, so the under-report
+cannot silently ship a short Release; removing the skip would be a behaviour change with no
+defect behind it.
+
+**The failure direction was measured and is the reason this was a fragility ticket rather
+than a High-severity correctness one.** NRL-104's Verify tried the dangerous direction -
+`fail_on_unmatched_files: true` deleted from the step and supplied only inside a hijacking
+comment - and the check stayed correctly **red**, because every scoped assertion is
+`/^\s*...$/m` anchored and a `#` defeats `^\s*`. NRL-124 re-measured it at
+`[false, true, true, true]` in both hijack shapes and pinned it behaviourally, against
+fixtures rather than by reading the test file's own source. So the observed failure mode was
+a loud false red, never a silent false pass.
 
 `name: Release ${{ github.ref_name }}` is carried over so the Release keeps the title
 NRL-79 observed as `Release 0.1.1`. `draft: false` and `prerelease: false` stay explicit:
@@ -571,11 +610,17 @@ ordering and `NRL_SKIP_REAL_SPEECHD`) belongs to that step and was **not** detac
 step goes in above it, not between it and the step it documents.
 
 One fragility of the test extractor had to be respected while writing the new comment, and
-it is the same one the NRL-104 amendment records: `extractUploadedFiles` anchors on the
+it is the same one the NRL-104 amendment records: `extractUploadedFiles` anchored on the
 **first** occurrence of its two literal anchors anywhere in the file, so a comment quoting
-the upload step's name or its block scalar verbatim hijacks the published-asset capture. The
-new comment quotes neither, and the real regex was re-run against the edited file to confirm
-it still captures exactly `main.js`, `manifest.json`, `styles.css`.
+the upload step's name or its block scalar verbatim hijacked the published-asset capture. The
+new comment therefore quoted neither, and the real regex was re-run against the edited file
+to confirm it still captured exactly `main.js`, `manifest.json`, `styles.css`.
+
+**That fragility is closed as of NRL-124** (see "The extractor is scoped to the step it
+names" above). Both extractors now locate the step by an exact `- name:` match at its own
+indentation, so a comment is skipped by construction and no comment in this file has to
+avoid the literals any more. The tag-guard comment above is left as it was written: there is
+no longer a reason to change it, and no longer a reason it had to be that way.
 
 ### What this does not establish
 

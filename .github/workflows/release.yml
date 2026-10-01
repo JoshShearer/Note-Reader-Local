@@ -301,18 +301,24 @@ jobs:
       # concludes success - the silent-truncation shape NRL-76 removed from
       # `Generate checksums` (ADR 0011, NRL-76 decisions 4 and 5).
       #
-      # THE BLOCK SCALAR BELOW MUST STAY LAST, with the blank line after it. Its
-      # reader is `extractUploadedFiles` in `tests/release.test.ts`, a regex over
-      # this text rather than a YAML parse, and it ends its capture at the first
-      # BLANK LINE and not at the next YAML key - so any `with:` key written under
-      # that scalar is read as a published asset and breaks the NRL-76 subject-set
-      # equality check. The step NAME matters for the same reason: the regex
-      # anchors on it. SO DOES THE PROSE ABOVE IT, measured while writing this
-      # comment: the regex takes the FIRST occurrence of its two anchors anywhere
-      # in the file, so a comment up here quoting either of them verbatim hijacks
-      # the capture and the NRL-76 check reports the comment as a published asset.
-      # That is why this paragraph names neither literally and why the pre-existing
-      # comment near `Generate checksums` splits the step name across two lines.
+      # THE STEP NAME IS LOAD-BEARING, and since NRL-124 nothing else about this
+      # step's shape is. Its reader is `extractUploadedFiles` in
+      # `tests/release.test.ts`, which locates the step by an exact `- name:` line
+      # at this indentation and ends the `files: |` block at the next key indented
+      # at or shallower than it. So key ORDER inside `with:`, the
+      # blank line after the block scalar, and the wording of nearby comments are
+      # all no longer load-bearing. Before NRL-124 all three were: the extractor
+      # took the FIRST match of either anchor anywhere in the file and ended its
+      # capture at the first blank line, so a comment up here quoting either one
+      # hijacked the capture and the NRL-76 subject-set check reported comment
+      # prose as a published asset: hit for real during NRL-104, and re-measured
+      # for NRL-124 at eleven entries of which only three were real files.
+      # This paragraph therefore quotes `- name: Upload Release Assets` and
+      # `files: |` verbatim ON PURPOSE: that is precisely the hijack shape, so a
+      # green `npm test` demonstrates the fix against this real file rather than
+      # only against the synthetic fixtures in `tests/release.test.ts`. Rename the
+      # step, though, and both extractors throw - which is what the guard on this
+      # exact literal name exists to say out loud.
       - name: Upload Release Assets
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
