@@ -385,12 +385,42 @@ export class KokoroEngine implements SpeechEngine {
 	private sessionFailed = false;
 	/** One recycle already spent, with no successful synthesis since. */
 	private recycleSpent = false;
+	/**
+	 * A threaded load already failed in this plugin session (NRL-102).
+	 *
+	 * SESSION-SCOPED ON PURPOSE, and nothing durable is written. Plugin data
+	 * is `data.json`, which is vault-synced, so a remembered "threads fail
+	 * here" would travel to a machine where they work and degrade it
+	 * permanently with no way back - a worse defect than the one this fixes
+	 * (docs/adr/0034). It lives and dies with this instance, and
+	 * `createEngines()` builds a fresh one on every plugin load, so an
+	 * Obsidian relaunch or a disable/re-enable clears it. The accepted cost is
+	 * ONE wasted threaded attempt per launch or reload.
+	 *
+	 * It deliberately SURVIVES `dispose()`, which is the opposite lifetime
+	 * from the two NRL-101 flags above: a dispose means the next load is cold,
+	 * which is exactly when the doomed attempt would be re-paid. See the
+	 * comment in `dispose()`.
+	 */
+	private threadedLoadFailed = false;
+	/**
+	 * The last thread count anybody explicitly ASKED for.
+	 *
+	 * This is the whole mechanism for telling a deliberate thread-count change
+	 * from an incidental re-read, and it is why it is kept separately from
+	 * `options.threads`: `load()` degrades the effective count on failure, so
+	 * comparing against the effective value would read every re-assertion of
+	 * the configured count as a fresh request. Only the constructor and
+	 * `setOptions` write it; `load()`'s degradation never does.
+	 */
+	private requestedThreads: number;
 
 	constructor(
 		private readonly store: ModelStore,
 		options: Partial<KokoroOptions> = {},
 	) {
 		this.options = { ...DEFAULT_OPTIONS, ...options };
+		this.requestedThreads = this.options.threads;
 		const first = VOICES[0]!;
 		this.voice = {
 			id: `kokoro:${first.file}`,
@@ -421,9 +451,33 @@ export class KokoroEngine implements SpeechEngine {
 	 * Changing the backend means a different onnxruntime session, so a running
 	 * worker is thrown away rather than reconfigured. Doing nothing when
 	 * nothing changed keeps a settings-tab redraw from costing a reload.
+	 *
+	 * Both main.ts call sites rebuild the WHOLE options object from the saved
+	 * settings, so a weights change and a device change each re-assert the
+	 * configured thread count. Once a threaded load has failed, that
+	 * re-assertion used to write the configured count back over the degraded
+	 * one and the next load re-paid the doomed attempt (NRL-102). So the
+	 * incoming request is compared against the last REQUESTED count, never
+	 * against the degraded effective one: an unchanged request is incidental
+	 * and suppressed, a changed one is the user asking again and is honoured,
+	 * which also clears the memory so the new count is really attempted.
+	 *
+	 * Re-asserting the SAME count carries no signal at all - the device
+	 * dropdown and the slider call the same function with identical arguments -
+	 * so it is treated as incidental, which is the least surprising of the two
+	 * (docs/adr/0034). The escape hatches are a real slider move and a plugin
+	 * reload.
 	 */
 	setOptions(next: Partial<KokoroOptions>): void {
+		const asked = next.threads ?? this.requestedThreads;
+		const deliberate = asked !== this.requestedThreads;
+		this.requestedThreads = asked;
+		if (deliberate) this.threadedLoadFailed = false;
 		const merged = { ...this.options, ...next };
+		// Before `changed` is computed, so the phantom 1-to-N "change" stops
+		// forcing a dispose, while a real weights or device change still
+		// disposes and reloads at the count that actually works.
+		if (this.threadedLoadFailed && !deliberate) merged.threads = this.options.threads;
 		const changed =
 			merged.device !== this.options.device ||
 			merged.threads !== this.options.threads ||
@@ -679,6 +733,16 @@ export class KokoroEngine implements SpeechEngine {
 	 */
 	async load(): Promise<void> {
 		if (this.ready) return await this.ready;
+		// Said on every load that skips the attempt, not only the first: a user
+		// who configured four threads and is quietly given one deserves to
+		// know why, that the memory lasts only this session, and how to clear
+		// it. Counts and a remedy only, no worker text (non-negotiable 1).
+		if (this.threadedLoadFailed && this.requestedThreads > 1) {
+			this.infoCb?.(
+				`skipping the ${this.requestedThreads}-thread attempt: it failed earlier in this ` +
+					`Obsidian session. Reload Obsidian to try again.`,
+			);
+		}
 		try {
 			await this.loadOnce();
 		} catch (err) {
@@ -686,6 +750,9 @@ export class KokoroEngine implements SpeechEngine {
 			this.infoCb?.(
 				`threaded load failed (${err instanceof Error ? err.message : String(err)}); retrying single-threaded`,
 			);
+			// Remembered for the session so an incidental option re-read cannot
+			// resurrect the count that just failed (NRL-102, docs/adr/0034).
+			this.threadedLoadFailed = true;
 			this.options = { ...this.options, threads: 1 };
 			await this.dispose();
 			await this.loadOnce();
@@ -992,6 +1059,14 @@ export class KokoroEngine implements SpeechEngine {
 		// this method rather than before.
 		this.sessionFailed = false;
 		this.recycleSpent = false;
+		// `threadedLoadFailed` is deliberately NOT reset here, and that is the
+		// one line a tidy-up is most likely to "finish". A dispose means the
+		// next load is cold, which is precisely when the failed threaded
+		// attempt would be re-paid, so resetting it here would undo NRL-102
+		// entirely - `setOptions` disposes, and a settings change is the path
+		// the defect arrived on. It is cleared only by an explicit change to a
+		// different thread count, or by the engine instance going away with the
+		// plugin (docs/adr/0034).
 		this.sentVoices.clear();
 		for (const url of this.blobs.values()) URL.revokeObjectURL(url);
 		this.blobs.clear();
