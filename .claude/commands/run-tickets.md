@@ -547,7 +547,7 @@ the bundle>`.
 There is no pre-push hook, so the push is instant. `.github/workflows/ci.yml` runs on `push` and
 on `pull_request`, so the PR will pick up a check. You **may** read its conclusion once for the
 report; you **must not** wait on it, and never write a polling loop. Branch protection is out of
-scope, so a red check does not block a merge. Record whatever you saw, including "not concluded", in
+scope, so a red check does not block a merge. Record whatever you saw, including \"not concluded\", in
 `verifyNotes` so the end-of-run report can point the owner at `/test-issue <ID>` for any PR whose
 check went red. Do not run `/test-issue` yourself: it triages by reproducing a failure locally and by
 waiting on a conclusion, and neither belongs in an unattended run.
