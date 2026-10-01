@@ -75,12 +75,11 @@ A reproduction in this repo is one of:
 
 - **A real Obsidian session.** `npm run deploy` writes the build into
   `~/Documents/Notes/.obsidian/plugins/local-tts-reader`. Reload the plugin, run the
-  command, record what happened. Obsidian here is the Flatpak `md.obsidian.Obsidian`.
+  command, record what happened. Obsidian here is the native `/usr/bin/obsidian` (Electron 43; the Flatpak `md.obsidian.Obsidian` was removed, checked 2026-10-01 with `flatpak list`).
 
 - **A real binary.** `spd-say` is on this machine and a speech-dispatcher daemon is running;
-  `tests/engine.test.ts` shells out to that binary. `espeak-ng` is **not** installed here - it
-  exists only as a speech-dispatcher output module - so there is no real-binary path for that
-  engine, and `AGENTS.md`'s quality-gates block is the one place that detail lives. Paste the
+  `tests/engine.test.ts` shells out to that binary. `espeak-ng` is installed too (1.52.0, since
+  2026-10-01), but no suite spawns it, so its real-binary path is manual only, and `AGENTS.md`'s quality-gates block is the one place that detail lives. Paste the
   exact command and its exact output, including which stream it appeared on. That detail
   matters: `spd-say` reports `Invalid voice` on **stdout with exit 0**, which is why one
   existing defect is silent.

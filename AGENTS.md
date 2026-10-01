@@ -132,9 +132,9 @@ leaves the player terminal and a naive check reads that as instant success.
 `tests/engine.test.ts` shells out to the real `spd-say` binary and needs a running
 speech-dispatcher daemon (here with the `speech-dispatcher-espeak-ng` output module). It
 is a Linux desktop test and will fail elsewhere. `tests/espeak.test.ts` covers `espeak.ts`
-with a fake `ProcessRunner` only: the `espeak-ng` binary itself is not installed on this
-machine (confirmed via `which espeak-ng`), so there is still no real-binary coverage for
-that engine, only for speech-dispatcher. The two regions of `tests/engine.test.ts` that
+with a fake `ProcessRunner` only. The `espeak-ng` binary has been installed here since
+2026-10-01 (1.52.0, pacman), but no suite spawns it, so there is still no automated
+real-binary coverage for that engine, only for speech-dispatcher. The two regions of `tests/engine.test.ts` that
 need the daemon - the preamble checks and the real-binary block that speaks aloud and
 asserts wall-clock duration - are bypassed when `NRL_SKIP_REAL_SPEECHD` is exactly `"1"`,
 which is what both workflows set. A skip prints one `SKIP <name>` line per bypassed check
@@ -265,7 +265,14 @@ plugin fell back to the CPU, so `ort-wasm-simd-threaded.jsep.*` is packed and
 byte-verified but not yet executed by the host. And **no engine other than Kokoro was
 heard** - inside the flatpak sandbox `espeak-ng`, `spd-say` and system voices are all
 absent, so all three reported unavailable, which is correct behaviour on a machine with no
-speech tooling rather than a gap in the plugin.
+speech tooling rather than a gap in the plugin. **That last clause was only half the story,
+corrected by NRL-135:** with the tooling present, both Linux engines would still have
+reported unavailable, because `spawn.ts`'s `import("child_process")` could not resolve in
+Obsidian's renderer. NRL-135 (PR #177, `docs/adr/0033`) replaced it with a call-time
+`require`; on 2026-10-01 in native Obsidian 1.13.7 both reported available and a read on
+Auto went `preparing` -> `playing` on `speechd`, advancing a chunk. Not listened to by ear.
+One residual, unticketed: with no speech-dispatcher daemon process running, the probe
+reported `spd-say could not be reached` until the daemon was started.
 
 **The first of those three has since closed, on a second, independent device.** A Pixel 9
 Pro XL (Android 17, WebView `app.vanium.webview`, Chromium 154) loaded the identical

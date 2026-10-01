@@ -143,7 +143,7 @@ From `CONTEXT.md`. These are design-level, so do not report them as fresh discov
    npm run deploy
    ```
 
-   then exercise it in the Flatpak `md.obsidian.Obsidian` and record what you saw. If you
+   then exercise it in the real Obsidian and record what you saw. If you
    did not do this, the verdict stays PARTIAL. Say `needs Obsidian` and move on.
 5. Compare each verdict to the baseline table and mark the delta.
 
