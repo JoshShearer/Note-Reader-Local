@@ -39,6 +39,14 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private static final String TAG = "TtsBridge";
     private static final int PORT = 8787;
+    /**
+     * Hard caps on what an unauthenticated client can make us hold. Without
+     * them one request with no token and "Content-Length: 2000000000" killed
+     * the process: the body buffer was allocated before the token check, and
+     * the OutOfMemoryError escaped the per-connection catch.
+     */
+    private static final int MAX_HEADER_BYTES = 16 * 1024;
+    private static final int MAX_BODY_BYTES = 64 * 1024;
 
     private volatile TextToSpeech tts;
     private volatile boolean ttsReady = false;
@@ -88,14 +96,30 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     }
 
     private void serve() {
-        try (ServerSocket ss = new ServerSocket(PORT, 8, InetAddress.getLoopbackAddress())) {
-            log("listening on 127.0.0.1:" + PORT);
+        // An explicit IPv4 loopback, never InetAddress.getLoopbackAddress():
+        // on Android 17 that returned ::1, so the socket sat in /proc/net/tcp6
+        // and a client calling http://127.0.0.1 (what the plugin and every doc
+        // use) was refused, by WebView fetch and CapacitorHttp alike.
+        InetAddress lo;
+        try {
+            lo = InetAddress.getByAddress(new byte[] {127, 0, 0, 1});
+        } catch (IOException e) {
+            log("bind FAILED: " + e.getClass().getSimpleName());
+            return;
+        }
+        try (ServerSocket ss = new ServerSocket(PORT, 8, lo)) {
+            // The address actually bound, not a literal: the old hardcoded
+            // "127.0.0.1" stayed in the log while the socket was on ::1.
+            log("listening on " + ss.getLocalSocketAddress());
             while (!Thread.currentThread().isInterrupted()) {
                 try (Socket c = ss.accept()) { handle(c); }
-                catch (Exception e) { Log.w(TAG, "conn: " + e); }
+                // Throwable, not Exception. An Error from one connection must
+                // not take the accept thread, and with it the process, down.
+                // Class name only: an exception message can echo client input.
+                catch (Throwable t) { Log.w(TAG, "conn: " + t.getClass().getSimpleName()); }
             }
         } catch (IOException e) {
-            log("bind FAILED: " + e);
+            log("bind FAILED: " + e.getClass().getSimpleName());
         }
     }
 
@@ -104,29 +128,33 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         OutputStream raw = c.getOutputStream();
         BufferedOutputStream os = new BufferedOutputStream(raw);
 
-        // Request line + headers.
+        // Request line + headers, capped so a client cannot grow this without
+        // bound by never sending the blank line.
         StringBuilder head = new StringBuilder();
-        int prev = -1, cur;
+        int cur;
         while ((cur = in.read()) != -1) {
             head.append((char) cur);
+            if (head.length() > MAX_HEADER_BYTES) {
+                send(os, 431, "text/plain", "headers too large".getBytes(), null); return;
+            }
             if (head.length() >= 4 && head.charAt(head.length()-1)=='\n'
                 && head.charAt(head.length()-2)=='\r' && head.charAt(head.length()-3)=='\n'
                 && head.charAt(head.length()-4)=='\r') break;
-            prev = cur;
         }
         String[] lines = head.toString().split("\r\n");
         if (lines.length == 0) return;
         String[] rl = lines[0].split(" ");
         if (rl.length < 2) { send(os, 400, "text/plain", "bad request".getBytes(), null); return; }
         String method = rl[0], target = rl[1];
-        int clen = 0; String auth = "";
+        long clen = 0; boolean badLen = false; String auth = "";
         for (String h : lines) {
             String lower = h.toLowerCase(Locale.ROOT);
-            if (lower.startsWith("content-length:")) clen = Integer.parseInt(h.split(":",2)[1].trim());
+            if (lower.startsWith("content-length:")) {
+                try { clen = Long.parseLong(h.split(":",2)[1].trim()); }
+                catch (NumberFormatException e) { badLen = true; }
+            }
             if (lower.startsWith("authorization:")) auth = h.split(":",2)[1].trim();
         }
-        byte[] body = new byte[clen];
-        int got = 0; while (got < clen) { int k = in.read(body, got, clen - got); if (k < 0) break; got += k; }
 
         String path = target.contains("?") ? target.substring(0, target.indexOf('?')) : target;
         String query = target.contains("?") ? target.substring(target.indexOf('?')+1) : "";
@@ -143,6 +171,13 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         if (!auth.equals("Bearer " + token) && !query.contains("token=" + token)) {
             send(os, 401, "text/plain", "unauthorized".getBytes(), null); return;
         }
+
+        // The body is read only now, after the token check and inside a cap.
+        // A plugin chunk is a few hundred characters; 64 KiB is generous.
+        if (badLen || clen < 0) { send(os, 400, "text/plain", "bad content-length".getBytes(), null); return; }
+        if (clen > MAX_BODY_BYTES) { send(os, 413, "text/plain", "body too large".getBytes(), null); return; }
+        byte[] body = new byte[(int) clen];
+        int got = 0; while (got < clen) { int k = in.read(body, got, (int) clen - got); if (k < 0) break; got += k; }
 
 
         if (path.equals("/engines")) {

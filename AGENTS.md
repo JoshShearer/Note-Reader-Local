@@ -372,42 +372,74 @@ API 30+ cannot see or bind a TTS engine without declaring
 It was broken on every modern Android, not just this one. It also bound `0.0.0.0:35248`,
 LAN-exposed, and was uninstalled.
 
-**A purpose-built bridge works.** `io.loopstring.ttsbridge`, one 358-line Java Activity, a
+**A purpose-built bridge works.** `io.loopstring.ttsbridge`, one 393-line Java Activity, a
 16,797-byte APK built without gradle (Android build-tools 34.0.0 and platform android-34 in
 `~/Android/Sdk`; Temurin JDK 21.0.12.1 in `~/Android/tools`, because this machine had a JRE
-and no `javac`). It declares the `TTS_SERVICE` query, binds **127.0.0.1 only**, requires a
-random 32-hex token on every route but `/health`, and takes text in a **POST body, never a
-query string** (non-negotiable 2's reasoning: a URL lands in logs the way argv lands in
-`ps`). Result: `queriesIntents=[Intent { act=android.intent.action.TTS_SERVICE }]`,
-`TTS init: SUCCESS`, zero "not bound" errors. **Source, build script and measurement script
-are in `companion/android/`** (README there); the repo copy rebuilds to a `classes.dex`
-byte-identical to the build that produced the numbers below, so the committed source is the
-measured code. Build trap: **d8 8.2.2 cannot dex an anonymous
-`UtteranceProgressListener`** here (`NullPointerException: Cannot invoke "String.length()"`);
-`-g:none` and `--release 11` did not help, a named nested class did.
+and no `javac`). **Source, build script and measurement script are in
+`companion/android/`** (README there). It declares the `TTS_SERVICE` query, binds
+**127.0.0.1 only**, requires a random 32-hex token on every route but `/health`, and takes
+text in a **POST body, never a query string** (non-negotiable 2's reasoning: a URL lands in
+logs the way argv lands in `ps`). Result: `queriesIntents=[Intent { act=android.intent.action.TTS_SERVICE }]`,
+`TTS init: SUCCESS`, zero "not bound" errors. **The query is proven causal, not inferred**:
+the same Java with only `<queries>` removed gave `queriesIntents=[]`,
+`TTS init: FAILED (-1)` and a 503 from `/synthesize`. Obsidian itself targets SDK 36, so
+package visibility applies to it too.
 
-**Native TTS passes the requirement with large margin.** All offline, engine
-`app.grapheneos.speechservices`:
+Three defects in the first committed version were found by `/critique` running the bridge
+on the device, and are fixed; each is worth not reintroducing. **The bind address.**
+`InetAddress.getLoopbackAddress()` returned **`::1`** on Android 17, so the socket sat in
+`/proc/net/tcp6` while every document said `127.0.0.1`: on device, `nc 127.0.0.1 8787` was
+refused and `nc ::1 8787` answered, and from inside Obsidian both `fetch` and
+`CapacitorHttp` failed at `127.0.0.1` (`CapacitorHttp` also failed at `localhost`, which
+Java resolves to `127.0.0.1`). It now binds the IPv4 loopback explicitly and logs the address
+actually bound rather than a literal. **An unauthenticated crash.** The body buffer was sized
+from the `Content-Length` header before the token check, and the `OutOfMemoryError` escaped
+a `catch (Exception)`, so one request with no token and `Content-Length: 2000000000` gave
+`FATAL EXCEPTION: tts-bridge-http ... at MainActivity.handle` and killed the process. Headers
+are now capped at 16 KiB, the body at 64 KiB, the token is checked before the body is read,
+and each connection catches `Throwable`; re-run, seven hostile inputs (no token or token,
+`Content-Length` of 2000000000, 65537, -5, `abc` and 9999999999, and a 20 KB unterminated
+header) drew 401, 413, 400 or 431 from one surviving process. **Overstated provenance.** An
+earlier draft of this paragraph said the repo copy was byte-identical to "the build that
+produced the numbers below". Only some rows came from that build; three came from a superseded
+one. Every bridge number below has since been re-measured on the current committed source
+(`classes.dex` sha256 `c81e9ceea4edf09170d6becb778c59cefb992ad451ec7d1a753727ac67aba646`),
+by `companion/android/measure.sh`, in two fresh app sessions.
+
+Build trap: **d8 8.2.2 cannot dex an anonymous `UtteranceProgressListener`** here
+(`NullPointerException: Cannot invoke "String.length()"`); `-g:none` and `--release 11` did
+not help, a named nested class did.
+
+**Native TTS passes the requirement with margin.** All offline (airplane mode, ping
+unreachable), engine `app.grapheneos.speechservices`, committed build above, two fresh app
+sessions:
 
 ```
-input       rate   audio out    synthesis   RTF     headroom   2x target
-482 chars   1.0    32.276 s     3,480 ms    0.108   9.27x      PASS
-482 chars   2.0    16.138 s     3,483 ms    0.216   4.63x      PASS
-482 chars   1.0    (2nd session) 3,650 ms   0.113   8.84x      PASS
- 72 chars   1.0     5.097 s       611 ms    0.120   8.3x       PASS
+input       rate   audio out    session A           session B           2x target
+482 chars   1.0    32.276 s     3,734 ms  RTF 0.116  5,106 ms  RTF 0.158  PASS
+482 chars   2.0    16.138 s     3,838 ms  RTF 0.238  4,023 ms  RTF 0.249  PASS
+ 72 chars   1.0     5.097 s       681 ms  RTF 0.134    859 ms  RTF 0.169  PASS
 ```
 
-That is **roughly 30 times Kokoro's throughput on the same phone**, with zero download and
-0.6 s to first audio against Kokoro's 72 s cold. Two integration facts follow. Synthesis cost
-tracks input length, not output duration (3,480 vs 3,483 ms). And **the engine applies rate
-at synthesis time** - at 2.0 the file itself is half as long - so an engine built on it must
-own its rate and the Player must not apply rate again, or the result is 4x. That is exactly
-the defect non-negotiable 9 exists to prevent.
+Read the 2.0 row as the requirement itself: that audio is already rendered at 2x, so
+synthesis outruns 2x playback by **4.0x to 4.2x**. Against Kokoro's roughly 3 to 4 on the
+same phone that is **roughly 20 to 35 times the throughput**, with zero download. (An
+earlier draft quoted RTF 0.108 to 0.120, 4.6x and "roughly 30 times"; those came from a
+superseded build and are replaced, not averaged in.) A 72-character sentence synthesizes in
+681 to 859 ms with the engine already bound. That is synthesis time measured from the host
+over `adb forward`, **not** time to first audio inside the plugin, which has not been
+measured, and it must not be set against Kokoro's 72 s cold load as if it were.
 
-**No word timings, by either API.** `onRangeStart` fired **zero** times for
-`synthesizeToFile` (482 characters, two runs; 72 characters) **and** for `speak()` (72
-characters, `rc` 0, finished, 5,481 ms wall for 5.097 s of audio). So this engine simply
-does not implement it. That needs no new architecture: `speechd.ts:24` already declares
+Two integration facts follow. Synthesis time is roughly independent of rate (3,734 vs
+3,838 ms in session A; session B's first call ran slower at 5,106 ms). And **the engine
+applies rate at synthesis time** - at 2.0 the file itself is half as long, 16.138 s against
+32.276 s - so an engine built on it must own its rate and the Player must not apply rate
+again, or the result is 4x. That is exactly the defect non-negotiable 9 exists to prevent.
+
+**No word timings, by either API.** `onRangeStart` fired **zero** times across all six
+`synthesizeToFile` calls above **and** both `speak()` probes (72 characters, `rc` 0,
+finished, 5,502 and 5,355 ms wall for 5.097 s of audio). So this engine simply does not
+implement it. That needs no new architecture: `speechd.ts:24` already declares
 `timing: "none"`, and `src/ui/highlight.ts:69-75` already keeps the sentence layer and
 NRL-72's scroll while disabling only the word row for such an engine. **The owner accepted
 losing the word highlight on Android on 2026-10-01.**
@@ -429,14 +461,22 @@ Studio, 5 AnkiConnect - all plugins that only work with a separately installed l
 server. These are regex hits on listing text, not audited dependency counts, but they
 establish that "plugin plus local companion over loopback" is an accepted directory shape.
 
-**What is NOT yet established, and must not be read as done:** the WebView-to-bridge path
-was never composed end to end (the WebView reached an adb socket on loopback; the bridge
-was reached from the host via `adb forward`), and the bridge has **no `OPTIONS` handler**,
-so a WebView `fetch` carrying `Authorization` will fail its CORS preflight while
-`CapacitorHttp` would not; no sustained multi-chunk read went through the real Player; no
-foreground service exists, so the bridge serves only while its Activity is alive, and
-whether the plugin can launch it (an intent or custom-scheme URL from the WebView) is
-untested; Play and F-Droid distribution are unexplored; and nothing here amends `srs.md` or
+**The WebView-to-bridge path has now run end to end**, from inside Obsidian on the device,
+against the fixed build: `GET /health` at `127.0.0.1` and at `localhost` returned 200 by both
+`fetch` and `CapacitorHttp`, and `POST /synthesize` through `CapacitorHttp` at `127.0.0.1`
+returned 200 with audio. A `fetch` POST carrying `Authorization` still fails, because the
+bridge has **no `OPTIONS` handler** and the CORS preflight is refused, so the plugin side
+must use `CapacitorHttp` or the bridge must answer preflight.
+
+**What is NOT yet established, and must not be read as done:** no sustained multi-chunk read
+went through the real Player; the bridge handles requests on its single accept thread with
+no read timeout, so one connected-but-silent client stalls every other request until it
+closes (reproduced: `/health` answered at t0, went silent while such a client was open, and
+answered again once it closed), and a long synthesis blocks `/health` the same way; a
+synthesis that fails or times out can leave its WAV in the app cache; no foreground service
+exists, so the bridge serves only while its Activity is alive, and whether the plugin can
+launch it (an intent or custom-scheme URL from the WebView) is untested; the token still goes
+to logcat; Play and F-Droid distribution are unexplored; and nothing here amends `srs.md` or
 adds an ADR, both of which a shipped companion-app engine will need under the deviation rule
 at the top of this file. The `2 of 16` count does not move.
 
