@@ -2,8 +2,13 @@
 
 - Status: accepted
 - Date: 2026-09-30
-- Ticket: NRL-74 (R-M08). Amends ADR 0006 clauses 2, 3 and 4; corrects two
-  sentences in ADR 0018; adds a one-line amendment to ADR 0019 and ADR 0023.
+- Ticket: NRL-74 (R-M08), then NRL-95 (R-M08), which bounded term 2 of the rule
+  to the opener's paragraph and rewrote decisions 3 and 4, the "Known gap"
+  section and the residual list below. Amends ADR 0006 clauses 2, 3 and 4;
+  corrects two sentences in ADR 0018; adds a one-line amendment to ADR 0019 and
+  ADR 0023.
+- NOTE ON THE TITLE: "document-scoped" describes term 1 only as of NRL-95. The
+  file name is kept so existing references still resolve.
 
 ## Context
 
@@ -17,12 +22,15 @@ direction ADR 0007 clause 6 and ADR 0018 both refuse.
 The ticket proposed hoisting `cleanLine`'s line-start guard out from under its
 `obsidianComment` gate, so that the guard applied to `<!--` too. That was built
 and A/B'd against the suite before any of this was written, and it **breaks five
-pins**, including `obsidian-inside-html-block` (`tests/extract.test.ts:1187`),
-the very pin the ticket's own acceptance criteria say must keep passing. The
-ticket mischaracterises that pin as line-start-and-unclosed. It is a **mid-line**
-`<!--` whose `-->` sits four lines later, past a fence and past a `$$` line, and
-it requires the text between them to be hidden. A pure line-start rule cannot
-express it.
+pins**, including `obsidian-inside-html-block` (cited here as
+`tests/extract.test.ts:1187`; it is in fact at `:1201`, and NRL-95 corrected the
+reference), the very pin the ticket's own acceptance criteria say must keep
+passing. The ticket mischaracterises that pin as line-start-and-unclosed. It is a
+**mid-line** `<!--` whose `-->` sits four lines later, past a fence and past a
+`$$` line, and it required the text between them to be hidden. A pure line-start
+rule cannot express it. **That pin's expectation was itself wrong and NRL-95
+replaced it** - see decision 3 - so read this paragraph as NRL-74's reasoning at
+the time rather than as current state.
 
 ## Decision
 
@@ -31,7 +39,8 @@ express it.
    line **and either**
 
    - only whitespace precedes it on the line (term 1, line-local), **or**
-   - some **later** line in the note carries `-->` (term 2, document-scoped).
+   - some **later** line carries `-->` (term 2; document-scoped as NRL-74
+     shipped it, bounded by the opener's paragraph as of NRL-95 - decision 3).
 
    Anything else - a mid-line `<!--` with no closer anywhere - is literal text
    that CommonMark renders and Obsidian displays, so it is spoken, delimiters
@@ -88,7 +97,8 @@ express it.
    does cross a soft line break. With no `-->` the `<` falls through to the text
    tokenizer and the delimiters are displayed - which is the defect direction,
    confirmed from the renderer rather than reasoned. But that path is
-   **paragraph-scoped**, where ours is document-scoped. See "Known gap" below.
+   **paragraph-scoped**, where NRL-74's was document-scoped. NRL-95 bounded it;
+   see decision 3 and "CLOSED by NRL-95" below.
 
 2. **Two predicates, not one.** `opensHtmlBlock(view, at, closesLater)` sits
    beside `opensObsidianBlock(view, at)` and is deliberately separate:
@@ -106,19 +116,24 @@ express it.
    "do not merge two scans that answer different questions" note describes, where
    NRL-73's merge of two askings of the *same* question was the opposite case.
 
-3. **The lookahead runs to EOF, not to the end of the paragraph - correct for
-   term 1, and a KNOWN DIVERGENCE for term 2.** Record it as two things and not
-   one. The two terms answer to two different renderer paths, and the single
-   shared EOF scan is right for one of them and wider than the other:
+3. **The two terms have DIFFERENT scopes, and that is the renderer's own
+   asymmetry rather than an inconsistency.** Term 1 scans to EOF; term 2 is
+   bounded by the end of the opener's paragraph. Record it as two things and not
+   one, because the two terms answer to two different renderer paths:
 
-   | term | renderer path | our EOF scan |
+   | term | renderer path | our scope |
    |---|---|---|
-   | 1, line-start | HTML **block** tokenizer, module 8776 | **correct** - that tokenizer really does walk to end of input |
-   | 2, `closesLater` | **inline** raw-HTML tokenizer, module 4839 `.T` | **wider than the renderer**, which cannot cross a paragraph break |
+   | 1, line-start | HTML **block** tokenizer, module 8776 | **EOF - correct**, that tokenizer really does walk to end of input once it has opened |
+   | 2, `closesLater` | **inline** raw-HTML tokenizer, module 4839 `.T` | **the opener's paragraph** (NRL-95), matching a regex applied to one paragraph's inline text |
 
-   This is also a deliberate divergence from `codeSpanClosesLater` and
-   `bracketClosesLater`, both of which stop at `interruptsParagraph`. The
-   evidence offered for term 2's EOF scope is pin `:1187`:
+   NRL-74 shipped a single shared EOF scan for both, and recorded term 2's half
+   as a divergence carried knowingly. **NRL-95 closed it.** What follows is the
+   resolution, replacing NRL-74's "the evidence is weak and was not
+   re-litigated" paragraphs.
+
+   The only justification NRL-74 offered for term 2's EOF scope was one pin,
+   cited there as `:1187` and in fact at `tests/extract.test.ts:1201`, whose
+   fixture NRL-74's own text mis-quoted:
 
    ```
    Before <!--
@@ -129,50 +144,225 @@ express it.
    Visible.
    ```
 
-   Its `-->` is reachable only across a `%%` line, a fence and a `$$` line, and
-   the pin requires the text between to be hidden. Stopping at any of those
-   would fail it, and the ticket's acceptance criteria protect it explicitly.
+   It expected `"Before after. Visible."`, and its `-->` is reachable only
+   across a `%%` line, a fence and a `$$` line, so any paragraph bound fails it.
+   NRL-74 already conceded that this was weak evidence. **NRL-95 showed the pin
+   was wrong, and wrong in a worse way than prose loss: its old expectation
+   encoded a DISCLOSURE.** Three independent lines converge on `"Before <!--"`:
 
-   **That evidence is weak, and this clause must not be read as saying term 2's
-   scope is right.** The asar read in decision 1 shows the renderer's mid-line
-   path is the inline one and therefore paragraph-scoped, so pin `:1187`'s own
-   expectation is not renderer-faithful in either half: its `<!--` is mid-line,
-   so Obsidian displays `Before <!--` literally, and its `%%` line is a
-   line-start `%%` with no lone `%`, so Obsidian's `%%` block tokenizer opens a
-   comment there that never closes. The only stated justification for term 2's
-   EOF scope is therefore a pin whose own expectation the same read undermines.
+   - **the asar read.** Module 8776 returns early unless `<` is the first
+     non-tab/space character, so this mid-line `<!--` never reaches the HTML
+     block tokenizer at all. It reaches module 7648's inline path, module 4839's
+     `.T`, applied to the one-line paragraph `Before <!--`, which holds no
+     `-->`. So Obsidian displays `Before <!--` literally. Line 2's `%%` is
+     line-start with no lone `%`, so the `%%` block tokenizer opens a comment
+     there that never closes and hides lines 2-6.
+   - **the paragraph-bounded arm**, built from `4dcb753` and run in NRL-95's
+     Implement session, independently produces exactly `"Before <!--"`.
+   - **NRL-74's own self-tested oracle**, re-run unmodified in that session with
+     all 21 hand-traced cases still passing, says `Before` is DISPLAYED while
+     `after.` and `Visible` are HIDDEN. So the old expectation spoke two
+     sentinels Obsidian hides.
 
-   It was **not** re-litigated here - it is a pre-existing pin, it is green on
-   both sides of this diff, and changing it is a different ticket. **That ticket
-   now exists: NRL-95**, and it owns both halves (re-examine the pin, then decide
-   term 2's scope). What this ADR records is a divergence carried knowingly, not
-   a choice shown correct.
+   The pin was **replaced in place** per the NRL-66/NRL-67 convention: same
+   name, same fixture, expectation `"Before <!--"`. It is now the evidence
+   AGAINST term 2's EOF scope, not for it.
+
+   Term 1 keeps its EOF scan, and that is not a compromise: module 8776 is the
+   rule it mirrors.
 
 4. **The scope is delivered as an explicit parameter, never ambient state and
-   never a callback into `cleanLine`.** `extractChunks` computes ONE scalar,
-   once, right after `source.split("\n")`:
+   never a callback into `cleanLine`.** `extractChunks` computes per-line boolean
+   arrays, once, right after `source.split("\n")`. NRL-95 shipped one array and
+   one backward pass; **NRL-111 added a forward pass in front of it**, because one
+   term of the stop set is not answerable from the line alone (see the amendment
+   at the end of this decision):
 
    ```ts
-   let lastHtmlCloser = -1;
-   for (let k = lines.length - 1; k >= 0; k--)
-       if (lines[k]!.includes("-->")) { lastHtmlCloser = k; break; }
+   const term2Stop: boolean[] = new Array<boolean>(lines.length).fill(false);
+   {
+       let paraLinesAbove = 0;
+       for (let k = 0; k < lines.length; k++) {
+           const line = lines[k]!;
+           term2Stop[k] = endsTerm2Scan(line, paraLinesAbove);
+           paraLinesAbove = endsTerm2Block(line, paraLinesAbove) ? 0 : paraLinesAbove + 1;
+       }
+   }
+   const htmlCloserAhead: boolean[] = new Array<boolean>(lines.length).fill(false);
+   let ahead = false;
+   for (let k = lines.length - 1; k >= 0; k--) {
+       const line = lines[k]!;
+       htmlCloserAhead[k] = ahead;
+       if (term2Stop[k]!) { ahead = false; continue; }
+       if (line.includes("-->")) ahead = true;
+   }
    ```
 
-   `lastHtmlCloser > n` is then exactly "some line after `n` carries a closer".
-   A helper that rescanned `lines` per test would be an O(L) scan inside
-   `codeSpanClosesLater`'s O(L) loop inside `extractChunks`' O(L) loop - O(L^3)
-   on a long note. This is O(L) once and O(1) per test. Strict `>` is
-   deliberate: a `-->` earlier on the same line cannot close an opener later on
-   it, and the caller has already ruled out one after the opener on that line.
+   The two passes cannot be one loop in either direction: the content-line count
+   depends on lines BEFORE `k` and the closer carry on lines AFTER it. Both are
+   O(L) and the pair is still O(L).
 
-   It is a ninth `cleanLine` parameter, **appended** because six of the ten call
-   sites bind positionally. It mirrors `outgoingCode` (NRL-64) and
-   `outgoingBracket` (NRL-63) in SHAPE - one scalar handed in, so `cleanLine`
-   stays line-local - but not in TIMING: it asks nothing about this line, so it
-   is known before the first pass and **adds no pass**. There are still three.
+   `htmlCloserAhead[n]` is exactly "some line AFTER `n`, and before the first
+   line that ends `n`'s paragraph, carries a closer". NRL-74 shipped a scalar,
+   `lastHtmlCloser`, and `lastHtmlCloser > n`; NRL-95 replaced it, because the
+   bound is per-line and a scalar cannot carry one. **The O(L^3) reasoning
+   survives verbatim as the reason a per-call rescan is still refused:** a helper
+   that rescanned `lines` per test would be an O(L) scan inside
+   `codeSpanClosesLater`'s O(L) loop inside `extractChunks`' O(L) loop. The array
+   is O(L) time once, O(1) per test, and O(L) booleans of extra memory.
+   Rejected: a `paragraphEnd: number[]` array plus the old scalar (strictly more
+   work and more state for the same answer), and lazy memoised computation (extra
+   mutable state for no gain).
+
+   Three details of that loop are load-bearing. The assignment **precedes**
+   folding line `k` in, which is the old scalar's strict `>` - a `-->` on line
+   `n` cannot close an opener later on `n`, and the caller has already ruled out
+   one after the opener on that line. `ahead` is **reset at a stop line**,
+   because a paragraph cannot see past its own end. And a `-->` sitting **ON** a
+   stop line is deliberately unreachable from earlier lines, while the stop line
+   itself still gets the following run's answer - which is what keeps
+   `table-tracking` and `heading-html-tracking` green.
+
+   **THE MUTUAL-RECURSION TRAP.** The bound predicate is a separate, comment-blind
+   helper, `endsTerm2Scan`, and it MUST NOT be `interruptsParagraph`:
+
+   ```
+   interruptsParagraph -> opensHiddenComment -> opensHtmlBlock -> consumes this answer
+   ```
+
+   so reusing `interruptsParagraph` here is mutually recursive - unbounded, or
+   needing a sentinel argument threaded through four functions to break the
+   cycle. `endsTerm2Scan` is comment-blind by construction rather than by a flag
+   for exactly that reason. Do not "simplify" it into a call to
+   `interruptsParagraph`.
+
+   **Its stop set is `interruptsParagraph`'s terms with `BLOCKQUOTE` and
+   `TABLE_ROW` dropped, `LIST_BULLET` REPLACED by `TERM2_LIST`, and `SETEXT`
+   SPLIT INTO THREE (NRL-111)**, and the four departures are four different
+   reasons rather than one. The list half was corrected at NRL-95's ship review;
+   the earlier draft of this ADR dropped `LIST_BULLET` whole on a justification
+   that measurement falsified. See the residual list below.
+
+   **AMENDED BY NRL-111: the `SETEXT` term as NRL-95 shipped it was a stop the
+   renderer does not have, and the reasoning for it in this ADR rested on an
+   INVERTED PREMISE.** This paragraph replaces that reasoning rather than sitting
+   beside it, and two other places in this file that stated the premise have been
+   corrected in place as well.
+
+   The inverted premise was that Obsidian runs with `commonmark` **falsy**, which
+   this ADR inferred from `u.interruptParagraph` holding
+   `["setextHeading",{commonmark:!1}]` and `["definition",{commonmark:!1}]`
+   entries at all. It is the opposite. `VT.globalOptions` is
+   `{breaks:!0, commonmark:!0}` and the sole parse entry applies it, so
+   `options.commonmark` is **TRUE**; module 6047 gates each entry on
+   `o.commonmark === n.options.commonmark`, so those two `{commonmark:!1}` entries
+   are the **DISABLED** ones. **`setextHeading` and `definition` do not interrupt
+   a paragraph in Obsidian at all.** A setext underline ends a paragraph only
+   through the setextHeading **block** tokenizer, module 8671, which takes exactly
+   **one** content line.
+
+   So the term needs **block position**, which a line-local regex cannot supply,
+   and that is why `endsTerm2Scan` gained a `paraLinesAbove` parameter and why
+   `extractChunks` gained the forward pass above. Deleting `SETEXT.test(line)` is
+   **not** the fix: measured, an arm identical to shipped minus that one term is
+   RED on `pin-nrl95-setext-between` and newly LOSES 36,864 cells of text the
+   renderer displays.
+
+   The split is three terms with three independent justifications, each one read
+   off **real rendered HTML** produced by executing Obsidian 1.13.7's own parser
+   and renderer in Node (the durable harness at
+   `~/.local/share/note-reader-local/obsidian-parser-harness/`), not off a
+   transcription:
+
+   | term | shape | gated? | why it stops |
+   |---|---|---|---|
+   | `TERM2_SETEXT_EQ` | `/^=+\r?$/` | **yes**, `paraLinesAbove === 1` | module 8671's one-content-line rule. Measured: `Title` / `===` is `<h1>`; `Title` / ` ===`, `Title` / `===  `, `Title` / `===\t` and `Title` / `\t===` are each one `<p>` with the `===` as prose, so the shape is exact and NOT CommonMark's `^ {0,3}...\s*$` |
+   | `TERM2_LONE_DASH` | `/^ {0,3}-\s*$/` | no | a bare `-` is a LIST item starting: module 745 accepts a marker with nothing after it, and `list` is in `u.interruptParagraph` unconditionally. Measured: `Prose <!--` / `more` / `-` / `HIDDENE` / `--> t.` renders `<p>...</p><ul><li>HIDDENE...` |
+   | `TERM2_DASH_RUN` | `/^ {0,3}--+\s*$/` | no | module 4839's `.T` body cannot consume two consecutive dashes, so a `--` anywhere between opener and closer makes the construct fail to match whatever the block structure is. Measured: that shape renders as ONE `<p>` with every line visible |
+   | `TERM2_SETEXT_DASH` | `/^--+\r?$/` | **yes**, `paraLinesAbove === 1` | **ADDED BY NRL-111's SECOND PASS**, see the F4 correction below. A dash run that IS its block's second line is a setext `<h2>` and therefore a real BLOCK END, which the first draft denied unconditionally. Measured: `Lead.` / `--` is `<h2 data-heading="Lead.">Lead.</h2>`, while `Lead.` / ` --`, `Lead.` / `-- ` and `Lead.` / `--\t` are each one `<p>` - so the shape is exact, measured rather than assumed symmetric with the `=` half, and `\r?` holds because `Lead.\r\n--\r\n` is still an `<h2>` |
+
+   The union of the four dash/eq shapes is **not** `SETEXT`: ` ===` and `===  `
+   lose their stop. That is deliberate and it closes cells rather than opening
+   them, the renderer having no underline there either.
+
+   **`endsTerm2Block` is split out from `endsTerm2Scan`, and conflating them is a
+   measured disclosure.** The content-line count resets on `endsTerm2Block` only.
+   `TERM2_DASH_RUN` is the one term that stops the scan **without ending a block**,
+   so `--` / `Prose <!--` / `===` / `HIDDENE` / `--> t.` gives its `===` two
+   content lines above it, which is not an underline, and the renderer hides
+   `HIDDENE`. An arm that reset the count there speaks it: measured at 3,072 cells
+   and RED on `pin-nrl111-dash-pair-is-not-a-block-end`.
+
+   **CORRECTED BY NRL-111's SECOND PASS, and the correction is the F4 finding.**
+   "Without ending a block" is true of a dash run OFF a block's second line and
+   false ON it, where the setextHeading tokenizer reaches it first and makes it an
+   `<h2>`. The first draft gated the `=` run on block position and left the dash
+   run position-INDEPENDENT, i.e. it repeated for dashes the exact error it had
+   just fixed for `=`. So `Lead.` / `--` / `Prose <!--` / `===` / `HIDDENE` /
+   `--> t.` gave the `===` four content lines, did not stop, and dropped text the
+   renderer displays: **512 cells of prose loss, green on base 874410d and red on
+   the first draft**, now pinned as
+   `pin-nrl111-dash-run-on-a-second-line-is-an-h2`. The remedy is a FOURTH term,
+   `TERM2_SETEXT_DASH`, in `endsTerm2Block` only and under the identical
+   `paraLinesAbove === 1` gate; `TERM2_DASH_RUN` keeps its ungated place in
+   `endsTerm2Scan`, which is why the two stay separate patterns rather than
+   becoming one with one gate. The other direction is pinned too, by
+   `guard-nrl111-dash-run-off-a-second-line-is-not-an-h2`, which is RED on base and
+   RED on the arm that makes the dash run a block end unconditionally.
+
+   **Direction of the whole change, proved exhaustively over a bounded alphabet
+   rather than sampled.** Over every line of length <= 5 drawn from the 14
+   characters the predicate can read, at each of four content-line counts
+   (579,195 lines, 2,316,780 (line, count) pairs): **1,960 widenings, every one of
+   them a `1)` ordered marker; 387 narrowings, every one of them an `=` run; 0
+   cases where `endsTerm2Block` holds without `endsTerm2Scan`; and 0 cases where
+   `endsTerm2Scan` holds without `endsTerm2Block` other than a dash run.** Each
+   clause was shown live by emptying its exception set, which turns the same run
+   red at 1,960 and 387 respectively, and by an arm whose `TERM2_LIST` is widened
+   to `\d+[.)]`, which produces 5,136 violations of the first clause. **The bound
+   is real and must be stated with the claim: lines longer than 5 characters and
+   characters outside that alphabet are not covered, so this is a proof over the
+   enumerated domain and a strong argument - not a proof - outside it.**
+
+   **RE-RUN WITH A SIGN BY NRL-111's SECOND PASS, and the sign is the part that
+   mattered.** The figures above classify each divergence and say nothing about
+   whether the renderer shows or hides the line, which is how an argument that
+   correctly identified `1)` as the only widening class coexisted with a 7,168-cell
+   disclosure inside that very class. The re-run asks the renderer about **every
+   diverging (line, count) PAIR at its own count**, not per line at `k=1` - a
+   per-line sign is simply wrong for a position-gated term, since the same line
+   stops at 1 and does not at 2. Over the same alphabet and bound (813,615 lines,
+   3,254,460 pairs) against base 874410d:
+
+   - **2,064 widenings, every one a `1)` at a capped indent, 0 unclassified. Sign:
+     the renderer DISPLAYS the line in 2,064 of 2,064, so every widening is a
+     correct prose-loss fix and none is a disclosure.**
+   - **7,627 narrowings: 387 an `=` run off a block's second line, 7,240 a list
+     marker past three columns of indent, 0 unclassified. Sign: the renderer HIDES
+     the line in 387 of 387 and in 7,224 of 7,240, so all but 16 narrowings remove
+     a disclosure.**
+   - The 16 exceptions were run down rather than rounded off: they are four
+     distinct lines (`\t* --`, `\t*\t--`, `\t+ --`, `\t+\t--`) at four counts each,
+     and the renderer shows them because the line holds a **mid-line `--`** that
+     module 4839's regex cannot cross, not because the marker interrupts. That is
+     **F2**, the already-pinned out-of-scope root
+     (`tripwire-nrl111-f2-midline-dashes-between-opener-and-closer`), which the
+     uncapped pattern had been catching by accident. Not a new class.
+
+   The probe demonstrably discriminates: run identically against the FIRST DRAFT it
+   reports 8 **unclassified** widenings - `"\t1) "` and `"\t1)\t"` at each of four
+   counts - and signs all 8 as lines the renderer HIDES. The same bound caveat
+   applies to the signed re-run as to the original.
+
+   The value still reaches `cleanLine` as a **scalar** ninth parameter,
+   `htmlCloserAhead[lineNo]!`, **appended** because six of the ten call sites
+   bind positionally. So `cleanLine` stays line-local, it mirrors `outgoingCode`
+   (NRL-64) and `outgoingBracket` (NRL-63) in SHAPE, and it still asks nothing
+   about this line, so it **adds no pass**. There are still three.
 
    A module-level flag was built first and was the fifth pin failure: it leaked
-   into the recursive label `cleanLine` call and broke `local-html-state`.
+   into the recursive label `cleanLine` call and broke `local-html-state`. That
+   warning still applies.
 
 5. **The new literal escape gates `blockComments` POSITIVELY, where the `%%`
    escape negates it.** This reads like a typo and is not:
@@ -435,10 +625,25 @@ the NRL-66/NRL-67 convention. Decision Q9 itself keeps its pin: `:960`, the same
 shape with a `-->` four lines down, still expects `["ZAFTERZ here."]` and is green
 on both sides. Do not collapse the pair.
 
-### Known gap: our lookahead is wider than the renderer's
+**NRL-95 moved the SECOND of that pair, and added a third.** With term 2 bounded
+by the opener's paragraph, `[a]: x.png "<!--"` / blank / `ZSECRETZ ...` / blank /
+`-->` / blank / `ZAFTERZ here.` no longer opens a comment at all: the `-->` is two
+paragraphs away and the renderer's inline path cannot cross a blank line. It went
+`["ZAFTERZ here."]` -> `["ZSECRETZ sentence here.", "-->", "ZAFTERZ here."]`, and
+the lone `-->` line is spoken too, which is also renderer-faithful - `-->` matches
+no HTML block opener and is not a tag, so it is ordinary paragraph text. It was
+**replaced in place** again, and a THIRD fixture was added rather than the second
+merely edited, so decision Q9's own ordering property keeps a test: the same shape
+with the `-->` inside the opener's OWN paragraph still expects `["ZAFTERZ here."]`
+and is green on both sides. **This fixture was not predicted by NRL-95's plan** -
+its fixture sweep covered the suite's fixture ARRAYS and this one is an `expect()`
+call, so it was found by running the suite. It is the only pre-existing suite
+expectation NRL-95 moves other than the `:1201` pin decision 3 discusses.
 
-Term 2 scans to EOF; the renderer's mid-line path is the **inline** tokenizer,
-which cannot cross a paragraph break. So
+### CLOSED by NRL-95: our term-2 lookahead was wider than the renderer's
+
+NRL-74 shipped term 2 scanning to EOF while the renderer's mid-line path is the
+**inline** tokenizer, which cannot cross a paragraph break. So
 
 ```
 Plain prose <!--
@@ -449,26 +654,219 @@ New para.
 --> tail.
 ```
 
-is hidden by us and displayed by Obsidian. Measured **1,024 cells, identical on
-base and on the fix** - this diff neither opened nor widened it - and re-measured
-independently at ship review on the shape above, `HIDDENP` spoken in **0 of 512
-on base and 0 of 512 on the fix**. Fixing it means making term 2
-paragraph-scoped, which fails pin `:1187` as decision 3 explains, so it needs
-that pin re-examined first.
+was hidden by us and displayed by Obsidian. NRL-74 measured it at **1,024 cells,
+identical on base and on the fix**, and re-measured the shape above at ship review
+with `HIDDENP` spoken in **0 of 512 on base and 0 of 512 on the fix**. NRL-95
+bounded term 2 and it now speaks: measured in NRL-95's Implement session by
+bundling the real `src/text/extract.ts` from `4dcb753` and from the fix side by
+side with the repo's own esbuild, the ticket's own repro went
+`"Before x. Prose Tail."` -> `"Before x. Prose <!-- HIDDENP New paragraph -->
+Tail."`, and across the oracle-keyed two-class probe (28 shapes x 512 content-key
+combinations, 21,504 Class-B cells per arm) the text the renderer DISPLAYS but we
+silenced fell from **8,448 lost to 1,792 lost, with 0 cells newly leaking and 0
+newly lost**. The residual 1,792 is fully accounted for: every one of them is a
+content-key exclusion the oracle cannot see, 256 cells each at one constant toggle
+(`skipInlineCode` x3 rows, `skipCodeBlocks` x2, `speakImageAlt`, `skipFrontmatter`).
 
-**Tracked as NRL-95** (Bug, Medium, R-M08), filed at ship review with the module
-numbers, the regexes, both measurements and the doubt about pin `:1187`. Note the
-direction reversal it will have to handle: widening `opensHiddenComment` back out
-**narrows** `codeSpanClosesLater` and `bracketClosesLater`, the opposite of this
-diff, so decision 6's three destination pins and decision 7's
-`guard-nrl74-variant-C-disclosure` must both be re-measured there.
+Two evidence notes on that number, because they matter more than the number. The
+probe was run against **oracle.mjs unmodified** first and reported **1,024 cells
+newly leaking in two shapes**, both of them a setext underline or a thematic break
+between opener and closer. That is an **oracle limit, not a leak**: `oracle.mjs`'s
+`endsParagraph` models blank / fence / ATX heading / html-opener / `%%`-opener
+only, and Obsidian's own parser prototype - read out of the same installed
+`obsidian.asar` in that session, `app.js` sha256
+`8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898`, at byte offset
+22284 - sets
 
-### Other residual risks, stated plainly
+```js
+u.interruptParagraph = [["thematicBreak"],["list"],["atxHeading"],["fencedCode"],
+  ["blockquote"],["html"],["setextHeading",{commonmark:!1}],["definition",{commonmark:!1}]]
+```
 
-- `lastHtmlCloser` is a crude text scan. It counts a `-->` inside a fenced block,
-  inside frontmatter, inside another comment or inside a code span. Measured: the
-  fence and frontmatter shapes are in the two-class probe and neither newly leaks
-  or newly loses.
+so a thematic break DOES end the paragraph the inline regex is applied to.
+**CORRECTED BY NRL-111: the setext half of that sentence was WRONG, and in the
+disclosure direction.** `setextHeading` and `definition` carry `{commonmark:!1}`,
+`VT.globalOptions` sets `commonmark:!0`, and module 6047 gates each entry on
+`o.commonmark === n.options.commonmark` - so those two entries are the DISABLED
+ones and a setext underline does NOT interrupt a paragraph. It ends one only as
+the second line of a setextHeading block (module 8671, exactly one content line).
+Treating it as an unconditional interrupter shipped a live 2,048-cell disclosure;
+see decision 4's NRL-111 amendment. Note what that list does NOT contain, read at NRL-95's ship
+review and load-bearing for the `TABLE_ROW` decision below: **`table`**, nowhere,
+and the only two terms ever inserted into it anywhere in `app.js` are `math` and
+`comment`. The numbers above are from `oracle95.mjs`, a copy of
+`oracle.mjs` with those two terms added on that primary-source authority and
+nothing else changed, re-run against the unmodified 21-case self-test with all 21
+still passing. `list`, `blockquote` and `definition` were deliberately NOT added,
+because the oracle models neither container prefix re-offering nor link reference
+definitions and adding the terms without the structure would trade one wrong
+answer for another.
+
+**And the direction claim NRL-74 recorded here was BACKWARDS.** It said bounding
+term 2 would **narrow** `codeSpanClosesLater` and `bracketClosesLater`. It
+**WIDENS** them: bounding term 2 narrows `opensHtmlBlock` -> `opensHiddenComment`
+-> `interruptsParagraph`, so both carries return false LESS often and confirm MORE
+often. Measured on fixtures - a code span and a label each now survive a paragraph
+break base refused - and on the predicate layer: over 697 documents / 2,794
+(document, line) pairs the shipped term-2 array is **0 widened, 178 narrowed**
+against base's `lastHtmlCloser > n`, a strict subset, so the change is fail-closed
+by measurement rather than by argument. The three destination pins and
+`guard-nrl74-variant-C-disclosure` were re-measured rather than assumed and all
+four are **UNMOVED, 0 of 512 differing cells each**, because none of their `-->`s
+sits outside the opener's paragraph.
+
+### Residual risks left by NRL-95's own bound, stated plainly
+
+- **The stop set drops `BLOCKQUOTE` and `TABLE_ROW`, and replaces `LIST_BULLET`
+  with `TERM2_LIST`.** Three departures, three reasons. The first draft of this
+  ADR gave one reason for all three and the ship-review critique falsified it for
+  the list half, so read the three separately.
+
+  **`BLOCKQUOTE`, dropped - correct, and compatible with `blockquote` being in
+  `u.interruptParagraph`.** The renderer's blockquote tokenizer PEELS the `>`
+  prefix and re-runs the paragraph tokenizer on the stripped content, so a
+  continuation line of the SAME quote is never a quote STARTING;
+  `u.interruptParagraph` is about the other case. So `> Prose <!--` /
+  `> HIDDENQ` / `> more -->` is one paragraph inside the quote, module 4839's
+  regex does find the closer, and Obsidian HIDES `HIDDENQ`. Stopping there speaks
+  it. Measured: the two quote guards are RED on the arm that puts `BLOCKQUOTE`
+  back. The cost is real and is now pinned as a tripwire rather than left
+  unstated: where the quote STARTS after the opener (`Prose <!--` /
+  `> HIDDENQ3` / `more -->`) the renderer's paragraph really does end at line 2
+  and displays everything, and we hide it. Fail-closed, identical on base, and
+  only fixable with container-prefix awareness - the NRL-88 root-1 class
+  (`pin-nrl95-quote-starting-after-opener-still-hidden`).
+
+  **`TABLE_ROW`, dropped - correct, and for a STRONGER reason than this ADR first
+  gave.** The first reason was that our `TABLE_ROW` is `/^\s*\|/` and matches a
+  lone `| a |` line GFM does not treat as a table. True but narrow. The real
+  reason, read out of `app.js` this session: **`table` appears nowhere in
+  `u.interruptParagraph`**, and the only two terms ever inserted into that list
+  are `math` and `comment` (`RE(t.interruptParagraph,"fencedCode","math")` and
+  `RE(i.interruptParagraph,"fencedCode","comment")` are the only two such calls
+  in the file). So NO table row can interrupt a paragraph in Obsidian, delimiter
+  row or not, and a REAL GFM table between opener and closer is hidden too.
+  **Do not "fix" `TABLE_ROW` to require a delimiter row and then add it here**;
+  that reopens the disclosure on exactly the real-table shape, which is why
+  `guard-nrl95-real-gfm-table-closer` was added. All three table guards are RED
+  on the arm that puts `TABLE_ROW` back.
+
+  **`LIST_BULLET`, REPLACED - the first draft's reason here was FALSE and the
+  behaviour was changed at ship review.** The draft said a list, like a
+  blockquote, re-offers its lines as one paragraph. It does not: `- x` / `- y` /
+  `- z` is three items with three paragraphs, so the closer is NOT in the
+  opener's paragraph and Obsidian DISPLAYS every line. Dropping `LIST_BULLET`
+  whole therefore retained prose loss with no disclosure to justify it. The
+  correct term is module 745's own silent-mode rule, transcribed into
+  `TERM2_LIST`: a bullet interrupts a paragraph and an ordered marker interrupts
+  only when its digit string is exactly `"1"` (`if (silent && o !== "1") return`).
+  `LIST_BULLET`'s `\d+[.)]` accepts `7.` and `01.`, and stopping at one of those
+  IS a disclosure: two guards are RED on the arm that puts the whole of
+  `LIST_BULLET` in the stop set.
+
+  **CORRECTED BY NRL-111 on the `)` half, and the pattern changed with it.**
+  NRL-95 wrote `1\.` on the premise that "Obsidian runs `commonmark` falsy, so
+  `)` is not a marker". That premise is the inverted one decision 4's amendment
+  corrects: `commonmark` is TRUE, module 745's marker test is
+  `y === h || z && y === v` with `z = options.commonmark` and `v = ")"`, so `1)`
+  IS a marker and DOES interrupt. Measured against real rendered HTML:
+  `Prose <!--` / `1) HIDDENE` / `more -->` gives
+  `<p>Prose &#x3C;!--</p><ol><li>HIDDENE...`, so the paragraph ends there and the
+  renderer displays it; `7.`, `7)`, `01.` and `01)` all stay one `<p>` with the
+  sentinel inside the comment. The term is now
+  `TERM2_LIST = /^ {0,3}(?:[-*+]|1[.)])[ \t]/`,
+  `guard-nrl95-ordered-paren-not-an-interrupter` was REPLACED IN PLACE by
+  `pin-nrl111-ordered-paren-interrupts` with the opposite expectation, and two
+  `)` twins of the digit-string guards were added.
+
+  **THE SENTENCE THAT USED TO END THIS BULLET WAS WRONG AND IS THE LESSON OF
+  NRL-111's SECOND PASS.** It read "this direction was prose loss rather than
+  disclosure, which is why it was the lower-severity half". That is true of the
+  shape the fixture pins and false of the pattern change that produced it. The
+  pattern was `^[ \t]*` with **no indent cap**, so adding `1)` to it also added
+  `\t1) `, `    1) `, ` \t1) ` and every other over-indented form - every one of
+  which the renderer HIDES - and the widening therefore shipped a **live
+  disclosure, 7,168 newly leaking cells over 14 shapes (room 9,216)**, in a ticket
+  whose whole purpose was removing one. Worse, this very ADR recorded the uncapped
+  indent as "wrong in the DISCLOSURE direction" two paragraphs below, so the fact
+  was written down and not joined up.
+
+  The exhaustive direction argument below was **not wrong about the class and was
+  wrong about its SIGN**: it proved every widening was a `1)` ordered marker and
+  then assumed a `1)` was benign, without asking the renderer whether each
+  widening's own line was shown or hidden. A direction argument that names a class
+  and does not sign it is not a safety argument. The second pass re-ran it with a
+  per-pair sign (see below), and signing is now part of the probe rather than part
+  of the prose.
+
+  **The indent cap landed with it**, so the sentence above is now true: both halves
+  of `TERM2_LIST`'s indent axis moved together, which is what this bullet's own
+  prose had argued for and the first diff failed to do.
+
+  **Two things about `TERM2_LIST`. The FIRST IS NOW FIXED by NRL-111's second
+  pass; the second is still open as NRL-119's remaining half.** `^[ \t]*` had NO
+  indent cap, and that was wrong in the DISCLOSURE direction: module 745's list
+  tokenizer gives up past three columns of indent and a tab reaches column four on
+  its own, so `\t- x` and `    - x` are lazy paragraph prose and do NOT interrupt.
+  Measured against real rendered HTML: `Prose <!--` / `\t- HIDDENL` / `more -->`
+  renders `<p>Prose <!--\n\t- HIDDENL\nmore --></p>`, i.e. the renderer HIDES
+  `HIDDENL`. The indent axis was swept with the real renderer across all five
+  markers (`-`, `*`, `+`, `1.`, `1)`) and eleven indents, and the split is TOTAL
+  with no mixed row: 0, 2 and 3 spaces DISPLAY the sentinel, while 4 spaces, 5
+  spaces, `\t`, ` \t`, `  \t`, `   \t` and `\t\t` all HIDE it.
+  `pin-nrl95-bullet-any-indent` and `pin-nrl95-bullet-tab-indent` therefore
+  encoded a disclosure as expected behaviour; both were REPLACED IN PLACE by
+  `pin-nrl111-bullet-four-space-indent-is-not-a-marker` and
+  `pin-nrl111-bullet-tab-indent-is-not-a-marker` with the opposite expectation, and
+  the pattern is now `^ {0,3}`. This closes **NRL-119's first half** as well as
+  NRL-111's own widening: on a 55-shape x 512 indent corpus (11 indents x 5
+  markers) base leaks **14,336 of 17,920 class-A cells** and the capped arm leaks
+  **0**, with 0 newly lost and base's 2,048 class-B cells closed as well. A tab is
+  Obsidian's own default indent for a nested list item, so the leaking shape was
+  the ordinary one.
+
+  The SECOND is untouched: the `[ \t]` requirement misses a BARE marker, which
+  module 745 accepts (`next!=="\n" && next!==""` passes), so `*`, `+`, `1.` and
+  `1)` alone on a line are all measured interrupters and we fail closed on all four
+  - 5,120 cells, prose loss. That is **NRL-119's second half** and it is
+  deliberately not done here; `pin-nrl111-bare-ordered-marker-unmasked` is the only
+  thing in the suite that goes red on an arm widening `[ \t]` to `([ \t]|$)`, so
+  it is the tripwire that stops the stop set growing a bare-marker term by
+  accident. Measured on the first pass's own list change: five
+  fixtures RED against the pre-ship-review arm
+  (`pin-nrl95-bullet-items-are-three-paragraphs`, `-bullet-line-between`,
+  `-bullet-any-indent`, `-bullet-tab-indent`, `-ordered-one-dot-interrupts`), 0
+  after; and over a **19,584-cell sweep** (3 openers x 32 middle lines x 3 tails
+  x 64 content-key combinations) the arm with `TERM2_LIST` diverges from the arm
+  without it in **3,456 cells and in 0 cells where an independent transcription
+  of module 745's silent path says the middle line does NOT interrupt** - so the
+  widening never speaks text the renderer hides. `sourceIndex` clean by numeric
+  UTF-16 code-unit index over every chunk of all 19,584 cells, 0 failures.
+
+  What survives all three: the stop set answers `true` for a strict subset of the
+  lines the document-scoped predicate did, so omitting a term is fail-closed and
+  ADDING one is the dangerous direction. Two residual prose losses stay, both
+  pinned as tripwires and both of the container-prefix class: a quote or a bullet
+  that our anchored regexes cannot see because the `>` is never peeled before the
+  scan (`pin-nrl95-quote-starting-after-opener-still-hidden`,
+  `pin-nrl95-bullet-inside-quote-still-hidden`).
+- **The scan is forward-only from the opener line and does not bound the OPENER's
+  own block.** An ATX heading's or a table row's mid-line `<!--` therefore still
+  reaches a later closer that module 4839's paragraph-scoped path could not.
+  Over-hiding, so fail-closed; pre-existing; the same class as the already-pinned
+  `heading-tracking` `%%` divergence. Pinned as
+  `guard-nrl95-atx-opener-not-bounded`, identical to `heading-html-tracking`, and
+  out of NRL-95's scope. So NRL-95 does NOT make term 2 fully faithful to module
+  4839, and must not be read as claiming it.
+- `htmlCloserAhead` is still a crude text scan within a paragraph. It counts a
+  `-->` inside a code span or inside another comment on a non-stop line. NRL-95
+  **partly mitigated** the older, wider form of this bullet, which said the scan
+  also counted a `-->` inside a fenced block, inside frontmatter or behind a blank
+  line: a fence line and a blank line now stop the scan, and frontmatter's `---`
+  is matched by `HR` and by NRL-111's `TERM2_DASH_RUN` both (it was `SETEXT`/`HR`
+  before NRL-111 split that term; a three-dash run still stops unconditionally),
+  so a closer there no longer reaches an earlier opener. Measured: the fence and frontmatter shapes are in the
+  two-class probe and neither newly leaks nor newly loses.
 - `appendRemainder` hands `cleanLine` a **suffix**, so term 1 is measured from
   the remainder's start rather than the physical line's. Inherited from the `%%`
   predicate, NRL-73's own known limit, not opened here.
@@ -490,6 +888,379 @@ diff, so decision 6's three destination pins and decision 7's
   from what the tokenizers say, because a `%%` in an ATX heading reaches the
   anchored inline tokenizer rather than the block one. Identical on base and fix,
   pinned as `heading-tracking`, and **no ticket has been filed**.
-- `interruptsParagraph`'s answer set changed, so **whichever of NRL-74 and NRL-88
-  merges second must re-measure NRL-88's five roots.** NRL-88's numbers are
-  neither re-measured nor claimed here.
+- `interruptsParagraph`'s answer set changed AGAIN at NRL-95: **28 (document,
+  line) pairs over 697 documents, on 3 distinct lines, every one of them a
+  mid-line `<!--` line the tokenizer oracle does NOT call a comment-block
+  opener.** So **whichever of NRL-74, NRL-95, NRL-98 and NRL-93 merges last must
+  re-measure NRL-88's remaining roots.** Their numbers are neither re-measured nor
+  claimed here.
+- `codeSpanClosesLater` and `bracketClosesLater` were shown structurally
+  unweakened rather than asserted to be: brace-matched out of both trees and
+  **byte-identical modulo the threaded argument's type and the two index
+  expressions**. `opensObsidianBlock`, `opensHtmlBlock`, `opensHiddenComment`,
+  `interruptsParagraph`, `opensMathBlock` and `labelClose` are **byte-identical**
+  across the NRL-95 diff, by sha256 of each brace-matched body.
+- **NOTHING IN NRL-95 WAS OBSERVED IN OBSIDIAN.** CDP port 9222 was not listening
+  and no Obsidian process was running for the whole of that run, and no deploy
+  happened. Every renderer claim above, including the whole case for moving pin
+  `:1201`, rests on reading `obsidian.asar` 1.13.7 (sha256 confirmed identical to
+  the bytes NRL-74 read) plus a transcribed oracle. Rule 11 applies to every
+  number.
+
+### CLOSED by NRL-111: the `SETEXT` stop was a stop the renderer does not have
+
+NRL-95's own automated Verify found this and failed the ticket for it; the PR was
+merged anyway, so it was live in `main` from `0953b7d` until NRL-111. Decision 4's
+amendment carries the mechanism, the three-way split of the term and the exhaustive
+direction property. What follows is the measurement.
+
+**The oracle is not a transcription.** Every renderer claim in this section comes
+from executing Obsidian 1.13.7's own parser (`WT`) and HTML renderer (`GT`) out of
+the installed bundle in bare Node, through the durable harness at
+`~/.local/share/note-reader-local/obsidian-parser-harness/` (`app.js` sha256
+`8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898`, 3,876,459
+bytes, re-verified this session; its own six-case self-test re-run, 6 ok). That
+matters here more than anywhere, because **NRL-111 exists precisely because NRL-95
+reasoned from a transcription that passed its self-test.**
+
+**One correction to the harness's own oracle, which it is worth not rediscovering.**
+`leak.cjs` locates HTML comments in the rendered output with `indexOf("<!--")`.
+Obsidian's heading handler emits `data-heading="<the raw heading text>"`, so a
+heading whose text contains `<!--` puts a literal `<!--` inside an **attribute**,
+and that scan takes it as a comment opener and swallows every following element to
+the next `-->`. Measured on `Prose <!--` / `===` / `more` / `===` / `HIDDENE` /
+`--> t.`, whose real HTML is
+`<h1 data-heading="Prose <!--">Prose &#x3C;!--</h1><h1 ...>more</h1><p>HIDDENE<br>--> t.</p>`:
+the naive scan reports `HIDDENE` HIDDEN where a reader plainly sees it. NRL-111's
+`oracle111.cjs` skips a tag to its `>` **honouring quoted attribute values**, which
+fixes it. Pinned as `guard-nrl111-double-setext-attribute-shape`.
+
+**Two-class probe, 1,350 shapes x 512 content-key combinations = 691,200 cells per
+arm.** Four structural axes: 5 prefixes (the dash-pair hazard), 3 opener positions,
+45 middle constructs enumerated by construct AND by position, 2 tails.
+
+```
+                       Class A (renderer HIDES)   Class B (renderer DISPLAYS)
+                       301,056 cells              390,144 cells
+base 874410d           50,176 spoken              56,320 lost
+NRL-111                 5,120 spoken              51,200 lost
+NEWLY LEAKING 0        NEWLY LOST 0               50,176 cells differ
+```
+
+Room to fail was 50,176 cells on the disclosure side and 56,320 on the prose-loss
+side, so neither direction is vacuous. **45,056 disclosure cells closed and 5,120
+prose-loss cells closed.**
+
+**"0 NEWLY LEAKING, 0 NEWLY LOST" IS A STATEMENT ABOUT THIS CORPUS AND IS FALSE
+OUTSIDE IT.** The corpus's four axes are 5 prefixes, 3 opener positions, 45 middle
+constructs and 2 tails, and its indent axis is thin: it enumerates middle
+CONSTRUCTS, not the INDENTS a construct can carry. An independent Verify built an
+indent-split corpus and found the first pass **newly leaking 7,168 cells over 14
+shapes (room 9,216)** through `TERM2_LIST`'s missing cap - a class this probe
+cannot see and therefore never contradicted. Quote the figure with the corpus
+attached, always, and never as "the fix leaks nothing". The second pass's own
+probes are reported in their own section below with their own corpora stated.
+
+**Every residual cell is accounted for and every one is identical on base.**
+Class A's remaining 5,120 are one shape, `\t- x`, the `TERM2_LIST` indent-cap
+disclosure recorded in the list-half bullet above. Class B's remaining 51,200 are:
+5,120 `skipCodeBlocks` (a content-key exclusion the oracle cannot see), 5,120 the
+bare-`1)` fail-closed gap, 5,120 the already-pinned NRL-88 root-1 quote class,
+5,120 a `$$` math-block line that is in `u.interruptParagraph` and not in our stop
+set, and 30,720 a **line-start** `<!--` whose next line is a setext underline or a
+dash run, which makes it an `<h1>`/`<h2>` rather than an HTML block - i.e. **term 1
+needs block position too**, in the prose-loss direction. None of the five is opened
+by NRL-111 and none has a ticket yet.
+
+**"EVERY RESIDUAL ACCOUNTED FOR" MISSED TWO, both class A and both 512 cells on
+both arms, so both inherited rather than opened here**, found by the independent
+Verify and recorded rather than glossed. A **tab-only line is taken as blank** by
+the forward pass's `line.trim() === ""`, which resets the content-line count where
+the renderer does not end a block there. And a **lazy list continuation resets the
+count** as well, because the line it continues matches `TERM2_LIST` while the
+renderer is still inside the same paragraph. Neither moves between base and either
+pass of NRL-111; both belong with the five above and with F1 below rather than with
+anything this ticket changed.
+
+**Four alternate implementations were built and each is measurably worse, so no
+design decision here rests on argument.**
+
+| arm | Class A spoken | Class B lost | the fixture that catches it |
+|---|---|---|---|
+| NRL-111 as shipped | 5,120 | 51,200 | - |
+| shipped minus `SETEXT.test(line)` (the "one-character fix") | 5,120 | **93,184** (+36,864) | `pin-nrl95-setext-between` and 5 more |
+| content-line count reset at a dash run | **8,192** (+3,072) | 51,200 | `pin-nrl111-dash-pair-is-not-a-block-end` |
+| `TERM2_SETEXT_EQ` kept at CommonMark's `^ {0,3}=+\s*$` | **13,312** (+8,192) | 51,200 | `pin-nrl111-eq-indented-not-an-underline`, `-eq-trailing-space-not-an-underline` |
+| content-line count never reset | 5,120 | **54,272** (+3,072) | `guard-nrl111-count-resets-at-a-block-end` |
+| `TERM2_LIST` widened to `\d+[.)]` | - | - | the four digit-string guards |
+| `HR` removed from the stop set | 5,120 | **66,560** (+15,360) | `pin-nrl95-hr-between` |
+| **`TERM2_LIST` left uncapped at `^[ \t]*`** (what the first pass shipped) | - | - | `pin-nrl111-bullet-four-space-indent-is-not-a-marker`, `-bullet-tab-indent-is-not-a-marker`; **+7,168 newly leaking on the indent corpus**, see the second-pass section |
+| **`TERM2_SETEXT_DASH` omitted** (what the first pass shipped) | - | - | `pin-nrl111-dash-run-on-a-second-line-is-an-h2`; +512 newly lost |
+| `TERM2_DASH_RUN` made a block end UNCONDITIONALLY | - | - | `pin-nrl111-dash-pair-is-not-a-block-end`, `guard-nrl111-dash-run-off-a-second-line-is-not-an-h2` |
+
+In all 26 differing shapes across the first three alternates the shipped arm agrees
+with the rendered HTML and the alternate does not.
+
+**The three "measured as NOT affected" shapes, held on both arms.** 17 controls x
+512 = 8,704 cells per arm: `***` / `___` / `---` / `----` / `- - -` (thematicBreak,
+unconditionally in the list), `--` at four positions (the inline regex cannot cross
+it), a lone `-` at three positions (a bare list marker), and `=`-runs on the second
+line at four shapes. **0 of 17 moved between base and the fix, and both arms agree
+with the renderer in all 17.** The probe discriminates: on the
+delete-the-term arm 11 of 17 move and all 11 then disagree with the renderer.
+
+**`sourceIndex` lockstep**, by numeric UTF-16 code-unit index over the whole
+691,200-cell corpus: 979,968 chunks / 14,983,680 units on the fix and 993,792 /
+15,178,240 on base, **0 length, 0 monotonicity, 0 bounds and 0 identity failures on
+both arms**. Non-vacuous, with every row nonzero on both arms: drop-one gives
+882,688 / 901,632 length failures; shift-by-one 570,880 bounds plus 409,088 /
+422,912 identity; swap-two 813,568 / 832,512 monotonic and the same identity;
+zero-all 956,928 / 970,752 identity. The main corpus produces **no** `equation`
+chunk, so a second 72-note math corpus (inline `$$y$$`, inline `$x$`, display
+block) was run to exercise that exemption: 79,872 / 70,656 chunks of which 30,720 /
+29,696 hold the synthetic word, 0 failures with the exemption and **30,720 / 29,696
+identity failures without it**, so it is shown mandatory AND pre-existing. The
+space exemption likewise: 39,936 / 36,864 failures without it on the math corpus and
+673,792 / 699,392 on the main one.
+
+**The equation exemption must key on the synthetic SPAN, not on the chunk's whole
+text, and this extends the AGENTS.md note rather than repeating it.** AGENTS.md
+already records that keying on `blockType === "equation"` exempts nothing, because
+`extract.ts` pushes the display-block chunk with `blockType: "other"`. Keying on
+`text === "equation"` is the next wrong answer: the **inline** `$$y$$` form embeds
+the synthetic word MID-CHUNK (`"Prose equation after."`), so a whole-text key
+exempts only the display form and reports **8 identity failures per inline
+occurrence, on BOTH arms**. The right key is per index: every index of the
+synthetic word points at the `$` that opened it. Measured at the second pass over a
+36-note math corpus x all 512 content-key combinations, 365,568 units on the
+shipped arm and 532,992 on base: 0 failures with the exemption, **106,496 on the
+shipped arm and 147,456 on base without it**, so it is mandatory on both arms and
+pre-existing.
+
+**Function bodies**: 18 of 19 brace-matched bodies are **byte-identical** across the
+diff by sha256 - `flowDepthDelta`, `labelClose`, `inlineContainerClose`,
+`wikiTargetClose`, `opensObsidianBlock`, `opensHtmlBlock`, `opensHiddenComment`,
+`interruptsParagraph`, `codeSpanClosesLater`, `bracketClosesLater`, `opensMathBlock`,
+`containerPrefix`, `peelQuotes`, `containerCarryStops`, `cleanLine`,
+`detectFrontmatter`, `splitSentences`, `mergeShort`.
+
+**"ONLY `extractChunks` MOVED" UNDERCOUNTS, and `endsTerm2Scan` necessarily moved -
+it gained a parameter.** The accurate statement, re-measured at the second pass with
+a brace-matched extractor that was sanity-mutated first (one deliberate body edit,
+exactly one `MOVED` reported): base 874410d has 32 top-level function bodies and the
+shipped tree has 33; **30 of the 32 are byte-identical**, `endsTerm2Block` is
+ADDED, and `endsTerm2Scan` and `extractChunks` are the two that moved. Of the
+critical predicates, **16 of 16 top-level ones are byte-identical**
+(`interruptsParagraph`, `codeSpanClosesLater`, `bracketClosesLater`,
+`opensMathBlock`, `opensHiddenComment`, `opensObsidianBlock`, `opensHtmlBlock`,
+`inlineContainerClose`, `wikiTargetClose`, `labelClose`, `cleanLine`,
+`finalSegment`, `isFileTarget`, `commentSpans`, `containerCarryStops`,
+`flowDepthDelta`), and `emitWikiLabel` is an arrow function inside `cleanLine` and
+so is covered by `cleanLine` being byte-identical rather than hashed on its own.
+The extractor was **sanity-mutated
+first** and reported `MOVED`, and it is built around the two traps that have each
+bitten several agents: `flowDepthDelta`'s body holds a regex literal plus `"["`,
+`"{"`, `"]"`, `"}"` string literals, and `labelClose`'s return type
+`: { close: number; depth: number }` is not its body - the first draft of the
+extractor hashed that type instead, reported every body `SAME` **including the
+deliberately mutated one**, and was fixed before any number above was taken.
+
+**4,000-note fuzz** over a 49-line vocabulary x 4 option sets, 16,000 cells:
+**0 newly leaking**, Class A leaking 62 -> 42, Class B lost 2,006 -> 2,018,
+**12 newly lost in ONE distinct note shape**, run down rather than dismissed: the
+note's only interrupter is a **bare `1)`** line, which `TERM2_LIST`'s `[ \t]`
+requirement misses, and base's wrong `===  ` stop happened to MASK it. Prose loss,
+not disclosure, the same gap the list-half bullet above records at 5,120 cells where
+nothing masks it, and pinned as `pin-nrl111-bare-ordered-marker-unmasked` so it
+cannot change silently. The same fuzz finds 20 newly lost on the delete-the-term
+arm, so it is demonstrably able to fail.
+
+### NRL-111's SECOND PASS: what an independent Verify found, and what it cost
+
+The first pass was **FAILED by an independent Verify** and the reason is worth
+stating in one sentence, because it is the generalisable part: **the `1)` widening
+shipped a new live disclosure, in a ticket whose whole purpose was removing one.**
+Everything below is the second pass, measured the same way - Obsidian 1.13.7's own
+parser and HTML renderer executed in Node through the durable harness, whose
+`selftest.cjs` (6 ok) and `oracle-selftest.cjs` (9 ok) were re-run first.
+
+**One scope limit of the oracle, recorded by that Verify and respected here.** An
+image's or an embed's alt text lives only in an HTML **attribute**, so
+`visibleText()` counts it as hidden. Every corpus in this section is free of image
+and embed constructs for that reason; do not add one without handling it explicitly.
+
+**THE BLOCKING FINDING.** The only widening in the first pass was
+`/^[ \t]*1\)[ \t]/`, and `TERM2_LIST` had no indent cap, so that widening set
+split by indent and the split was total:
+
+| widening lines | distinct lines | renderer | the first pass |
+|---|---|---|---|
+| indent 0 to 3 columns | 246 | **shows** in 246/246 | correct prose-loss fix |
+| indent >= 4 columns or any tab | 28 | **HIDES** in 28/28 | **newly leaked, 28 of 28** |
+
+**7,168 newly leaking cells over 14 shapes (room 9,216)**, and **3,584 of 3,584
+room** in a bullet-controlled corpus. **Introduced rather than unmasked**: in all 14
+shapes base spoke 0/512 and the first pass spoke 512/512, while the `1.`/`-`/`*`/`+`
+twins at the same indents read 512 on **both** arms - that is NRL-119's inherited
+half, and it is the control that separates the two. A tab is Obsidian's own default
+indent for a nested list item, so the leaking shape is this:
+
+```
+Some notes <!-- draft, do not publish
+	1) internal budget 4.2M
+	2) layoff list attached
+-->
+```
+
+**THE REMEDY IS THE CAP, and it is strictly dominant over base in both
+directions.** Of the two remedies Verify measured, dropping `1)` merely returns to
+base and costs 1,024 class-B cells, while the indent cap gives Class A 0 **and**
+Class B 0. The cap is what landed, together with `1)`, so **both halves of
+`TERM2_LIST`'s indent axis moved in one commit** - which is what this ADR's own
+prose had argued for and the first diff failed to do. It closes **NRL-119's first
+half** (a live 5,120-cell disclosure) as well as the first pass's own widening.
+**NRL-119's second half, a bare marker alone on a line, stays open** and is
+tripwired, not fixed.
+
+**Re-measured, with the corpus and the room to fail stated for every figure.**
+Arm 0 is base `874410d`; "head" is the first pass; "new" is what ships.
+
+`TERM2_LIST` indent corpus, 11 indents x 5 markers, three families:
+
+| family | shapes | cells | class A / B | base A spoken | head A spoken | new A spoken | newly leaking (head / new) | room |
+|---|---|---|---|---|---|---|---|---|
+| A: marker line right after the opener | 55 | 28,160 | 17,920 / 10,240 | 14,336 | **17,920** | **0** | **3,584 / 0** | 3,584 |
+| B: marker line two lines down | 55 | 28,160 | 17,920 / 10,240 | 14,336 | **17,920** | **0** | **3,584 / 0** | 3,584 |
+| C: bullet-only control, no `1)` at all | 33 | 16,896 | 10,752 / 6,144 | 10,752 | 10,752 | **0** | 0 / 0 | **0** |
+
+Family C is the control that separates the two halves: with no ordered marker in it
+the `1)` widening has **no room at all** there (room 0), so its 10,752 class-A cells
+are purely NRL-119's inherited disclosure and the cap is the only thing that moves
+them. On class B, new loses **0** of 8,192 room in A and in B, and closes base's
+2,048. The probe demonstrably fails against a wrong arm: head and an
+otherwise-identical uncapped arm both report 3,584 newly leaking.
+
+Verify's own structural two-class corpus, 277 shapes x 512 = **141,824 cells** per
+arm, 43,520 class A and 98,304 class B, oracle crashes 0:
+
+```
+                 class A spoken   class B lost   newly leaking   newly lost
+base 874410d     26,880           43,776         -               -
+first pass       1,536            45,824         0 (room 16,640) 2,048 (room 54,528)
+SHIPPED          1,536            45,312         0 (room 16,640) 1,536 (room 54,528)
+closed by SHIPPED: 25,344 class A
+```
+
+The shipped arm's 1,536 newly-lost cells are **exactly three shapes, one each from
+F1, F2 and F3 below**, enumerated per shape rather than aggregated. The first
+pass's fourth, `reset-dashrun-then-opener-eq2nd`, is the F4 fix.
+
+**FOUR findings. F4 was clean enough to fix; F1, F2 and F3 are pinned as
+tripwires** with their measured counts, directions and roots, and tickets are being
+filed. All four are PROSE LOSS - the renderer displays the sentinel and we drop it -
+and all four are measured against base as well, which matters: **F1, F2 and F3 are
+RED on base**, because base spoke the sentinel accidentally right by not gating the
+`=` run at all. The trade is 25,344 class-A cells closed against 1,536 class-B cells
+lost. It is not a wash and it is not free.
+
+- **F4, FIXED. 512 cells, room 1,536.** A `--` that IS its block's second line is
+  a setext `<h2>`, so a real block end, and the first pass denied that
+  unconditionally - repeating for the dash run the exact position-independent error
+  it fixed for the `=` run. The remedy is `TERM2_SETEXT_DASH` in `endsTerm2Block`
+  under the identical `paraLinesAbove === 1` gate; `TERM2_DASH_RUN` keeps its
+  ungated scan stop. On the dedicated 8-shape F4 corpus (4,096 cells, 2,560 class A
+  / 1,536 class B): the shipped arm is **0 newly lost of 1,536 room and 0 newly
+  leaking**, the three class-B dash shapes stay spoken at 512 each, and the five
+  class-A shapes (` --`, `--\t`, two-above, zero-above, after-blank) correctly go
+  512 -> 0, closing 2,560 inherited class-A cells. The first pass loses 512 of that
+  room, so the probe fails against the wrong arm.
+- **F1, 6,144 cells over 12 of 17 shapes, prose loss, room 7,680.** The forward
+  pass uses the term-2 **stop** set as a **block-end** set, and that set omits real
+  renderer block ends: blockquote, nested quote, table, `$$`, indented code,
+  footnote definition, link reference definition, a bare `* + 1. 1)` marker, a
+  comment block. So `paraLinesAbove` over-counts and a correct second-line stop is
+  suppressed. **No F1 cell in the measured corpus leaks: 0 of 7,680 room.** An
+  earlier revision of this bullet generalised that into "a narrow stop set used as
+  a counter can only OVER-count, so none can leak", and **NRL-111's second Verify
+  falsified it.** The counter can also UNDER-count, two ways, and under-counting to
+  exactly 1 turns the gate on where the renderer has no underline: `TERM2_LIST`
+  matches a container-OPENING marker line, which is a block start and not a block
+  end, and `line.trim() === ""` takes a tab-only line as blank. Measured at 55,296
+  and 12,288 class-A cells, both saturated, **0 newly leaking and cell-for-cell
+  identical on base, on the first pass and on an uncapped arm** - so the shipped
+  behaviour is untouched and it was the CLAIM that was wrong. Both mechanisms are
+  listed as class-A residuals earlier in this same section, which is to say the
+  document contradicted itself. F1 is therefore prose loss **plus a disclosure
+  mechanism**, not prose-loss-only. Verify
+  measured 6,656 over 13 shapes against the first pass; F4's fix closed one of them
+  (`setextH2viaDash`), which is why the figure is 6,144 over 12 here. Pinned as
+  `tripwire-nrl111-f1-blockquote-above-is-not-a-counted-block-end`.
+- **F2, 3,584 cells over 7 of 9 shapes, prose loss, room 4,608.** A mid-line `--`
+  between opener and closer makes module 4839's regex fail, so the renderer shows
+  everything; we detect dash-ONLY lines. Already declared out of scope by the first
+  pass's PR. It is also where the signed direction re-run's 16 exceptional
+  narrowings land. Pinned as
+  `tripwire-nrl111-f2-midline-dashes-between-opener-and-closer`.
+- **F3, 3,072 cells over 6 of 21 shapes, prose loss, room 3,072 (saturated).** A
+  container-indented `=` run (`- Prose <!--` / `  ===`): `TERM2_SETEXT_EQ` is
+  anchored at column 0 and the renderer peels the container prefix first. The
+  quote-prefixed members of the same corpus are lost on base too and are not part of
+  the 3,072. Pinned as `tripwire-nrl111-f3-container-indented-eq-run`.
+
+**Fixture ablation, 32 fixtures x 17 arms.** The shipped arm is 0 RED. Base is
+**15 RED**. Each term is still decisive under ablation and each new fixture has real
+room to fail:
+
+| arm | RED | the fixture that catches it |
+|---|---|---|
+| shipped | **0** | - |
+| base 874410d | **15** | the 9 first-pass reproductions, the 2 retargeted bullet pins, and the 3 F-tripwires plus `guard-nrl111-dash-run-off-a-second-line-is-not-an-h2` |
+| first pass (head) | 3 | the 2 retargeted bullet pins + `pin-nrl111-dash-run-on-a-second-line-is-an-h2` |
+| uncapped `TERM2_LIST` | 2 | the 2 retargeted bullet pins |
+| `TERM2_SETEXT_DASH` omitted | 1 | `pin-nrl111-dash-run-on-a-second-line-is-an-h2` |
+| `1)` removed | 1 | `pin-nrl111-ordered-paren-interrupts` |
+| `TERM2_SETEXT_EQ` term DELETED | 4 | `pin-nrl95-setext-between` (NRL-95's C5) and 3 more |
+| `TERM2_SETEXT_EQ` ungated | 8 | the four `pin-nrl111-eq-*` third/fourth-line pins and more |
+| `TERM2_LONE_DASH` removed | 1 | `guard-nrl111-lone-dash-third-line` |
+| `TERM2_DASH_RUN` scan stop removed | 1 | `guard-nrl111-dash-pair-third-line` |
+| dash run a block end unconditionally | 2 | `pin-nrl111-dash-pair-is-not-a-block-end`, `guard-nrl111-dash-run-off-a-second-line-is-not-an-h2` |
+| count never resets | 2 | `guard-nrl111-count-resets-at-a-block-end` |
+| count resets on the SCAN set | 2 | `pin-nrl111-dash-pair-is-not-a-block-end` |
+| `TERM2_SETEXT_EQ` at CommonMark's shape | 2 | `pin-nrl111-eq-indented-not-an-underline`, `-eq-trailing-space-not-an-underline` |
+| gate at `=== 2` | 10 | 10 of the eq pins |
+| `HR` removed | 1 | `pin-nrl95-hr-between` |
+| `TERM2_LIST` widened to a BARE marker | 1 | `pin-nrl111-bare-ordered-marker-unmasked` |
+
+**The delete-the-term arm is still RED on `pin-nrl95-setext-between`**, so the
+simultaneity NRL-111 rests on - the C5 pin and the NRL-111 pins holding at once -
+is still real and not an artefact of the second pass.
+
+**`sourceIndex` re-measured on this pass's own corpora**, by numeric UTF-16
+code-unit index: main corpus 475 notes x all 512 content-key combinations =
+243,200 extractions per arm, **460,032 chunks / 3,357,440 units** on the shipped arm
+and 549,888 / 4,803,328 on base, **0 length, 0 monotonicity, 0 bounds, 0 identity
+failures on both arms**. All four mutators nonzero on both arms: drop-one 449,536 /
+539,392 length; shift-by-one 2,758,400 / 3,778,560 identity; swap-two 399,872 /
+493,312 monotonic plus 716,032 / 888,448 identity; zero-all 2,775,040 / 4,021,248
+identity. Both exemptions mandatory on both arms: without the space exemption
+73,984 / 159,232, and on a separate 36-note math corpus (18,432 extractions per
+arm, 365,568 / 532,992 units) without the equation exemption **106,496 / 147,456**.
+
+**Function bodies** were re-measured with the extractor **sanity-mutated first** -
+one deliberate one-body edit, exactly one `MOVED` reported - and the three trap
+functions (`labelClose`, `flowDepthDelta`, `isWordChar`) confirmed extracted. The
+`labelClose` return-type trap has now caught four agents in this run and Verify's
+own first extractor hit the regex-literal trap, so do not re-roll this by hand.
+
+**STILL NOT OBSERVED IN OBSIDIAN**, exactly as the first pass. No deploy and no CDP
+session happened in the second pass either. The oracle is the shipped
+**reading-view** parser and renderer executed in Node, and **Live Preview has never
+been read**. Rule 11 applies to every number in this section.
+
+**NOTHING IN NRL-111 WAS OBSERVED IN OBSIDIAN.** No deploy happened and CDP 9222 was
+not attempted. Executing the shipped parser and renderer in Node is much stronger
+than reading them and is still **not the running app**: it is the **reading-view**
+pipeline only, and **Live Preview is separate code that no ticket in this family has
+ever read or run**. The hast transformers are stubbed empty in the render harness
+(they only decorate `<a>` elements). Rule 11 applies to every number in this
+section.

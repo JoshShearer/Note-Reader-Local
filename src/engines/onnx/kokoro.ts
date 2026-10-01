@@ -31,6 +31,22 @@ const KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 const SAMPLE_RATE = 24000;
 
 /**
+ * What the user is told when recycling the worker did not help (NRL-101).
+ *
+ * Exported so a test can name it without keeping a second copy of the words.
+ * There is deliberately no new Notice machinery behind it: `reportError` in
+ * main.ts already puts `err.message` into a Notice for ten seconds and traces
+ * it, so a distinct message IS the distinct notice, and a second Notice call
+ * for one failure would be worse than one.
+ *
+ * It names no note text, no chunk text and no worker message (non-negotiable
+ * 1); the real engine message is what the FIRST failure already reported.
+ */
+export const KOKORO_RELOAD_REQUIRED =
+	"The local speech engine stopped working and restarting it did not help. " +
+	"Reload Obsidian, or disable and re-enable Local TTS Reader, to use Kokoro again.";
+
+/**
  * Model card fields for the settings page (NRL-33, R-C02).
  *
  * `license` is read directly off kokoro-js@1.2.1's own package.json
@@ -357,6 +373,18 @@ export class KokoroEngine implements SpeechEngine {
 	private sentVoices = new Set<string>();
 	/** Backend the worker actually settled on, once it is running. */
 	private runtime: { device: string; threads: number } | null = null;
+	/**
+	 * The worker reported a speak failure, so this onnxruntime session is
+	 * suspect (NRL-101).
+	 *
+	 * A boolean and not the message, on purpose: nothing here must give a
+	 * later author a reason to keep worker text on the engine, where it would
+	 * be one interpolation away from a log line (non-negotiable 1). The
+	 * message the user needs has already been reported by the failing read.
+	 */
+	private sessionFailed = false;
+	/** One recycle already spent, with no successful synthesis since. */
+	private recycleSpent = false;
 
 	constructor(
 		private readonly store: ModelStore,
@@ -411,12 +439,40 @@ export class KokoroEngine implements SpeechEngine {
 			: `CPU (WASM, ${this.runtime.threads} thread${this.runtime.threads === 1 ? "" : "s"})`;
 	}
 
+	/**
+	 * Is the engine ready to speak without a multi-second load?
+	 *
+	 * `sessionFailed` makes this false so that main.ts raises its existing
+	 * "Loading <engine>..." notice for the read that recycles the worker
+	 * (NRL-101). Without it that read spends several seconds re-reading 155 MB
+	 * of weights and re-inflating the ORT pack behind a silent UI, which is
+	 * the "appears hung" failure the no-auto-retry decision exists to avoid.
+	 */
 	isPrepared(): boolean {
-		return this.prepared;
+		return this.prepared && !this.sessionFailed;
 	}
 
-	/** Load the model now rather than on the first sentence. */
+	/**
+	 * Load the model now rather than on the first sentence.
+	 *
+	 * The recycle has to happen HERE as well as in `synthesize()`, and that is
+	 * measured rather than reasoned (NRL-101). `isPrepared()` returning false
+	 * is what makes main.ts wrap this call in the "Loading Kokoro..." notice,
+	 * but `load()` alone resolves instantly off the stale `ready` a poisoned
+	 * engine still holds, so the notice is dismissed before the reload even
+	 * starts: on a Pixel 9 Pro XL the notice was on screen for 88 ms while the
+	 * recycle's own load took 9,840 ms, all of it behind a silent UI - the
+	 * exact "appears hung" failure the no-auto-retry decision exists to avoid.
+	 *
+	 * The spent-budget case is deliberately NOT reachable from here: a throw
+	 * out of `prepare()` is a candidate LOAD failure, which `playWithFallback`
+	 * turns into "no speech engine is available; check settings." and loses
+	 * `KOKORO_RELOAD_REQUIRED` entirely. That message must arrive from
+	 * `synthesize()`, where the player's error path carries it to
+	 * `reportError`. So the guard is on the budget, not just the mark.
+	 */
 	async prepare(): Promise<void> {
+		if (this.sessionFailed && !this.recycleSpent) await this.recycleIfSessionFailed();
 		await this.load();
 	}
 
@@ -712,6 +768,21 @@ export class KokoroEngine implements SpeechEngine {
 						}
 						case "error": {
 							if (msg.id !== undefined) {
+								// The worker only posts an id-bearing error when a
+								// `speak` threw inside onnxruntime, and one such
+								// failure was observed to leave every later
+								// synthesis failing in milliseconds until the
+								// plugin was reloaded (NRL-101). Mark the session
+								// here rather than in a catch around the await:
+								// a catch is a wider set that also sees
+								// `dispose()`'s own rejection of concurrent
+								// prefetched pendings - which the recycle itself
+								// produces, so it would re-arm the flag the
+								// recycle just consumed - and `sendVoice()`'s
+								// missing-file throw, which no reload can fix.
+								// Set before the lookup, so an error for an id
+								// nobody is waiting on any more still counts.
+								this.sessionFailed = true;
 								const entry = this.pending.get(msg.id);
 								if (entry) {
 									this.pending.delete(msg.id);
@@ -783,8 +854,66 @@ export class KokoroEngine implements SpeechEngine {
 		this.worker?.postMessage({ type: "cancel" } satisfies ToWorker);
 	}
 
+	/**
+	 * Throw away a worker that reported a synthesis failure, once (NRL-101).
+	 *
+	 * This fixes the BLAST RADIUS of such a failure, not its trigger. The one
+	 * observed `OrtRun ... invalid expand shape` crash is not reproduced
+	 * anywhere and nothing here makes it less likely; what is reproduced is
+	 * that afterwards the next read got the same worker and the same
+	 * onnxruntime session, so every later read failed in milliseconds until
+	 * Obsidian was reloaded. `dispose()` is the exact teardown a plugin reload
+	 * performs - it is the only caller of `worker.terminate()` - which is the
+	 * only recovery anyone has observed to work. It is NOT established that
+	 * recycling cures an ORT session that has entered that state.
+	 *
+	 * There is no retry inside the failing call: a reload costs a full cold
+	 * load, and silently spending several seconds inside one `synthesize()`
+	 * would read as a hang. The failing read reports the engine's own message
+	 * and the NEXT read pays for the reload, with a loading notice.
+	 *
+	 * The budget is one recycle per successful-synthesis epoch, so a session
+	 * that stays broken is not reloaded on every read for the rest of the
+	 * session; the second failure after a spent recycle gets
+	 * `KOKORO_RELOAD_REQUIRED` immediately instead.
+	 */
+	private async recycleIfSessionFailed(): Promise<void> {
+		if (!this.sessionFailed) return;
+		if (this.recycleSpent) throw new Error(KOKORO_RELOAD_REQUIRED);
+		this.sessionFailed = false;
+		// Nothing on this path fetches, and that is structural rather than
+		// careful (non-negotiable 6): `loadOnce()` reads config, tokenizer,
+		// weights and voice from the vault store, the worker script from the
+		// in-memory base64, and the two runtime files from the pack inside
+		// main.js. The cost is real - `dispose()` revokes the blob cache, so
+		// the weights are re-read and the pack re-inflated - and is the reason
+		// the reload is deferred to the next read rather than retried here.
+		await this.dispose();
+		// AFTER the dispose, not before: `dispose()` clears `recycleSpent`, so
+		// assigning it first would hand the budget straight back. That is also
+		// what makes a settings change (`setOptions` -> `dispose`) refill the
+		// budget while the recycle's own dispose cannot. Do not hoist this.
+		this.recycleSpent = true;
+		this.infoCb?.("recycling the Kokoro worker after a reported session failure");
+		try {
+			await this.load();
+		} catch (err) {
+			// A failed reload leaves an ordinary cold engine: `loadOnce()`'s
+			// catch already nulled `worker` and `ready`. So give the budget
+			// back - otherwise the reload notice would fire on a perfectly
+			// healthy later retry - and let load()'s own error through
+			// unchanged. Its messages ("Kokoro weights are missing...",
+			// "Bundled ONNX Runtime is corrupted...") are already actionable,
+			// and replacing them with a generic "reload Obsidian" would hide
+			// the real cause, which is the opposite of this ticket's purpose.
+			this.recycleSpent = false;
+			throw err;
+		}
+	}
+
 	async synthesize(req: SynthRequest, signal: AbortSignal): Promise<SynthResult> {
 		if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+		await this.recycleIfSessionFailed();
 		// Prefetch starts several requests at once. Every caller must await the
 		// shared boot promise, not just the caller that started loading.
 		await this.load();
@@ -823,6 +952,11 @@ export class KokoroEngine implements SpeechEngine {
 			},
 		);
 
+		// The only thing that refills the recycle budget without a dispose.
+		// Without it, one transient failure would arm the reload notice for the
+		// rest of the engine instance's life (NRL-101).
+		this.recycleSpent = false;
+
 		const sampleRate = pcm.sampleRate || SAMPLE_RATE;
 		const wav = pcmToWav(float32ToPcm16(pcm.pcm), sampleRate);
 		const info = durationOf(wav, sampleRate);
@@ -850,6 +984,14 @@ export class KokoroEngine implements SpeechEngine {
 		this.ready = null;
 		this.prepared = false;
 		this.runtime = null;
+		// A disposed engine has no suspect session left to recycle, and the
+		// next load is an ordinary cold one, so both NRL-101 flags reset here.
+		// This is deliberately the thing that refills the recycle budget after
+		// a settings change (`setOptions` disposes) or a plugin reload, and it
+		// is why `recycleIfSessionFailed` assigns `recycleSpent` AFTER awaiting
+		// this method rather than before.
+		this.sessionFailed = false;
+		this.recycleSpent = false;
 		this.sentVoices.clear();
 		for (const url of this.blobs.values()) URL.revokeObjectURL(url);
 		this.blobs.clear();

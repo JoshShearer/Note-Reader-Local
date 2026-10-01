@@ -315,7 +315,10 @@ as such, none of them evidence of anything. **No pre-existing fixture moved** -
 the pre-fix run's failure list held exactly the 9 new core names and nothing
 else. `pin-nrl74-container-label-still-leaks-destination` deliberately did not
 move, and its comment is untouched: it is root 1, and its expectation must change
-when root 1 closes, not here.
+when root 1 closes, not here. (AMENDED by NRL-98, ADR 0029: root 1 closed there
+and that fixture DID move, replaced in place per the NRL-66/NRL-67 convention. The
+comment NRL-88 left untouched also mis-attributed root 1 to NRL-88; that is
+corrected at the fixture.)
 
 ## Residual risk
 
@@ -328,6 +331,15 @@ implementation, and clause 1's matched-pair rule. Nobody has rendered
 confirmed it shows an image.
 
 Clause 4's bare-`]` shape and clause 3's residual in all three of its positions
-are named, pinned and deliberate. Roots 1, 2, 3 and 5 are open, and whoever closes root 1 must
+are named, pinned and deliberate. (AMENDED by NRL-98, ADR 0029: roots 1 and 2 are
+no longer simply "open". Their CONTAINER members are closed, by a peel budget on
+`bracketClosesLater`'s two ends plus one relaxed conjunct of the bracket arming
+guard; `interruptsParagraph` was NOT widened and its body is hashed unchanged, so
+this ADR's own matrix and ADR 0019's F5 guard both stand. NRL-98 re-measured
+rather than quoting, and found root 4 unmoved. What remains of roots 1 and 2 is
+three non-container shapes - a TABLE_ROW opener, a TABLE_ROW interior and a setext
+underline after two or more content lines - which go to one follow-up, **NRL-109**,
+whose fix direction is NARROWING that predicate. Roots 3 and 5 are still open with the
+reasons ADR 0023 records.) Whoever touches any of this must
 re-measure this ADR's matrix rather than quoting it, for exactly the reason
 NRL-74 gave NRL-88.

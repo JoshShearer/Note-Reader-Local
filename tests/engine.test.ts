@@ -498,6 +498,64 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
 	noReuse("D3", { violations });
 }
 {
+	// D4 (NRL-94). A scoped listing that exits non-zero while still printing
+	// PARSEABLE rows, which is the one shape only the loop's `code !== 0` clause
+	// can catch. Case D above looks like it already covers this and does not:
+	// D's `openjtalk: { code: 1 }` carries no stdout, so the listing parses to
+	// zero rows and the separate `rows.length === 0` guard (case D3) catches it
+	// even with `code !== 0` deleted. Measured before this case was written:
+	// deleting that clause left the full 24-suite run green.
+	//
+	// So the stdout has to be non-empty AND parseable, and the row it has lost
+	// has to be the SHARED one or the mutant's verdict would not move. The truth
+	// is that festival really serves "English (America)" as well as espeak-ng
+	// (that is `FESTIVAL_SHARES_EN`, used by cases I, J, K and L below); the
+	// failing listing here arrives as `FESTIVAL_LIST`, one row, with the shared
+	// row dropped.
+	//
+	// DISCRIMINATES BY VERDICT. With the clause deleted festival's rows are taken
+	// as [Festival Voice], the ambiguity that should keep "English (America)"
+	// unknown disappears with the dropped row, and the name is attributed to the
+	// allowlisted espeak-ng alone as `local: true` - the literal R-S01 violation.
+	// Three distinct canonical keys, so the differential gate does not catch it
+	// either.
+	//
+	// No `modulesAgain`: the injected failure is in `lists`, not in `modules`, so
+	// the default replay of a clean module list is harmless. That does NOT make
+	// this a free NRL-71 control arm, though - the probe gives up inside the
+	// per-module loop and never reaches the closing `-O` at all, so this case is
+	// unaffected by the re-read by construction, exactly as D, D2 and D3 are.
+	//
+	// The three modules and the bare listing are spelled out rather than reusing
+	// `THREE_MODULES` / `THREE_MODULE_BARE`: those consts are declared further
+	// down with the I-L family, and a `const` referenced above its declaration is
+	// a TDZ ReferenceError, not a hoisted value. Per-family placement beside D3
+	// is worth more than the shared constant.
+	const { violations, runner } = attributionRunner({
+		modules: ["espeak-ng", "openjtalk", "festival"],
+		lists: {
+			"espeak-ng": ESPEAK_LIST,
+			openjtalk: OPENJTALK_LIST,
+			festival: { code: 1, stdout: FESTIVAL_LIST },
+		},
+		bare: spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "none"]]),
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check(
+		"D4: a non-zero -o listing with parseable rows attributes nothing",
+		voices.length === 4 && voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("D4: and the shared name is not called local", localOf(voices, "English (America)") === "unknown", `${localOf(voices, "English (America)")}`);
+	// Also a discriminator, measured rather than assumed: this was drafted as a
+	// guard and went red under the deletion too, because `requiresNetwork` is
+	// derived from the same attribution as `local`.
+	check("D4: and its requiresNetwork is not false", networkOf(voices, "English (America)") === "unknown", `${networkOf(voices, "English (America)")}`);
+	// Guard, green on both sides of the deletion.
+	check("D4: nothing reports local false", neverFalse(voices));
+	noReuse("D4", { violations });
+}
+{
 	// E. One module only: nothing to compare, so no differential is possible.
 	const { violations, runner, scopedCalls } = attributionRunner({
 		modules: ["espeak-ng"],
@@ -664,6 +722,12 @@ console.log("speechd: module attribution resolves known-local voices (fake runne
  *
  * Three modules throughout, so dropping the non-allowlisted one still leaves the
  * two the differential gate needs.
+ *
+ * NRL-94 extends the opening-`-O` half of this family past an external kill.
+ * Cases J2 and J3 are NOT signal cases: J2 expires the probe's OWN deadline
+ * during that run and J3 gives it a non-zero exit with a perfectly parseable
+ * two-module listing, so between them J, J2 and J3 cover all three clauses of
+ * the opening guard.
  */
 const FESTIVAL_SHARES_EN = spdList([
 	["English (America)", "en-US", "none"],
@@ -729,6 +793,105 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	noReuse("J", { violations });
 }
 {
+	// J2 (NRL-94). The probe's OWN deadline expiring during the opening `-O`,
+	// which is the one thing only `controller.signal.aborted` can catch there.
+	// Case J above covers a kill the plugin did not issue and case E2 covers a
+	// non-zero exit with unparseable stdout; neither expires the deadline during
+	// the opening run, so before this case that clause survived deletion -
+	// measured, full 24-suite run green with `controller.signal.aborted || `
+	// removed from the opening guard.
+	//
+	// DISCRIMINATES BY CALL TRACE, not by verdict, which is the technique case H2
+	// used for the whole of NRL-87. With the clause deleted the reply is
+	// otherwise a clean one - code 0, no signal - so nothing else in the opening
+	// guard catches it: the probe parses two modules, enters the per-module loop,
+	// and the loop's own `controller.signal.aborted` clause stops it one step
+	// later. The verdict is "everything unknown" on BOTH sides, so `scopedCalls`
+	// is the only observable that moves, 0 -> 1.
+	//
+	// `modulesAgain` is explicit and CLEAN per the contract on
+	// `AttributionScript.modulesAgain`. Here it is INERT by construction: with
+	// the clause intact the probe gives up at the opening run, and under the
+	// deletion the loop stops it before the closing `-O` is ever reached. It is
+	// set anyway so this case cannot silently stop pinning the opening clause if
+	// the loop's own clauses ever move. Measured rather than assumed: with
+	// `modulesAgain` removed the case is still red under the deletion, so the
+	// field is defence in depth here and not the load-bearing thing it is on J3.
+	//
+	// Margin: the 60 ms held-back reply against a 10 ms outer budget is the
+	// file's existing 6x convention (cases H, H2, M5). `closingTimeoutMs` is left
+	// at its default because this case must never reach the closing run. A
+	// slipped margin makes the case RED, not silently green.
+	const { violations, runner, scopedCalls, oAborted } = attributionRunner({
+		modules: {
+			code: 0,
+			stdout: ["OUTPUT MODULES", "espeak-ng", "openjtalk", ""].join("\n"),
+			delayMs: 60,
+		},
+		modulesAgain: ["espeak-ng", "openjtalk"],
+		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
+		bare: spdList([...ESPEAK_ROWS, ["Default", "ja", "none"]]),
+	});
+	const voices = await new SpeechDispatcherEngine(runner, 10).listVoices();
+	check(
+		"J2: a deadline on the opening -O attempts no scoped listing",
+		scopedCalls.length === 0,
+		JSON.stringify(scopedCalls),
+	);
+	// Load-bearing guard rather than decoration, the same role `oCount() === 2`
+	// plays for M5: it is what says the deadline fired during the opening `-O`
+	// itself, so the case cannot silently degrade into being caught by some
+	// other give-up while still reporting an empty call trace.
+	check("J2: the deadline fired during the opening -O itself", oAborted[0] === true, JSON.stringify(oAborted));
+	// Guards, green on both sides of the deletion.
+	check(
+		"J2: and everything is left unknown",
+		voices.length === 4 && voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("J2: nothing reports local false", neverFalse(voices));
+	noReuse("J2", { violations });
+}
+{
+	// J3 (NRL-94). A non-zero exit on the opening `-O`, the clause case E2 looks
+	// like it should cover and does not: E2's reply is `{ code: 1, stdout: "" }`,
+	// which parses to zero modules, so the arity guard `modules.length < 2`
+	// catches it even with `modulesRun.code !== 0` deleted. Measured before this
+	// case was written: deleting that clause left the full 24-suite run green.
+	//
+	// So the stdout here has to be a VALID, parseable, two-module listing - the
+	// same reasoning case M4 carries for the closing run's exit-code clause.
+	//
+	// DISCRIMINATES BY VERDICT. With the clause deleted the non-zero exit is
+	// ignored, two modules parse, both listings arrive cleanly and DIFFER
+	// (`ESPEAK_LIST` vs `OPENJTALK_LIST`) so the differential gate passes, the
+	// closing `-O` answers cleanly with the identical set, and every name is
+	// attributed - Afrikaans, served by the allowlisted espeak-ng alone, comes
+	// back `local: true`. That is the literal R-S01 violation.
+	//
+	// `modulesAgain` is explicit and clean, and here it is LOAD-BEARING rather
+	// than defensive, exactly as on case J: left unset it defaults to `modules`,
+	// the injected `code: 1` is replayed onto the closing `-O`, the closing
+	// guard's own `againRun.code !== 0` clause catches it there instead, the
+	// verdict does not move and this clause goes back to surviving deletion.
+	const { violations, runner } = attributionRunner({
+		modules: { code: 1, stdout: ["OUTPUT MODULES", "espeak-ng", "openjtalk", ""].join("\n") },
+		modulesAgain: ["espeak-ng", "openjtalk"],
+		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
+		bare: spdList([...ESPEAK_ROWS, ["Default", "ja", "none"]]),
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check(
+		"J3: a non-zero opening -O attributes nothing",
+		voices.length === 4 && voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("J3: and the allowlisted name is not called local", localOf(voices, "Afrikaans") === "unknown", `${localOf(voices, "Afrikaans")}`);
+	// Guard, green on both sides of the deletion.
+	check("J3: nothing reports local false", neverFalse(voices));
+	noReuse("J3", { violations });
+}
+{
 	// K. The control arm. Identical fixtures to I and J with every child exiting
 	// normally: attribution must still happen, or the fix has simply switched the
 	// probe off. Afrikaans is served by espeak-ng alone, English (America) by
@@ -778,14 +941,17 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
  * the cases above that attribute today and set no `modulesAgain`, so each now
  * answers both `-O` calls with the same bytes: A, B, F, G (including its
  * `scopedCalls.length === 2` memo assertion and its two-concurrent-listVoices
- * assertion) and K. C, D, D2, D3, E, E2, H, H2, I, J and L give up before the
- * closing `-O` is ever reached, so they are unaffected by construction rather
- * than by assertion; a reviewer should not expect them to move.
+ * assertion) and K. C, D, D2, D3, D4, E, E2, H, H2, I, J, J2, J3 and L give up
+ * before the closing `-O` is ever reached, so they are unaffected by construction
+ * rather than by assertion; a reviewer should not expect them to move.
  *
- * J is the one exception to "unset means a free control arm" (NRL-87): it sets
- * an explicit clean `modulesAgain` precisely so its injected SIGTERM is not
- * replayed onto the closing call, because that replay was catching the case
- * before the opening guard it exists to pin was reached. See the comment on
+ * J, and NRL-94's J2 and J3, are the exceptions to "unset means a free control
+ * arm" (NRL-87): they set an explicit clean `modulesAgain` precisely so the
+ * injected failure is not replayed onto the closing call, because that replay was
+ * catching case J before the opening guard it exists to pin was reached. On J3 it
+ * is load-bearing for exactly that reason; on J2 it is inert by construction and
+ * kept as defence in depth. D4 deliberately sets none: its failure is injected
+ * into `lists`, so the default replay is harmless. See the comment on
  * `AttributionScript.modulesAgain`.
  */
 {
@@ -826,6 +992,56 @@ const THREE_MODULE_BARE = spdList([...ESPEAK_ROWS, ["Festival Voice", "en-US", "
 	check("M2: nothing reports local false", neverFalse(voices));
 	check("M2: the closing -O really ran", oCount() === 2, `${oCount()}`);
 	noReuse("M2", { violations });
+}
+{
+	// M8 (NRL-94). A module set that changed to a DIFFERENT set of the SAME SIZE
+	// between the two `-O` calls, which is the shape only a SET comparison can
+	// catch. The out-of-sequence number is deliberate: the file already orders M7
+	// before M6, and per-family placement beats numeric order.
+	//
+	// M2 above and this case are the two halves of "compare the parsed set". M2
+	// pins that a REORDERED set must still attribute, so the comparison cannot be
+	// a byte comparison; M8 pins that a same-size DIFFERENT set must not, so it
+	// cannot be a count comparison. They must stay opposite: mutating
+	// `moduleSetKey(...) !== moduleSetKey(modules)` into a
+	// `parseOutputModules(...).length !== modules.length` count comparison leaves
+	// M2 green, so M2 alone can never pin this. Measured before this case was
+	// written: that mutation left the full 24-suite run green.
+	//
+	// DISCRIMINATES BY VERDICT. Intact, the two sorted keys differ, the probe
+	// returns null and every voice is unknown. Under the count mutation 2 === 2
+	// passes and Afrikaans comes back `local: true` - so a daemon that SWAPPED a
+	// non-allowlisted module in for an allowlisted one between the two `-O` calls
+	// would be believed, which is precisely the atomicity NRL-71 narrowed the
+	// window for.
+	//
+	// festival deliberately gets NO `lists` entry, exactly as M1 does: the loop
+	// only ever queries the FIRST module set, and an unscripted module throws,
+	// which would make the case pass for the wrong reason.
+	const { violations, runner, oCount } = attributionRunner({
+		modules: ["espeak-ng", "openjtalk"],
+		modulesAgain: ["espeak-ng", "festival"],
+		lists: { "espeak-ng": ESPEAK_LIST, openjtalk: OPENJTALK_LIST },
+		bare: spdList([...ESPEAK_ROWS, ["Default", "ja", "none"]]),
+	});
+	const voices = await new SpeechDispatcherEngine(runner).listVoices();
+	check(
+		"M8: a same-size but different module set attributes nothing",
+		// The arity term is not decoration: `.every` over an empty array is
+		// vacuously true, so without it this check could pass on a fixture that
+		// produced no voices at all. J3 and D4 carry the same term for the same
+		// reason. The sibling check below is the other half of that - `localOf`
+		// returns "missing" rather than "unknown" for an absent name (:398).
+		voices.length === 4 && voices.every((v) => v.local === "unknown" && v.requiresNetwork === "unknown"),
+		JSON.stringify(voices.map((v) => `${v.id}=${String(v.local)}`)),
+	);
+	check("M8: and the allowlisted name is not called local", localOf(voices, "Afrikaans") === "unknown", `${localOf(voices, "Afrikaans")}`);
+	// Load-bearing guard, the M1/M2/M5 precedent: it is what proves the case
+	// reached the comparison rather than giving up somewhere earlier.
+	check("M8: the closing -O really ran", oCount() === 2, `${oCount()}`);
+	// Guard, green on both sides of the mutation.
+	check("M8: nothing reports local false", neverFalse(voices));
+	noReuse("M8", { violations });
 }
 {
 	// M3. The closing `-O` is signal-terminated while reporting the same module

@@ -302,9 +302,11 @@ module scope on Android, where the plugin is loaded because `manifest.json` says
 `isDesktopOnly: false`.
 
 Then confirm the shape that keeps it that way: `spawn.ts` reaches `child_process` only through
-`await import("child_process")` inside method bodies, `registry.ts:34` constructs `EspeakEngine`
-and `SpeechDispatcherEngine` only when `!Platform.isMobile`, and `kokoro.worker.ts` is a
-separate bundle. A top-level `import { spawn } from "child_process"` typechecks, builds, passes
+`await import("child_process")` inside method bodies, and `kokoro.worker.ts` is a separate
+bundle. `registry.ts`'s `createEngines` constructs `EspeakEngine` and `SpeechDispatcherEngine`
+only when `shouldConstructLinuxDesktopEngines` (`src/engines/platform.ts`) passes, which is Linux
+desktop specifically and narrower than not-mobile: a macOS or Windows desktop is not mobile and
+still gets neither. A top-level `import { spawn } from "child_process"` typechecks, builds, passes
 every test, and breaks the plugin on a phone.
 
 ### Settings: does normaliseSettings preserve unknown keys

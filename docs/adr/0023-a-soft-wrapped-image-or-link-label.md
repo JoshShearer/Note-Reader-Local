@@ -61,6 +61,19 @@ the label, and unless that line's first `]` is immediately followed by `(` or
 about where a paragraph ends; a label cannot leave its own block any more than a
 code span can.
 
+(AMENDED by NRL-98, ADR 0029. The last clause of that sentence is **no longer
+true and was falsified deliberately.** The PREDICATE is still identical and still
+shared byte for byte - its body is hashed across the diff and unchanged - but
+`bracketClosesLater` now evaluates it on a container-PEELED line where
+`codeSpanClosesLater` evaluates it on the raw one, so the two carries CAN now
+disagree about where a paragraph ends. The reason they should is the second half
+of the sentence above being wrong rather than the first: a code span cannot leave
+its own block, but a paragraph CAN span a container's lines, because Obsidian's
+blockquote and list tokenizers strip their prefix per line and tokenize the
+JOINED remainder. A reader checking "the identical predicate" against the code
+will find two different arguments at the two call sites, and that is the
+intended state.)
+
 The `](` / `][` requirement is the one place this deliberately does *not* copy
 the code carry, and it is what keeps the change on the safe side of the
 prose-loss axis. The defect is a spoken destination, and only the inline and
@@ -142,7 +155,12 @@ reader checking "not widened" against the code will find a changed signature.
 This paragraph's conclusion is unchanged and `opensMathBlock` is untouched;
 `bracketClosesLater`'s body was proven byte-identical to base modulo the threaded
 argument. NRL-74 also changed `interruptsParagraph`'s answer set, so whichever of
-NRL-74 and NRL-88 merges second must re-measure the five roots below. See ADR
+NRL-74 and NRL-88 merges second must re-measure the five roots below. (AMENDED by
+NRL-98: that re-measurement has now happened for roots 1 and 2 as well, on NRL-98's
+own corpus against its own merge base `e4c9c1d`, and the recorded totals for those
+two were a single number over a MIXED population. ADR 0029's table replaces them
+with a per-row breakdown that separates the defect rows from the renderer-faithful
+ones. Do not quote the figures below for roots 1 or 2.) See ADR
 0025. NRL-88 merged second and DID re-measure: root 4 had not moved, traced
 rather than assumed - its shapes carry no `%%` and no `<!--` on either the opener
 or the stray line, so the narrowing never fires inside them, and NRL-74's
@@ -214,9 +232,22 @@ branch measured **five** distinct roots over a 38-shape x 512 matrix (11,520
 leaking of 19,456 on the fix against 16,384 on base; the absolute is
 matrix-dependent and is not comparable to the 36-shape figure above):
 
-1. `interruptsParagraph` matching on the **opener** line, 2,048 of 2,048 cells;
+1. `interruptsParagraph` matching on the **opener** line, 2,048 of 2,048 cells.
+   **CONTAINER MEMBERS CLOSED as of NRL-98, and this count is a PRE-NRL-74
+   BASELINE OVER A MIXED POPULATION - do not quote it.** It folded together the
+   container openers (a genuine leak, closed), an ATX heading opener (correct
+   behaviour, must not be "fixed") and a TABLE_ROW opener (a genuine leak, still
+   open). See **ADR 0029** for the per-row breakdown on NRL-98's own corpus
+   against `e4c9c1d`, and for the 5,120 cells NRL-74 unmasked, reported there as
+   their own row rather than folded in;
 2. `interruptsParagraph` matching on a line **between** opener and closer, 1,792
-   of 2,048;
+   of 2,048. **CONTAINER MEMBERS CLOSED as of NRL-98, same caveat on the count**:
+   this one folded a container interior whose opener is in the SAME or a DEEPER
+   container (a leak, closed) together with one whose opener is OUTSIDE it (the
+   renderer breaks there too, so it is CORRECT and silencing it would be prose
+   loss), a setext underline after one content line (correct) and after two or
+   more (a leak, still open), and a TABLE_ROW interior (a leak, still open). ADR
+   0029 separates all six;
 3. `opensMathBlock`, clause 7a's separate stop, 512 of 512;
 4. **a root neither this ADR nor `srs.md` named before now:** `bracketClosesLater`
    returns at the **first line bearing any `]`**, so a line that does not
@@ -234,14 +265,25 @@ matrix-dependent and is not comparable to the 36-shape figure above):
 
 Root 4 was the one worth carrying forward, because it is not a container problem
 at all and no amount of teaching the lookahead about container prefixes would
-reach it. That is what ADR 0027 closed. **Four remain** - 1, 2, 3 and 5 above,
-renumbered nowhere so the original numbering in `AGENTS.md` and in NRL-88's own
-ticket still resolves - and all of them, open or closed, are destination-only,
+reach it. That is what ADR 0027 closed. The numbering 1-5 is kept rather than
+compacted, so the original numbering in `AGENTS.md` and in NRL-88's and NRL-98's
+tickets still resolves. All five, open or closed, are destination-only,
 fail-closed and prose-safe: an aborted confirmation leaves the line exactly as
-the pre-NRL-63 tree had it. Roots 1 and 2 are deferred rather than attempted and
-are tracked as **NRL-98**,
-because fixing them means widening `interruptsParagraph`, which is shared with
-`codeSpanClosesLater` and which NRL-73 and NRL-74 had just narrowed; root 3 is
+the pre-NRL-63 tree had it.
+
+**As of NRL-98 (ADR 0029) root 1's and root 2's CONTAINER members are closed**,
+by making `bracketClosesLater` peel at most the opener's own quote levels from
+each continuation line before running the UNCHANGED `interruptsParagraph` and
+`labelClose` on it, and by relaxing one conjunct of the BRACKET arming guard from
+`blockType === "paragraph"` to `(paragraph || quote || list)`. NRL-98 did **not**
+widen `interruptsParagraph`, which is why ADR 0019's F5 code-span guard stayed
+green by construction; it fed the unchanged predicate a different string, which
+is what clause 2's amendment above records. Root 2 is **not** recorded as closed:
+three non-container residuals survive against the same requirement and go to one
+follow-up, **NRL-109** - a TABLE_ROW opener (root 1c, 2,048 of 2,048 cells), a
+TABLE_ROW interior (root 2e, 2,048 of 2,048) and a setext underline after two or
+more content lines (root 2d, 2,048 of 2,048) - whose fix direction is NARROWING
+`interruptsParagraph` and therefore collides with that same F5 guard. Root 3 is
 left because clause 7a's `opensMathBlock` stop exists to fix a real prose-loss
 defect and removing it trades prose for a destination, which ADR 0007 clause 6
 refuses; root 5 is clause 6's own recorded precedence rule.
@@ -255,7 +297,15 @@ setext underline sitting *after* the label has already closed
 An underline *between* opener and closer is `SETEXT.test` and therefore
 `interruptsParagraph`, so it is root 2 and it leaks on both sides (1,024 of
 1,024). The ATX form leaks 1,024 of 1,024 on both sides and is correct, an ATX
-heading being a single line that cannot soft-wrap.
+heading being a single line that cannot soft-wrap. (AMENDED by NRL-98: the setext
+member splits by SHAPE and only one half is a defect. Module 8671 eats content to
+the FIRST newline, so with ONE content line before the underline Obsidian really
+does render a heading plus a separate DISPLAYED paragraph and speaking the
+destination is renderer-faithful - the NRL-68 outcome, pinned by
+`guard-nrl98-setext-one-content-line`. With TWO OR MORE content lines
+`setextHeading` fails at block start and, being gated out of `interruptParagraph`
+by `commonmark: true`, cannot interrupt either, so it is one paragraph, the image
+IS matched, and we leak. That half is root 2d and goes to the follow-up.)
 
 **Prose loss**, the direction that bites. 18 sources built around labels that
 never close, labels closed only by a shortcut `]`, unbalanced brackets in

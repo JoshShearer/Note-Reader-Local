@@ -145,7 +145,7 @@ rule 14 applied to the claim that a gate is "pre-existing".
    Record which step failed: `Install dependencies`, `Typecheck`, `Build`,
    `Assert main.js require() list`, or `Test`. The whole triage differs by step, and `ci.yml` orders
    them deliberately: build strictly before test, and the `require()` assertion before `npm test`
-   so a long `&&` chain cannot hide it.
+   so a failure there surfaces as its own red step rather than inside the runner's output.
 
 2. **Reproduce on the PR head, locally.** You are on the branch. Run only the matching gate:
 
@@ -315,7 +315,7 @@ So `--watch` is legitimate here and would not be there. The difference is that a
 | Rollup `headRefOid` is not `HEAD` | You are triaging an older push. Say so, and re-read after the current head's run concludes |
 | Two `gates` entries with different conclusions | The `push` and `pull_request` runs disagree, which means something non-deterministic. Report both `detailsUrl`s and treat it as `CI-ENVIRONMENT-ONLY` with no identified cause; do not pick the green one |
 | A red check is red on `main` too | `PRE-EXISTING`. Report loudly and file a ticket: `run-tickets.md` treats a green `main` as its precondition for starting any ticket |
-| `npm test` fails at an early suite | The `test` script chains with `&&`, so an early failure says nothing about the later suites. Re-run the rest individually before describing the scope |
+| `npm test` reports a failure | The runner runs every registered suite and names each failure, so the scope is already printed. Read its per-suite table, its aggregate counts and its `FAILING SUITES:` line, as `AGENTS.md`'s quality-gates block describes, instead of re-running suites individually |
 | `tests/engine.test.ts` red locally | Check `spd-say --version` and the daemon before blaming the diff, and remember CI sets `NRL_SKIP_REAL_SPEECHD=1` and your shell does not |
 | `node_modules` absent | `npm ci` first. A gate cannot pass or fail without it, and a fresh worktree has none |
 | `gh` not authenticated | Stop. Every step here needs it; there is no degraded path |

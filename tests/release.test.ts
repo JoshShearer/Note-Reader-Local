@@ -457,6 +457,433 @@ function extractRunBlock(content: string, stepName: string): string {
 	return body.map((l) => (l.trim() === "" ? "" : l.slice(common))).join("\n") + "\n";
 }
 
+// --- The pushed tag is checked against the version files (NRL-105)
+//
+// `on: push: tags` admits only bare semver since NRL-75, but it admits ANY bare
+// semver. Nothing read `manifest.json`, `package.json` or `versions.json`, so
+// pushing `9.9.9` at a commit whose manifest says `0.1.0` cut a Release whose
+// name and contents contradicted each other. Obsidian's community-plugin
+// installer reads `manifest.json` off the Release to learn the version and
+// `versions.json` to decide which Obsidian versions may install it, which is
+// what makes this the one hazard on this path that reaches a user.
+//
+// THESE CHECKS EXECUTE THE STEP, for the same reason the NRL-76 block below
+// does: a check that grepped the YAML would pass the moment someone reformatted
+// a comparison that no longer discriminated. The body is extracted verbatim,
+// written to a script, and run in a throwaway sandbox holding three planted JSON
+// files. `bash -e` and deliberately NOT `-o pipefail` - see the section comment
+// above `extractRunBlock` - which is what makes the body's own
+// `set -euo pipefail` the thing under test rather than a harness flag.
+//
+// Four of the checks exist only to stop a vacuous pass and are labelled where
+// they sit: 5 is the only pin on "report every disagreement rather than the
+// first", 13 asserts the MESSAGE and not just the status because an unset `TAG`
+// exits non-zero even with the `-z` clause deleted, 15 pins that no `${{ }}`
+// reaches the body (one would make every execution check above a fiction), and
+// 17 is a tripwire on the `on:` block, green on both sides, standing in for the
+// `if:` this step deliberately does not carry.
+
+/** The step name both the workflow and these checks must spell identically. */
+const TAG_GUARD_STEP = "Verify the tag matches the version files";
+
+/** The matching triple, as exact file bytes. Each case overrides exactly one. */
+const GOOD_MANIFEST = '{"id":"local-tts-reader","version":"0.1.0","minAppVersion":"1.8.0"}\n';
+const GOOD_PACKAGE = '{"name":"local-tts-reader","version":"0.1.0"}\n';
+const GOOD_VERSIONS = '{"0.1.0":"1.8.0"}\n';
+
+interface GuardRun {
+	/** Process exit status. 0 on success. */
+	status: number;
+	stdout: string;
+	stderr: string;
+	/** The sandbox workspace the step ran in. */
+	work: string;
+}
+
+/**
+ * Run `release.yml`'s tag-guard step in a throwaway sandbox.
+ *
+ * A sibling of `runChecksumStep` rather than a parameterisation of it: that one
+ * plants its fixture from `extractUploadedFiles` (the published-asset list),
+ * creates a `$GITHUB_OUTPUT`, and decodes base64 `sha256sum` subjects, none of
+ * which exists here - and this step needs a `TAG` env var, per-case file
+ * CONTENTS and stdout, which that one has no concept of. Threading both through
+ * one runner would put a `subjects: []` on every result, which is the kind of
+ * field that later gets asserted vacuously.
+ *
+ * `null` means "do not create that file at all"; `tag: null` means "do not set
+ * `TAG` at all", and it must DELETE the key from the inherited environment, or
+ * an ambient `TAG` in a developer's shell would make check 13 pass for the wrong
+ * reason.
+ */
+function runTagGuardStep(
+	options: {
+		tag?: string | null;
+		manifest?: string | null;
+		pkg?: string | null;
+		versions?: string | null;
+	} = {},
+): GuardRun {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	// Throws if the step is absent or renamed, rather than yielding an empty
+	// script that would make every check below green.
+	const script = extractRunBlock(content, TAG_GUARD_STEP);
+	const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "nrl105-tag-guard-"));
+	const work = path.join(sandbox, "workspace");
+	fs.mkdirSync(work, { recursive: true });
+
+	const plant = (name: string, bytes: string | null | undefined, fallback: string) => {
+		const value = bytes === undefined ? fallback : bytes;
+		if (value === null) return;
+		fs.writeFileSync(path.join(work, name), value);
+	};
+	plant("manifest.json", options.manifest, GOOD_MANIFEST);
+	plant("package.json", options.pkg, GOOD_PACKAGE);
+	plant("versions.json", options.versions, GOOD_VERSIONS);
+
+	const scriptPath = path.join(sandbox, "verify-tag.sh");
+	fs.writeFileSync(scriptPath, script);
+
+	const env: Record<string, string | undefined> = { ...process.env };
+	const tag = options.tag === undefined ? "0.1.0" : options.tag;
+	if (tag === null) delete env.TAG;
+	else env.TAG = tag;
+
+	let status = 0;
+	let stdout = "";
+	let stderr = "";
+	try {
+		// `-e` only. See the section comment above `extractRunBlock`: that is
+		// GitHub's documented default for a `run:`.
+		stdout = execFileSync("bash", ["-e", scriptPath], {
+			cwd: work,
+			env,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+	} catch (err: unknown) {
+		const e = err as { status?: number | null; stdout?: string | Buffer; stderr?: string | Buffer };
+		status = typeof e.status === "number" ? e.status : 1;
+		stdout = e.stdout === undefined ? "" : String(e.stdout);
+		stderr = e.stderr === undefined ? "" : String(e.stderr);
+	}
+	return { status, stdout, stderr, work };
+}
+
+/**
+ * A named step's whole YAML text, from its `- name:` line to the next line at
+ * the same or shallower indentation.
+ *
+ * Throws for the same reason every other extractor in this file does: an empty
+ * string would make the `shell:` / `if:` / `env:` checks vacuously green.
+ */
+function extractStepText(content: string, stepName: string): string {
+	const lines = content.split("\n");
+	const start = lines.findIndex((l) => l.trim() === `- name: ${stepName}`);
+	if (start === -1) {
+		throw new Error(
+			`could not locate a \`- name: ${stepName}\` step in the workflow text; refusing to ` +
+				"return an empty step body, which would make the wiring checks vacuously green",
+		);
+	}
+	const indent = (lines[start] ?? "").search(/\S/);
+	const out: string[] = [lines[start] ?? ""];
+	for (let i = start + 1; i < lines.length; i++) {
+		const line = lines[i] ?? "";
+		if (line.trim() === "") {
+			out.push("");
+			continue;
+		}
+		// The next step, or a comment block introducing it, sits at this indent.
+		if (line.search(/\S/) <= indent) break;
+		out.push(line);
+	}
+	return out.join("\n");
+}
+
+/** The 1-based line index of a step's `- name:` line, for ordering checks. */
+function stepNameLine(content: string, stepName: string): number {
+	const lines = content.split("\n");
+	const at = lines.findIndex((l) => l.trim() === `- name: ${stepName}`);
+	if (at === -1) throw new Error(`no \`- name: ${stepName}\` step in the workflow text`);
+	return at + 1;
+}
+
+// 1. DEFECT REPRODUCTION. Red against the unguarded workflow: `extractRunBlock`
+// throws, which `test()` prints as a named FAIL with the diagnosis attached.
+test("the tag guard passes when the tag agrees with all three version files (NRL-105)", () => {
+	const run = runTagGuardStep();
+	assertEquals(run.status, 0, `the guard rejected a matching triple: ${run.stderr}`);
+	assertMatch(
+		run.stdout,
+		/0\.1\.0/,
+		"a passing guard must say which tag it agreed with, so a green log is readable",
+	);
+});
+
+// 2.
+test("a manifest.json version that disagrees with the tag fails the run (NRL-105)", () => {
+	const run = runTagGuardStep({ manifest: '{"version":"0.1.1"}\n' });
+	assert(run.status !== 0, "a manifest whose version is not the tag must fail the run");
+	assertMatch(run.stderr, /manifest\.json/, "the message must name the file that disagrees");
+	assertMatch(run.stderr, /0\.1\.1/, "the message must name the value it found");
+	assertMatch(run.stderr, /0\.1\.0/, "the message must name the tag it was compared against");
+});
+
+// 3.
+test("a package.json version that disagrees with the tag fails the run (NRL-105)", () => {
+	const run = runTagGuardStep({ pkg: '{"name":"x","version":"0.2.0"}\n' });
+	assert(run.status !== 0, "a package.json whose version is not the tag must fail the run");
+	assertMatch(run.stderr, /package\.json/, "the message must name the file that disagrees");
+	assertMatch(run.stderr, /0\.2\.0/, "the message must name the value it found");
+});
+
+// 4.
+test("a versions.json with no key for the tag fails the run (NRL-105)", () => {
+	const run = runTagGuardStep({ versions: '{"0.0.9":"1.8.0"}\n' });
+	assert(run.status !== 0, "versions.json with no key equal to the tag must fail the run");
+	assertMatch(run.stderr, /versions\.json/, "the message must name versions.json");
+	assertMatch(
+		run.stderr,
+		/0\.0\.9/,
+		"the message must list the keys it did find, or the author cannot see what to fix",
+	);
+});
+
+// 5. THE ONLY PIN on "report every disagreement, not the first". A body that
+// stopped at the first problem passes checks 2, 3 and 4 and fails only this one.
+// A tag is expensive to retry - delete it locally and remotely, and every attempt
+// leaves a permanent run in Actions history - so three push-fail-delete cycles
+// for one half-finished version bump is the wrong trade.
+test("the tag guard reports every disagreement, not just the first (NRL-105)", () => {
+	const run = runTagGuardStep({
+		manifest: '{"version":"1.0.0"}\n',
+		pkg: '{"name":"x","version":"2.0.0"}\n',
+		versions: '{"3.0.0":"1.8.0"}\n',
+	});
+	assert(run.status !== 0, "three disagreements must fail the run");
+	for (const file of ["manifest.json", "package.json", "versions.json"]) {
+		assert(
+			run.stderr.includes(file),
+			`stderr must name every disagreeing file, but ${file} is absent. ` +
+				`A body that stops at the first problem makes the author push, fail and delete a tag ` +
+				`once per file. Full stderr: ${JSON.stringify(run.stderr)}`,
+		);
+	}
+});
+
+// 6. Kills `includes` / `startsWith` / `grep` key matching.
+test("a versions.json key that merely contains the tag is not a match (NRL-105)", () => {
+	const run = runTagGuardStep({ versions: '{"0.1.01":"1.8.0"}\n' });
+	assert(
+		run.status !== 0,
+		"`0.1.01` contains `0.1.0` as a substring but is a different version; a substring or " +
+			"`grep` key test would wrongly accept it",
+	);
+});
+
+// 7. The other direction of the same defect: the tag as a prefix of a key.
+// manifest and package both say `0.1`, so only the key check can fail this.
+test("a tag that is a prefix of a versions.json key is not a match (NRL-105)", () => {
+	const run = runTagGuardStep({
+		tag: "0.1",
+		manifest: '{"version":"0.1"}\n',
+		pkg: '{"name":"x","version":"0.1"}\n',
+		versions: '{"0.1.0":"1.8.0"}\n',
+	});
+	assert(run.status !== 0, "the tag `0.1` must not match the key `0.1.0`");
+	assertMatch(run.stderr, /versions\.json/, "only the versions.json check can fail this case");
+});
+
+// 8. See the plan-phase decision recorded on NRL-105: the key's only purpose is
+// to carry the minimum Obsidian version string the installer reads, so an empty
+// value is indistinguishable in effect from the missing key.
+test("a versions.json key mapping to an empty value fails the run (NRL-105)", () => {
+	const run = runTagGuardStep({ versions: '{"0.1.0":""}\n' });
+	assert(run.status !== 0, "a key present with an empty minAppVersion must fail the run");
+	assertMatch(run.stderr, /versions\.json/, "the message must name versions.json");
+});
+
+// 9.
+test("a missing version file fails the run and is named (NRL-105)", () => {
+	const run = runTagGuardStep({ versions: null });
+	assert(run.status !== 0, "an absent versions.json must fail the run");
+	assertMatch(
+		run.stderr,
+		/versions\.json/,
+		"the message must name the file that is missing, not merely exit non-zero",
+	);
+});
+
+// 10. A diagnosis, not a node stack trace: the reader of a failed release run
+// needs the file name, and a raw throw buries it under frames.
+test("malformed JSON in a version file is diagnosed, not thrown (NRL-105)", () => {
+	const run = runTagGuardStep({ manifest: "{ not json\n" });
+	assert(run.status !== 0, "unparseable JSON must fail the run");
+	assertMatch(run.stderr, /manifest\.json/, "the message must name the unparseable file");
+	assert(
+		!/\n\s+at /.test(run.stderr),
+		`the guard must diagnose a malformed file rather than letting node print a stack trace. ` +
+			`Full stderr: ${JSON.stringify(run.stderr)}`,
+	);
+});
+
+// 11. The trigger cannot produce a `v`-prefixed tag, so this exists to stop a
+// well-meaning "strip the v" edit: normalising the tag would reintroduce exactly
+// the class of mismatch this step is for.
+test("nothing normalises the tag, so a v-prefixed tag fails (NRL-105)", () => {
+	const run = runTagGuardStep({ tag: "v0.1.0" });
+	assert(
+		run.status !== 0,
+		"`v0.1.0` must not be silently normalised to `0.1.0`; the files say `0.1.0` and the tag does not",
+	);
+});
+
+// 12. THE PROTOTYPING HOLE. A first draft used `null` as the "file unreadable"
+// sentinel and skipped the versions checks on it, so a versions.json whose whole
+// content is the literal `null` EXITED 0. The sentinel must be `undefined`, which
+// `JSON.parse` cannot return, and the object test must reject `null` explicitly.
+test("a versions.json that is not a map of version keys fails the run (NRL-105)", () => {
+	for (const bytes of ["[]\n", "null\n"]) {
+		const run = runTagGuardStep({ versions: bytes });
+		assert(
+			run.status !== 0,
+			`versions.json holding ${JSON.stringify(bytes.trim())} carries no key for the tag and must ` +
+				`fail the run. A \`null\` sentinel for an unreadable file makes the literal \`null\` exit 0.`,
+		);
+		assertMatch(run.stderr, /versions\.json/, "the message must name versions.json");
+	}
+});
+
+// 13. THE MESSAGE IS THE ASSERTION. With the `-z "${TAG:-}"` clause deleted, an
+// unset or empty TAG still exits non-zero - every comparison fails against an
+// undefined tag - so a status-only check stays green on the mutation and proves
+// nothing.
+test("an empty or unset TAG fails the run by name (NRL-105)", () => {
+	for (const tag of ["", null] as Array<string | null>) {
+		const run = runTagGuardStep({ tag });
+		assert(run.status !== 0, `TAG=${JSON.stringify(tag)} must fail the run`);
+		assertMatch(
+			run.stderr,
+			/TAG/,
+			`the guard must say that TAG itself is missing rather than reporting three version ` +
+				`mismatches against an empty tag. Full stderr: ${JSON.stringify(run.stderr)}`,
+		);
+	}
+});
+
+// 14. The guard reads three small JSON files, so it must cost seconds rather
+// than a full typecheck+build+test, and it must not sit after the gates where a
+// mismatched tag would already have paid for them.
+test("the tag guard runs after npm ci and before the quality gates (NRL-105)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const guard = stepNameLine(content, TAG_GUARD_STEP);
+	const install = stepNameLine(content, "Install dependencies");
+	const gates = stepNameLine(content, "Run quality gates");
+	assert(
+		install < guard && guard < gates,
+		`the guard must sit between \`Install dependencies\` (line ${install}) and ` +
+			`\`Run quality gates\` (line ${gates}), but it is at line ${guard}`,
+	);
+});
+
+// 15. If a `${{ }}` were written into the body, `extractRunBlock` would return it
+// as an unevaluable literal and every execution check above would be exercising
+// something the runner never runs. It is also the documented
+// script-injection-safe shape.
+test("the tag reaches the guard through env:, never interpolated into the body (NRL-105)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const step = extractStepText(content, TAG_GUARD_STEP);
+	assertMatch(
+		step,
+		/\n\s+env:\n\s+TAG:\s*\$\{\{\s*github\.ref_name\s*\}\}\s*\n/,
+		"the step must carry `env:` with `TAG: ${{ github.ref_name }}`",
+	);
+	const body = extractRunBlock(content, TAG_GUARD_STEP);
+	assert(
+		!body.includes("${{"),
+		`the run body must contain no \`\${{ }}\` expression: extractRunBlock returns it verbatim, so ` +
+			`one would make every execution check in this block a fiction, and it is the documented ` +
+			`script-injection shape. Body: ${JSON.stringify(body)}`,
+	);
+});
+
+// 16. ADR 0011's NRL-76 amendment, decision 4: shell options live in the BODY,
+// because the body is what this suite executes and a `shell: bash` key would be
+// a guarantee nothing here covers. And NRL-76 decision 5: no `if:` - `on:` is
+// `push.tags` only (check 17), so a condition's only effect would be to make the
+// step skippable, and a silent skip on a real tag push is worse than a failure.
+test("the guard sets its shell options in the body and carries no shell: or if: (NRL-105)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const body = extractRunBlock(content, TAG_GUARD_STEP);
+	assertEquals(
+		(body.split("\n")[0] ?? "").trim(),
+		"set -euo pipefail",
+		"the body's first line must be `set -euo pipefail` (ADR 0011, NRL-76 decision 4)",
+	);
+	const step = extractStepText(content, TAG_GUARD_STEP);
+	for (const key of ["shell:", "if:"]) {
+		const offender = step
+			.split("\n")
+			.find((l) => l.trim().startsWith(key) && !l.trim().startsWith("#"));
+		assertEquals(
+			offender,
+			undefined,
+			`the step must carry no \`${key}\` key, but found ${JSON.stringify(offender)}`,
+		);
+	}
+});
+
+// 17. GUARD (green on both sides). This stands in for the `if:` the step does not
+// carry. `on:` is exactly `{push: {tags: [...]}}`, so `github.ref_name` can only
+// ever be the pushed bare-semver tag and no condition is needed. The moment
+// someone adds `workflow_dispatch:` or `branches:`, this fails and forces them to
+// decide what the guard does on a non-tag ref - instead of the guard quietly
+// failing every such run.
+test("guard: release.yml's `on:` block is push.tags and nothing else (NRL-105)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const onAt = content.search(/^on:/m);
+	const jobsAt = content.search(/^jobs:/m);
+	assert(onAt !== -1 && jobsAt !== -1 && onAt < jobsAt, "the workflow must have `on:` before `jobs:`");
+	const slice = content.slice(onAt, jobsAt);
+	const byIndent = new Map<number, string[]>();
+	for (const raw of slice.split("\n")) {
+		if (raw.trim() === "" || raw.trim().startsWith("#")) continue;
+		const indent = raw.search(/\S/);
+		if (raw.trim().startsWith("- ")) continue; // a list entry, not a key
+		const at = byIndent.get(indent) ?? [];
+		at.push(raw.trim());
+		byIndent.set(indent, at);
+	}
+	assertEquals(
+		JSON.stringify(byIndent.get(0) ?? []),
+		JSON.stringify(["on:"]),
+		"nothing but `on:` may sit at column 0 in this slice",
+	);
+	assertEquals(
+		JSON.stringify(byIndent.get(2) ?? []),
+		JSON.stringify(["push:"]),
+		"`on:` must hold `push:` and nothing else - no workflow_dispatch, workflow_call or schedule. " +
+			"Adding one changes what `github.ref_name` can be, which is what the tag guard compares.",
+	);
+	assertEquals(
+		JSON.stringify(byIndent.get(4) ?? []),
+		JSON.stringify(["tags:"]),
+		"`push:` must hold `tags:` and nothing else - a `branches:` key would make `github.ref_name` " +
+			"a branch name and the tag guard would fail every push to it",
+	);
+});
+
+// 18.
+test("ADR 0011 records the NRL-105 tag-guard decision", () => {
+	const adr = fs.readFileSync(ADR_FILE, "utf-8");
+	assertMatch(
+		adr,
+		/Amendment \(NRL-105\)/,
+		"docs/adr/0011-release-attestation.md must carry an `Amendment (NRL-105)` section",
+	);
+});
+
 interface StepRun {
 	/** Process exit status. 0 on success. */
 	status: number;
@@ -590,6 +1017,197 @@ test("release.yml attests every published release asset and nothing else (NRL-76
 	);
 });
 
+// --- One pinned action creates the Release and uploads its assets (NRL-104)
+//
+// `release.yml` used to run two actions back to back: `Create GitHub Release`
+// (`actions/create-release@v1`) and then `Upload Release Assets`
+// (`softprops/action-gh-release@v1`). The second can do both jobs, and the
+// first was the sole source of the three `The set-output command is deprecated`
+// warnings NRL-79's run `36785920227` recorded, plus the only `using: node12`
+// runtime in the file and the `tag_name: ${{ github.ref }}` shape that passed a
+// full `refs/tags/0.1.1` where the adjacent line used the bare `github.ref_name`
+// and survived only on server-side normalisation this repo does not control.
+//
+// These checks read the workflow TEXT. They cannot say the path works - no tag
+// has been pushed since the change, so the shipped configuration is unexercised
+// on a real runner exactly as it was before NRL-79 (ADR 0011, Amendment NRL-104).
+//
+// Several are SCOPED to the upload step rather than to the whole file, and the
+// scoping is what makes them mean anything: `draft: false` and `prerelease: false`
+// existed file-wide before this change, inside the step being deleted, so a
+// content-wide regex would have been green on both sides and proved nothing.
+
+/**
+ * The `Upload Release Assets` step's own text, from its `- name:` line to the
+ * blank line that ends it.
+ *
+ * Defensive in the same way `extractUploadedFiles` and `parseOnPushTags` are:
+ * it THROWS rather than returning `""`, because an empty string would make
+ * every "is X inside the upload step" check below vacuously green, and a
+ * vacuous green on the step that decides what ships is the NRL-76 shape.
+ */
+function extractUploadStep(content: string): string {
+	const start = content.indexOf("- name: Upload Release Assets");
+	if (start === -1) {
+		throw new Error(
+			"could not locate the `- name: Upload Release Assets` step in the workflow text; " +
+				"refusing to return an empty step body, which would make the NRL-104 scoped checks " +
+				"vacuously green. `extractUploadedFiles` anchors on this same literal name.",
+		);
+	}
+	const end = content.indexOf("\n\n", start);
+	const step = end === -1 ? content.slice(start) : content.slice(start, end);
+	if (!step.includes("files:")) {
+		throw new Error(
+			"the `Upload Release Assets` step body was found but holds no `files:` key; " +
+				"the slice is wrong and the scoped checks below would be vacuous",
+		);
+	}
+	return step;
+}
+
+// DEFECT-SHAPED (NRL-104), red against the pre-change file at `:163-164`.
+// Scheduled work on a published deprecation path rather than an outage: nothing
+// was broken, and `actions/create-release@v1` is simply the thing being removed.
+test("release.yml no longer uses actions/create-release (NRL-104)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const uses = content.match(/^\s*uses:\s*\S+/gm) ?? [];
+	const offenders = uses.filter((line) => line.includes("actions/create-release"));
+	assert(
+		offenders.length === 0,
+		`actions/create-release is still referenced by a \`uses:\`: ${JSON.stringify(offenders)}. ` +
+			`It is the only source of the set-output deprecation warnings NRL-79 observed and the ` +
+			`only using: node12 runtime in the file.`,
+	);
+	assert(
+		!/^\s*-\s*name:\s*Create GitHub Release\s*$/m.test(content),
+		"a step is still named `Create GitHub Release`; softprops/action-gh-release creates the Release itself",
+	);
+});
+
+// RED against `@v1`. Asserts the SHAPE - a 40-hex commit plus a trailing `# v`
+// comment naming the human-readable version - and deliberately NOT the literal
+// SHA, so a future legitimate bump is one edit in the workflow rather than two.
+test("the release action is pinned to a 40-hex commit with a version comment (NRL-104)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	assertMatch(
+		content,
+		/uses:\s*softprops\/action-gh-release@[0-9a-f]{40}\s*#\s*v/,
+		"softprops/action-gh-release must be pinned by 40-hex commit SHA with a trailing `# v<version>` comment, " +
+			"not by a moving tag. A tag is rewritable by its owner; the comment is what keeps the pin readable.",
+	);
+	assert(
+		!/uses:\s*softprops\/action-gh-release@v/.test(content),
+		"softprops/action-gh-release is still pinned by tag",
+	);
+});
+
+// RED - the input is absent before this change, and it defaults to FALSE in the
+// action. Without it a missing `main.js` publishes a Release carrying fewer
+// assets than the attestation covers and still concludes success, which is
+// precisely the silent-truncation shape NRL-76 removed from `Generate checksums`.
+test("the upload step fails on an unmatched file (NRL-104)", () => {
+	const step = extractUploadStep(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	assertMatch(
+		step,
+		/^\s*fail_on_unmatched_files:\s*true\s*$/m,
+		"`fail_on_unmatched_files: true` must be set on the upload step: it defaults to false, so a " +
+			"missing asset would publish a short Release and still succeed",
+	);
+});
+
+// RED against `:168`. The action defaults its tag to `github.ref`, so naming it
+// would reintroduce the exact `refs/tags/<tag>` shape this ticket deletes.
+test("release.yml names no tag_name anywhere (NRL-104)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	// Full-line comments are stripped first, and that is deliberate rather than a
+	// loophole. The workflow's own comments describe the deleted shape at length -
+	// naming it is how the reason it went survives - so a raw text search would be
+	// red against a correct file. What must not exist is the KEY. Still red against
+	// the pre-change file, where `tag_name: ${{ github.ref }}` was a real key.
+	const yamlOnly = content
+		.split("\n")
+		.filter((line) => !line.trimStart().startsWith("#"))
+		.join("\n");
+	assert(
+		!/\btag_name\s*:/.test(yamlOnly),
+		"`tag_name:` is present. softprops/action-gh-release defaults to `github.ref`; setting it " +
+			"explicitly is how the full `refs/tags/0.1.1` shape got in, and it survived only on " +
+			"server-side normalisation this repo does not control.",
+	);
+});
+
+// RED, and only because the assertions are SCOPED. All three keys existed in the
+// pre-change file - inside the `Create GitHub Release` step being deleted - so a
+// content-wide search would pass on both sides of this diff and prove nothing.
+test("the upload step carries the Release title, draft and prerelease flags (NRL-104)", () => {
+	const step = extractUploadStep(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	assertMatch(
+		step,
+		/^\s*name:\s*Release \$\{\{ github\.ref_name \}\}\s*$/m,
+		"the upload step must carry `name: Release ${{ github.ref_name }}` - the Release title NRL-79 " +
+			"observed as `Release 0.1.1`, which the deleted step's `release_name:` used to set. " +
+			"`github.ref_name` and not `github.ref`.",
+	);
+	assertMatch(
+		step,
+		/^\s*draft:\s*false\s*$/m,
+		"`draft: false` must stay explicit on the upload step",
+	);
+	assertMatch(
+		step,
+		/^\s*prerelease:\s*false\s*$/m,
+		"`prerelease: false` must stay explicit on the upload step: NRL-75's semver-only `on: push: tags` " +
+			"filter excludes prereleases, and this is the second half of that reasoning",
+	);
+});
+
+// GUARD (green on both sides). `extractUploadedFiles` anchors on this literal
+// string, so renaming the step turns the NRL-76 subject-set check into a throw.
+test("guard: the upload step is still named literally `Upload Release Assets`", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	assertMatch(
+		content,
+		/^\s*-\s*name:\s*Upload Release Assets\s*$/m,
+		"`extractUploadedFiles` and `extractUploadStep` both anchor on this exact step name",
+	);
+});
+
+// GUARD (green on both sides), and the direct machine check on the coupling that
+// makes the key ORDER in this step load-bearing. `extractUploadedFiles`'s regex
+// is `/Upload Release Assets[\s\S]*?files:\s*\|([\s\S]*?)\n\s*\n/` - the capture
+// ends at the first BLANK LINE, not at the next YAML key. So any `with:` key
+// written after `files: |` is trimmed into the published-asset list and reported
+// by the NRL-76 subject-set check as `extra`, turning that check red for a
+// reason that has nothing to do with the attestation. `files: |` must be LAST.
+test("guard: no YAML key follows `files: |` inside the upload step", () => {
+	const step = extractUploadStep(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	const lines = step.split("\n");
+	const filesAt = lines.findIndex((line) => /^\s*files:\s*\|\s*$/.test(line));
+	assert(filesAt !== -1, "the upload step has no `files: |` block scalar");
+	const trailing = lines.slice(filesAt + 1).filter((line) => line.trim() !== "");
+	const keys = trailing.filter((line) => /^\s+[A-Za-z_][A-Za-z0-9_-]*:(\s|$)/.test(line));
+	assert(
+		keys.length === 0,
+		`a YAML key follows \`files: |\` inside the upload step: ${JSON.stringify(keys)}. ` +
+			`extractUploadedFiles captures up to the first blank line, so this key would be read as a ` +
+			`published asset and break the NRL-76 subject-set equality check.`,
+	);
+});
+
+// GUARD (green on both sides). The NRL-76 equality check above runs the real
+// shell step; this one pins the other end of the same coupling cheaply, so a
+// reorder that smuggles an extra entry into the published list is named here
+// even if the sandboxed step run is ever skipped.
+test("guard: the published asset list is still exactly the three installed files", () => {
+	const published = extractUploadedFiles(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
+	assertEquals(
+		published.join(","),
+		"main.js,manifest.json,styles.css",
+		"the upload step must publish exactly the three files Obsidian's installer fetches (ADR 0028)",
+	);
+});
+
 // GUARD (green on both sides). Without it the check above is satisfiable by a
 // literal string: every decoded digest must be the real sha256 of the file that
 // subject names, recomputed here.
@@ -688,10 +1306,15 @@ test("the checksum step leaves no file behind in the workspace (NRL-76)", () => 
 
 // GUARD (green on both sides), on the wiring the checks above cannot see. The
 // subject list only matters if the generator receives it, and the `if:` clause
-// is the one way to make this whole step moot with a GREEN run: `needs: build`
-// already stops `provenance` when the build fails, whereas an
-// `if: needs.build.outputs.hashes != ''` would SKIP provenance silently and
-// produce no attestation at all. See ADR 0011, Amendment (NRL-76), decision 5.
+// is the one way to make this whole step moot with a GREEN run:
+// `needs: [build, release]` already stops `provenance` when the build fails,
+// whereas an `if: needs.build.outputs.hashes != ''` would SKIP provenance
+// silently and produce no attestation at all. See ADR 0011, Amendment (NRL-76),
+// decision 5. The `needs:` membership check below is NOT a guard: it is NRL-106's
+// own assertion, red against the `needs: build` this job carried before, and the
+// `release` entry it pins is there purely for ORDERING - without it the
+// generator's `upload-assets` job is unordered with respect to the job that
+// creates the Release it attaches the attestation to.
 test("guard: the provenance job consumes the build's hashes and carries no if:", () => {
 	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
 	assertMatch(
@@ -717,8 +1340,56 @@ test("guard: the provenance job consumes the build's hashes and carries no if:",
 	assert(
 		conditional.length === 0,
 		`the provenance job carries ${JSON.stringify(conditional)}. A failing build step already stops ` +
-			"it through `needs: build`; an `if:` would SKIP it silently and produce a green run with no " +
+			"it through `needs: [build, release]`; an `if:` would SKIP it silently and produce a green " +
+			"run with no " +
 			"attestation, which is strictly worse than the defect NRL-76 fixed.",
+	);
+
+	// NRL-106. `needs:` must hold BOTH `build` and `release`, and the comparison is a
+	// SORTED SET rather than a literal because GitHub treats `needs` as a set: its own
+	// docs' `needs: [job1, job2]` example waits for both with no ordering significance
+	// between the entries, so `[release, build]` and a block sequence are the same
+	// dependency graph and asserting a literal would pin formatting rather than
+	// behaviour. Two traps, both measured on this slice. The assertion is scoped to the
+	// `needs:` LINE and not to `jobLines`, because a slice-wide substring search for
+	// `build` is ALREADY vacuous - `base64-subjects: ${{ needs.build.outputs.hashes }}`
+	// carries it, so such a check would stay green with `build` dropped from the list,
+	// which is exactly the regression that breaks that reference at run time. And
+	// `release` occurs nowhere else in this job today, so a substring search for it would
+	// have appeared to work for the wrong reason. The set equality catches an omission on
+	// either side and a spurious third entry.
+	const needsLines = jobLines.filter((l) => /^\s{4}needs:/.test(l));
+	assertEquals(
+		needsLines.length,
+		1,
+		`the provenance job carries ${needsLines.length} \`needs:\` keys (${JSON.stringify(needsLines)}). ` +
+			"YAML resolves duplicates last-wins and silently, so exactly one is required.",
+	);
+	const needsIndex = jobLines.findIndex((l) => /^\s{4}needs:/.test(l));
+	const inline = (jobLines[needsIndex] ?? "").replace(/^\s{4}needs:\s*/, "").trim();
+	const parsedNeeds: string[] = [];
+	if (inline !== "") {
+		// Flow spelling: `needs: build` or `needs: [build, release]`.
+		for (const entry of inline.replace(/^\[/, "").replace(/\]$/, "").split(",")) {
+			const name = entry.trim().replace(/^['"]|['"]$/g, "");
+			if (name !== "") parsedNeeds.push(name);
+		}
+	} else {
+		// Block sequence: `needs:` then `      - build` / `      - release`.
+		for (let i = needsIndex + 1; i < jobLines.length; i++) {
+			const match = /^\s{6}-\s*(\S+)/.exec(jobLines[i] ?? "");
+			if (!match) break;
+			const name = (match[1] ?? "").replace(/^['"]|['"]$/g, "");
+			if (name !== "") parsedNeeds.push(name);
+		}
+	}
+	assertEquals(
+		parsedNeeds.slice().sort().join(","),
+		"build,release",
+		`the provenance job depends on ${JSON.stringify(parsedNeeds)}. Both entries are load-bearing: ` +
+			"`build` so `needs.build.outputs.hashes` resolves, and `release` so the generator's " +
+			"`upload-assets` job cannot start before the Release object it attaches " +
+			"`multiple.intoto.jsonl` to exists. See ADR 0011, Amendment (NRL-106).",
 	);
 });
 

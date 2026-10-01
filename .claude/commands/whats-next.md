@@ -85,7 +85,7 @@ produced, so the next session may quote it and cite where it was measured.
 | `main.js` require list | `grep -o 'require("[^"]*")' main.js \| sort -u` output verbatim (rule 7) |
 | Extraction timings | from `tests/perf/`, with the input word count; compare against `srs.md:2092` only if you ran it |
 | Latency | command to first audible sound, and how it was timed. A stopwatch is a legitimate method as long as you say it was a stopwatch |
-| Binary versions | `espeak-ng --version`, `spd-say --version` if `tests/engine.test.ts` behaviour mattered |
+| Binary versions | `spd-say --version` and `spd-say -O` (the daemon) if `tests/engine.test.ts` behaviour mattered; `espeak-ng` is not installed here and the suite does not spawn it |
 | Engine and device | which of `kokoro`, `espeak`, `speechd`, `webspeech`; for Kokoro, which weights build (`gpu` fp32, `fast` q4f16, `small` q8) and whether it landed on WebGPU or WASM |
 
 If a number was estimated rather than measured, label it ESTIMATE. If no measurement was
