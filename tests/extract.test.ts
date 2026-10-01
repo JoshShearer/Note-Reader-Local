@@ -965,13 +965,26 @@ console.log("NRL-45 link reference definitions (R-M08)");
 	 * line already spoke ZSECRETZ before this change, measured identical on both
 	 * sides - and removing exactly that asymmetry is what NRL-74 is for.
 	 *
-	 * Decision Q9's own ordering property does NOT lose its test: the second
-	 * line below is the same shape with a `-->` four lines down, so the title's
-	 * `<!--` really is an opener, and it still expects ["ZAFTERZ here."] and is
-	 * green on both sides. Do not collapse the pair into one.
+	 * The SECOND of the three below was REPLACED IN PLACE a second time, by
+	 * NRL-95, and it moves SILENT -> SPOKEN for the same reason: its `-->` sits
+	 * two paragraphs away, and term 2 of the block rule is now bounded by the
+	 * opener's own paragraph (module 4839's inline path is paragraph-scoped, so
+	 * a closer in a later paragraph cannot close anything). The lone `-->` line
+	 * is spoken too, and that is also renderer-faithful - `-->` matches no HTML
+	 * block opener and is not a tag, so it is ordinary paragraph text. This
+	 * fixture was NOT named in NRL-95's plan: the Plan sweep covered the
+	 * suite's fixture ARRAYS and this one is an `expect()` call, so it was
+	 * found by running the suite rather than predicted.
+	 *
+	 * Decision Q9's own ordering property does NOT lose its test, which is why
+	 * the THIRD fixture was added rather than the second merely edited: it is
+	 * the same shape with the `-->` inside the opener's OWN paragraph, so the
+	 * title's `<!--` really is an opener under the new rule. It expects
+	 * ["ZAFTERZ here."] and is green on both sides. Do not collapse the three.
 	 */
 	expect('[a]: x.png "<!--"\n\nZSECRETZ sentence here.', ["ZSECRETZ sentence here."]);
-	expect('[a]: x.png "<!--"\n\nZSECRETZ sentence here.\n\n-->\n\nZAFTERZ here.', ["ZAFTERZ here."]);
+	expect('[a]: x.png "<!--"\n\nZSECRETZ sentence here.\n\n-->\n\nZAFTERZ here.', ["ZSECRETZ sentence here.", "-->", "ZAFTERZ here."]);
+	expect('[a]: x.png "<!--"\nZSECRETZ sentence here.\n-->\nZAFTERZ here.', ["ZAFTERZ here."]);
 
 	/*
 	 * sourceIndex across a dropped line (AGENTS.md rule 8). The drop is
@@ -1198,7 +1211,25 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["html-inside-inline", "Before %%<!-- hidden%% after.", "Before after."],
 		["obsidian-inside-html", "Before <!-- %% hidden --> after.", "Before after."],
 		["html-inside-block", "Before.\n%%\n<!--\n```\n$$\n\n%% after.\nVisible.", "Before. after. Visible."],
-		["obsidian-inside-html-block", "Before <!--\n%%\n```\n$$\n--> after.\nVisible.", "Before after. Visible."],
+		// REPLACED IN PLACE by NRL-95, per the NRL-66/NRL-67 convention: same name,
+		// same fixture, new expectation. It used to say "Before after. Visible.",
+		// and that was wrong in BOTH halves, one of them a DISCLOSURE rather than
+		// prose loss. Three independent evidence lines converge on "Before <!--":
+		// (i) the asar read - module 8776 returns early unless `<` is the first
+		// non-tab/space character, so this MID-LINE `<!--` never reaches the HTML
+		// BLOCK tokenizer at all and routes to module 7648's paragraph-scoped 4839
+		// `.T`, which finds no `-->` inside the one-line paragraph `Before <!--`
+		// and leaves it displayed; line 2's `%%` is line-start with no lone `%`, so
+		// the `%%` block tokenizer opens a comment that never closes and hides
+		// lines 2-6; (ii) the paragraph-bounded arm independently produces exactly
+		// this string; (iii) NRL-74's own self-tested oracle says `Before` is
+		// DISPLAYED while `after.` and `Visible` are HIDDEN, so the old expectation
+		// SPOKE two sentinels Obsidian hides.
+		//
+		// This pin was NRL-74's only stated justification for term 2 scanning to
+		// EOF. It is now the evidence AGAINST that scope, not for it. Read off the
+		// installed obsidian.asar 1.13.7, NOT observed in Obsidian.
+		["obsidian-inside-html-block", "Before <!--\n%%\n```\n$$\n--> after.\nVisible.", "Before <!--"],
 		["wrong-html-closer", "%%\n--> hidden\n%% after.", "after."],
 		["wrong-obsidian-closer", "<!--\n%% hidden\n--> after.", "after."],
 		["tail-comments", "%%\nhidden\n%% after %%more%% tail <!--gone--> end.", "after tail end."],
@@ -1330,6 +1361,17 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// shape these three use, and of that shape only. Put a container prefix
 		// on the same construct and the destination IS spoken on this fix - see
 		// pin-nrl74-container-label-still-leaks-destination below.
+		//
+		// NRL-95 RE-MEASURED all three rather than assuming, because bounding
+		// term 2 of the `<!--` rule WIDENS bracketClosesLater: it narrows
+		// opensHtmlBlock -> opensHiddenComment -> interruptsParagraph, so the
+		// carry returns false LESS often and confirms MORE often. (ADR 0025 and
+		// AGENTS.md both stated that direction backwards until NRL-95 corrected
+		// them.) None of the three carries a `-->` at all, so all three are
+		// UNMOVED: byte-identical output on both arms in 0 of 512 differing
+		// cells each, over every content-key combination. Their cross-paragraph
+		// twins, which DO move, are pinned separately as
+		// pin-nrl95-label-dest-closer-later-para and its link form.
 		["pin-nrl74-label-destination-not-spoken", "Before ![alt <!--x\nmore](zdestz.png) after.", "Before after.", { speakImageAlt: false }],
 		["pin-nrl74-label-destination-not-spoken-alt", "Before ![alt <!--x\nmore](zdestz.png) after.", "Before alt more after.", { speakImageAlt: true }],
 		["pin-nrl74-link-label-destination-not-spoken", "Before [lab <!--x\nmore](zdestz.png) after.", "Before lab more after."],
@@ -1359,7 +1401,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		//
 		// So when NRL-88 closes root 1, THIS EXPECTATION MUST CHANGE, to the
 		// "Before after." / "Before alt more after." pair its plain twins carry.
-		// It is written down so that happens on purpose.
+		// It is written down so that happens on purpose. RE-MEASURED at NRL-95
+		// and UNMOVED, 0 of 512 differing cells: NRL-95 does not touch root 1.
 		["pin-nrl74-container-label-still-leaks-destination", "> Before ![alt <!--x\n> more](zdestz.png) after.", "Before [alt <!--x more](zdestz.png) after."],
 		// GUARDS. Green on both sides of the fix, so none is evidence of
 		// anything; they exist so the two-term rule cannot be half-adopted.
@@ -1367,11 +1410,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl74-linestart-html-still-hides", "<!--\nSECRETA\nmore", ""],
 		// AC 3: a complete mid-line pair closes on its own line and is dropped.
 		["guard-nrl74-complete-midline-pair", "Before <!-- x --> after.", "Before after."],
-		// The second term. A mid-line `<!--` whose `-->` is four lines down IS an
-		// opener, so HIDSENT stays silent. NOT evidence for the EOF scope of that
-		// lookahead - a paragraph-scoped one would pass this too. The evidence
-		// for EOF scope is obsidian-inside-html-block above, whose `-->` sits
-		// past a fence AND a `$$` line.
+		// The second term. A mid-line `<!--` whose `-->` is three lines down and
+		// in the SAME paragraph IS an opener, so HIDSENT stays silent. Green on
+		// both sides of NRL-95 as well, which bounded that lookahead to the
+		// opener's paragraph: nothing here ends the paragraph, so the closer is
+		// still reached. It was never evidence for the old EOF scope - NRL-74
+		// cited obsidian-inside-html-block for that, and NRL-95 showed that pin's
+		// own expectation was wrong.
 		["guard-nrl74-midline-later-closer-hides", "Before x.\nProse <!--\nHIDSENT\n--> tail.", "Before x. Prose tail."],
 		// D-74-10, and what it guards is specific: the line-start-only narrowing
 		// of opensHiddenComment. That half-rule answers false for a mid-line
@@ -1380,6 +1425,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// becomes code content. Measured: base and this fix both say
 		// "Before a Prose b after."; the half-rule says
 		// "Before a Prose <!-- HIDDENX --> b after.". Both terms or neither.
+		// RE-MEASURED at NRL-95, which widens codeSpanClosesLater: UNMOVED, 0 of
+		// 512 differing cells, because this `-->` is inside the opener's own
+		// paragraph and the new bound never reaches it. The cross-paragraph twin
+		// that does move is pin-nrl95-codespan-closer-later-para.
 		["guard-nrl74-variant-C-disclosure", "Before `a\nProse <!--\nHIDDENX\n--> b` after.", "Before a Prose b after.", { skipInlineCode: false }],
 		// D-74-11. Duplicates local-html-state above under a name that says WHY:
 		// the new literal escape gates on `blockComments` POSITIVELY, where the
@@ -1468,6 +1517,145 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl88-stray-then-blank", "A ![alt\nsome [b] here\n\nwords](zdestz.png) B", "A [alt some b here words](zdestz.png) B", { speakImageAlt: false }],
 		["guard-nrl88-stray-then-heading", "A ![alt\nsome [b] here\n# H\nwords](zdestz.png) B", "A [alt some b here H words](zdestz.png) B", { speakImageAlt: false }],
 		["guard-nrl88-stray-then-never-closes", "A ![alt\nsome [b] here\nno closer\n\ntail.", "A [alt some b here no closer tail.", { speakImageAlt: false }],
+		// NRL-95. Term 2 of the `<!--` block rule - "some later line carries
+		// `-->`" - is now bounded by the end of the OPENER'S PARAGRAPH, where it
+		// used to scan to end of document. Term 1 (line-start) keeps its EOF scan:
+		// that half IS module 8776's own rule and is correct. Term 2 has no block
+		// tokenizer at all - a mid-line `<!--` reaches module 4839's `.T`
+		// (`<!---->|<!--(?:-?[^>-])(?:-?[^-])*-->`), applied to ONE paragraph's
+		// inline text, so it cannot see a `-->` in a later paragraph. We hid text
+		// the renderer displays, which is prose loss rather than leaked markup.
+		// Each of the eleven below was measured RED against base 4dcb753.
+		//
+		// The paragraph bound is blank / FENCE / HEADING / HR / SETEXT / TERM2_LIST,
+		// and its three departures from interruptsParagraph's own term list are
+		// pinned as guards further down.
+		["pin-nrl95-closer-in-later-paragraph", "Before x.\nProse <!--\nHIDDENP\n\nNew paragraph -->\nTail.", "Before x. Prose <!-- HIDDENP New paragraph --> Tail."],
+		// A blank line ends the paragraph even inside a blockquote, so the `-->`
+		// three lines down is in a DIFFERENT paragraph and cannot close the opener.
+		// Contrast guard-nrl95-container-closer-in-quote below, where there is no
+		// blank line and the container re-offers all three lines as one paragraph.
+		["pin-nrl95-container-closer-past-blank", "> Prose <!--\n> HIDDENQ2\n\n> more -->", "Prose <!-- HIDDENQ2 more -->"],
+		// The four non-container stops, one fixture each, so no single term can be
+		// dropped from endsTerm2Scan without a red check.
+		["pin-nrl95-heading-between", "Prose <!--\n# H\nHIDDENH\n--> t.", "Prose <!-- H HIDDENH --> t."],
+		["pin-nrl95-setext-between", "Prose <!--\n===\nHIDDENE\n--> t.", "Prose <!-- HIDDENE --> t."],
+		["pin-nrl95-hr-between", "Prose <!--\n***\nHIDDENR\n--> t.", "Prose <!-- HIDDENR --> t."],
+		// HIDDENF is dropped by skipCodeBlocks, correctly and for a different
+		// reason: the fence stops the term-2 scan, so the `<!--` is literal, and
+		// the fenced body is then excluded as content rather than hidden as comment.
+		["pin-nrl95-fence-between", "Prose <!--\n```\nHIDDENF\n```\n--> t.", "Prose <!-- --> t."],
+		// The D-74-9 destination class extended across a paragraph break. Base both
+		// LOSES prose and speaks `[alt`/`[lab`, because the document-scoped term 2
+		// saw the `-->` in the next paragraph and opened a block on the label line.
+		// With the bound in place the label carry is confirmed and the destination
+		// is dropped, exactly as the single-paragraph twins at
+		// pin-nrl74-label-destination-not-spoken already do.
+		["pin-nrl95-label-dest-closer-later-para", "Before ![alt <!--x\nmore](zdestz.png) after.\n\nnew para -->", "Before after. new para -->", { speakImageAlt: false }],
+		["pin-nrl95-link-label-dest-closer-later", "Before [lab <!--x\nmore](zdestz.png) after.\n\nnew para -->", "Before lab more after. new para -->"],
+		// The WIDENING, shown on a fixture. Narrowing term 2 narrows
+		// opensHtmlBlock -> opensHiddenComment -> interruptsParagraph, so BOTH
+		// carries return false LESS often and confirm MORE often. A code span now
+		// survives a break its own paragraph never ended at. This is the opposite
+		// direction to NRL-74, and ADR 0025 and AGENTS.md both stated it backwards
+		// until this ticket corrected them.
+		["pin-nrl95-codespan-closer-later-para", "Before `a\nProse <!--\nHIDDENX\nb` after.\n\nnew -->", "Before a Prose <!-- HIDDENX b after. new -->", { skipInlineCode: false }],
+		// NRL-45's leftover in its `<!--` HALF ONLY. An unmatched comment opener
+		// inside a link reference definition's quoted title used to hide every
+		// following line, because a `-->` anywhere later in the note counted. The
+		// `%%` half of that leftover is UNTOUCHED and stays open, so do NOT record
+		// NRL-45 as closed on the strength of this fixture.
+		["pin-nrl95-linkrefdef-title-closer-later", "[a]: x.png \"<!--\"\n\nZS here.\n\n-->\n\nZAFTERZ here.", "ZS here. --> ZAFTERZ here."],
+		// The stop set's DEPARTURES from interruptsParagraph's own term list, and
+		// they are three different reasons rather than one. BLOCKQUOTE and
+		// TABLE_ROW are dropped; LIST_BULLET is REPLACED by TERM2_LIST. Each guard
+		// below was MEASURED RED against the arm that puts the dropped term back,
+		// and each such red is a NEW DISCLOSURE that would be taken to close a
+		// prose-loss defect, which ADR 0006 and ADR 0007 clause 6 forbid. Without
+		// them nothing in the suite would catch a later "simplify endsTerm2Scan to
+		// interruptsParagraph's own term list" pass. The `pin-` entries in the same
+		// block are the opposite: they are the prose loss the corrected list half
+		// CLOSES, plus two tripwires for the container blindness it does not.
+		//
+		// G1-G3: a blockquote re-offers its stripped lines as ONE paragraph inside
+		// the container, so module 4839's inline regex DOES find the closer and
+		// Obsidian hides that text. The renderer's blockquote tokenizer PEELS the
+		// `>` and re-runs the paragraph tokenizer on the stripped content, so a
+		// continuation line of the same quote is not a quote STARTING -
+		// `blockquote` being in `u.interruptParagraph` is about the other case and
+		// does not contradict this. RED on the arm that stops at BLOCKQUOTE.
+		["guard-nrl95-container-closer-in-quote", "> Prose <!--\n> HIDDENQ\n> more -->\nTail.", "Prose Tail."],
+		["guard-nrl95-container-closer-nested-quote", "> > Prose <!--\n> > HIDDENN\n> > more -->", "Prose"],
+		// The blockquote exclusion's COST, pinned as a tripwire rather than as
+		// evidence of anything: here the quote STARTS after the opener, so the
+		// renderer's paragraph really does end at line 2 and it displays every
+		// line. We hide HIDDENQ3. Fail-closed, identical on base, and only fixable
+		// with container-prefix awareness (the NRL-88 root-1 class). When that
+		// lands this expectation must change ON PURPOSE.
+		["pin-nrl95-quote-starting-after-opener-still-hidden", "Prose <!--\n> HIDDENQ3\nmore -->", "Prose"],
+		// G4: TABLE_ROW is dropped because NO table row can interrupt a paragraph
+		// in Obsidian at all - `table` appears nowhere in `u.interruptParagraph`
+		// (read from app.js this session) and the only terms ever inserted into
+		// that list are `math` and `comment`. So a `| a |` line is a paragraph
+		// continuation for the renderer whether or not a delimiter row follows,
+		// which is why the third fixture below - a REAL GFM table - is here: the
+		// weaker "GFM needs a delimiter row" reading of this exclusion would not
+		// cover it, and a later pass that "fixes" TABLE_ROW to require a
+		// delimiter row and then adds it to endsTerm2Scan reopens the disclosure
+		// on exactly that shape. RED on the arm that stops at TABLE_ROW, in both
+		// skipTables positions.
+		["guard-nrl95-table-row-closer", "Prose <!--\n| a |\nHIDDENT\n--> t.", "Prose t."],
+		["guard-nrl95-table-row-closer-spoken", "Prose <!--\n| a |\nHIDDENT\n--> t.", "Prose t.", { skipTables: false }],
+		["guard-nrl95-real-gfm-table-closer", "Prose <!--\n| a | b |\n| --- | --- |\nHIDDENT\n--> t.", "Prose t."],
+		// THE LIST HALF, corrected at ship review. `LIST_BULLET` is REPLACED by
+		// `TERM2_LIST`, not dropped, because it is right for bullets and wrong for
+		// ordered markers, and the earlier "a list re-offers its lines as one
+		// paragraph" reading of this exclusion was FALSE: a `- x` / `- y` / `- z`
+		// list is three items with three paragraphs, so the closer is NOT in the
+		// opener's paragraph and Obsidian displays every line. The two fixtures
+		// below were `"Prose Tail."` and `"Prose t."` - hiding HIDDENL and HIDDENB -
+		// and both were measured RED against that staged behaviour before the
+		// TERM2_LIST stop was added. Module 745's silent entry is the authority:
+		// any bullet at any indent interrupts.
+		["pin-nrl95-bullet-items-are-three-paragraphs", "- Prose <!--\n- HIDDENL\n- more -->\nTail.", "Prose <!-- HIDDENL more --> Tail."],
+		["pin-nrl95-bullet-line-between", "Prose <!--\n- item\nHIDDENB\n--> t.", "Prose <!-- item HIDDENB --> t."],
+		["pin-nrl95-bullet-any-indent", "Prose <!--\n    - HIDDENL\nmore -->", "Prose <!-- HIDDENL more -->"],
+		["pin-nrl95-bullet-tab-indent", "Prose <!--\n\t- HIDDENL\nmore -->", "Prose <!-- HIDDENL more -->"],
+		["pin-nrl95-ordered-one-dot-interrupts", "Prose <!--\n1. HIDDENL\nmore -->", "Prose <!-- HIDDENL more -->"],
+		// And the ordered half that must NOT stop the scan. Each of these is a line
+		// module 745's SILENT path refuses, so the renderer keeps one paragraph and
+		// HIDES the sentinel. The first THREE are lines `LIST_BULLET` matches, and
+		// all three were measured RED against the arm that puts the whole of
+		// `LIST_BULLET` in the stop set - i.e. they are the disclosure that arm
+		// would ship, and they are the real justification for the ordered
+		// exclusion. The FOURTH is green on that arm too (`LIST_BULLET` needs
+		// `\s+` after the marker, so it misses `-x` as well): it guards
+		// TERM2_LIST's own `[ \t]` requirement instead, and is labelled a guard
+		// rather than counted. All four are green on both sides of the TERM2_LIST
+		// change itself.
+		["guard-nrl95-ordered-seven-not-an-interrupter", "Prose <!--\n7. HIDDENL\nmore -->", "Prose"],
+		["guard-nrl95-ordered-paren-not-an-interrupter", "Prose <!--\n1) HIDDENL\nmore -->", "Prose"],
+		["guard-nrl95-ordered-zero-padded-not-an-interrupter", "Prose <!--\n01. HIDDENL\nmore -->", "Prose"],
+		["guard-nrl95-bullet-needs-a-space", "Prose <!--\n-x HIDDENL\nmore -->", "Prose"],
+		// A bullet INSIDE the quote is still invisible to us, because TERM2_LIST
+		// is anchored and the `>` prefix is never peeled before the scan. Obsidian
+		// peels it and its list DOES interrupt, so it displays HIDDENL and we hide
+		// it. Fail-closed, identical on base, same NRL-88 root-1 class as
+		// pin-nrl95-quote-starting-after-opener-still-hidden above. Tripwire.
+		["pin-nrl95-bullet-inside-quote-still-hidden", "> Prose <!--\n> - HIDDENL\n> more -->", "Prose"],
+		// A single list item whose paragraph continues on indented lines IS one
+		// paragraph, so the closer is reached and the sentinel is correctly hidden.
+		// Green on both sides; it exists so TERM2_LIST is not widened to match a
+		// continuation line.
+		["guard-nrl95-one-item-continuation-hides", "- Prose <!--\n  HIDDENL\n  more -->", "Prose"],
+		// The residual this ticket does NOT close, pinned so it is not rediscovered
+		// as new. The scan is forward-only FROM the opener line and does not bound
+		// the opener's OWN block, so an ATX heading's mid-line `<!--` still reaches
+		// a closer that module 4839's paragraph-scoped path could not. Over-hiding,
+		// so fail-closed; pre-existing; the same class as the already-pinned
+		// `heading-tracking` `%%` divergence above. Identical to
+		// heading-html-tracking and out of scope here.
+		["guard-nrl95-atx-opener-not-bounded", "# Heading <!--hidden\nhidden\n--> after.", "after.", { skipHeadings: true }],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -1489,6 +1677,28 @@ console.log("Obsidian comment exclusion (NRL-38)");
 			const c = chunks.find(c => c.text.includes(word));
 			check(`NRL-38 ${id}: ${word} offset`, c?.sourceIndex[c.text.indexOf(word)] === src.indexOf(word));
 		}
+	}
+	// NRL-95. Explicit character-identity coverage, through the shared
+	// `unitsMatch` helper rather than the loop's inline form, for the four new
+	// fixtures whose SPOKEN text newly spans something: a paragraph break, an
+	// image label, a link label, a code span and a dropped link reference
+	// definition. Numeric and UTF-16-based, never a spread - see unitsMatch.
+	// The loop above already checks all four properties per fixture; these are
+	// named separately so a regression names the shape rather than the array.
+	const nrl95Lockstep: Array<[string, string, Partial<typeof OPTS>?]> = [
+		["closer-in-later-paragraph", "Before x.\nProse <!--\nHIDDENP\n\nNew paragraph -->\nTail."],
+		["label-dest-closer-later-para", "Before ![alt <!--x\nmore](zdestz.png) after.\n\nnew para -->", { speakImageAlt: false }],
+		["codespan-closer-later-para", "Before `a\nProse <!--\nHIDDENX\nb` after.\n\nnew -->", { skipInlineCode: false }],
+		["linkrefdef-title-closer-later", "[a]: x.png \"<!--\"\n\nZS here.\n\n-->\n\nZAFTERZ here."],
+		// Added at ship review with the TERM2_LIST stop: these two newly speak
+		// across a list-item boundary, which is a shape no earlier entry covers.
+		["bullet-items-are-three-paragraphs", "- Prose <!--\n- HIDDENL\n- more -->\nTail."],
+		["bullet-line-between", "Prose <!--\n- item\nHIDDENB\n--> t."],
+	];
+	for (const [id, src, overrides] of nrl95Lockstep) {
+		check(`NRL-95 ${id}: sourceIndex lockstep by UTF-16 unit`, extractChunks(src, { ...OPTS, ...overrides }).every(
+			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
+		));
 	}
 	const paced = extractChunks("Before.\n\n%%\nhidden\n%%\n\nafter.", OPTS);
 	check("NRL-38 paragraph boundaries retained", paced.length === 2);
