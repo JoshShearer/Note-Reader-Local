@@ -341,8 +341,9 @@ pushed to this repo: `0.1.1`, at commit `3d7b3e1`, on 2026-09-30, alongside a `n
 negative control at the identical commit. Both tags and the Release were deleted afterwards,
 so `git ls-remote --tags origin` and `gh release list` are **empty again** and the Release
 assets are no longer downloadable; what survives is the permanent run log, two still-live
-workflow artifacts and a Rekor entry. `actions/create-release`, the asset upload and the
-SLSA provenance job - none of which had executed once across 106 recorded `release.yml`
+workflow artifacts and a Rekor entry. `actions/create-release` (**since deleted by NRL-104** -
+it is no longer in `release.yml` and the citations below say what replaced it), the asset upload
+and the SLSA provenance job - none of which had executed once across 106 recorded `release.yml`
 failures - all executed and all concluded success in run `36785920227`: six jobs, none
 skipped, 97 seconds, this repo's first successful `release.yml` run. The workflow produced a
 real SLSA v0.2 in-toto attestation whose **seven subject digests equal the sha256 of the
@@ -362,9 +363,20 @@ Four caveats travel with that sentence and must not be separated from it. It was
 **once**, on a throwaway tag and a Release both since deleted, on one day, on
 `ubuntu-latest`, with three `The set-output command is deprecated and will be disabled soon`
 warnings from `actions/create-release@v1`, so **nothing about recurrence is established**;
-**2026-10-19** is a dated re-verification trigger for this path, because that is when the
-`ubuntu-latest` label migrates to Ubuntu 26, and the `set-output` retirement is the one
-observed thing that will actually break it. The attestation was **not** validated by
+**2026-10-19** stays a dated re-verification trigger for this path, because that is when the
+`ubuntu-latest` label migrates to Ubuntu 26 - but **the `set-output` half of that trigger is
+discharged**, not pending: NRL-104 deleted the `actions/create-release@v1` step that was the
+sole source of those three warnings and the file's only `using: node12` runtime, and the
+`softprops/action-gh-release` commit it is pinned to declares `using: "node24"` and holds zero
+literal `::set-output`. So the one *observed* thing that was going to break this path is gone,
+and the Ubuntu 26 migration is now the only reason left to re-check on that date.
+**NRL-104 makes this path LESS exercised rather than more, and that is the honest reading.**
+NRL-79's single successful run used `actions/create-release@v1` plus a separate upload step; the
+shipped configuration - one `softprops/action-gh-release@efb35369` step creating the Release and
+uploading all three assets - **has never run on a real runner**, because no tag has been pushed
+since. Every claim about it is desk-verified from the pinned action's own `action.yml` and dist,
+plus `tests/release.test.ts`'s regex assertions over the workflow text. The attestation was
+**not** validated by
 `slsa-verifier` or `gh attestation` under a TUF-rooted Sigstore trust bundle: neither exists
 on this machine (`gh` is 2.45.0 and `gh attestation --help` returns `unknown command`), the
 trust anchor used was Fulcio's root fetched over TLS, Rekor's signed entry timestamp and its
@@ -389,8 +401,10 @@ hazard was the slash-free shapes - `nightly`, `wip`, `pre-rebase`, `v0.1.0`, `0.
 `backup-nrl-54-...` - each of which would have cut a real public GitHub Release. The trigger
 is now `tags: ["[0-9]+.[0-9]+.[0-9]+"]`: bare semver, no `v` prefix (manifest.json's version
 is `0.1.0` and versions.json's sole key is `"0.1.0"`, so a `v*.*.*` pattern would never
-fire), prereleases excluded (`prerelease: false` is hardcoded in the `Create GitHub Release`
-step). These are **filter patterns, not regexes** - `*` is a wildcard and not a quantifier,
+fire), prereleases excluded (`prerelease: false` is hardcoded in the `Upload Release Assets`
+step - the single `softprops/action-gh-release` step that both creates the Release and uploads
+its assets as of NRL-104; the `Create GitHub Release` step this sentence used to name was
+deleted by that ticket). These are **filter patterns, not regexes** - `*` is a wildcard and not a quantifier,
 which is why `[0-9]*.[0-9]*.[0-9]*` was rejected as matching `0.1.0-rc1` - and the authority
 for applying `+` to a bracket class is GitHub's own row `v[12].[0-9]+.[0-9]+`, documented as
 matching `v1.10.1`. `tests/release.test.ts` pins it with three checks, and the matcher they
@@ -420,14 +434,18 @@ documented `\` escape: `v1\*` compiled to a literal backslash followed by a live
 did not match the tag `v1*`. The remedy for a related false comment was to **narrow the comment,
 not to add throws** - a throw on a character GitHub treats as an ordinary literal would make the
 oracle diverge from the thing it exists to model, which is the same failure in the other
-direction. And two shapes were seen on that path and deliberately left there. The first now
-has a measurement. `release.yml:179` passes `tag_name: ${{ github.ref }}`, the full
-`refs/tags/<tag>`, where the adjacent `release_name` line uses the bare `github.ref_name`;
-NRL-79's run log shows the step receiving `tag_name: refs/tags/0.1.1` verbatim, the resulting
-Release came out with the bare tag `0.1.1`, and `git ls-remote` after the run showed no stray
-`refs/tags/refs/tags/...` ref. So it is **harmless in practice and still wrong by
-inspection**, surviving only on server-side normalisation this repo does not control. The
-second is **unchanged by NRL-79**: **nothing anywhere checks that a pushed tag matches
+direction. And two shapes were seen on that path and deliberately left there. **The first is
+now GONE, removed by NRL-104.** It was `release.yml:179`'s `tag_name: ${{ github.ref }}`, the
+full `refs/tags/<tag>` handed to a step whose adjacent `release_name` line used the bare
+`github.ref_name`; NRL-79's run log showed the step receiving `tag_name: refs/tags/0.1.1`
+verbatim, the resulting Release came out with the bare tag `0.1.1`, and `git ls-remote` after
+the run showed no stray `refs/tags/refs/tags/...` ref, so it was harmless in practice and
+still wrong by inspection, surviving only on server-side normalisation this repo does not
+control. NRL-104 deleted the `actions/create-release@v1` step that carried it, and the
+replacement names **no `tag_name:` at all** - deliberately, because
+`softprops/action-gh-release` defaults its tag to `github.ref` and writing the key would put
+the same shape straight back. `tests/release.test.ts` pins the absence by name. The
+second is **unchanged by NRL-79 and by NRL-104**: **nothing anywhere checks that a pushed tag matches
 `manifest.json`'s version**, or that `versions.json` holds a key for it, so the trigger
 admits only bare semver but admits any bare semver. Obsidian's installer reads both files off
 the Release, which makes this the one item here with a user-visible failure mode.
@@ -436,8 +454,17 @@ The old step's `cd dist || true` plus its `if [ -f ... ]` guard did not merely h
 root by accident: with one published asset missing it exited **0** and wrote a *silently
 truncated* attestation - 216 bytes covering two subjects - rather than the absent one the
 ticket predicted, so a green run could have shipped provenance that omitted files the release
-carried. The step now hashes **all seven** published paths, including the four `ort/` WASM
-runtime files, and three parts of that are load-bearing. `set -euo pipefail` is not
+carried. The step hashes **every** published path, and three parts of that are load-bearing.
+**That set is THREE, not seven** - `main.js`, `manifest.json`, `styles.css`
+(`.github/workflows/release.yml:130-133`). This paragraph used to say "all seven published
+paths, including the four `ort/` WASM runtime files", and that went stale with ADR 0028 /
+NRL-96, which packed the runtime into `main.js` and stopped publishing `ort/` at all; NRL-104's
+`tests/release.test.ts` now pins the uploaded set at exactly those three. **Read every
+`seven`-subject figure in this section as NRL-79's 2026-09-30 run and not as current
+behaviour**: that run predates ADR 0028, so its attestation covered the seven files the
+release then carried. What the property asserts is unchanged and is not a count - the hashed
+set equals the published set, with `extractUploadedFiles` the single source of truth tying
+them together. `set -euo pipefail` is not
 decoration: without `pipefail` a missing asset still gives exit 0 and 720 bytes of truncated
 `hashes=`, because the failing `sha256sum` sits upstream of a pipe. The non-empty guard lives
 **in the build step**, and there is deliberately **no `if:` on the provenance job** - a
@@ -451,8 +478,9 @@ source of truth tying the hashed set to the published set, and it and `extractRu
 of passing vacuously. Every number above is a local bash execution of the step body, but the
 step itself is **no longer unexercised**: NRL-79's run `36785920227` ran it on a GitHub
 runner, `Generate checksums` concluded success under `set -euo pipefail` with the non-empty
-guard in place, and the attestation it fed carried all **seven** subjects - no `dist/`
-capture and no silent truncation, which is exactly the NRL-76 failure shape. One honest
+guard in place, and the attestation it fed carried all **seven** subjects the published set held
+*on that day* - no `dist/` capture and no silent truncation, which is exactly the NRL-76 failure
+shape. The same step on today's tree would carry three, per the paragraph above. One honest
 limit: the literal `hashes=` value is nowhere in the run log, because the step writes it to
 `$GITHUB_OUTPUT` and never echoes it, so the seven-subject decode downstream is the evidence
 and the 844-byte figure stays a reconstruction rather than a reading.
