@@ -720,6 +720,384 @@ console.log("NRL-101: a reported synthesis failure recycles the worker instead o
 	}
 }
 
+/**
+ * NRL-102: a failed threaded load is remembered for the session.
+ *
+ * The defect this reproduces is bookkeeping, not threading. `load()` degrades
+ * `this.options.threads` to 1 after a threaded boot fails, but nothing records
+ * that it happened, so the next `setOptions` that merely RE-ASSERTS the
+ * configured count writes 4 straight back over the 1 and the following load
+ * re-pays the doomed attempt. Both call sites in main.ts re-assert it: the
+ * weights dropdown and the device dropdown each rebuild the whole options
+ * object from `settings.kokoroThreads`.
+ *
+ * The fake worker here differs from the NRL-101 one in exactly one way: it
+ * answers `init` by recording `msg.threads` and, when asked for more than one,
+ * emits an ID-LESS `error`, which `loadOnce`'s message handler turns into a
+ * rejection of the boot promise. That is the shape the real failure takes - an
+ * asynchronous nested-worker failure surfacing as an uncaught worker error -
+ * and it is the only observable every check below reads: the sequence of thread
+ * counts the worker was asked to boot with.
+ *
+ * WHAT THIS CANNOT SEE. src/main.ts imports obsidian and has no bare-Node
+ * runtime, so `kokoroOptions()` and both `setOptions` call sites are
+ * uncovered, as are the settings tab's device dropdown and threads slider;
+ * the shapes below are transcriptions of what those produce. And nothing here
+ * exercises a real onnxruntime thread pool: the failure is a fake worker
+ * refusing to boot, so what is established is the MEMORY and the option
+ * bookkeeping, never that the real threaded path fails the way NRL-102
+ * reports.
+ */
+console.log("NRL-102: a failed threaded load is not re-attempted for the rest of the session");
+{
+	/** Every `init` the worker was sent, by the thread count it asked for. */
+	let initThreads: number[] = [];
+	/** Whether a threaded boot fails. False is G2's no-failure control. */
+	let failThreaded = true;
+
+	class ThreadFakeWorker {
+		private listeners = new Map<string, Array<(ev: unknown) => void>>();
+		constructor(
+			readonly url: string,
+			readonly options?: unknown,
+		) {}
+		addEventListener(type: string, fn: (ev: unknown) => void): void {
+			const list = this.listeners.get(type) ?? [];
+			list.push(fn);
+			this.listeners.set(type, list);
+		}
+		removeEventListener(): void {
+			/* the engine never removes a worker listener; present for shape only */
+		}
+		private emit(msg: unknown): void {
+			setTimeout(() => {
+				for (const fn of this.listeners.get("message") ?? []) fn({ data: msg });
+			}, 0);
+		}
+		postMessage(msg: { type: string; threads?: number }): void {
+			if (msg.type !== "init") return;
+			const threads = msg.threads ?? 1;
+			initThreads.push(threads);
+			if (failThreaded && threads > 1) {
+				// No `id`, so loadOnce rejects the boot promise rather than a
+				// pending synthesis. That is the path load()'s catch sees.
+				this.emit({ type: "error", message: "Uncaught worker error at step loading model" });
+				return;
+			}
+			this.emit({ type: "ready", device: "wasm", threads });
+		}
+		terminate(): void {
+			this.listeners.clear();
+		}
+	}
+
+	function threadStore(present: string[]): ModelStore {
+		const has = (p: string): boolean => present.includes(p);
+		return {
+			dir: "models",
+			modelBase: "local-model://kokoro/",
+			workerPath: "plugin/kokoro-worker.js",
+			async readPluginFile() {
+				return new ArrayBuffer(0);
+			},
+			async exists(p: string) {
+				return has(p);
+			},
+			async read() {
+				return new ArrayBuffer(8);
+			},
+			async readOptional(p: string) {
+				// A distinct buffer per call: loadOnce hands these to
+				// postMessage as a transfer list.
+				return has(p) ? new ArrayBuffer(16) : null;
+			},
+		};
+	}
+
+	async function threadPacked(payload: Uint8Array<ArrayBuffer>): Promise<{ gzip: string; sha256: string }> {
+		const digest = await crypto.subtle.digest("SHA-256", payload);
+		return {
+			gzip: Buffer.from(gzipSync(payload)).toString("base64"),
+			sha256: Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join(""),
+		};
+	}
+
+	/** Both builds present, so a weights change really has somewhere to go. */
+	const PRESENT_BOTH = [
+		"config.json",
+		"tokenizer.json",
+		"tokenizer_config.json",
+		FAST,
+		SMALL,
+		"voices/af_heart.bin",
+	];
+
+	/** The private fields the checks read. `private` is no runtime barrier. */
+	type Peek = {
+		options: { device: string; threads: number; weights: string };
+		threadedLoadFailed?: boolean;
+		sessionFailed?: boolean;
+		recycleSpent?: boolean;
+	};
+	const peek = (e: KokoroEngine): Peek => e as unknown as Peek;
+
+	const savedT = {
+		Worker: (globalThis as Record<string, unknown>).Worker,
+		code: (globalThis as Record<string, unknown>).KOKORO_WORKER_CODE,
+		ort: (globalThis as Record<string, unknown>).__ORT_ASSETS__,
+		fetch: globalThis.fetch,
+	};
+	let threadFetchCalls = 0;
+
+	try {
+		(globalThis as Record<string, unknown>).Worker = ThreadFakeWorker;
+		(globalThis as Record<string, unknown>).KOKORO_WORKER_CODE = btoa("");
+		(globalThis as Record<string, unknown>).__ORT_ASSETS__ = {
+			[RUNTIME_FILES[2]]: await threadPacked(new TextEncoder().encode("// fake ort glue\n")),
+			[RUNTIME_FILES[3]]: await threadPacked(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])),
+		};
+		// Non-negotiable 6: a remembered failure must cause no fetch. A fetch
+		// that throws turns any network access into a visible failure.
+		globalThis.fetch = (async () => {
+			threadFetchCalls += 1;
+			throw new Error("NRL-102: a remembered failure must not fetch");
+		}) as typeof fetch;
+		withGpu(null);
+
+		/** A fresh engine asking for `threads`, with both builds on disk. */
+		function freshEngine(threads: number): { engine: KokoroEngine; info: string[] } {
+			initThreads = [];
+			const info: string[] = [];
+			const engine = new KokoroEngine(threadStore(PRESENT_BOTH), {
+				device: "wasm",
+				threads,
+				weights: "fast",
+			});
+			engine.onInfo((m) => info.push(m));
+			return { engine, info };
+		}
+
+		// ---- T1: an incidental weights change must not resurrect 4 threads.
+		{
+			failThreaded = true;
+			const { engine } = freshEngine(4);
+			await engine.load();
+			check(
+				"T1a: the first load really does attempt 4 threads and fall back to 1",
+				JSON.stringify(initThreads) === "[4,1]",
+				JSON.stringify(initThreads),
+			);
+			check(
+				"T1b: the degradation is visible in options.threads",
+				peek(engine).options.threads === 1,
+				String(peek(engine).options.threads),
+			);
+			// Exactly what main.ts's setKokoroWeights sends: kokoroOptions()
+			// rebuilds the whole object from settings, re-asserting threads.
+			engine.setOptions({ device: "wasm", threads: 4, weights: "small" });
+			check(
+				"T1c: re-asserting the configured count does NOT write 4 back over the degraded 1",
+				peek(engine).options.threads === 1,
+				String(peek(engine).options.threads),
+			);
+			await engine.load();
+			check(
+				"T1d: the weights change reloads at 1 thread, with no second 4-thread attempt",
+				JSON.stringify(initThreads) === "[4,1,1]",
+				JSON.stringify(initThreads),
+			);
+			check(
+				"T1e: the weights change still took effect",
+				peek(engine).options.weights === "small",
+				peek(engine).options.weights,
+			);
+			await engine.dispose();
+		}
+
+		// ---- T2: the DEVICE dropdown re-asserts threads too, so a main.ts-only
+		// fix would be incomplete. Its own check for exactly that reason.
+		{
+			failThreaded = true;
+			const { engine } = freshEngine(4);
+			await engine.load();
+			// setKokoroRuntime(value, settings.kokoroThreads): the device moves,
+			// the thread count is re-asserted unchanged.
+			engine.setOptions({ device: "auto", threads: 4, weights: "fast" });
+			await engine.load();
+			check(
+				"T2: a device change re-asserting the same count also reloads at 1 thread",
+				JSON.stringify(initThreads) === "[4,1,1]",
+				JSON.stringify(initThreads),
+			);
+			check(
+				"T2b: the device change still took effect",
+				peek(engine).options.device === "auto",
+				peek(engine).options.device,
+			);
+			await engine.dispose();
+		}
+
+		// ---- T3: the memory re-arms. A deliberate move to 2 that also fails
+		// must be remembered in its turn, so a later incidental re-read does not
+		// go back to 2.
+		{
+			failThreaded = true;
+			const { engine } = freshEngine(4);
+			await engine.load();
+			engine.setOptions({ device: "wasm", threads: 2, weights: "fast" });
+			await engine.load();
+			check(
+				"T3a: a deliberate move to 2 is honoured and attempted",
+				JSON.stringify(initThreads) === "[4,1,2,1]",
+				JSON.stringify(initThreads),
+			);
+			engine.setOptions({ device: "wasm", threads: 2, weights: "small" });
+			await engine.load();
+			check(
+				"T3b: after 2 also failed, an incidental re-read stays at 1 rather than retrying 2",
+				JSON.stringify(initThreads) === "[4,1,2,1,1]",
+				JSON.stringify(initThreads),
+			);
+			await engine.dispose();
+		}
+
+		// ---- T4: the user is told, once, in counts only.
+		{
+			failThreaded = true;
+			const { engine, info } = freshEngine(4);
+			await engine.load();
+			const firstFailures = info.filter((m) => m.startsWith("threaded load failed ("));
+			check(
+				"T4a: the first failure's existing line is unchanged",
+				firstFailures.length === 1,
+				JSON.stringify(firstFailures),
+			);
+			check(
+				"T4b: no skip line is emitted on the load that actually failed",
+				info.filter((m) => m.includes("skipping the")).length === 0,
+				JSON.stringify(info),
+			);
+			const before = info.length;
+			engine.setOptions({ device: "wasm", threads: 4, weights: "small" });
+			await engine.load();
+			const skips = info.slice(before).filter((m) => m.includes("skipping the"));
+			check(
+				"T4c: the next load says exactly once that it skipped the threaded attempt",
+				skips.length === 1,
+				JSON.stringify(info.slice(before)),
+			);
+			check(
+				"T4d: the skip line names the requested count, the session scope and the remedy",
+				skips[0] === "skipping the 4-thread attempt: it failed earlier in this Obsidian session. " +
+					"Reload Obsidian to try again.",
+				JSON.stringify(skips[0]),
+			);
+			check(
+				"T4e: no second 'threaded load failed' line, because no second attempt was made",
+				info.slice(before).filter((m) => m.startsWith("threaded load failed (")).length === 0,
+				JSON.stringify(info.slice(before)),
+			);
+			await engine.dispose();
+		}
+
+		// ---- T5: dispose() must NOT clear the memory. This is the check that
+		// catches a later tidy-up folding the reset in beside the NRL-101 pair,
+		// whose lifetime is deliberately the opposite (docs/adr/0034).
+		{
+			failThreaded = true;
+			const { engine } = freshEngine(4);
+			await engine.load();
+			await engine.dispose();
+			engine.setOptions({ device: "wasm", threads: 4, weights: "small" });
+			await engine.load();
+			check(
+				"T5: a dispose between the failure and the re-read does not resurrect 4 threads",
+				JSON.stringify(initThreads) === "[4,1,1]",
+				JSON.stringify(initThreads),
+			);
+			await engine.dispose();
+		}
+
+		// ---- G1 GUARD (green on both sides): a deliberate change to a
+		// DIFFERENT count is still honoured. The only thing standing between
+		// this fix and an over-broad one that pins threads to 1 for ever.
+		{
+			failThreaded = true;
+			const { engine } = freshEngine(4);
+			await engine.load();
+			engine.setOptions({ device: "wasm", threads: 2, weights: "fast" });
+			await engine.load();
+			check(
+				"G1 guard: an explicit move to a different count is attempted, not suppressed",
+				JSON.stringify(initThreads) === "[4,1,2,1]",
+				JSON.stringify(initThreads),
+			);
+			await engine.dispose();
+		}
+
+		// ---- G2 GUARD (green on both sides): nothing changes when the threaded
+		// load never failed.
+		{
+			failThreaded = false;
+			const { engine } = freshEngine(4);
+			await engine.load();
+			check(
+				"G2a guard: a working threaded load boots once at 4 and never falls back",
+				JSON.stringify(initThreads) === "[4]",
+				JSON.stringify(initThreads),
+			);
+			engine.setOptions({ device: "wasm", threads: 4, weights: "small" });
+			await engine.load();
+			check(
+				"G2b guard: with no failure to remember, a weights change reloads at 4 threads",
+				JSON.stringify(initThreads) === "[4,4]",
+				JSON.stringify(initThreads),
+			);
+			await engine.dispose();
+		}
+
+		// ---- G3 GUARD: the NRL-101 pair keeps its opposite lifetime. Read at
+		// field level, because T5 pins the behaviour and this pins the reason:
+		// dispose() clears those two and must leave this one alone.
+		{
+			failThreaded = true;
+			const { engine } = freshEngine(4);
+			await engine.load();
+			await engine.dispose();
+			const p = peek(engine);
+			check(
+				"G3a guard: dispose() still clears sessionFailed (NRL-101)",
+				p.sessionFailed === false,
+				String(p.sessionFailed),
+			);
+			check(
+				"G3b guard: dispose() still clears recycleSpent (NRL-101)",
+				p.recycleSpent === false,
+				String(p.recycleSpent),
+			);
+			check(
+				"G3c: dispose() leaves the threaded-load memory set, unlike the NRL-101 pair",
+				p.threadedLoadFailed === true,
+				String(p.threadedLoadFailed),
+			);
+		}
+
+		check(
+			"G4 guard: non-negotiable 6 - nothing in this block fetched anything",
+			threadFetchCalls === 0,
+			String(threadFetchCalls),
+		);
+	} finally {
+		if (savedT.Worker === undefined) delete (globalThis as Record<string, unknown>).Worker;
+		else (globalThis as Record<string, unknown>).Worker = savedT.Worker;
+		if (savedT.code === undefined) delete (globalThis as Record<string, unknown>).KOKORO_WORKER_CODE;
+		else (globalThis as Record<string, unknown>).KOKORO_WORKER_CODE = savedT.code;
+		if (savedT.ort === undefined) delete (globalThis as Record<string, unknown>).__ORT_ASSETS__;
+		else (globalThis as Record<string, unknown>).__ORT_ASSETS__ = savedT.ort;
+		globalThis.fetch = savedT.fetch;
+	}
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);
