@@ -1134,21 +1134,41 @@ rediscover them:
   `layers.sentence` must be able to carry the decision alone, with no reference to word
   timing, or speech-dispatcher loses the scroll along with the word row it can never have.
   And 0 is returned as an offset rather than filtered, so the first chunk of a note still
-  scrolls to the top. **`y: "nearest"` is load-bearing**: no options object is passed,
-  so "no jump when the highlight is already visible" is the library's behaviour, not ours.
-  Measured in bare Node against the vendored `@codemirror/view`: `scrollIntoView(5)` gives
-  one effect carrying `range.head 5`, `y "nearest"`, `x "nearest"`, `yMargin 5`, and in
-  `dist/index.js` `moveY` is assigned only when the rect falls outside the bounding box,
-  with the scroll gated on `if (moveX || moveY)`. **Do not add a `coordsAtPos` visibility
-  test**: it needs a DOM the bare-Node suite cannot build and duplicates what `nearest`
-  already does. `highlight.ts` is therefore **no longer decoration-only**, and its header
+  scrolls to the top. **`y: "nearest"` WAS load-bearing and is no longer what ships** -
+  **corrected by NRL-110**, which passes `{ y: "center" }`. Read the next two sentences as
+  history. NRL-72 passed no options object, so "no jump when the highlight is already
+  visible" was the library's behaviour rather than ours: measured in bare Node against the
+  vendored `@codemirror/view`, `scrollIntoView(5)` gave one effect carrying `range.head 5`,
+  `y "nearest"`, `x "nearest"`, `yMargin 5`, and in `dist/index.js` `moveY` was assigned
+  only when the rect fell outside the bounding box, with the scroll gated on
+  `if (moveX || moveY)`. That gate is what NRL-110 trades away: `y: "center"` takes the
+  `else` branch at `dist/index.js:175-181`, which assigns `moveY` unconditionally, so a
+  chunk event now scrolls **even when the sentence is already visible**. It was traded on a
+  real measurement, the first this project has ever taken of the scroll on screen - under
+  `"nearest"` on a Pixel 9 Pro XL in real Obsidian the spoken sentence's top sat at 973px of
+  a 997px editor on every chunk from the eleventh onward, flush with the bottom edge. Only
+  `y` is passed, so `x` stays `"nearest"`, and no `yMargin` is passed because the `center`
+  arm at `dist/index.js:177` never reads one - passing one would be dead config. A
+  `coordsAtPos` visibility test is **still not added, but the old reason is dead**: it no
+  longer "duplicates what `nearest` already does", because on this path `nearest` does
+  nothing. It stays unwritten purely because it needs a DOM the bare-Node suite cannot build
+  (`EditorView` is never instantiated in `tests/highlight.test.ts`), so anyone wanting the
+  no-jump-when-visible property back must build it and accept that the suite cannot see it. `highlight.ts` is therefore **no longer decoration-only**, and its header
   comment was rewritten rather than left lying; the guarantee that survives is the cursor,
   the text selection, the focused element and the undo history, measured as a
   byte-identical `state.selection` with `docChanged === false`. The user's scroll position
   is deliberately no longer promised.
   Evidence, **bare-Node only**: `tests/highlight.test.ts` blocks 14-16, **4 red before the
   change and 0 after** (14a effect count, 14b the target offset, 14c the `nearest`
-  defaults, 14f the document-length clamp). Block 17 covers the gate and is a **defect
+  defaults, 14f the document-length clamp). **NRL-110 correction appended, not rewritten:**
+  14c was **replaced in place** (the NRL-66/NRL-67 convention) to assert
+  `y === "center" && x === "nearest"`, and it was the **one** check in the whole suite that
+  NRL-110 turned red - measured red at the pre-change tree and green after, with nothing
+  else moving. NRL-110 also added **14h GUARD**, green on both sides and not counted as
+  evidence, pinning effect identity *and* order in the single dispatch (sentence, then
+  word, then exactly one scroll, one transaction), because 14a only counted three effects
+  and 14e only counted one transaction - neither forbade re-ordering the scroll ahead of a
+  decoration effect. Block 17 covers the gate and is a **defect
   reproduction** rather than new capability, since the ungated scroll shipped in this same
   branch: **2 red** against the old unconditional expression staged in the block (17a
   highlighting off, 17f both rows off), 0 after, with 17b green on both sides establishing
