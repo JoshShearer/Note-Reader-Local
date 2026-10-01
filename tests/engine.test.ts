@@ -1580,6 +1580,189 @@ console.log("speechd: isAvailable() distinguishes its failure modes (fake runner
 	);
 }
 
+// NRL-142. Two spd-say clients that connect to a stopped autospawned daemon at
+// the same moment both try to spawn it; one wins and the other exits 1. These
+// stderr strings are the real ones, captured this session from spd-say
+// 0.12.0-rc2 against a private XDG_RUNTIME_DIR daemon: RACE_RUNNING from six of
+// six concurrent `-O` pairs, BIND_FAILED from an over-long socket path, and
+// RACE_LOCK as quoted in the ticket (not seen during implementation; seen in 2
+// of 3 losing shell trials at ship time, with this machine's socket path).
+const RACE_RUNNING =
+	"Failed to connect to Speech Dispatcher:\nError: Can't connect to unix socket /run/user/1000/n142.qF73/speech-dispatcher/speechd.sock: No such file or directory. Autospawn: Autospawn failed. Speech Dispatcher refused to start with error code, stating this as a reason: Speech Dispatcher already running.\n";
+const RACE_LOCK =
+	"Failed to connect to Speech Dispatcher:\nError: Can't connect to unix socket /run/user/1000/speech-dispatcher/speechd.sock: Connection refused. Autospawn: Autospawn failed. Speech Dispatcher refused to start with error code, stating this as a reason: Can't set lock on pid file.\n";
+const BIND_FAILED =
+	"Failed to connect to Speech Dispatcher:\nError: Can't connect to unix socket /x/speech-dispatcher/speechd.sock: Connection refused. Autospawn: Autospawn failed. Speech Dispatcher refused to start with error code, stating this as a reason: Fatal error [speechd.c:968]:Can't bind local socket\n";
+const PLAIN_REFUSED =
+	"Failed to connect to Speech Dispatcher:\nError: Can't connect to unix socket /x/speech-dispatcher/speechd.sock: Connection refused.\n";
+const O_OK: RunResult = { code: 0, signal: null, stderr: "", stdout: Buffer.from("OUTPUT MODULES\nespeak-ng\nopenjtalk\n") };
+const raceLoss = (stderr: string): RunResult => ({ code: 1, signal: null, stderr, stdout: Buffer.from("") });
+
+/**
+ * Availability runner for NRL-142: answers each `-O` from `replies` in order,
+ * counting every `-O` and `which`. `hold` parks the first `-O` until released,
+ * which is how two callers are made to overlap deterministically.
+ */
+function availabilityRunner(replies: (RunResult | Error)[], hold = false) {
+	let oCalls = 0;
+	let whichCalls = 0;
+	let release: () => void = () => {};
+	const gate = hold ? new Promise<void>((r) => (release = r)) : Promise.resolve();
+	const runner: ProcessRunner = {
+		async run(_cmd, args) {
+			if (args[0] !== "-O") throw new Error(`unexpected call: ${args.join(" ")}`);
+			const n = oCalls++;
+			if (n === 0) await gate;
+			const reply = replies[Math.min(n, replies.length - 1)]!;
+			if (reply instanceof Error) throw reply;
+			return reply;
+		},
+		async spawn() {
+			throw new Error("not used");
+		},
+		async which() {
+			whichCalls++;
+			return "/usr/bin/spd-say";
+		},
+	};
+	return { runner, oCount: () => oCalls, whichCount: () => whichCalls, release: () => release() };
+}
+// Settle every pending microtask and timer-0 callback before asserting.
+const settle = () => new Promise<void>((r) => setTimeout(r, 5));
+// The 4th constructor positional is the race-retry delay; 0 so the suite never sleeps.
+const raceEngine = (runner: ProcessRunner) => new SpeechDispatcherEngine(runner, undefined, undefined, 0);
+
+console.log("speechd: concurrent availability probes do not race the autospawn (NRL-142)");
+{
+	// CORE C1: two overlapping isAvailable() calls on one instance - the
+	// settings tab's resolveAutomaticChoice()/getEngineStatuses() pair - make
+	// exactly one `-O`, so there is no second client to lose the spawn race.
+	// Any second `-O` gets a NON-retryable failure, so this case pins the
+	// coalescing alone and the race retry cannot rescue it.
+	const h = availabilityRunner([O_OK, raceLoss(PLAIN_REFUSED)], true);
+	const spd2 = raceEngine(h.runner);
+	const both = Promise.all([spd2.isAvailable(), spd2.isAvailable()]);
+	await settle();
+	h.release();
+	const [a, b] = await both;
+	check("NRL-142 C1: two concurrent isAvailable() make exactly one -O", h.oCount() === 1, `${h.oCount()} -O calls`);
+	check("NRL-142 C1: and both report available", a.available && b.available, JSON.stringify([a, b]));
+}
+{
+	// CORE C2: an external client wins the spawn and ours is told the pid file
+	// is locked. One retry against the now-running daemon reports available.
+	const h = availabilityRunner([raceLoss(RACE_LOCK), O_OK]);
+	const r = await raceEngine(h.runner).isAvailable();
+	check("NRL-142 C2: a lost pid-file race is retried and reports available", r.available === true, JSON.stringify(r));
+	check("NRL-142 C2: with exactly two -O calls", h.oCount() === 2, `${h.oCount()}`);
+}
+{
+	// CORE C3: the reason this machine's spd-say 0.12.0-rc2 actually prints.
+	const h = availabilityRunner([raceLoss(RACE_RUNNING), O_OK]);
+	const r = await raceEngine(h.runner).isAvailable();
+	check("NRL-142 C3: an 'already running' race is retried and reports available", r.available === true, JSON.stringify(r));
+	check("NRL-142 C3: with exactly two -O calls", h.oCount() === 2, `${h.oCount()}`);
+}
+{
+	// GUARD G1 (green before and after): a real failure is not retried. Each
+	// of these must stay unavailable after exactly one -O (AC2: no blanket
+	// retry that hides a broken daemon).
+	for (const [label, reply] of [
+		["can't bind local socket", raceLoss(BIND_FAILED)],
+		["plain connection refused", raceLoss(PLAIN_REFUSED)],
+		["code 1 with empty stderr", raceLoss("")],
+		// The race reasons only count behind "Autospawn failed": the same words
+		// from anything other than a failed spawn are not this race.
+		["race reason without Autospawn failed", raceLoss("Speech Dispatcher already running. Can't set lock on pid file.\n")],
+	] as const) {
+		const h = availabilityRunner([reply, O_OK]);
+		const r = await raceEngine(h.runner).isAvailable();
+		check(`NRL-142 G1 guard: ${label} stays unavailable`, r.available === false, JSON.stringify(r));
+		check(`NRL-142 G1 guard: ${label} makes exactly one -O`, h.oCount() === 1, `${h.oCount()}`);
+		check(
+			`NRL-142 G1 guard: ${label} keeps the fixed reason`,
+			!r.available && r.reason === "Speech Dispatcher is unavailable: spd-say could not be reached.",
+			!r.available ? r.reason : "available:true",
+		);
+	}
+}
+{
+	// G2 (new capability, red before only because no retry existed): the retry
+	// is bounded. Two race losses in a row report unavailable after exactly
+	// two -O calls, and the stderr is never echoed into the reason.
+	const h = availabilityRunner([raceLoss(RACE_LOCK), raceLoss(RACE_RUNNING), O_OK]);
+	const r = await raceEngine(h.runner).isAvailable();
+	check("NRL-142 G2 new capability: race then race stays unavailable", r.available === false, JSON.stringify(r));
+	check("NRL-142 G2 new capability: the retry is bounded at two -O calls", h.oCount() === 2, `${h.oCount()}`);
+	check("NRL-142 G2: the reason does not carry stderr", !r.available && !r.reason.includes("Autospawn"), !r.available ? r.reason : "available:true");
+}
+{
+	// GUARD G3: coalescing lasts only while a probe is in flight. Two
+	// sequential calls each probe, so a daemon that appears or disappears
+	// later is still seen.
+	const h = availabilityRunner([O_OK, raceLoss(PLAIN_REFUSED)]);
+	const spd2 = raceEngine(h.runner);
+	const first = await spd2.isAvailable();
+	const second = await spd2.isAvailable();
+	check("NRL-142 G3 guard: two sequential calls make two -O", h.oCount() === 2, `${h.oCount()}`);
+	check("NRL-142 G3 guard: and each sees its own answer", first.available === true && second.available === false, JSON.stringify([first, second]));
+	check("NRL-142 G3 guard: which() runs per probe", h.whichCount() === 2, `${h.whichCount()}`);
+}
+{
+	// GUARD G4: a rejecting run() still yields "Could not check...", and a
+	// settled failure is not memoised: the next call runs again.
+	const h = availabilityRunner([new Error("ECONNREFUSED talking to spd-say"), O_OK]);
+	const spd2 = raceEngine(h.runner);
+	const first = await spd2.isAvailable();
+	const second = await spd2.isAvailable();
+	check(
+		"NRL-142 G4 guard: a rejecting run reports Could not check",
+		!first.available && first.reason.startsWith("Could not check Speech Dispatcher"),
+		JSON.stringify(first),
+	);
+	check("NRL-142 G4 guard: and the next call re-runs and succeeds", second.available === true && h.oCount() === 2, `${h.oCount()} ${JSON.stringify(second)}`);
+}
+{
+	// GUARD G5: a signal-killed -O is not a race loss, even carrying a race
+	// stderr, so it is not retried.
+	const h = availabilityRunner([{ ...raceLoss(RACE_RUNNING), code: 0, signal: "SIGKILL" }, O_OK]);
+	const r = await raceEngine(h.runner).isAvailable();
+	check("NRL-142 G5 guard: a signal-killed -O makes exactly one -O", h.oCount() === 1, `${h.oCount()}`);
+	const h2 = availabilityRunner([{ ...raceLoss(RACE_RUNNING), signal: "SIGKILL" }, O_OK]);
+	const r2 = await raceEngine(h2.runner).isAvailable();
+	check("NRL-142 G5 guard: a signal-killed non-zero -O is not retried", h2.oCount() === 1 && r2.available === false, `${h2.oCount()} ${JSON.stringify(r2)}`);
+	void r;
+}
+{
+	// GUARD G6: availability coalescing is not shared with the attribution
+	// probe. isAvailable() alongside listVoices() makes its own -O plus the
+	// probe's opening and closing -O, so NRL-71/NRL-83's two-call contract
+	// for probeAttribution is untouched.
+	let oCalls = 0;
+	const runner2: ProcessRunner = {
+		async run(_cmd, args) {
+			if (args[0] === "-O") {
+				oCalls++;
+				return O_OK;
+			}
+			if (args[0] === "-L") return { code: 0, signal: null, stderr: "", stdout: Buffer.from(SPD_LIST) };
+			if (args[0] === "-o" && args.includes("-L")) {
+				return { code: 0, signal: null, stderr: "", stdout: Buffer.from(args[1] === "espeak-ng" ? ESPEAK_LIST : OPENJTALK_LIST) };
+			}
+			throw new Error(`unexpected call: ${args.join(" ")}`);
+		},
+		async spawn() {
+			throw new Error("not used");
+		},
+		async which() {
+			return "/usr/bin/spd-say";
+		},
+	};
+	const spd2 = raceEngine(runner2);
+	await Promise.all([spd2.isAvailable(), spd2.listVoices()]);
+	check("NRL-142 G6 guard: isAvailable + listVoices make 1 + 2 -O calls", oCalls === 3, `${oCalls}`);
+}
+
 console.log("voice ids resolve across the format change");
 {
 	const { runner } = fakeRunner({});
