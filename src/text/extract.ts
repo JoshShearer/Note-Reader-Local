@@ -551,6 +551,20 @@ function opensHtmlBlock(view: string, at: number, closesLater: boolean): boolean
  * Note that no tab can survive the cap: module 6058 advances a tab to the next
  * multiple of four, so any lead containing one is at least four columns, which
  * is why one spaces-only scan plus a length test covers both halves.
+ *
+ * The one guarantee this predicate offers unconditionally, and the only one worth
+ * relying on, is STRUCTURAL: it can decline an opener the pre-NRL-93 rule
+ * accepted, and it can never accept one the pre-NRL-93 rule declined. Both added
+ * terms are conjunctive refusals in front of a body that is otherwise the old
+ * `trim() === ""` test, so `opensObsidianBlock(view, at, d)` implies the old
+ * `view.slice(0, at).trim() === "" && view.indexOf("%", at + 2) === -1` for every
+ * argument triple. Proved exhaustively rather than sampled: 0 violations over
+ * 263,672 triples spanning every string over {space, tab, `%`, `x`, `>`} up to
+ * length 6 with every `at` in range and both values of `dedentedByList`, with a
+ * deliberately widened variant giving 575 violations on a 7,422-triple subset to
+ * show the check can fail. Note what that does NOT say: it bounds the direction
+ * this predicate can move, and it says nothing about `listDedented`'s own
+ * approximations, which is where NRL-93's Verify pass found a real disclosure.
  */
 function opensObsidianBlock(view: string, at: number, dedentedByList: boolean): boolean {
 	if (view.indexOf("%", at + 2) !== -1) return false;
@@ -2495,39 +2509,66 @@ export function extractChunks(
 	// bracketClosesLater ask about lines they are not consuming, so a scalar
 	// carried by the per-line loop could not answer them.
 	//
-	// Three things are load-bearing. The run is tracked on the QUOTE-PEELED view,
+	// Four things are load-bearing. The run is tracked on the QUOTE-PEELED view,
 	// because a list inside a blockquote dedents its item content exactly as a
 	// top-level one does while `containerPrefix` calls that line a quote rather
 	// than a list - without the peel, `> - item` / `> \t%%` newly speaks the
 	// hidden text. The MARKER line itself is false, because module 745's `M`
 	// assigns the item's first line (`c[0] = s`) the text after the marker
 	// UNDEDENTED; in practice `at` is 0 there, LIST_BULLET having eaten the whole
-	// lead, so this is a statement of the rule rather than a live branch. And the
-	// run is ended by the SAME condition the per-line loop already uses for
-	// `inList`, minus its BLOCKQUOTE arm, which the peel makes wrong here: a
-	// quote line after a list item is item content for module 745, since
-	// `interruptList` holds no blockquote entry.
+	// lead, so this is a statement of the rule rather than a live branch. The
+	// run is ended by roughly the condition the per-line loop uses for `inList`,
+	// minus its BLOCKQUOTE arm, which the peel makes wrong here: a quote line
+	// after a list item is item content for module 745, since `interruptList`
+	// holds no blockquote entry.
 	//
-	// Every approximation in it errs toward TRUE, which is the pre-NRL-93
-	// behaviour and therefore cannot regress: an indented non-item line that
-	// really did end the renderer's list (`- item` / ` # Head`) keeps the run
-	// alive here, and a line whose indent survives the dedent because an
-	// enclosing construct re-indents it (`- item` / `  > \t%%`) is likewise left
-	// hidden. Both are measured, named divergences rather than new ones.
+	// And the two run-ending terms must each consult the view the renderer
+	// actually decides on, which is NOT the peeled body in either case. This is
+	// the correction NRL-93's own Verify pass blocked the PR for: a first draft
+	// asked both questions of `body` alone and so DISCLOSED author-hidden text in
+	// 1,780 cells of a 3,360-cell corpus, measured against real rendered HTML.
+	//
+	// - HEADING / FENCE / HR may end the run only when the line is NOT quoted.
+	//   `> ---` inside a list item is a thematic break inside a BLOCKQUOTE nested
+	//   in that item; it ends neither the item nor the list, so the next line is
+	//   still dedented item content and a tab-led `%%` there really does open a
+	//   comment block. Peeling first turns it into a bare `---`, which really
+	//   would end the list, and the construct is mistaken for one it is not.
+	//   Measured: 1,480 of 2,464 cells leaked without this term, 0 with it.
+	// - `blankBefore` may end the run only when the line's RAW indent is empty as
+	//   well as its peeled body's. `- item` / blank / `  > q` keeps the quote
+	//   inside the item because two columns reach its content indent, where the
+	//   same quote at column 0 genuinely does end the list. The peel removes the
+	//   indent along with the marker, so the peeled body cannot tell the two
+	//   apart. Measured: 368 of 896 cells leaked without this term, 0 with it.
+	//
+	// The remaining approximations err toward TRUE, which is the pre-NRL-93
+	// behaviour: an indented non-item line that really did end the renderer's
+	// list (`- item` / ` # Head`) keeps the run alive here, and a line whose
+	// indent survives the dedent because an enclosing construct re-indents it is
+	// likewise left hidden. Both are measured, named divergences rather than new
+	// ones. What this pass does NOT claim is that erring toward TRUE is an
+	// invariant of the whole pass: the two terms above are precisely the places
+	// where it did not hold, they were found by measurement and not by reading,
+	// and the guarantee that survives is the structural one stated on
+	// `opensObsidianBlock` instead.
 	const listDedented: boolean[] = new Array<boolean>(lines.length).fill(false);
 	{
 		let inItem = false;
 		let blankBefore = true;
 		for (let k = 0; k < lines.length; k++) {
-			const body = lines[k]!.replace(BLOCKQUOTE, "");
+			const raw = lines[k]!;
+			const body = raw.replace(BLOCKQUOTE, "");
+			const quoted = BLOCKQUOTE.test(raw);
 			const blank = body.trim() === "";
 			const marker = LIST_BULLET.test(body);
+			const indented = /^\s/.test(raw) || /^\s/.test(body);
 			if (
 				inItem &&
 				!blank &&
 				!marker &&
-				!/^\s/.test(body) &&
-				(blankBefore || HEADING.test(body) || FENCE.test(body) || HR.test(body))
+				!indented &&
+				(blankBefore || (!quoted && (HEADING.test(body) || FENCE.test(body) || HR.test(body))))
 			) {
 				inItem = false;
 			}

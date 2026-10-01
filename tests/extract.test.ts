@@ -2009,6 +2009,73 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// cells P3's controls report, all at skipInlineCode false.
 		["pin-nrl93-adr0019-span-destination-skipped", "Before `a\n	%% x ![alt](zdestz.png)\nb` after.", "Before after."],
 		["pin-nrl93-adr0019-span-destination-spoken", "Before `a\n	%% x ![alt](zdestz.png)\nb` after.", "Before a %% x ![alt](zdestz.png) b after.", { skipInlineCode: false }],
+		// NRL-93 FIX-FORWARD. An independent Verify pass FAILED the first draft of
+		// this change for a DISCLOSURE it introduced, and the twelve fixtures below
+		// are that defect's own shapes. Every one of them was RED against the first
+		// draft and is green now; the oracle is real rendered HTML from Obsidian
+		// 1.13.7's own parser and renderer run in Node, not a transcription.
+		//
+		// THE DEFECT. `listDedented`'s run-ending condition asked its questions of the
+		// QUOTE-PEELED body, `lines[k].replace(BLOCKQUOTE, "")`. A heading, fence or
+		// thematic break that lives inside a BLOCKQUOTE nested in a list item peels
+		// down to a bare `---` / `# H` / ```` ``` ````, which really would end a list -
+		// so the run ended, `listDedented` read false for the next line, the predicate
+		// declined an opener the renderer really does honour, and author-hidden text
+		// was SPOKEN. Base was correct in all 1,780 cells of the 3,360-cell two-arm
+		// corpus; this was introduced, not unmasked. Measured on the fix: 0.
+		//
+		// ARM 1, the quoted heading / fence / thematic break. The guard is that those
+		// three terms may end a run only when the line is NOT quoted. 1,480 of 2,464
+		// cells, down to 0.
+		["pin-nrl93-arm1-quoted-hr-in-item", "- item\n> ---\n	%% SECRETA\nTAILVIS", "item"],
+		["pin-nrl93-arm1-quoted-hr-ordered-item", "1. item\n> ---\n	%% SECRETA\nTAILVIS", "item"],
+		["pin-nrl93-arm1-quoted-fence-in-item", "- item\n> ```\n> c\n> ```\n    %% SECRETA\nTAILVIS", "item c"],
+		["pin-nrl93-arm1-nested-quoted-hr-in-item", "- item\n> > ---\n	%% SECRETA\nTAILVIS", "item"],
+		["pin-nrl93-arm1-indented-quoted-hr-in-item", "- item\n  > ---\n	%% SECRETA\nTAILVIS", "item"],
+		// The quoted-heading form, with a divergence of its own that is NOT this
+		// fix's and is identical on base: the `#` is spoken because `stripTags` is
+		// the only thing that would remove it and a quoted heading inside a list item
+		// is not reached by the heading branch. Pinned with the `#` so the fixture
+		// records what we really say rather than what we would like to say.
+		["pin-nrl93-arm1-quoted-heading-in-item", "- item\n> # H\n	%% SECRETA\nTAILVIS", "item # H"],
+		// ARM 2, which the arm-1 guard does NOT cover and which is why both came off
+		// together. `blankBefore` may end a run only when the line's RAW indent is
+		// empty as well as its peeled body's: two columns of indent reach a `- item`'s
+		// content indent, so the quote stays inside the item, while the same quote at
+		// column 0 genuinely does end the list. The peel removes the indent along with
+		// the marker, so the peeled body cannot tell those apart. 368 of 896 cells,
+		// down to 0.
+		["pin-nrl93-arm2-blank-then-indented-quote", "- item\n\n  > q\n	%% SECRETA\nTAILVIS", "item q"],
+		["pin-nrl93-arm2-blank-then-3sp-quote", "- item\n\n   > q\n    %% SECRETA\nTAILVIS", "item q"],
+		["pin-nrl93-arm2-blank-then-tab-quote", "1. item\n\n	> q\n	%% SECRETA\nTAILVIS", "item q"],
+		// THE TWO CONTROLS that localise the fault and stop the guards being widened
+		// into "never end a run". Both are green on the first draft AND on the fix, and
+		// RED on base, so they are census gains rather than evidence of this fix - but
+		// a careless widening of either guard would take them away. An UNQUOTED
+		// thematic break really does end the list, and a column-0 quoted line after a
+		// blank really does too, so in both the renderer DISPLAYS the secret and we
+		// must speak it.
+		["guard-nrl93-unquoted-hr-really-ends-the-list", "- item\n---\n    %% SECRETA\nTAILVIS", "item %% SECRETA TAILVIS"],
+		["guard-nrl93-col0-quote-after-blank-really-ends-the-list", "- item\n\n> q\n	%% SECRETA\nTAILVIS", "item q %% SECRETA TAILVIS"],
+		// THE UNMASKED DESTINATION CLASS, pinned as a TRIPWIRE and not as evidence of
+		// a fix, following pin-nrl74-container-label-still-leaks-destination. Declining
+		// a `%%` opener stops that line interrupting the paragraph, so
+		// `bracketClosesLater` confirms a soft-wrapped label across it and the
+		// destination is spoken where base said nothing. Measured over 768 cells (2
+		// shapes x 8 container prefixes x 6 leads x 8 option sets): base 0, fix 384.
+		//
+		// THE CONTROL IS WHAT MAKES IT A TRIPWIRE RATHER THAN A LEAK, and it is the
+		// second fixture here: replace the declined `%%` line with ordinary prose and
+		// the destination is spoken in 768 of 768 cells on BASE and 768 of 768 on the
+		// fix. So the aborted-carry literal is pre-existing, and all this change did
+		// was stop base's note-scoped `%%` block swallowing the tail that was masking
+		// it. Note the other half of the move, in the safe direction: base SPEAKS
+		// ZHIDEZ here, which the renderer hides, and the fix does not.
+		//
+		// When NRL-88's remaining roots close, the first expectation must change on
+		// purpose; the control's must not move at all.
+		["pin-nrl93-unmasked-label-destination", "Before ![alt\n	%% x\n%%\nZHIDEZ\n%%\nmore](zdestz.png) after.", "Before [alt %% x more](zdestz.png) after."],
+		["guard-nrl93-unmasked-label-destination-control", "Before ![alt\n	plain x\n%%\nZHIDEZ\n%%\nmore](zdestz.png) after.", "Before [alt plain x more](zdestz.png) after."],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });

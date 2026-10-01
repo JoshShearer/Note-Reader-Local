@@ -237,11 +237,46 @@ evidence, not a live Obsidian reading or highlighting observation.
    blockquote dedents its item content exactly as a top-level one does while
    `containerPrefix` calls that line a quote rather than a list; it reports false
    on the MARKER line itself, because module 745 assigns the item's first line
-   (`c[0] = s`) the text after the marker undedented; and it ends a run by the
-   same condition the per-line loop already uses for `inList`, minus that
-   condition's BLOCKQUOTE arm, which the peel makes wrong here because
-   `interruptList` holds no blockquote entry. Every approximation in it errs
-   toward TRUE, which is the old behaviour and therefore cannot regress.
+   (`c[0] = s`) the text after the marker undedented; and it ends a run by roughly
+   the condition the per-line loop uses for `inList`, minus that condition's
+   BLOCKQUOTE arm, which the peel makes wrong here because `interruptList` holds
+   no blockquote entry.
+
+   **"Every approximation in it errs toward TRUE, which is the old behaviour and
+   therefore cannot regress" was written here and in `extract.ts`, and NRL-93's own
+   Verify pass FALSIFIED it.** Two of the run-ending terms asked their question of
+   the quote-peeled body, which is not the view the renderer decides on, and both
+   ended a run that the renderer keeps alive - so `listDedented` read FALSE where
+   the renderer had dedented the line, the predicate declined a real opener, and
+   author-hidden text was SPOKEN in **1,780 of 3,360** cells of a two-arm corpus
+   oracled on real rendered HTML, with base correct in every one of the 1,780. The
+   absolute is deleted rather than weakened, and these are the two terms as fixed,
+   each measured:
+
+   - HEADING / FENCE / HR end a run only when the line is **not quoted**. `> ---`
+     inside a list item is a thematic break inside a blockquote nested in that
+     item; it ends neither the item nor the list. **1,480 of 2,464** cells leaked
+     without this term, **0** with it.
+   - `blankBefore` ends a run only when the line's **raw** indent is empty as well
+     as its peeled body's, because the peel removes an indent that is what keeps a
+     quoted line inside the item. **368 of 896** cells leaked without this term,
+     **0** with it.
+
+   What is true of the fixed pass, and all that should be relied on, is split in
+   two. The **structural** half is proved: `opensObsidianBlock` can only decline an
+   opener the pre-NRL-93 rule accepted and can never accept one it declined, since
+   both added terms are conjunctive refusals in front of the old body - 0
+   violations over **263,672** triples covering every string over
+   {space, tab, `%`, `x`, `>`} up to length 6, every `at` in range and both values
+   of `dedentedByList`, with a deliberately widened variant giving 575 violations
+   to show the check can fail. The **behavioural** half is only measured, never
+   proved: `listDedented` is an approximation of three bundle modules, its
+   remaining divergences from them are the ones enumerated below and they are
+   measured identical on both sides of this change, and nothing here rules out a
+   further shape in which it reads FALSE where the renderer dedented. The
+   structural half bounds the damage such a shape can do to *this predicate's*
+   direction; it does not bound `listDedented`'s own, which is exactly what the
+   deleted sentence wrongly implied.
 
    **The argument is a BOOLEAN and not the indent itself, and that is a scoping
    decision with a measured residual.** Subtracting the amount needs a stack of
