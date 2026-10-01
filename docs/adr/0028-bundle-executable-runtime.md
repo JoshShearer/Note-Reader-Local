@@ -144,6 +144,14 @@ UI are gone with the download.
   until they clear it themselves. The settings tab counts it honestly; nothing
   deletes it silently, because deleting a directory a previous version created
   is not this version's call to make.
+- Note (NRL-122): `deploy.mjs` does prune the developer plugin folder, removing
+  any top-level entry that is not one of the three shipped files, `data.json` or
+  a dotfile, which is how a pre-ADR-0028 `ort/` and `kokoro-worker.js` stop
+  surviving every deploy. That does not contradict the bullet above, whose
+  "nothing deletes it silently" governs the user's model directory
+  (`.obsidian/local-tts/kokoro`); the plugin folder is a destination the
+  developer script owns and writes on every run, and each removal is logged with
+  its byte count.
 
 ## Verification status
 

@@ -319,7 +319,11 @@ test("a corrupt pack is rejected rather than executed", async () => {
 
 test("deploy.mjs copies exactly the three files Obsidian's installer fetches", () => {
 	const content = fs.readFileSync(DEPLOY_FILE, "utf-8");
-	const arrayMatch = content.match(/for \(const item of (\[[^\]]*\])/);
+	// NRL-122 hoisted the array out of the `for` header into a module-scope
+	// `const SHIPPED`, because the prune has to test membership of the same list
+	// the copy loop walks. The pattern follows the declaration; both assertions
+	// below are unchanged.
+	const arrayMatch = content.match(/const SHIPPED = (\[[^\]]*\])/);
 	const arraySource = arrayMatch?.[1];
 	assert(arraySource !== undefined, "deploy.mjs's copy-item array not found");
 	const items = JSON.parse(arraySource!.replace(/'/g, '"'));
@@ -335,6 +339,254 @@ test("deploy.mjs copies exactly the three files Obsidian's installer fetches", (
 		items.includes("main.js") && items.includes("manifest.json") && items.includes("styles.css"),
 		"deploy.mjs must still copy the three files Obsidian's own installer fetches",
 	);
+});
+
+/**
+ * NRL-122: deploy.mjs's prune, exercised by RUNNING the script.
+ *
+ * The text check above is why the defect was invisible: a regex over
+ * deploy.mjs can see which files are copied and nothing at all about what is
+ * left behind in the destination, so a plugin folder accumulating a stale
+ * `kokoro-worker.js` and a 32 MB `ort/` across every deploy passed it.
+ *
+ * Three things about the sandbox are load-bearing. The copy SOURCE is
+ * `process.cwd()`, because deploy.mjs calls `cp()` with a relative path, so
+ * three tiny stubs stand in for the real 13.6 MB bundle and these checks cost
+ * milliseconds instead of copying it three times. A `.obsidian` directory has
+ * to exist or the script exits 1 before reaching anything under test. And no
+ * path under the home directory is ever constructed: the script's own default
+ * destination is `~/Documents/Notes`, and a test that reached it would delete
+ * the owner's real settings, which is the one mistake in this area that costs a
+ * user something (AGENTS.md non-negotiable 10).
+ */
+interface DeployRun {
+	sandbox: string;
+	dest: string;
+	stdout: string;
+	status: number;
+	/** Byte counts of the planted stale entries, for the log assertions. */
+	plantedBytes: { worker: number; ort: number };
+}
+
+const DEPLOY_STUBS: Record<string, string> = {
+	"main.js": "STUB main.js fresh bytes\n",
+	"manifest.json": '{"id":"local-tts-reader","stub":true}\n',
+	"styles.css": "/* STUB styles.css fresh */\n",
+};
+
+/** Recognisable settings AND reading positions, which is what makes losing it fatal. */
+const SANDBOX_DATA_JSON = '{"engine":"kokoro","rate":1.5,"positions":{"Notes/a.md":22}}\n';
+const SANDBOX_MARKER = "main @ nrl122-test\n";
+/**
+ * A `.json` file that is NOT on the allowlist, and the reason it is planted.
+ * The `data.json` guard below is green on both sides of the diff, and a
+ * mutation showed it could not tell by-name protection from an inference that
+ * merely happens to cover it: replacing `KEEP_BY_NAME.has(name)` with
+ * `name.endsWith(".json")` left the whole suite green. This entry is what
+ * closes that, because the extension test keeps it and the allowlist does not.
+ */
+const SANDBOX_OTHER_JSON = '{"not":"settings","owner":"nobody"}\n';
+
+function runDeployIntoSandbox(): DeployRun {
+	const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "nrl122-deploy-"));
+	const srcDir = path.join(sandbox, "cwd");
+	const vault = path.join(sandbox, "vault");
+	const dest = path.join(vault, ".obsidian", "plugins", "local-tts-reader");
+	fs.mkdirSync(srcDir, { recursive: true });
+	fs.mkdirSync(path.join(vault, ".obsidian"), { recursive: true });
+	fs.mkdirSync(path.join(dest, "ort"), { recursive: true });
+
+	for (const [name, body] of Object.entries(DEPLOY_STUBS)) {
+		fs.writeFileSync(path.join(srcDir, name), body);
+	}
+
+	// The exact stale state the ticket measured, plus the two entries that must
+	// survive it. The planted main.js differs in length from the stub, so "the
+	// shipped files went fresh" cannot pass by the copy having been skipped.
+	const workerBody = "// stale inlined worker from before NRL-96\n";
+	// TWO files at TWO depths, which is what makes the `removed ort/` byte count
+	// a check on the recursive sum rather than on "the size of the one file
+	// inside". With a single file the two readings are the same number and the
+	// assertion cannot tell them apart.
+	const wasmBody = "fake wasm bytes 0123456789\n";
+	const wasmGlueBody = "// fake ort glue\n";
+	fs.writeFileSync(path.join(dest, "main.js"), "OLD main.js from a previous deploy, longer\n");
+	fs.writeFileSync(path.join(dest, "kokoro-worker.js"), workerBody);
+	fs.writeFileSync(path.join(dest, "ort", "ort-wasm-simd-threaded.wasm"), wasmBody);
+	fs.mkdirSync(path.join(dest, "ort", "nested"), { recursive: true });
+	fs.writeFileSync(path.join(dest, "ort", "nested", "ort-wasm-simd-threaded.mjs"), wasmGlueBody);
+	fs.writeFileSync(path.join(dest, "data.json"), SANDBOX_DATA_JSON);
+	fs.writeFileSync(path.join(dest, ".deployed-from"), SANDBOX_MARKER);
+	fs.writeFileSync(path.join(dest, "other.json"), SANDBOX_OTHER_JSON);
+
+	let status = 0;
+	let stdout = "";
+	try {
+		stdout = execFileSync(process.execPath, [DEPLOY_FILE, vault], {
+			cwd: srcDir,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+	} catch (err: unknown) {
+		const e = err as { status?: number | null; stdout?: string | Buffer };
+		status = typeof e.status === "number" ? e.status : 1;
+		stdout = e.stdout === undefined ? "" : String(e.stdout);
+	}
+
+	return {
+		sandbox,
+		dest,
+		stdout,
+		status,
+		plantedBytes: {
+			worker: Buffer.byteLength(workerBody),
+			ort: Buffer.byteLength(wasmBody) + Buffer.byteLength(wasmGlueBody),
+		},
+	};
+}
+
+test("deploy.mjs prunes a stale kokoro-worker.js and ort/ from the plugin folder", () => {
+	const run = runDeployIntoSandbox();
+	try {
+		assertEquals(run.status, 0, `deploy.mjs exited ${run.status}:\n${run.stdout}`);
+		assert(
+			!fs.existsSync(path.join(run.dest, "kokoro-worker.js")),
+			"deploy.mjs left a stale kokoro-worker.js in the plugin folder. " +
+				"esbuild deletes that file after inlining it, so a copy on disk can " +
+				"only be from a build that predates NRL-96, and kokoro.ts reads it as " +
+				"a live fallback when the inlined code is absent",
+		);
+		assert(
+			!fs.existsSync(path.join(run.dest, "ort")),
+			"deploy.mjs left a stale ort/ directory in the plugin folder. ADR 0028 " +
+				"packs the runtime into main.js and the build emits no ort/, so 32 MB " +
+				"of it survives every deploy and undercuts the claim that a directory " +
+				"install is three files",
+		);
+	} finally {
+		fs.rmSync(run.sandbox, { recursive: true, force: true });
+	}
+});
+
+/**
+ * GUARD, not a reproduction: the unmodified script deletes nothing at all, so
+ * this check is green on both sides of NRL-122's diff and proves nothing on its
+ * own. It is the most load-bearing check in the ticket anyway, because
+ * `data.json` carries the user's settings AND their reading positions, so it is
+ * protected by NAME in deploy.mjs's allowlist rather than by any "it does not
+ * look like a build artifact" inference (AGENTS.md non-negotiable 10). It was
+ * shown to discriminate by MUTATION: deleting the allowlist term from the
+ * shipped prune turns exactly this check red and nothing else.
+ *
+ * On its own it could NOT tell by-name protection from a covering inference,
+ * measured rather than suspected: a `name.endsWith(".json")` variant of the
+ * prune left the whole suite green. The check below it is the other half of the
+ * pin and the two are read together.
+ */
+test("guard: deploy.mjs never deletes data.json or a dotfile", () => {
+	const run = runDeployIntoSandbox();
+	try {
+		const dataPath = path.join(run.dest, "data.json");
+		assertFileExists(
+			dataPath,
+			"deploy.mjs deleted data.json. That is the user's settings and every " +
+				"stored reading position, and nothing in a deploy may touch it",
+		);
+		assertEquals(
+			fs.readFileSync(dataPath, "utf-8"),
+			SANDBOX_DATA_JSON,
+			"deploy.mjs rewrote data.json. It must not be read, migrated or " +
+				"rewritten by a deploy, only left alone",
+		);
+		const markerPath = path.join(run.dest, ".deployed-from");
+		assertFileExists(
+			markerPath,
+			"deploy.mjs deleted the .deployed-from marker. The allowlist keeps every " +
+				"dot-prefixed entry so pipeline-owned files survive without being enumerated",
+		);
+		assertEquals(
+			fs.readFileSync(markerPath, "utf-8"),
+			SANDBOX_MARKER,
+			"deploy.mjs rewrote the .deployed-from marker",
+		);
+	} finally {
+		fs.rmSync(run.sandbox, { recursive: true, force: true });
+	}
+});
+
+/**
+ * The other half of the `data.json` pin, and the reason it exists: the guard
+ * above is satisfied by any rule that happens to keep `data.json`, including
+ * `name.endsWith(".json")`, which was measured green across the whole suite.
+ * Asserting that a DIFFERENT `.json` file is removed is what forces the rule to
+ * be the by-name allowlist decision 3 asked for, because the kept entry and the
+ * removed one differ in nothing but their name.
+ *
+ * The direction of a wrong answer here is safe either way - an extension test
+ * preserves more than it should rather than destroying anything - so this is a
+ * check that the pin means what it says, not a defect reproduction.
+ */
+test("deploy.mjs removes a non-allowlisted .json file, so data.json is kept by name", () => {
+	const run = runDeployIntoSandbox();
+	try {
+		assert(
+			!fs.existsSync(path.join(run.dest, "other.json")),
+			"deploy.mjs left other.json in the plugin folder. The allowlist protects " +
+				"data.json BY NAME; a rule keyed on the .json extension would keep " +
+				"every stale JSON artifact and, worse, would mean nothing in the suite " +
+				"could tell the two apart",
+		);
+		assertFileExists(
+			path.join(run.dest, "data.json"),
+			"deploy.mjs deleted data.json while removing other.json, so the prune is " +
+				"keyed on something other than the name",
+		);
+	} finally {
+		fs.rmSync(run.sandbox, { recursive: true, force: true });
+	}
+});
+
+test("deploy.mjs lands the three shipped files and logs each removal with a byte count", () => {
+	const run = runDeployIntoSandbox();
+	try {
+		// First half: green on both sides. It exists so the check above cannot
+		// pass by the script having emptied the destination wholesale.
+		for (const [name, body] of Object.entries(DEPLOY_STUBS)) {
+			assertEquals(
+				fs.readFileSync(path.join(run.dest, name), "utf-8"),
+				body,
+				`${name} in the plugin folder does not carry the bytes just built`,
+			);
+		}
+
+		// Second half: red before the fix, which logs nothing it removed.
+		const workerLine = run.stdout.match(/kokoro-worker\.js[^\n]*?(\d+) bytes/);
+		assert(
+			workerLine !== null,
+			"deploy.mjs's output must name kokoro-worker.js and its byte count when " +
+				`it removes it. Got:\n${run.stdout}`,
+		);
+		assertEquals(
+			Number(workerLine![1]),
+			run.plantedBytes.worker,
+			"the logged byte count for kokoro-worker.js must be the file's real size",
+		);
+
+		const ortLine = run.stdout.match(/\bort\b[^\n]*?(\d+) bytes/);
+		assert(
+			ortLine !== null,
+			`deploy.mjs's output must name ort and its byte count. Got:\n${run.stdout}`,
+		);
+		assertEquals(
+			Number(ortLine![1]),
+			run.plantedBytes.ort,
+			"a removed directory's logged byte count must be the recursive sum of the " +
+				"regular files inside it, not a directory inode size - the point of the " +
+				"line is to tell the reader how much disk a stale ort/ was holding",
+		);
+	} finally {
+		fs.rmSync(run.sandbox, { recursive: true, force: true });
+	}
 });
 
 test("release.yml publishes no runtime asset to download", () => {
