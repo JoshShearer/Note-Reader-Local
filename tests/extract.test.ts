@@ -1536,8 +1536,175 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// The four non-container stops, one fixture each, so no single term can be
 		// dropped from endsTerm2Scan without a red check.
 		["pin-nrl95-heading-between", "Prose <!--\n# H\nHIDDENH\n--> t.", "Prose <!-- H HIDDENH --> t."],
+		// NRL-95's C5. KEPT EXACTLY AS IT WAS, and it is the other half of NRL-111:
+		// the `===` here IS the block's second line, so module 8671's setextHeading
+		// BLOCK tokenizer takes it, the paragraph really does end, and the renderer
+		// really does display HIDDENE. Measured against real rendered HTML from the
+		// installed obsidian.asar 1.13.7 in NRL-111's Implement session:
+		// `<h1 data-heading="Prose <!--">Prose &#x3C;!--</h1><p>HIDDENE<br>--> t.</p>`.
+		// The NRL-111 pins immediately below must hold AT THE SAME TIME as this one;
+		// deleting `SETEXT.test(line)` makes them pass and this one fail.
 		["pin-nrl95-setext-between", "Prose <!--\n===\nHIDDENE\n--> t.", "Prose <!-- HIDDENE --> t."],
 		["pin-nrl95-hr-between", "Prose <!--\n***\nHIDDENR\n--> t.", "Prose <!-- HIDDENR --> t."],
+		// NRL-111. The `=` setext underline is a stop ONLY on the block's second
+		// line. `setextHeading` is in `u.interruptParagraph` but carries
+		// `{commonmark:!1}`, and module 6047 gates an entry on
+		// `o.commonmark === n.options.commonmark` with `options.commonmark === true`
+		// (`VT.globalOptions = {breaks:!0, commonmark:!0}`), so it is DISABLED as an
+		// interrupter; the only route left is the setextHeading BLOCK tokenizer,
+		// module 8671, which takes exactly ONE content line. On any later line the
+		// `===` is paragraph prose, module 4839's inline `.T` regex crosses it, and
+		// Obsidian HIDES the text after it. NRL-95 stopped there and spoke it: a
+		// live 2,048-cell disclosure in `main`.
+		//
+		// All four shapes measured against real rendered HTML: each renders as ONE
+		// `<p>` holding the whole raw comment, so HIDDENE is inside it. Each was
+		// measured RED against base 874410d.
+		["pin-nrl111-eq-underline-third-line", "Prose <!--\nmore\n===\nHIDDENE\n--> t.", "Prose t."],
+		["pin-nrl111-eq-single-third-line", "Prose <!--\nmore\n=\nHIDDENE\n--> t.", "Prose t."],
+		["pin-nrl111-eq-underline-fourth-line", "Prose <!--\na\nb\n===\nHIDDENE\n--> t.", "Prose t."],
+		["pin-nrl111-eq-underline-midline-opener", "Before x. Prose <!--\nmore\n===\nHIDDENE\n--> t.", "Before x. Prose t."],
+		// The SHAPE half, which `SETEXT`'s `^ {0,3}...\s*$` also got wrong and which
+		// is why `TERM2_SETEXT_EQ` is a separate pattern rather than a reuse. The
+		// renderer's setextHeading tokenizer accepts NO leading and NO trailing
+		// whitespace: measured, `Title` / `===` is `<h1>` while `Title` / ` ===` and
+		// `Title` / `===  ` are each one `<p>` with the `===` as prose. So these two
+		// are second-line underlines for CommonMark and NOT for Obsidian, it hides
+		// HIDDENE in both, and base spoke it in both. RED against 874410d.
+		["pin-nrl111-eq-indented-not-an-underline", "Prose <!--\n ===\nHIDDENE\n--> t.", "Prose t."],
+		["pin-nrl111-eq-trailing-space-not-an-underline", "Prose <!--\n===  \nHIDDENE\n--> t.", "Prose t."],
+		// The reason `endsTerm2Block` is split out from `endsTerm2Scan`. A `--` line
+		// stops the scan - module 4839's regex body cannot consume two consecutive
+		// dashes, so the construct fails to match and the `<!--` is literal - but it
+		// is NOT a block end: measured, `--` / `Prose` renders as one `<p>`. So the
+		// `===` here has TWO content lines above it, is not an underline, and the
+		// renderer hides HIDDENE. An arm that reset the content-line count on the
+		// `--` calls it a second line, stops, and speaks HIDDENE. RED against
+		// 874410d, and RED against that arm too.
+		["pin-nrl111-dash-pair-is-not-a-block-end", "--\nProse <!--\n===\nHIDDENE\n--> t.", "-- Prose t."],
+		// TRIPWIRE, and the one place NRL-111 makes something WORSE. The bare `1)`
+		// line is a real paragraph interrupter - module 745 accepts a marker with
+		// nothing after it, measured: the renderer puts HIDDENE in an `<ol><li>` and
+		// DISPLAYS it - and `TERM2_LIST`'s `[ \t]` requirement misses it, which is a
+		// pre-existing fail-closed gap already pinned in its own right below
+		// (`guard-nrl95-bullet-needs-a-space`'s family). Base's wrong `===  ` stop
+		// happened to MASK it here; removing that stop unmasks it, so this note goes
+		// `"Prose <!-- more 1) HIDDENE --> t."` -> `"Prose t."`. Measured at 12 cells
+		// of a 16,000-cell fuzz and 5,120 cells of NRL-111's own corpus, where it is
+		// identical on base because nothing masks it there. It is PROSE LOSS, not a
+		// disclosure. Closing it meant two changes in OPPOSITE directions: widening
+		// `TERM2_LIST` to end-of-line, and giving it the three-space indent cap it
+		// was missing. NRL-111's second pass landed the CAP half, because leaving it
+		// out was a live disclosure; the end-of-line half is NRL-119 and is
+		// deliberately still open, so this tripwire stands. When it lands, this
+		// expectation must change on purpose. Do NOT add a bare-marker term to the
+		// stop set without the measurement: this fixture is the only thing in the
+		// suite that goes red on an arm that widens `[ \t]` to `([ \t]|$)`.
+		["pin-nrl111-bare-ordered-marker-unmasked", "Prose <!--\nmore\n===  \n1)\nHIDDENE\n--> t.", "Prose t."],
+		// MUST NOT WIDEN, three controls, all three green on BOTH sides of NRL-111.
+		// Each dash shape keeps the stop NRL-95 gave it, for three different reasons
+		// and none of them setext: `---` and longer are `thematicBreak`, which is in
+		// `u.interruptParagraph` unconditionally; `--` cannot be crossed by the
+		// inline regex; a lone `-` is a bare list marker, which module 745 accepts
+		// with nothing after it (`next!=="\n" && next!==""` passes) and `list` is
+		// also unconditionally in the list. Measured: all three render with HIDDENE
+		// VISIBLE, so speaking it is correct in all three.
+		//
+		// Room to fail, measured arm by arm rather than assumed. The `--` guard is
+		// RED on the arm whose content-line count resets at a dash run, and the lone
+		// `-` guard is RED on the delete-the-term arm. The `---` guard below is RED on
+		// NEITHER: `---` is matched by `HR` and by `TERM2_DASH_RUN` both, so no
+		// single-term arm reaches it (an HR-removed arm was built and it stays green,
+		// while `pin-nrl95-hr-between`'s `***` goes red). It is kept as a record of
+		// the `---` shape's renderer verdict and is NOT evidence for this fix.
+		["guard-nrl111-hr-dashes-third-line", "Prose <!--\nmore\n---\nHIDDENE\n--> t.", "Prose <!-- more HIDDENE --> t."],
+		// The `--` itself is not spoken, and that is a SEPARATE pre-existing
+		// divergence rather than part of this stop: `extractChunks`' own heading
+		// tracking takes `more` / `--` as a setext heading and drops the underline,
+		// where the renderer keeps both as prose in one paragraph. Nothing NRL-111
+		// touches moves it, it loses no word, and it is not opened here.
+		["guard-nrl111-dash-pair-third-line", "Prose <!--\nmore\n--\nHIDDENE\n--> t.", "Prose <!-- more HIDDENE --> t."],
+		["guard-nrl111-lone-dash-third-line", "Prose <!--\nmore\n-\nHIDDENE\n--> t.", "Prose <!-- more HIDDENE --> t."],
+		// The content-line count must RESET at a block end, or an opener that is not
+		// on line 0 never sees its own `===` as a second line and the fix hides text
+		// the renderer shows. The blank line here is the reset. Measured RED against
+		// an arm whose count never resets (it says `"Lead. Prose t."`) and green on
+		// base and on the fix, so it is a guard with REAL room to fail rather than a
+		// decorative one.
+		["guard-nrl111-count-resets-at-a-block-end", "Lead.\n\nProse <!--\n===\nHIDDENE\n--> t.", "Lead. Prose <!-- HIDDENE --> t."],
+		// The shape that caught a bug in the PROBE rather than in the code, kept
+		// because it is worth not rediscovering: Obsidian's heading handler emits
+		// `data-heading="<raw heading text>"`, so this note's HTML carries a literal
+		// `<!--` inside an ATTRIBUTE. An oracle that scans the rendered HTML for
+		// `<!--` with `indexOf` takes that as a comment opener and reports HIDDENE as
+		// hidden when a reader plainly sees it. Measured: the real HTML is
+		// `<h1 data-heading="Prose <!--">Prose &#x3C;!--</h1><h1 ...>more</h1><p>HIDDENE<br>--> t.</p>`.
+		// HONEST LABEL: this fixture has NO room to fail against any of the four
+		// alternate implementations NRL-111 built except the delete-the-term one -
+		// the scan stops at line 1 in every arm - so it is a record of the shape, not
+		// evidence for the fix.
+		["guard-nrl111-double-setext-attribute-shape", "Prose <!--\n===\nmore\n===\nHIDDENE\n--> t.", "Prose <!-- more HIDDENE --> t."],
+		// NRL-111's SECOND PASS, F4. The first draft gated the `=` run on block
+		// position and left the dash run unconditionally not-a-block-end, which
+		// repeats for dashes the exact position-independent error it had just fixed
+		// for `=`. A dash run that IS its block's second line is a setext `<h2>` and
+		// therefore a real block end, so the `===` below has ONE content line above
+		// it, is an underline, and the renderer DISPLAYS HIDDENE. Measured:
+		// `Lead.` / `--` renders `<h2 data-heading="Lead.">Lead.</h2>`. The `--`
+		// itself is not spoken because `extractChunks`' own heading tracking drops a
+		// setext underline, which is unchanged and not what this pins. GREEN on base
+		// 874410d and RED against NRL-111's first draft, so it is a regression pin
+		// with real room to fail rather than a record. 512 cells.
+		["pin-nrl111-dash-run-on-a-second-line-is-an-h2", "Lead.\n--\nProse <!--\n===\nHIDDENE\n--> t.", "Lead. Prose <!-- HIDDENE --> t."],
+		// The gate's other direction, and the reason `TERM2_DASH_RUN` keeps its
+		// ungated SCAN stop while only `TERM2_SETEXT_DASH` is a block end. Here the
+		// `--` has TWO content lines above it, so it is paragraph prose rather than
+		// an `<h2>`, the `===` has three, and the renderer HIDES HIDDENE - measured.
+		// RED against base 874410d, which spoke it.
+		["guard-nrl111-dash-run-off-a-second-line-is-not-an-h2", "L1.\nL2.\n--\nProse <!--\n===\nHIDDENE\n--> t.", "L1. L2. Prose t."],
+		// THREE TRIPWIRES for three roots NRL-111 deliberately does NOT fix. Each is
+		// PROSE LOSS: the renderer DISPLAYS the sentinel and we drop it. None of
+		// them leaks IN ITS MEASURED CORPUS (F1 0 of 7,680 room). Do NOT restate the
+		// stronger claim an earlier revision made here - that a narrow stop set used
+		// as a block-end COUNTER "can only OVER-count", so none CAN leak. NRL-111's
+		// second Verify falsified it: the counter also UNDER-counts, because
+		// `TERM2_LIST` matches a container-OPENING marker line (a block start, not a
+		// block end) and `line.trim() === ""` reads a tab-only line as blank, and
+		// under-counting to exactly 1 turns the gate on where the renderer has no
+		// underline. Measured 55,296 and 12,288 class-A cells, both saturated, 0
+		// newly leaking and cell-for-cell identical on base and on an uncapped arm,
+		// so shipped behaviour is untouched and only the claim was wrong. Each count
+		// below was measured on its own corpus with the real parser and renderer.
+		//
+		// LABEL THEM HONESTLY: all three are RED against base 874410d, so they are
+		// prose this pass stops speaking. Base spoke the sentinel, and base was
+		// accidentally RIGHT on these three shapes, because it stopped at an `=` run
+		// unconditionally - the same unconditional stop that was a 26,880-cell
+		// disclosure elsewhere in the same corpus. The gate removes the disclosure
+		// and exposes this residue in the same move; the trade is 25,344 class-A
+		// cells closed against 1,536 class-B cells lost on NRL-111's main two-class
+		// corpus, all of the loss being these three roots. Linear tickets are being
+		// filed; do not fix one of them by widening the gate.
+		//
+		// F1, 6,144 cells over 12 of 17 shapes (room 7,680): the forward pass uses
+		// the term-2 STOP set as a BLOCK-END set, and that set omits real renderer
+		// block ends - blockquote, nested quote, table, `$$`, indented code, footnote
+		// definition, link reference definition, a bare `* + 1. 1)` marker, a comment
+		// block - so `paraLinesAbove` over-counts and a correct second-line stop is
+		// suppressed. The blockquote shape below is the smallest member.
+		["tripwire-nrl111-f1-blockquote-above-is-not-a-counted-block-end", "> Lead.\nProse <!--\n===\nHIDDENE\n--> t.", "Lead. Prose t."],
+		// F2, 3,584 cells over 7 of 9 shapes (room 4,608): module 4839's inline regex
+		// body cannot consume two consecutive dashes, so ANY mid-line `--` between
+		// opener and closer makes the construct literal and the renderer shows
+		// everything. We detect dash-ONLY lines. Declared out of scope by NRL-111's
+		// own PR before Verify measured it.
+		["tripwire-nrl111-f2-midline-dashes-between-opener-and-closer", "A <!--\nmore\n===\nHIDDENE\nB <!--\nmore2\n--> t.", "A t."],
+		// F3, 3,072 cells over 6 of 21 shapes (room 3,072, saturated):
+		// `TERM2_SETEXT_EQ` is anchored at column 0 and the renderer peels the
+		// container prefix first, so an `=` run inside a list item or an ordered item
+		// is a real underline to it and prose to us. The quote-prefixed members of
+		// that corpus are lost on base too and are not part of the 3,072.
+		["tripwire-nrl111-f3-container-indented-eq-run", "- Prose <!--\n  ===\n  HIDDENE\n  --> t.", "Prose t."],
 		// HIDDENF is dropped by skipCodeBlocks, correctly and for a different
 		// reason: the fence stops the term-2 scan, so the `<!--` is literal, and
 		// the fenced body is then excluded as content rather than hidden as comment.
@@ -1612,27 +1779,75 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// opener's paragraph and Obsidian displays every line. The two fixtures
 		// below were `"Prose Tail."` and `"Prose t."` - hiding HIDDENL and HIDDENB -
 		// and both were measured RED against that staged behaviour before the
-		// TERM2_LIST stop was added. Module 745's silent entry is the authority:
-		// any bullet at any indent interrupts.
+		// TERM2_LIST stop was added. Module 745's silent entry is the authority for
+		// a bullet AT A VALID INDENT; NRL-95's gloss "any bullet at any indent
+		// interrupts" was false and the two fixtures below used to encode it, see
+		// their own comment.
 		["pin-nrl95-bullet-items-are-three-paragraphs", "- Prose <!--\n- HIDDENL\n- more -->\nTail.", "Prose <!-- HIDDENL more --> Tail."],
 		["pin-nrl95-bullet-line-between", "Prose <!--\n- item\nHIDDENB\n--> t.", "Prose <!-- item HIDDENB --> t."],
-		["pin-nrl95-bullet-any-indent", "Prose <!--\n    - HIDDENL\nmore -->", "Prose <!-- HIDDENL more -->"],
-		["pin-nrl95-bullet-tab-indent", "Prose <!--\n\t- HIDDENL\nmore -->", "Prose <!-- HIDDENL more -->"],
+		// REPLACED IN PLACE per the NRL-66/NRL-67 convention, and renamed because
+		// the old names (`pin-nrl95-bullet-any-indent`, `pin-nrl95-bullet-tab-indent`)
+		// asserted the opposite of the renderer's own answer. Both used to expect
+		// `"Prose <!-- HIDDENL more -->"`, i.e. they pinned a LIVE DISCLOSURE as
+		// expected behaviour, inherited from NRL-95 and widened by NRL-111's first
+		// draft before this pass capped it.
+		//
+		// Module 745's list tokenizer gives up past three columns of indent, and a
+		// tab reaches column four on its own, so at four spaces or at a tab the
+		// marker line is a lazy paragraph continuation and the inline comment regex
+		// crosses it. Measured against real rendered HTML out of the installed
+		// obsidian.asar 1.13.7 in NRL-111's fix-forward session: both of these notes
+		// render as ONE `<p>` holding the whole raw comment
+		// (`<p>Prose <!--\n    - HIDDENL\nmore --></p>`), so the renderer HIDES
+		// HIDDENL and speaking it is a disclosure. Both are RED against base
+		// 874410d AND against the first draft of NRL-111.
+		//
+		// A tab is Obsidian's own default indent for a nested list item, so this is
+		// the ordinary shape and not an exotic one.
+		["pin-nrl111-bullet-four-space-indent-is-not-a-marker", "Prose <!--\n    - HIDDENL\nmore -->", "Prose"],
+		["pin-nrl111-bullet-tab-indent-is-not-a-marker", "Prose <!--\n\t- HIDDENL\nmore -->", "Prose"],
 		["pin-nrl95-ordered-one-dot-interrupts", "Prose <!--\n1. HIDDENL\nmore -->", "Prose <!-- HIDDENL more -->"],
+		// `1)` DOES interrupt, and NRL-95 had this one backwards. REPLACED IN PLACE
+		// per the NRL-66/NRL-67 convention, renamed because the old name
+		// (`guard-nrl95-ordered-paren-not-an-interrupter`) asserted the opposite of
+		// the truth and would read as a tripwire rather than a corrected pin.
+		// Module 745's marker test is `y === h || z && y === v` with
+		// `z = options.commonmark` and `v = ")"`; `commonmark` is TRUE, so `)` is a
+		// delimiter. Measured against real rendered HTML in NRL-111's Implement
+		// session: `Prose <!--` / `1) HIDDENL` / `more -->` renders
+		// `<p>Prose &#x3C;!--</p><ol><li>HIDDENL<br>more --></li></ol>`, so the
+		// paragraph ends at the marker and HIDDENL is DISPLAYED. Base hid it.
+		//
+		// CORRECTED BY NRL-111's SECOND PASS. The first draft called this half
+		// "prose loss rather than disclosure" and that was true of THIS shape and
+		// false of the pattern change that produced it. `TERM2_LIST` was `^[ \t]*`
+		// with no indent cap, so adding `1)` to it also added `\t1) `, `    1) ` and
+		// every other over-indented form - all of which the renderer HIDES - and the
+		// widening therefore shipped 7,168 newly leaking cells of its own. The
+		// exhaustive direction argument had identified the class correctly and
+		// MIS-SIGNED it: it proved every widening was a `1)` and then assumed a
+		// `1)` was benign. The indent cap, landed in the same pattern, is what makes
+		// the sentence above true. RED against base 874410d.
+		["pin-nrl111-ordered-paren-interrupts", "Prose <!--\n1) HIDDENL\nmore -->", "Prose <!-- HIDDENL more -->"],
 		// And the ordered half that must NOT stop the scan. Each of these is a line
-		// module 745's SILENT path refuses, so the renderer keeps one paragraph and
-		// HIDES the sentinel. The first THREE are lines `LIST_BULLET` matches, and
-		// all three were measured RED against the arm that puts the whole of
-		// `LIST_BULLET` in the stop set - i.e. they are the disclosure that arm
-		// would ship, and they are the real justification for the ordered
-		// exclusion. The FOURTH is green on that arm too (`LIST_BULLET` needs
-		// `\s+` after the marker, so it misses `-x` as well): it guards
-		// TERM2_LIST's own `[ \t]` requirement instead, and is labelled a guard
-		// rather than counted. All four are green on both sides of the TERM2_LIST
-		// change itself.
+		// module 745's SILENT path refuses because its digit string is not exactly
+		// `"1"` (`if (silent && o !== "1") return`), so the renderer keeps one
+		// paragraph and HIDES the sentinel. Measured: `7.`, `7)`, `01.` and `01)`
+		// all render as one `<p>` with the sentinel inside the raw comment. The
+		// first TWO are lines `LIST_BULLET` matches, and both were measured RED
+		// against the arm that puts the whole of `LIST_BULLET` in the stop set -
+		// i.e. they are the disclosure that arm would ship, and they are the real
+		// justification for the digit-string exclusion. The THIRD is green on that
+		// arm too (`LIST_BULLET` needs `\s+` after the marker, so it misses `-x` as
+		// well): it guards TERM2_LIST's own `[ \t]` requirement instead, and is
+		// labelled a guard rather than counted. All three are green on both sides of
+		// NRL-111's `1[.)]` widening.
 		["guard-nrl95-ordered-seven-not-an-interrupter", "Prose <!--\n7. HIDDENL\nmore -->", "Prose"],
-		["guard-nrl95-ordered-paren-not-an-interrupter", "Prose <!--\n1) HIDDENL\nmore -->", "Prose"],
 		["guard-nrl95-ordered-zero-padded-not-an-interrupter", "Prose <!--\n01. HIDDENL\nmore -->", "Prose"],
+		// The `)` twin of each, added by NRL-111 so the widening to `1[.)]` cannot be
+		// loosened to `\d+[.)]` or `\d[.)]` without a red check.
+		["guard-nrl111-ordered-seven-paren-not-an-interrupter", "Prose <!--\n7) HIDDENL\nmore -->", "Prose"],
+		["guard-nrl111-ordered-zero-padded-paren-not-an-interrupter", "Prose <!--\n01) HIDDENL\nmore -->", "Prose"],
 		["guard-nrl95-bullet-needs-a-space", "Prose <!--\n-x HIDDENL\nmore -->", "Prose"],
 		// A bullet INSIDE the quote is still invisible to us, because TERM2_LIST
 		// is anchored and the `>` prefix is never peeled before the scan. Obsidian
