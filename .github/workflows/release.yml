@@ -342,11 +342,14 @@ jobs:
   # updated_at), removing the job entirely produced no run, and restoring it
   # with `.yml` produced no run.
   #
-  # `needs: build` is kept so `needs.build.outputs.hashes` still resolves.
+  # Both entries in `needs:` are load-bearing and neither is removable. `build` is
+  # there so `needs.build.outputs.hashes` below still resolves; `release` is there
+  # purely for ORDERING, so the generator's `upload-assets` job cannot start before
+  # the Release object it attaches the attestation to exists (NRL-106).
   # All three permissions are required by the generator's own jobs: it reads
   # workflow metadata, signs the provenance, and uploads the release asset.
   provenance:
-    needs: build
+    needs: [build, release]
     permissions:
       actions: read
       id-token: write
