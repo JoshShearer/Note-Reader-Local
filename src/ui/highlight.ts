@@ -39,7 +39,10 @@ import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
  * and suppressing the scroll never suppresses a decoration. See
  * `registerScrollSuppression`, `nextScrollSuppression` and the extended
  * `scrollTargetForChunk` below, and ADR 0030 for why the own-vs-user
- * detection is a heuristic that has never been run against a real browser.
+ * detection is a heuristic. It is no longer an unobserved one - a real
+ * gesture's native 'scroll' events were measured latching suppression on an
+ * Android device - but its event-ORDERING premise is still untested and
+ * desktop is unobserved; see `registerScrollSuppression`'s own note.
  *
  * Two layers means two ways to clear, and they are not interchangeable. Ending
  * playback clears both; moving to the next word clears only the word. A single
@@ -314,12 +317,21 @@ export function registerHighlighting(editor: EditorView): void {
  * happened that the plugin did not cause, fed into `nextScrollSuppression`
  * as `isUserScroll`.
  *
- * BEST-EFFORT HEURISTIC, not a proof: this has never been run against a real
- * browser's actual scroll-event timing (AGENTS.md rule 13; docs/adr/0030).
- * `main.ts` has no runtime in the bare-Node suite, and `tests/highlight.test.ts`
- * never instantiates a real `EditorView`, so the listener itself has no
- * automated coverage - only the pure `nextScrollSuppression` it delegates to
- * does.
+ * STILL A HEURISTIC, but no longer an unobserved one, and this paragraph is
+ * corrected rather than left standing (AGENTS.md rule 13; docs/adr/0030's
+ * NRL-90 amendment). What has since been measured, on a real Android Obsidian:
+ * a real touch gesture's own native 'scroll' events do reach this listener and
+ * do latch suppression, and the viewport then stops tracking the read. What is
+ * still NOT established is the part that decides the arm's correctness - the
+ * ORDERING of a real 'scroll' event against CodeMirror's `requestAnimationFrame`
+ * measure pass - because `tests/highlight.test.ts` invokes this handler directly
+ * in the same task and never instantiates a real `EditorView`, and because
+ * `main.ts` imports `obsidian` and has no bare-Node runtime, so the three
+ * register/reset call sites are unexercised by `npm test`. Desktop is
+ * unobserved entirely. The listener BODY does now have coverage, via that
+ * suite's additive `scrollDOM` stub (block 19, checks 19h-19n), so the earlier
+ * claim here that only the pure `nextScrollSuppression` was covered is false
+ * and has been removed.
  */
 export function registerScrollSuppression(editor: EditorView): void {
 	if (scrollListenerAttached.has(editor)) return;
@@ -344,9 +356,29 @@ export function isScrollSuppressed(editor: EditorView): boolean {
  * never on the NRL-89 leaf-reattach path: reattaching to a note whose read is
  * still in flight is not a fresh `play()` call, so a manual scroll made
  * before switching away and back must still be respected.
+ *
+ * `expectingOwnScroll` is cleared here too, and that is a fix rather than
+ * tidiness (the NRL-90 follow-up, docs/adr/0030). `applyHighlightLayers` arms
+ * that flag before every scrolling dispatch, but the dispatch does not always
+ * move the DOM: `scrollRectIntoView` passes its `if (moveX || moveY)` gate
+ * (node_modules/@codemirror/view/dist/index.js:200) and then has its
+ * `cur.scrollTop += moveY / scaleY` write CLAMPED by the browser (:208-213),
+ * and a `scrollTop` write that changes nothing fires no 'scroll' event. That is
+ * the ordinary case at the opening of a read, where centring a chunk in the
+ * first half-viewport would need a negative `scrollTop` - measured on a real
+ * device at docs/adr/0022:245-249, chunks 0-4 holding `scrollTop` 0. So an arm
+ * can be left set with no event to consume it, and without this line it
+ * survived into the next read and swallowed the first genuine user scroll of
+ * it, which contradicts this function's own claim to restore normal follow
+ * behaviour.
+ *
+ * `.delete` rather than `.set(editor, false)`, matching the listener's own
+ * read-and-clear at `registerScrollSuppression` and the WeakMap's documented
+ * "absent reads as not expecting".
  */
 export function resetScrollSuppression(editor: EditorView): void {
 	scrollSuppressed.set(editor, false);
+	expectingOwnScroll.delete(editor);
 }
 
 export function applySentenceHighlight(editor: EditorView, range: HighlightRange | null): void {

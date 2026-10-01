@@ -200,3 +200,250 @@ editor, because the concept is absent from its signature.
   by design (CONTEXT.md; `play()`'s signature has no editor parameter), and
   giving it one for this ticket alone would be a new, one-off exception to
   that boundary for state that is properly UI-layer, editor-keyed data.
+
+---
+
+## Amendment, NRL-90 follow-up (2026-09-30)
+
+Added in place rather than as a new ADR, because this is the same decision
+finished rather than a different one. It does three things: it clears a stale
+`expectingOwnScroll` arm in `resetScrollSuppression`; it re-derives F1 against
+NRL-110's `{ y: "center" }` and finds it **reachable**, correcting both this ADR's
+own expectation and ADR 0022:309-346; and it records F1 as an accepted,
+reachability-mapped, fail-open residual with the one measurement that would decide
+whether it needs machinery.
+
+### F1 is reachable, and the earlier "measure-zero" reading was wrong
+
+Both this ADR's Consequences and ADR 0022's NRL-110 amendment expected
+`{ y: "center" }` to make F1 vanish, on the ground that the `center` arm of
+`scrollRectIntoView` computes `moveY` unconditionally, so the
+`if (moveX || moveY)` gate at `node_modules/@codemirror/view/dist/index.js:200`
+almost never zeroes. That reasoning is correct as far as it goes and **stops one
+screen too early**. Twenty lines past the gate, at `:208-213`:
+
+```js
+let start = cur.scrollTop;
+cur.scrollTop += moveY / scaleY;
+movedY = (cur.scrollTop - start) * scaleY;
+```
+
+The browser **clamps** an out-of-range `scrollTop`, and a `scrollTop` write that
+does not change the value fires **no `scroll` event**. So `moveY != 0` with
+`movedY === 0` is an ordinary state, not a corner. `applyHighlightLayers` arms
+`expectingOwnScroll` before the dispatch; with no event to read-and-clear it, the
+arm survives.
+
+Four reachable sub-cases, named so each can be argued with separately:
+
+- **R1, the opening of every read. MEASURED.** Centring a chunk that sits in the
+  first half-viewport needs a negative `scrollTop`; the browser clamps it to 0;
+  the DOM does not move. This is not reasoned - it is in `docs/adr/0022:240-249`,
+  NRL-110's own post-`center` on-device series on a Pixel 9 Pro XL: "Chunks 0-4
+  are unchanged from the baseline ... `scrollTop` 0 - because centring them would
+  mean scrolling up past the top of the document and `scrollTop` cannot go
+  negative". **Five of that run's twenty-two chunk dispatches moved the DOM by
+  zero**, and they are the first five of every read - exactly the seconds in which
+  a user is most likely to scroll by hand.
+- **R2, the tail of every note. REASONED, not measured.** Symmetric: `scrollTop`
+  is already at its maximum, so centring a chunk in the last half-viewport clamps
+  the same way. NRL-110's series stopped at chunk 21, `scrollTop` 1209 of a
+  maximum 8116, so it never reached this.
+- **R3, a note shorter than the viewport. REASONED, not measured.** At
+  `index.js:152-155`, `if (cur.scrollHeight <= cur.clientHeight && cur.scrollWidth <= cur.clientWidth) { cur = parent; continue; }`
+  skips `scrollDOM` entirely and the parent walk ends at `doc.body`, where `:202`
+  calls `win.scrollBy(...)`. Whatever the window does, that can never fire a
+  `scroll` event on `editor.scrollDOM`, which is the element our listener is
+  attached to.
+- **R4, a rect already exactly centred.** The only genuine `moveY === 0` case,
+  and the only one that is measure-zero. This is all the earlier reading left
+  standing, and it was wrong to leave only this.
+
+### The consequence is bounded, and the bound is the whole reason this is accepted
+
+`expectingOwnScroll` is a single boolean, read-and-cleared in the listener and
+overwritten with `true` by each arming dispatch. So however many zero-movement
+dispatches pile up, **at most one stale arm is pending at any instant, and it
+swallows exactly one `scroll` event**. If a real touch drag or wheel gesture emits
+two or more `scroll` events - which is the ordinary behaviour of a scroll gesture -
+the second event latches suppression and the user sees nothing wrong at all.
+
+That gives a **falsifiable prediction**: a gesture emitting >= 2 `scroll` events
+makes F1's user-visible consequence nil. A gesture emitting exactly one, with
+suppression failing to latch, makes F1 a real defect and warrants a follow-up
+ticket. It is deliberately not filed pre-emptively.
+
+### Why the self-expiring arm was NOT built
+
+The obvious fix - arm the flag, then clear it unconditionally on the next
+microtask or animation frame, so a dispatch that produced no event cannot leave an
+arm behind - was designed, costed and **rejected, because it fails closed**:
+
+- CodeMirror does not scroll inside `dispatch`. `index.js:7714-7715` calls
+  `this.requestMeasure()`, and `:8003-8005` is
+  `requestMeasure(request) { if (this.measureScheduled < 0) this.measureScheduled = this.win.requestAnimationFrame(() => this.measure()); }`.
+  The `scrollTop` write at `:208-213` therefore happens in a **later** animation
+  frame than our dispatch.
+- A `scrollTop` write fires `scroll` asynchronously, at the next rendering update
+  per CSSOM-View's "run the scroll steps", so the event lands at least one frame
+  after that write.
+- A `Promise.resolve().then` clear therefore lands in the same task, and a
+  single-`requestAnimationFrame` clear lands at best in the same frame as
+  CodeMirror's own `measure()`. Both run **before the scroll event exists**. Every
+  one of our own scrolls would then be read as a user scroll, suppression would
+  latch on chunk 1, and auto-scroll - the feature R-S03 asks for - would die for
+  the rest of every read.
+- A double-rAF clear would land after the event only if CodeMirror measures in the
+  very next frame and never reschedules, and `:7824-7831` shows it can reschedule.
+- A millisecond-window arm (storing a timestamp instead of a boolean) has the same
+  fail-closed direction, since a device under load exceeding the window kills the
+  feature, plus the arbitrary tuning constant this ADR's Alternatives-rejected
+  section already refused.
+
+F1's failure direction is "keeps following" - fail-open, one swallowed scroll
+event. The self-expiring arm's is "stops following permanently" - fail-closed. The
+asymmetry decides it. The remaining alternative, arming only when the target
+genuinely falls outside the visible range, stays rejected on its original ground:
+it needs `coordsAtPos` and a real DOM, which ADR 0022 decision 3 forbids in this
+file and `tests/highlight.test.ts` cannot instantiate. Reading `scrollDOM.scrollTop`
+instead does not rescue it, because the value only changes a frame later - the same
+timing problem.
+
+### What shipped
+
+One line in `resetScrollSuppression` (`src/ui/highlight.ts`):
+`expectingOwnScroll.delete(editor)` beside the existing
+`scrollSuppressed.set(editor, false)`. `.delete` rather than `.set(editor, false)`,
+matching the listener's own read-and-clear and the WeakMap's documented "absent
+reads as not expecting". Nothing else under `src/` changed; `main.ts` is untouched,
+because all three read-start sites already call `resetScrollSuppression` and the
+fix reaches them for free.
+
+Without it, a stale arm from a zero-movement dispatch (R1) survived a playback
+restart and swallowed the **first** genuine user scroll of the next read, which
+contradicts this function's own claim to restore normal follow behaviour and is
+acceptance criterion 4 of the ticket ("playback restarting resets to the normal
+follow behaviour").
+
+### Coverage, and what the suite now does and does not prove
+
+`tests/highlight.test.ts` block 19 gained `19h`-`19n`, and `fakeEditor` gained an
+additive `scrollDOM` stub, so `registerScrollSuppression`'s **listener body has its
+first coverage of any kind**. The Consequences bullet above, which says block 19
+"does NOT and CANNOT cover `registerScrollSuppression`'s actual
+`scrollDOM.addEventListener` wiring", is superseded on that point.
+
+Two reproductions, both **red against the unfixed `resetScrollSuppression` and
+green after**: `19h`, a pre-restart arm must not survive the reset, asserted on
+`isScrollSuppressed`; and `19i`, the same end to end, asserting the next chunk
+dispatch carries zero scroll effects. The same pair was reproduced independently
+first, in a standalone bare-Node probe bundling the real `src/ui/highlight.ts`,
+before either check was written.
+
+Four **guards**, green on both sides and labelled as such, never counted as
+reproductions: `19j` a no-target dispatch does not arm; `19k` the arm is consumed
+exactly once (the premise `19h` depends on); `19l` `registerScrollSuppression`
+attaches exactly one listener however often it is called; `19m` the reset still
+clears a latched `scrollSuppressed`.
+
+One **tripwire**, `19n`, green on both sides and explicitly not a fix: it pins both
+halves of F1's accepted residual - that the first event after a zero-movement arm
+is swallowed, and that the second latches - so either half can only change
+deliberately.
+
+What the suite still cannot judge is narrower than before but not empty, and the
+amended KNOWN GAP comment at the end of block 19 states it: the handler is invoked
+directly in the same task, so real event **timing** relative to CodeMirror's rAF
+measure pass is untested; **gesture multiplicity** is a device fact; and whether
+`scrollDOM` is the element Obsidian actually scrolls is unverified, since no real
+`EditorView` is ever instantiated.
+
+### Limits of this amendment
+
+- **R2 and R3 stay reasoned, not measured.**
+- **Desktop is unobserved.** CDP port 9222 is unreachable in this environment and
+  the Flatpak Obsidian must not be restarted, so every on-device figure here or in
+  ADR 0022 is Android-only. The one ground for generalising is the one ADR 0022
+  already states: both platforms run the same bundled `@codemirror/view`.
+- **`main.ts` has no bare-Node runtime**, so the three
+  `registerScrollSuppression`/`resetScrollSuppression` call sites and the
+  `isScrollSuppressed` read are unexercised by `npm test`.
+- R-S03 is a SHOULD, so the `2 of 16` MUST headline count in AGENTS.md does not
+  move.
+
+### On-device observation (Android, 2026-09-30)
+
+**This is the first time anything about suppression has been observed in a real
+Obsidian.** ADR 0030's original Consequences section says "NOT VERIFIED IN
+OBSIDIAN... acceptance criterion 7 is explicitly not deliverable in this run";
+that is superseded for the four facts below and stays true for everything else.
+
+Device: Pixel 9 Pro XL, Android 17, Obsidian WebView Chrome/154, vault
+`AcceptanceTest`, note `ScrollAcceptance.md` (60 sentences, doc length 16,211,
+`scrollHeight` 9,497, `clientHeight` 997, so `scrollTop` max 8,500). Driven over
+CDP on `adb forward tcp:9333`. The probe hooks `EditorView.dispatch` to record each
+transaction's effect count, its scroll effect's `range.head` and `y`, and
+`scrollDOM.scrollTop` before the dispatch, two animation frames after it and 100 ms
+after it; a separate capture-phase `scroll` listener on the same `scrollDOM` counts
+native events. **Desktop remains unobserved** - CDP port 9222 is unreachable and
+the Flatpak Obsidian must not be restarted.
+
+**M1, F1 reachability, observed directly rather than inferred.** From a read
+started at chunk 0 with the stored position cleared, four consecutive chunk
+dispatches each carried **three effects, one of them a scroll effect** with
+`y: "center"` at heads 2, 21, 128 and 290 - and `scrollTop` read **0 before, 0
+immediately after, 0 two frames later and 0 at 100 ms** on every one of them, with
+**zero native `scroll` events** over the whole 65-second window. So the arm
+`applyHighlightLayers` sets was left unconsumed on every opening chunk. This is F1
+measured on the device rather than derived from the library source, and it confirms
+R1 independently of ADR 0022's series.
+
+**M2, the deciding measurement, and it answers the falsifiable prediction above in
+the favourable direction.** A real touch drag synthesized through CDP
+`Input.synthesizeScrollGesture` (`gestureSourceType: "touch"`, 350-400 px,
+speed 800) emitted **54, 46 and 33 native `scroll` events** on three separate
+gestures - not 1, and not close to 1. Since the stale arm swallows exactly one
+event, F1's user-visible consequence under a real gesture is **nil**: the second of
+33-54 events latches suppression. The prediction is therefore met and **no
+follow-up ticket is filed**. The honest limit is that this is the typical case, not
+the worst one: a programmatic `scrollDOM.scrollTop += 300` emits exactly one event
+and is indistinguishable from a user scroll to the listener, so a single-event
+scroll source would still lose that one event.
+
+**M3, the feature works at all.** After that 54-event gesture moved `scrollTop`
+from 0 to 400 mid-read, the next two chunk dispatches carried **two effects and
+zero scroll effects**, and `scrollTop` stayed at **400** while the read advanced
+from chunk 4 to chunk 6. Suppression latched on a real gesture and the viewport
+stopped tracking the read, which is acceptance criteria 1 and 2.
+
+**M4, the one-liner this amendment ships, measured on both sides.** Same device,
+same note, same probe, same command sequence, **only `main.js` differing**: an
+opening clamped dispatch leaves an arm pending with zero scroll events, the read is
+stopped with no scroll in between, playback is restarted, and then exactly **one**
+scroll event is delivered before the restarted read's own first chunk dispatch
+(`armingSoFar: 0` confirms the setup was clean, and `nEvents: 1` that it was a
+single event).
+
+- **Before** (`main.js` md5 `078d23c8…`): the restarted read's chunk dispatch
+  carried **three effects, one scroll effect at head 2**, and dragged `scrollTop`
+  from **300 back to 0**. The chunk after it scrolled too, so suppression never
+  latched at all. The user's scroll was undone - the defect, with its user-visible
+  consequence, on a real device.
+- **After** (`main.js` md5 `15e618c5…`): the same dispatch carried **two effects
+  and zero scroll effects**, `scrollTop` held at **300**, and `nEvents` stayed at
+  1, so the plugin produced no scroll of its own. The single event latched
+  suppression, because the arm no longer survived the restart.
+
+**M4(i), a restart does return to normal follow behaviour.** With suppression
+latched by a 33-event real gesture, a stop and a fresh read produced chunk
+dispatches carrying a scroll effect again (heads 2 and 21, three effects each), and
+the viewport moved from `scrollTop` 350 back to 0 as centring chunk 0 clamps at the
+document top. So the reset clears suppression as well as the arm.
+
+**One unrelated observation, recorded because it cost time and is not this
+ticket's.** Three times in this session a `read-note` after a stop left the player
+in `preparing` indefinitely - 60 s, 80 s and 95 s with no chunk dispatch and no
+state change - and each time a `disablePlugin`/`enablePlugin` cycle restored it.
+That matches the shape NRL-101 already records (a Kokoro session poisoned until
+reload, trigger unidentified); it was **not** triggered by this change, since it
+occurred on both the pre-fix and post-fix builds. It is not re-filed here.
