@@ -337,7 +337,10 @@ session, filed rather than folded in here: a Kokoro ONNX crash that leaves the s
 poisoned until Obsidian reloads, trigger unidentified (NRL-101, since **half** closed - the
 paragraph after this one is the whole of what moved), and the 4-thread WASM load
 failing reproducibly on a desktop Flatpak install, falling back to ~2.7x-real-time
-single-threaded synthesis rather than the README's assumed near-1x (NRL-102). Full
+single-threaded synthesis rather than the README's assumed near-1x (NRL-102, since
+**partly** closed - the repeat cost is gone, the root cause is untouched and the 2.7x
+figure still stands; read the NRL-102 paragraphs in the Android-throughput section
+below and do not read "closed" as "fixed"). Full
 measurement detail for both the Android acceptance and the two findings is in NRL-96's
 comment thread, not duplicated here.
 
@@ -444,6 +447,106 @@ So desktop Electron explicitly enables `SharedArrayBuffer`, and whatever defeats
 4-thread load there is something else. **Limit:** this proves the flag reaches the
 renderer; `typeof SharedArrayBuffer` was not evaluated inside the desktop page, because CDP
 9222 was not listening and Obsidian was not restarted to open it.
+
+**NRL-102 is PARTLY closed, and what did NOT close matters more than what did.** `89aedd0`,
+PR #188, `docs/adr/0034-remembering-a-failed-threaded-load-for-the-session.md`. **The root
+cause is untouched and unfixed.** Threads still fail on this host, single-threaded synthesis
+is still roughly 2.7x slower than real time, and the non-Flatpak comparison the ticket asks
+for remains unresolvable: the Flatpak is the only Obsidian on this machine, re-measured this
+run. **One wasted threaded attempt per Obsidian launch or plugin reload remains, BY DESIGN.**
+
+What closed is the *repeat* cost only. A failed threaded load is now remembered for the plugin
+session, so an incidental re-read of the same `kokoroThreads` value no longer resurrects the
+doomed attempt. Two new private fields on `KokoroEngine`: `threadedLoadFailed`, set in the
+existing catch in `load()` that already degrades `options.threads` to 1, and
+`requestedThreads`, written **only** by the constructor and `setOptions` and never by the
+degradation, so the two diverge exactly when a failure has been remembered. `setOptions`
+therefore compares the incoming **REQUESTED** value against the last requested value, never
+against the degraded effective one, and the suppression happens before `changed` is computed
+so a phantom 1 -> 4 no longer forces a dispose.
+
+**The ticket's own premise was wrong and is corrected here.** There is exactly one
+`new KokoroEngine` site (`src/engines/registry.ts:33`, reached once from `src/main.ts:156`),
+so the degradation already persisted for the whole plugin session and a bare `dispose()` -
+including NRL-101's recycle - left threads at 1. "Every fresh load re-pays" was not literally
+true. The two real re-pay paths were once per launch, which stays, and `setOptions` resetting
+threads to 4 because `kokoroOptions()` re-reads `settings.kokoroThreads`. The second is what
+was fixed, and the device dropdown (`src/ui/settingsTab.ts:280-283`) hit it the same way by
+re-asserting the unchanged count, which is why the fix had to live in `kokoro.ts` and **not**
+in `setKokoroWeights`: a `main.ts`-only fix would have missed the device path.
+
+Evidence, **bare Node against a fake worker that refuses any init asking for more than one
+thread**, which is the class to hold every figure below to. Init thread-count sequences:
+`[4,1,4,1]` unfixed against `[4,1,1]` fixed; the device-dropdown shape gives the identical
+`[4,1,4,1]`; a deliberate change to 2 gives `[4,1,2]` with the memory cleared and the attempt
+really made at the new value rather than silently forced to 1; and the adversarial re-arm case
+is `[4,1,2,1,2,1]` unfixed against `[4,1,2,1,1]` fixed, where the memory re-arms after the 2
+also fails and the skip line names the **NEW** count rather than the stale 4. 22 new checks in
+`tests/kokoro.test.ts`, of which **6 are defect reproductions** (T1c, T1d, T2, T3b, T4e, T5)
+and 3 are red merely because the new field and the new `infoCb` line did not exist. Verify
+corrected the author's own 5-of-9 split **upward, in the author's disfavour**: T4e's failure
+detail on the reverted build carries a *second* `threaded load failed (` line, which can only
+exist because the second doomed attempt was really made.
+
+**One thing was measured on the real desktop, and it is the DEFECT rather than the fix.** The
+defect reproduced verbatim over CDP against the deployed pre-fix build, with the ticket's
+trace character for character once `device: "wasm"` was forced at the engine level:
+`backend plan: wasm/4t -> wasm/1t`, then `threaded load failed (...)`, then
+`kokoro ready on CPU (WASM, 1 thread)` with `options.threads` 1 - after which the exact
+`kokoroOptions()` shape put `options.threads` back to 4 with `ready` nulled. **The FIX was
+not and could not be observed.** The running renderer provably held pre-fix code
+(`"threadedLoadFailed" in engine` was false, and the live `setOptions` stringified to the
+merge-base one-liner), the build on disk belonged to another lane, and restarting Obsidian was
+forbidden, so every figure about the fix is bare-Node and rule 11 applies to all of it.
+
+**A new measurement from that same session contradicts a claim already in this file, and both
+are left standing.** A plain `engine.load()` with the settings as found took the **GPU** path
+and **SUCCEEDED**: `backend choice: GPU (nvidia ampere, no shader-f16) with onnx/model.onnx`,
+`backend plan: webgpu/1t -> wasm/4t -> wasm/1t`, `loaded on webgpu with 1 thread(s) in
+3193ms`, `kokoro ready on GPU (WebGPU)`. So with as-found settings on this desktop the
+4-thread WASM attempt is **never reached**, which is why the ticket's trace needed the wasm
+backend forced. That is at odds with the NRL-96 paragraph earlier in this file, which records
+this machine reporting `GPU available (nvidia ampere, no shader-f16)` and the plugin falling
+back to the CPU with the JSEP pair never loaded. **Neither claim is deleted.** The new one's
+limits: it was taken against a *different concurrent lane's* deployed build rather than
+against `main`, on an un-restarted renderer, in one session. NRL-96's session also recorded
+`backend plan: wasm/4t -> wasm/1t` with no webgpu entry, so its device resolved differently.
+**NRL-139 now holds the question** of which is current.
+
+**Nothing is persisted, deliberately, and persisting it is the WRONG fix.** Plugin data is
+`data.json`, which is vault-synced, so a durable "threads failed here" flag would follow the
+vault to a machine where threads work and degrade it permanently with no way back - a worse
+defect than the one being fixed. Non-negotiable 10 is the independent second reason: a new
+settings key invites the whitelist rebuild that erases reading positions. `docs/adr/0034`
+carries both, plus the reason this flag must deliberately **survive** `dispose()` where
+NRL-101's `sessionFailed` / `recycleSpent` pair is deliberately cleared by it. Verify grepped
+the whole diff for `saveData|loadData|normaliseSettings|pluginData|DEFAULT_SETTINGS|data.json|`
+`localStorage|adapter.write|writeFile` and all four hits are prose explaining why nothing is
+persisted; `src/settings/` is untouched.
+
+**The limits, every one of them load-bearing.** The suite's "failure" is a fake worker refusing
+to boot, so nothing establishes that the real ORT thread pool fails the way the ticket reports,
+nor that a once-failed load would not have worked on a second try. `src/main.ts` and
+`src/ui/settingsTab.ts` have no bare-Node runtime, so `kokoroOptions()`, both `setOptions`
+call sites, the device dropdown and the threads slider have **no automated coverage of any
+kind**, and the option shapes in the tests are transcriptions - though the real-host
+reproduction did drive the `kokoroOptions()` shape against the live engine, which is stronger
+than a transcription for that one step. The worker keeps its own `SharedArrayBuffer` probe and
+its own per-attempt fallback (`src/engines/onnx/kokoro.worker.ts` is byte-identical by
+sha256), so **two un-unified layers now give up on threads**; that is accepted, the worker's
+probe being the backstop for a host where `SharedArrayBuffer` is simply absent, which the
+engine-level memory cannot see. And the same-count-is-incidental choice is a **judgement
+nobody has user-tested**: re-asserting 4 when 4 is already stored carries no signal at all,
+because the device dropdown and the slider call `setKokoroRuntime` with identical arguments,
+so it is treated as incidental and suppressed, with the slider's per-value `onChange` and a
+plugin reload as the escape hatches.
+
+**No requirement moves and the `2 of 16` MUST count does not move.** This ticket cites no
+requirement ID, and `srs.md` was not amended. State the reason in its corrected form:
+`grep -n thread srs.md` is zero matches, but `kokoroThreads` **does** appear at `srs.md:509`,
+in the Settings shape listing with no behavioural contract attached. The case-sensitive grep
+that missed it was caught by critique as a rule 13 violation and corrected in ADR 0034, so
+quote the corrected form rather than the bare zero.
 
 **The direct native route is still closed on a current WebView.** NRL-35's BLOCKED_BY_HOST
 was measured on Chrome/88; re-measured on Chromium 154 it holds: `typeof speechSynthesis`
@@ -886,6 +989,15 @@ this repo establish their counts: **symlinking a shadow root defeats mutation te
 resolves symlinks, so a `__dirname`-derived `ROOT` silently resolves back to the real
 worktree, the mutation is never read, and every run comes back green. Copy the bundle instead
 of linking it, and sanity-mutate once before trusting a shadow.
+**A second trap sits on the same technique and is a different failure, so the note above does
+not cover it: a `cp -a` of a git WORKTREE carries a `.git` FILE, not a directory.** It holds
+`gitdir: .../.git/worktrees/<name>`, so a git command run inside the copy rewrites the **real**
+worktree's INDEX. Measured during NRL-102's Verify: a
+`git checkout <mergebase> -- src/engines/onnx/kokoro.ts` inside the shadow left the real
+worktree reading `MM`. The file *content* was never wrong - its sha256 matched `HEAD`'s blob
+throughout - only the index entry pointed at the merge-base blob, and `git reset HEAD -- <path>`
+restored it. The symlink trap makes the mutation invisible; this one corrupts the tree you are
+measuring against. Give the shadow its own `.git`, or never run git inside it.
 `actionlint` 1.7.7 is not a substitute for
 running it: measured during NRL-69, it was silent on **both** halves of the compile defect
 that had broken every run in this repo's history, so its silence on this file is weak
