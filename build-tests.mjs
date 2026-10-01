@@ -27,4 +27,11 @@ await build({
 	external: [...builtins],
 	logLevel: "warning",
 	sourcemap: "inline",
+	// src/engines/system/spawn.ts loads child_process with a plain require(),
+	// because that is the only thing that resolves a builtin inside Obsidian
+	// (NRL-135, docs/adr/0033). An ESM bundle has no `require`, and esbuild's
+	// __require shim throws without one, so give it the real thing.
+	banner: {
+		js: 'import { createRequire as __nrlCreateRequire } from "node:module";\nconst require = __nrlCreateRequire(import.meta.url);',
+	},
 });

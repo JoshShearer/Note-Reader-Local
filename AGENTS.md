@@ -170,15 +170,21 @@ Each of these is a promise the product makes. Breaking one is a BLOCK, not a con
 ### Mobile safety
 
 7. **`manifest.json` declares `isDesktopOnly: false`.** No node builtin may be imported
-   in a way that evaluates on mobile. `child_process` is type-only plus two dynamic
-   `await import()` calls inside method bodies (`src/engines/system/spawn.ts`), and the
-   engines that reach them are constructed only when `shouldConstructLinuxDesktopEngines`
+   in a way that evaluates on mobile. `child_process` is type-only plus one call-time
+   `require("child_process")` reached from two method bodies (`src/engines/system/spawn.ts`),
+   and the engines that reach it are constructed only when `shouldConstructLinuxDesktopEngines`
    (`src/engines/platform.ts`) passes, which is Linux desktop specifically and narrower
    than not-mobile: a macOS or Windows desktop is not mobile and still gets neither.
    `Platform.isMobile` does appear in `registry.ts`, in `resolveWeights` and
    `probeEngines`, but it is not what gates that construction. Keep it that way, and
    check `main.js`'s `require()` list after any dependency change - it should contain
-   only `obsidian`, `@codemirror/view`, `@codemirror/state`.
+   only `obsidian`, `@codemirror/view`, `@codemirror/state` and `child_process`, the last
+   allowed only in that call-time shape (`docs/adr/0033`). **Never `import()` a builtin**:
+   esbuild leaves it as a native dynamic import, Obsidian's renderer cannot resolve a bare
+   builtin specifier, and that is how both Linux engines reported "not installed" from the
+   first commit until NRL-135 while every bare-Node suite stayed green. CI and
+   `tests/release.test.ts` both fail on one. Do not hide a builtin from those checks with a
+   computed specifier or `window.require`.
 
 ### Correctness
 

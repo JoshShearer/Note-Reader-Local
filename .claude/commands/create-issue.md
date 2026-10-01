@@ -116,7 +116,7 @@ now than to catch in review.
 | `src/engines/system/` | Speech text goes to subprocesses on stdin, never argv (rule 2) |
 | `src/engines/onnx/kokoro.worker.ts` | `isRemote` and `assertLocal` stay. Fix the path, not the guard (rule 5) |
 | `src/settings/index.ts` | `normaliseSettings()` must not drop unrecognised keys; plugin data holds reading positions too (rule 10) |
-| Any new import, or a dependency change | `manifest.json` is `isDesktopOnly: false`. Re-check `main.js`'s `require()` list: only `obsidian`, `@codemirror/view`, `@codemirror/state` (rule 7) |
+| Any new import, or a dependency change | `manifest.json` is `isDesktopOnly: false`. Re-check `main.js`'s `require()` list: only `obsidian`, `@codemirror/view`, `@codemirror/state`, plus `child_process` as a call-time `require` in `src/engines/system/spawn.ts` only (ADR 0033), and no `import()` of any builtin (rule 7) |
 | Anything that downloads | Every byte is user-initiated. No fetch on load, on prewarm, or on first read (rule 6) |
 | Any performance claim in the issue | Rule 13: you measured it this session, or you cite where it was measured |
 

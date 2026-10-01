@@ -14,6 +14,7 @@
 import { execFileSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import { builtinModules } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -272,6 +273,41 @@ test("nothing in the bundle can fetch a runtime at runtime", () => {
 	assert(
 		!content.includes("ORT_RELEASE_REPO"),
 		"main.js still carries the release-repo constant the on-demand download used",
+	);
+});
+
+// NRL-135, docs/adr/0033. Inside Obsidian's renderer a native `import()` of a
+// node builtin throws "Failed to resolve module specifier", and esbuild leaves
+// a dynamic import of an external exactly as written. That shipped from the
+// first commit until NRL-135 and made both Linux engines report "not
+// installed" on machines where they were installed, while every bare-Node
+// suite stayed green, because Node's own loader resolves builtins. This is the
+// only place the shipped artifact is checked for it.
+test("main.js holds no import() of a node builtin", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	const builtins = new Set(
+		builtinModules.flatMap((m) => [m, `node:${m}`]),
+	);
+	const hits = [...content.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g)]
+		.map((m) => m[1] ?? "")
+		.filter((spec) => builtins.has(spec));
+	assert(
+		hits.length === 0,
+		`main.js dynamically imports ${[...new Set(hits)].join(", ")}; Obsidian's ` +
+			"renderer cannot resolve that, use a lazy require() (ADR 0033)",
+	);
+});
+
+// Mirrors ci.yml's "Assert main.js require() list" step so a local `npm test`
+// sees the same verdict. child_process is allowed only since ADR 0033, and
+// only as a call-time require inside src/engines/system/spawn.ts.
+test("main.js require() list is exactly the allowed set", () => {
+	const content = fs.readFileSync(MAIN_JS, "utf-8");
+	const allowed = ["@codemirror/state", "@codemirror/view", "child_process", "obsidian"];
+	const found = [...new Set([...content.matchAll(/require\("([^"]+)"\)/g)].map((m) => m[1]))].sort();
+	assert(
+		JSON.stringify(found) === JSON.stringify(allowed),
+		`main.js require() list is ${found.join(", ")}, expected ${allowed.join(", ")}`,
 	);
 });
 

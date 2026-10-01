@@ -296,13 +296,14 @@ npm run build
 grep -oE 'require\("[^"]+"\)' main.js | sort -u
 ```
 
-The result must be exactly `obsidian`, `@codemirror/view`, `@codemirror/state`. Anything else,
-and especially `child_process`, `fs`, `path` or `os`, means a node builtin now evaluates at
-module scope on Android, where the plugin is loaded because `manifest.json` says
+The result must be exactly `obsidian`, `@codemirror/view`, `@codemirror/state`, `child_process`
+(ADR 0033). Anything else, and especially `fs`, `path` or `os`, means a node builtin now
+evaluates at module scope on Android, where the plugin is loaded because `manifest.json` says
 `isDesktopOnly: false`.
 
 Then confirm the shape that keeps it that way: `spawn.ts` reaches `child_process` only through
-`await import("child_process")` inside method bodies, and `kokoro.worker.ts` is a separate
+a call-time `require("child_process")` in `loadChildProcess`, called from method bodies, never
+through an `import()` (which Obsidian's renderer cannot resolve, NRL-135), and `kokoro.worker.ts` is a separate
 bundle. `registry.ts`'s `createEngines` constructs `EspeakEngine` and `SpeechDispatcherEngine`
 only when `shouldConstructLinuxDesktopEngines` (`src/engines/platform.ts`) passes, which is Linux
 desktop specifically and narrower than not-mobile: a macOS or Windows desktop is not mobile and

@@ -44,6 +44,25 @@ export interface ProcessRunner {
 	which(cmd: string): Promise<string | null>;
 }
 
+/**
+ * Load child_process at call time, never at module scope (AGENTS.md rule 7,
+ * docs/adr/0033).
+ *
+ * A native `import("child_process")` cannot work in Obsidian: esbuild leaves a
+ * dynamic import of an external untouched, and the renderer's ESM loader has
+ * no resolution for a bare builtin specifier, so it throws "Failed to resolve
+ * module specifier 'child_process'". Every run() then rejected, which() caught
+ * that as "not on PATH", and both Linux engines reported themselves missing on
+ * a machine where spd-say and espeak-ng were installed (NRL-135). The CJS
+ * `require` that nodeIntegration provides is what resolves builtins there.
+ * The ESM test bundles get a real `require` from build-tests.mjs's banner, so
+ * no import() fallback is needed and none may come back: CI fails the build
+ * if main.js holds an `import()` of any node builtin.
+ */
+function loadChildProcess(): typeof import("child_process") {
+	return require("child_process") as typeof import("child_process");
+}
+
 class NodeProcessRunner implements ProcessRunner {
 	async run(
 		cmd: string,
@@ -51,7 +70,7 @@ class NodeProcessRunner implements ProcessRunner {
 		stdin?: string,
 		signal?: AbortSignal,
 	): Promise<RunResult> {
-		const { spawn } = await import("child_process");
+		const { spawn } = loadChildProcess();
 		return await new Promise<RunResult>((resolve, reject) => {
 			const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
 			const stdout: Buffer[] = [];
@@ -89,7 +108,7 @@ class NodeProcessRunner implements ProcessRunner {
 	}
 
 	async spawn(cmd: string, args: string[]): Promise<ChildProcessWithoutNullStreams> {
-		const { spawn: nodeSpawn } = await import("child_process");
+		const { spawn: nodeSpawn } = loadChildProcess();
 		return nodeSpawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
 	}
 

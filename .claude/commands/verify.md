@@ -129,9 +129,12 @@ Mobile safety is rule 7 and it is not covered by any test.
 grep -o 'require("[^"]*")' main.js | sort -u
 ```
 
-The list must contain only `obsidian`, `@codemirror/view`, `@codemirror/state`. Anything
-else, especially a node builtin such as `child_process`, `fs` or `path`, is a BLOCK: it
-breaks `isDesktopOnly: false`.
+The list must contain only `obsidian`, `@codemirror/view`, `@codemirror/state` and
+`child_process`, the last allowed only as the call-time `require` in
+`src/engines/system/spawn.ts` (ADR 0033). Anything else, especially another node builtin
+such as `fs` or `path`, is a BLOCK: it breaks `isDesktopOnly: false`. So is any
+`import("<builtin>")` in `main.js` (`grep -oE 'import\("[^"]+"\)' main.js`): Obsidian's
+renderer cannot resolve one, which is NRL-135.
 
 If `kokoro.worker.ts` moved, confirm `isRemote` and `assertLocal` still exist in the built
 worker:
