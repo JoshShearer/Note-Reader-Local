@@ -43,7 +43,10 @@ the human wait the whole design exists to avoid. Launch it wrong and it stalls a
 | `rm -rf "$DEPLOY_LOCK"` | releasing the deploy slot, in Verify and in Finish |
 
 `git worktree add` and `git worktree remove` are **not** gated (`opencode.json` allows `*` by
-default and neither matches a listed rule), so lane creation and cleanup add no new prompt.
+default and neither matches a listed rule), so lane creation and cleanup add no new prompt. Nor are
+`gh api` and `git ls-remote`, which is why Phase 6 deletes a merged branch's remote ref with
+`gh api -X DELETE` rather than with the gated `git push origin --delete`. That is deliberate, not an
+oversight: do not "simplify" it back to a `git push`.
 
 `git branch -d` is not gated, but it is not the path taken: this repo squash-merges, so `-d`
 reports "not merged" for work that is fully in `main` (Phase 7 says so itself), and `-D` after a
@@ -620,14 +623,45 @@ Only when `verifyVerdict` is `pass`:
 
 ```bash
 gh pr view <prNumber> --json state,mergeable
-gh pr merge <prNumber> --squash --delete-branch
-gh pr view <prNumber> --json state,mergedAt,mergeCommit
+gh pr merge <prNumber> --squash
+gh pr view <prNumber> --json state,mergedAt,mergeCommit   # state MERGED before the next line
+gh api -X DELETE "repos/{owner}/{repo}/git/refs/heads/<branch>"
+git ls-remote --heads origin '<branch>'   # must print nothing; exit code is 0 either way
 ```
+
+`<branch>` is the state file's ticket `branch` field, which this phase did not previously need. The
+`{owner}/{repo}` placeholders resolve from whatever `origin` points at, and were measured expanding
+to `JoshShearer/Note-Reader-Local` on `gh 2.45.0` here (the literal
+`repos/JoshShearer/Note-Reader-Local/git/refs/heads/<branch>` is the same call, kept as a fallback
+because the `gh` version is not pinned anywhere in this repo). Write the ref path exactly as above:
+neither `.../refs/heads/<branch>` nor `.../git/refs/<branch>` is it.
+
+**The ref delete comes after the confirming view, and only runs if that view said `state: MERGED`.**
+Unlike `--delete-branch`, which `gh` runs for you only on a merge it just completed, these are five
+independent commands: run them blind and a `gh pr merge` that failed (a conflict, a missing Verify
+pass, an API error) is still followed by a delete of the one pushed copy of that branch. Read the
+second view before the fourth line. `git ls-remote` is then the proof, and read its **output**, not
+its exit status: it exits 0 whether or not the pattern matched, so a check on `$?` passes either way.
+
+**No `--delete-branch`.** It makes `gh` switch off the merged branch afterwards, and the branch it
+switches to is the default one, which is permanently checked out in the primary repo, so git refuses
+from a lane with `fatal: 'main' is already used by worktree at <primary>`. The merge itself still
+lands and only the cleanup aborts, so the visible output reads like a failed merge when a stale remote
+branch is the only casualty. The remote ref then goes with `gh api` rather than with
+`git push origin --delete` because `opencode.json` sets `git push *` to `ask`, and a gated command is
+the human wait this design exists to avoid.
 
 If the PR is already merged, record that and move on. If it is not mergeable (a conflict with
 `main`), block the ticket with the reason; do not resolve conflicts inside this phase. Never merge
 a ticket whose Verify did not record a pass, and never self-approve. Record the merge commit and
 set `phase: \"finish\"`.
+
+Verify the merge by content, not just by branch state: this repo squashes, so `git branch -d` can
+claim 'not merged' for work that is fully in `main`. This phase deletes no local branch and has no
+resynced lane yet, so the content evidence here is the second `gh pr view` reporting `state: MERGED`
+with a non-null `mergeCommit`, plus a grep of `origin/main` for a distinctive symbol the PR added if
+anything is in doubt. That first sentence is **byte-identical** to Phase 7's copy of it below, so that
+the two cannot drift apart unnoticed; edit both or neither.
 
 **7. Finish** - "Read `.claude/commands/finish.md` and follow it for the merged branch `<branch>`
 in `<run-worktree>`. Two of its steps do not apply in a run lane and must be skipped; everything else
@@ -637,6 +671,10 @@ does.
 `note-reader-local-nrl-${ISSUE_NUM}`, which does not exist in a run lane, and the lane you are in is
 removed once for the whole run by Step 8, not per ticket. A phase that removed its own lane would
 delete the checkout the next ticket needs.
+
+`finish.md` **step 4 needs no skip and no change.** Phase 6 already deleted the remote ref, so its
+`git ls-remote` finds nothing, its "Already gone" arm fires and records `remote: already-deleted`, and
+the gated `git push origin --delete` on the other arm is never reached.
 
 **Do not check out `main`.** It is checked out in the primary repo and git will refuse. Where
 `finish.md` says to finish on an up-to-date `main`, finish on `<run-branch>` reset to `origin/main`:
@@ -652,8 +690,13 @@ Done with `save_issue`, passing `id` and `state: \"Done\"`: the parameter is `st
 `status`, and unknown fields are rejected, so no id lookup is needed. Read the status back. Then
 check whether this ticket removed one of the defects listed in the `AGENTS.md` Known state section,
 or moved a requirement's status in `srs.md`. If so, make the doc edit on a `docs/<id>-finish`
-branch, open a PR, and squash-merge it yourself; never commit to `main` directly. Only move a
-requirement to fully met with evidence, and name that evidence. Finally, take `<deploy-lock>`
+branch, open a PR, and squash-merge it yourself; never commit to `main` directly. Merge it the way
+Phase 6 does and for the same reason: `gh pr merge <n> --squash` with no `--delete-branch`, then
+`gh api -X DELETE \"repos/{owner}/{repo}/git/refs/heads/docs/<id>-finish\"`, then
+`git ls-remote --heads origin 'docs/<id>-finish'`, which must print nothing. Quote the branch name in
+that `ls-remote`, because it contains a `/`; the ref path after `heads/` takes the same slash
+literally. Only move a requirement to fully met with evidence, and name that evidence.
+Finally, take `<deploy-lock>`
 atomically with `mkdir` and run `npm run deploy` from the resynced lane so the owner's vault carries
 the latest merged build, then write `.deployed-from` with this lane's path and commit, and release
 the lock. If the lock cannot be taken, skip the deploy and name the holder; do not wait. Leave the
@@ -689,11 +732,27 @@ for B in <ticket branches>; do
 done
 ```
 
-A branch with no remote is fine **only** if it is an ancestor of `origin/main`, which is the normal
-end state: Merge squash-merged it and `--delete-branch` removed the remote copy. A branch with no
+A fully finished ticket branch normally reaches **neither** arm: Phase 7's `finish.md` deletes the
+local branch at its step 5 and prunes at its step 6, so `git rev-parse --verify "$B"` fails and the
+loop's `continue` skips that branch entirely. A branch that still resolves here is one whose Finish
+did not complete, and then which arm fires depends only on the tracking ref. Merge deleted the remote
+ref with `gh api -X DELETE`, which is server-side only, and Phase 7's plain `git fetch origin` does
+not remove the local `origin/<branch>` (`fetch.prune` and `remote.origin.prune` are both unset in this
+lane), so the first arm usually still fires and prints `unpushed=0`.
+
+Once something prunes that tracking ref, the second arm fires, and a squash-merged branch prints
+`merged=no` there, **not** `merged=yes`: a squash commit is a new commit, so the branch tip is not an
+ancestor of `origin/main`. Measured 2026-10-01 on this repo, the head commits of PRs #168, #170, #172
+and #174 are all non-ancestors of `origin/main` after their squash merges. `merged=yes` is the
+signature of a branch carrying nothing of its own, not of a merged one. So that arm does **not**
+satisfy the "all four clean" condition below, and the lane is kept. The gate cannot tell a
+squash-merged branch from genuinely unpushed work, so it fails towards keeping: report it the way
+"Anything not clean" says and leave the discard to the owner.
+
+A branch with no remote is fine **only** if it is an ancestor of `origin/main`. A branch with no
 remote that is not an ancestor of `origin/main` is unpushed work. Do not use `git branch -d`'s opinion
-here for the same reason Phase 7 does not: a squash merge makes it report "not merged" for work that is
-fully in `main`.
+here for the same reason Phase 7 does not: a squash merge makes it report "not merged" for work that
+is fully in `main`.
 
 **All four clean** - `status` empty, `stash list` empty, every ticket branch either zero commits ahead
 of its remote or an ancestor of `origin/main`:
