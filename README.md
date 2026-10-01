@@ -4,8 +4,11 @@ Read your notes aloud with on-device text-to-speech and word highlighting. No cl
 
 ## Features
 
-- **On-Device Speech Synthesis** - Three TTS backends, all running locally on your machine or device
-  - Linux: Speech Dispatcher (eSpeak NG, Festival, Piper, etc.)
+- **On-Device Speech Synthesis** - Four TTS backends, all running locally on your machine or
+  device. Which ones you can actually use depends on the host; see
+  [System Requirements](#system-requirements).
+  - Linux desktop: Speech Dispatcher (eSpeak NG, Festival, Piper, etc.), or `espeak-ng` driven
+    directly
   - macOS/Windows: System-provided voices (via Web Speech API)
   - All platforms including Android: Local neural TTS via Kokoro (WebGPU where the host offers an adapter, otherwise WASM. Android is always the WASM path, single-threaded - see [Android](#android))
 - **Word-Level Highlighting** - Current word highlights as you read, driven by source offsets
@@ -37,7 +40,9 @@ Settings → Community plugins. There is nothing else to install; the ONNX runti
 ## Usage
 
 1. Open any note in Obsidian
-2. Click the speaker icon in the ribbon (or use `Ctrl+Shift+R` / `Cmd+Shift+R` on macOS)
+2. Click the **Read this note aloud** button in the ribbon, or run **Read note aloud** from the
+   command palette. No default hotkey ships - bind one yourself under Settings → Hotkeys if you
+   want one.
 3. Adjust playback speed, voice, and content preferences in Settings
 
 ## System Requirements
@@ -65,6 +70,11 @@ sudo apt-get install speech-dispatcher speech-dispatcher-espeak-ng
 sudo dnf install speech-dispatcher espeak-ng
 ```
 
+The separate `espeak-ng` engine skips the daemon and drives the `espeak-ng` binary directly;
+install the `espeak-ng` package if you want it. Of the two Linux paths, Speech Dispatcher is the
+one this repo's tests exercise against a real daemon - `espeak-ng` is covered against a fake
+process runner only - so treat it as the less exercised of the two.
+
 ### macOS / Windows
 
 Uses your system's built-in voice synthesis (Siri, Cortana, or equivalent).
@@ -75,7 +85,7 @@ Kokoro is the only engine available on Android. The device's native TTS engine i
 reachable: Obsidian exposes no TTS facility of its own, its bundled Capacitor bridge has no
 `TextToSpeech` plugin compiled in, and Obsidian's Android WebView does not implement
 `window.speechSynthesis` at all. This was confirmed by measurement on real hardware rather
-than assumed. A diagnostic command, `TTS: Test Android native TTS`, reports the details and
+than assumed. A diagnostic command, **Test Android native TTS**, reports the details and
 lands on `BLOCKED_BY_HOST`; it exists so the finding can be rechecked, not because the path
 works.
 
@@ -184,16 +194,20 @@ The remaining Kokoro controls:
 
 ## Architecture
 
-The plugin splits speech synthesis into three independent engines, each with its own backend:
+The plugin splits speech synthesis into four independent engines, each with its own backend:
 
-- **Speech Dispatcher** (Linux) - Interfaces with the system's configured speech engine
+- **Speech Dispatcher** (Linux desktop) - Interfaces with the system's configured speech engine
+- **espeak-ng** (Linux desktop) - Drives the `espeak-ng` binary directly, with no daemon in
+  between
 - **Web Speech API** (Browser) - Uses browser voices (online/offline detection provided)
 - **Kokoro** (All platforms) - Local neural synthesis via transformers.js + ONNX Runtime
   - The only engine available on Android, for the reasons above
 
-Engine availability therefore depends on the host: Speech Dispatcher needs a Linux daemon and
-an output module, Web Speech needs a browser or desktop runtime that implements
-`speechSynthesis`, and Kokoro needs a WebView with WebAssembly SIMD.
+Engine availability therefore depends on the host. Speech Dispatcher and `espeak-ng` are built
+only on Linux desktop, and each additionally needs its own binary present - `spd-say` with a
+running daemon and at least one output module, or `espeak-ng` on `PATH`. Web Speech needs a
+browser or desktop runtime that implements `speechSynthesis`, and Kokoro needs a WebView with
+WebAssembly SIMD.
 
 Each engine advertises what it can do (pause, resume, pitch control, etc.) so the UI only enables controls that actually work.
 
@@ -215,7 +229,9 @@ MIT - See LICENSE for details.
 
 ### 0.1.0 (Initial Release)
 
-- Three speech backends - Speech Dispatcher, Web Speech, and Kokoro - with automatic quality-ranked fallback selection. Availability depends on the host; see System Requirements
+- Four speech backends - Speech Dispatcher, espeak-ng, Web Speech, and Kokoro - with automatic
+  quality-ranked fallback selection. The two Linux backends are built only on Linux desktop;
+  availability otherwise depends on the host; see System Requirements
 - Word-level highlighting with source offset mapping
 - Linux Speech Dispatcher backend (eSpeak NG, Festival, Piper, and other output modules)
 - Web Speech backend (macOS, Windows, browsers)
