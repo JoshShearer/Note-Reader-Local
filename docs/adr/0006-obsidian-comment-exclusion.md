@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-09-29
 - Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44, NRL-64, NRL-74 and
-  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74 and NRL-95
+  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74, NRL-95 and NRL-93
 
 ## Context
 
@@ -26,7 +26,9 @@ evidence, not a live Obsidian reading or highlighting observation.
    including trailing prose on the closing line and subsequent comments there.
 
 2. **Distinguish block and inline openers.** At the start of a prose line
-   (allowing whitespace) **and with no further `%` before the end of that
+   (we allow any whitespace; the renderer allows leading **spaces** only,
+   charCode 32, with no cap on how many, and that gap is the open divergence
+   recorded below) **and with no further `%` before the end of that
    line**, an unmatched `%%` opens a block that hides through
    the first later `%%`, or through EOF when none exists. Apply this to the
    line body after structural prefixes are peeled and to closing-line prose
@@ -186,13 +188,73 @@ evidence, not a live Obsidian reading or highlighting observation.
    paragraph, so stopping there was a measured disclosure. See ADR 0025 decisions
    3 and 4, and the residual list there.
 
-   One known miss, not opened by NRL-73 and not fixed by it: the line-start half
-   uses `.trim()`, which accepts a **tab**, where the tokenizer's skip loop
-   accepts charCode 32 only. So `\t%%` opens a block for us and not for Obsidian.
+   **Two** known misses in the line-start half, neither opened by NRL-73, both
+   still open, and both in the prose-loss direction. NRL-93 investigated them and
+   is **BLOCKED**: the record below is what it measured, not a fix. Replaced in
+   place, per the NRL-66/NRL-67 convention; the paragraph that recorded one miss
+   and called a one-line change unsafe for an unknown reason is superseded,
+   because the reason is now known and is not the one it named.
 
-   This was read off the installed parser's own source and was **NOT observed
-   live** in Obsidian - the same standing this ADR's other tokenizer citations
-   have. Every number above is bare-Node measurement against base `bb77b77`.
+   Miss 1 is the tab. The half uses `.trim()`, which accepts a **tab**, where the
+   tokenizer's skip loop is
+   `for(var i=t.length,r=0;r<i&&32===t.charCodeAt(r);)r++;` immediately before
+   `if(37===t.charCodeAt(r)&&37===t.charCodeAt(r+1))` and so accepts charCode 32
+   only. `\t%%` opens a block for us and not for Obsidian, which silences a
+   paragraph's remaining lines and a blockquote whole.
+
+   Miss 2 is **four or more spaces**, found while investigating miss 1 and in the
+   same mechanism. The `%%` tokenizer's own loop really has no cap, but a
+   continuation line indented a tab or four-plus spaces never reaches it: the
+   paragraph tokenizer (module 8607) skips the interrupt check for such a line
+   outright -
+   `if((h=t.charAt(c))===o){p=l;break}` ... `if(p>=l&&h!==a){y=t.indexOf(a,y+1);continue}`
+   with `o = "\t"`, `s = " "`, `a = "\n"`, `l = 4`, gated on
+   `options.commonmark`, which `VT.globalOptions={breaks:!0,commonmark:!0}` sets.
+   So the line is absorbed as lazy prose and its `%%` reaches the **inline**
+   tokenizer, `/^%%(.*?)%%/`, which is anchored and whose `.` does not match a
+   newline, so an unmatched one is literal and displayed. We open a block.
+
+   **Why neither is a one-line change, and why the obvious two candidates are
+   both wrong.** The renderer's line-start test runs on the view a container has
+   already dedented, and a LIST ITEM's content is dedented by the item's own
+   content indent before any block tokenizer sees it: module 745's `M` calls
+   module 5540's remove-indentation with that indent, and module 6058 counts a
+   tab as four columns. Transcribed and RUN rather than reasoned about, those
+   three turn `- item` / `\t%%` / `SECRET` into `item` / `%%` / `SECRET`, so the
+   renderer DOES open a comment there and our current behaviour is already right.
+   A charCode-32 scan therefore newly speaks hidden text inside a list:
+   **6,144 of 24,576 cells** on a 48-shape list census and **1,272 of 16,000
+   note-option cells** on a 4,000-note single-item fuzz, with **zero** leaks
+   closed in that population. A `/^ {0,3}$/` capped form, which would close miss
+   2 as well, is worse there still at **8,704 cells**. The faithful rule is
+   therefore context-sensitive: dedent a list continuation first, then accept
+   charCode 32 only and at most three of them. That needs the item indent
+   threaded to this predicate, which is a mechanism and not a character class.
+
+   A **fresh-block** tab-led or four-space line is not part of either miss and
+   needs no change: it never reaches this predicate, and the renderer agrees it
+   is code. `blockMethods` is [frontmatter, blankLine, indentedCode, ..., comment,
+   fencedCode, ...], because `FE` splices before its anchor
+   (`a.splice(a.indexOf(n),0,t)`) and `indentedCode` already precedes
+   `fencedCode`, and module 134 opens indented code on ONE tab
+   (`else if(l===o)` with `o = "\t"`). `interruptParagraph` holds no
+   `indentedCode` entry at all, and both its `setextHeading` and `definition`
+   entries carry `{commonmark:!1}`, which module 6047's
+   `(void 0===o.commonmark||o.commonmark===n.options.commonmark)` gate disables
+   under `commonmark:!0` - worth writing down because an oracle that keeps either
+   of them models the wrong parser.
+
+   `opensHtmlBlock` keeps `.trim()` deliberately and shares neither miss: module
+   8776's skip loop is `(C === "\t" || C === " ")`, so Obsidian really does
+   accept a tab before `<!--`. The two predicates answer different questions and
+   must not be merged (D-73-4, and NRL-66's note about two scans).
+
+   All of this was read off the installed parser's own source - `app.js` sha256
+   `8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898`,
+   3,876,459 bytes - and was **NOT observed live** in Obsidian, the same standing
+   this ADR's other tokenizer citations have. NRL-73's numbers above are
+   bare-Node measurement against base `bb77b77`; NRL-93's are bare-Node
+   measurement against base `f27517d`.
 
 3. **Only the active comment's first matching closer ends it.** Comments do
    not nest. HTML comments end at `-->`; Obsidian comments end at `%%`.
