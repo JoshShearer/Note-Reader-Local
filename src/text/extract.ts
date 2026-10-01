@@ -553,15 +553,24 @@ function opensHtmlBlock(view: string, at: number, closesLater: boolean, setextCo
  *   or more columns (`if((h=t.charAt(c))===o){p=l;break}` ... `if(p>=l&&h!==a)
  *   {y=t.indexOf(a,y+1);continue}` with `l=4`), so such a line is absorbed as
  *   lazy prose and its `%%` falls to the anchored inline `/^%%(.*?)%%/`, which
- *   has no closer and is displayed. In a FRESH block position the same four
- *   columns are indented code instead - `blockMethods` runs `indentedCode`
- *   before `comment`, and module 134 opens on one tab - which `extractChunks`'
- *   own INDENTED_CODE branch already handles before this predicate is reached.
- *   Either way four columns is not a comment opener.
+ *   has no closer and is displayed. In a FRESH block position a lead of four
+ *   literal spaces, or of one literal tab, is indented code instead -
+ *   `blockMethods` runs `indentedCode` before `comment`, and module 134 opens
+ *   on either of those - which `extractChunks`' own INDENTED_CODE branch
+ *   handles before this predicate is reached. Either way such a lead is not a
+ *   comment opener.
  *
- * Note that no tab can survive the cap: module 6058 advances a tab to the next
- * multiple of four, so any lead containing one is at least four columns, which
- * is why one spaces-only scan plus a length test covers both halves.
+ * NRL-113 narrowed that: a lead of one to three spaces THEN a tab is no longer
+ * indented code for us, because module 134 does no tab-stop expansion, so a
+ * fresh-block ` \t%%` line now DOES reach this predicate. Term A declines it
+ * correctly and for the renderer's own reason - the `%%` skip loop is charCode
+ * 32 only - so the line is prose carrying a literal `%%`, which is exactly what
+ * the renderer displays. So it is no longer true that "no tab can survive the
+ * cap", and the earlier appeal to module 6058 snapping a tab to the next
+ * multiple of four is CommonMark-shaped column arithmetic that module 134 does
+ * not perform. What covers both halves is simply that term A's scan stops at
+ * any non-space, so any lead containing a tab is refused outright regardless of
+ * its length.
  *
  * The one guarantee this predicate offers unconditionally, and the only one worth
  * relying on, is STRUCTURAL: it can decline an opener the pre-NRL-93 rule
@@ -2216,12 +2225,54 @@ const TERM2_DASH_RUN = /^ {0,3}--+\s*$/;
  */
 const TERM2_SETEXT_DASH = /^--+\r?$/;
 /**
- * Four columns of indent. A tab after up to three spaces reaches the next tab
- * stop, which is column four, so it counts too. Whether the line is code
- * depends on state: CommonMark only starts indented code after a blank line
- * or at the start of the document, and never inside a list item.
+ * Four literal spaces, or one literal tab, at offset 0. There is deliberately
+ * NO tab-stop expansion here, and that is the renderer's rule rather than
+ * CommonMark's.
+ *
+ * This used to read `/^(?: {4}| {0,3}\t)/` with a comment saying "a tab after
+ * up to three spaces reaches the next tab stop, which is column four, so it
+ * counts too". That is true of CommonMark and false of Obsidian. Module 134,
+ * Obsidian 1.13.7's indented-code tokenizer, was RUN out of the installed asar
+ * during NRL-113 rather than read: its opener arm is `l===a` plus the next
+ * three characters also `a` (four LITERAL spaces, `a = " "`) or `l===o` (one
+ * LITERAL tab, `o = "\t"`), tested at offset 0, with no column arithmetic
+ * anywhere. The tokenizer is a SINGLE loop, so the continuation arm IS the
+ * opener arm - the same test at each line start - which is why one constant
+ * serves every read site here and is faithful rather than merely convenient.
+ *
+ * That count has moved since NRL-113 was planned and the number is deliberately
+ * not written into this comment again. It was THREE at NRL-113's own base
+ * (079cf0c); it is SIX at the base this landed on - `containerPrefix`'s list
+ * and task content-indent stops (NRL-131, relocated onto the remaining body by
+ * NRL-116), `containerCarryStops`' lazy arm, the setext pre-pass's raw-HTML
+ * mask (NRL-155, keyed on this constant on purpose so it follows a narrowing),
+ * and extractChunks' own continuation and opener tests. Each was re-measured
+ * against the executed renderer before this landed. `MODULE134_INDENTED_CODE`
+ * below holds the same pattern and stays a separate constant on purpose: it is
+ * keyed on the RENDERER's rule for `isSetextContentLine`, where this one is
+ * keyed on what extractChunks calls indented code, and the two are free to
+ * diverge again.
+ *
+ * The cost of the old wider test was an R-M08 disclosure and an R-M09
+ * destination disclosure at once. A ` \t<!--` line in a fresh-block position
+ * is not indented code for the renderer, so `html` (module 8776) opens a raw
+ * comment block and the body is HIDDEN, while we dropped the lead line as code
+ * and spoke the body as prose. The same lead on a lazy continuation line does
+ * not end a blockquote, so `containerCarryStops` wrongly aborted the label
+ * carry and the destination fell out as prose.
+ *
+ * A fresh-block `\t<!--` is a different shape and is CORRECT as it stands: the
+ * renderer really does make that line code, because `blockMethods` reaches
+ * `indentedCode` (index 2) before `html` (index 11), so module 8776's
+ * tab-tolerant skip loop never gets to decide it. Both facts came from running
+ * the real parser and renderer; neither is verified in a live Obsidian, and
+ * both are the reading-view path only.
+ *
+ * Whether the line is code still depends on state: indented code only starts
+ * after a blank line or at the start of the document, and never inside a list
+ * item.
  */
-const INDENTED_CODE = /^(?: {4}| {0,3}\t)/;
+const INDENTED_CODE = /^(?: {4}|\t)/;
 const TABLE_ROW = /^\s*\|/;
 /**
  * Thematic break: three or more of the same marker, optionally spaced. Checked
@@ -2547,8 +2598,12 @@ const HTML_OPENER_AT_START = /^ {0,3}<!--/;
 /**
  * Module 134's indented-code opener, LITERALLY: four spaces or one tab at
  * offset 0, with no tab-stop expansion (NRL-155). It is deliberately not
- * `INDENTED_CODE`, which also accepts one to three spaces then a tab (NRL-113's
- * defect). Measured against rendered HTML out of the installed obsidian.asar
+ * `INDENTED_CODE`, which when NRL-155 shipped also accepted one to three spaces
+ * then a tab (NRL-113's defect). NRL-113 has since narrowed that constant to
+ * this same pattern, so the two now coincide; they stay SEPARATE for the reason
+ * NRL-155 gave below - this one is keyed on the renderer's rule and the other
+ * on what extractChunks calls indented code - and merging them would re-couple
+ * the setext refusal to a predicate that is free to move again. Measured against rendered HTML out of the installed obsidian.asar
  * 1.13.7 (app.js sha256 8efbf581...9898): ` \tTitle` / `===` is
  * `<h1>\tTitle</h1>`, while `\tTitle` / `===` and `    Title` / `===` are
  * `<pre><code>`. Keyed on the renderer's rule so the setext refusal stays right

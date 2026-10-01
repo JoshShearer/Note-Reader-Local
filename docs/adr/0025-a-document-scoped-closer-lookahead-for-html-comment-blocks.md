@@ -875,14 +875,36 @@ sits outside the opener's paragraph.
   the two sites. Pre-existing in both halves; not opened or closed here.
 - A tab-indented `<!--` in a fresh-block position never reaches the predicate at
   all, because indented-code handling consumes the line first. Identical on both
-  sides, and the same shape NRL-93 records for `%%`. **It is a disclosure rather
-  than prose loss, which the first draft of this bullet did not say.** Measured at
-  ship review: `Before x.` / blank / `\t<!--` / `HIDDEN1` / `more` speaks
-  `"Before x. HIDDEN1 more"` on **base and fix alike, 512 of 512 cells each**,
-  while module 8776's skip loop accepts `\t`, so Obsidian opens a block there and
-  hides `HIDDEN1`. Unchanged by this diff in either direction, and it is NRL-93's
-  indented-code question rather than a new one: narrowing the `<!--` predicate
-  would not help, because the line never reaches it.
+  sides of NRL-74's diff. **AMENDED BY NRL-113 (2026-10-01), and the amendment
+  inverts this bullet's verdict rather than refining it.** The bullet is kept
+  because the shape is worth knowing and because its 512-of-512 figure is still
+  correct about *what we speak*; it was **wrong about what the renderer does**.
+  What it said: "It is a disclosure rather than prose loss ... `Before x.` /
+  blank / `\t<!--` / `HIDDEN1` / `more` speaks `"Before x. HIDDEN1 more"` on
+  **base and fix alike, 512 of 512 cells each**, while module 8776's skip loop
+  accepts `\t`, so Obsidian opens a block there and hides `HIDDEN1`", attributed
+  to NRL-93's indented-code question.
+  - The premise about module 8776 is **true** and the conclusion **does not
+    follow**. `blockMethods`, produced by RUNNING the real construction rather
+    than reading it, puts `indentedCode` at index **2** and `html` at index
+    **11**, so module 134 consumes the line and module 8776 is never consulted.
+  - The real rendered HTML, from Obsidian 1.13.7's own `WT` parser and `GT`
+    renderer executed in Node, is `<p>Before x.</p>` +
+    `<pre><code>&#x3C;!--</code></pre>` + `<p>HIDDEN1<br>more</p>`. `HIDDEN1`
+    and `more` are **DISPLAYED**, so this is **NOT a disclosure and not a
+    divergence at all**, in either position of `skipCodeBlocks`. Pinned by
+    `guard-nrl113-fresh-block-tab-html-is-indented-code`.
+  - **The adjacent real leak was a lead of one to three spaces then a tab**,
+    which module 134 does not call indented code because it does no tab-stop
+    expansion. There `html` *is* reached and the body *is* hidden, and we spoke
+    it. NRL-113 closed it by narrowing `INDENTED_CODE` to `/^(?: {4}|\t)/`:
+    18,432 of 179,712 corpus cells leaking on base, 0 on the fix, 0 newly
+    leaking, plus 21,504 of 294,912 container-carry cells where the same lead
+    made us speak a destination.
+  - `opensHtmlBlock` is **unchanged** and its `.trim()` is still correct for
+    `<!--`, exactly as this ADR's decision 1 says. Nothing in this amendment
+    merges the two predicates, and narrowing the `<!--` predicate would still
+    not have helped: the fresh-block tab line genuinely is code.
 - The oracle surfaced one **pre-existing** divergence unrelated to `<!--`:
   `# %% off` / `ZHZ` / `%% after ZPZ.` is spoken and hidden the opposite way round
   from what the tokenizers say, because a `%%` in an ATX heading reaches the

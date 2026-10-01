@@ -2496,6 +2496,199 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// PURPOSE: SECRET stops being spoken in each.
 		["pin-nrl118-note-scope-closes-at-another-depth", ">> %%\n%% SECRET", "SECRET"],
 		["guard-nrl118-note-scope-control-no-container", "%%\n%% SECRET", "SECRET"],
+		// NRL-113. `INDENTED_CODE` used to accept one to three SPACES followed by a
+		// TAB, on CommonMark's tab-stop reasoning. Obsidian's indented-code tokenizer,
+		// module 134, does NO tab-stop expansion: its opener arm is four LITERAL
+		// spaces or ONE LITERAL tab at offset 0, and the continuation arm is the same
+		// test. So a ` \t`, `  \t` or `   \t` lead is not indented code for the
+		// renderer, and treating it as code dropped the lead line and spoke whatever
+		// followed.
+		//
+		// The oracle for every entry below is REAL RENDERED HTML from Obsidian
+		// 1.13.7's own parser and renderer executed in Node (the harness at
+		// ~/.local/share/note-reader-local/obsidian-parser-harness), not a
+		// transcription. NOT VERIFIED IN A LIVE OBSIDIAN, and reading-view path only.
+		//
+		// THE DISCLOSURE (R-M08). For ` \t<!--` in a fresh-block position the real
+		// HTML is `<p>Before x.</p>\n \t<!--\nHIDDEN1\nmore` - the raw comment passes
+		// through `allowDangerousHtml` untouched and HIDDEN1/more are inside it. We
+		// spoke them. BOTH positions of `skipCodeBlocks` were leaks and both are
+		// pinned, because the renderer does not call the line code at all, so that
+		// toggle has no business governing it.
+		["pin-nrl113-space-tab-html-hidden", "Before x.\n\n \t<!--\nHIDDEN1\nmore", "Before x."],
+		["pin-nrl113-space-tab-html-hidden-spoken", "Before x.\n\n \t<!--\nHIDDEN1\nmore", "Before x.", { skipCodeBlocks: false }],
+		["pin-nrl113-two-space-tab-html-hidden", "Before x.\n\n  \t<!--\nHIDDEN1\nmore", "Before x."],
+		["pin-nrl113-two-space-tab-html-hidden-spoken", "Before x.\n\n  \t<!--\nHIDDEN1\nmore", "Before x.", { skipCodeBlocks: false }],
+		["pin-nrl113-three-space-tab-html-hidden", "Before x.\n\n   \t<!--\nHIDDEN1\nmore", "Before x."],
+		["pin-nrl113-three-space-tab-html-hidden-spoken", "Before x.\n\n   \t<!--\nHIDDEN1\nmore", "Before x.", { skipCodeBlocks: false }],
+		// Document start is a second fresh-block position and reached the same branch.
+		["pin-nrl113-space-tab-html-hidden-document-start", " \t<!--\nHIDDEN1\nmore", ""],
+		["pin-nrl113-space-tab-html-hidden-document-start-spoken", " \t<!--\nHIDDEN1\nmore", "", { skipCodeBlocks: false }],
+		// The TERMINATED variant, where the renderer resumes after `-->`: real HTML is
+		// `<p>Before x.</p>\n \t<!--\nHIDDEN1\n-->\n<p>more</p>`, so `more` is displayed
+		// and HIDDEN1 and the closer are not.
+		["pin-nrl113-space-tab-html-terminated", "Before x.\n\n \t<!--\nHIDDEN1\n-->\nmore", "Before x. more"],
+		// PROSE RECOVERY, not a disclosure, and the row that touches NRL-93's shipped
+		// `opensObsidianBlock`. A fresh-block ` \t%%` stops being an indented-code lead
+		// and becomes prose carrying a LITERAL `%%`, which is what the renderer shows:
+		// `<p> \t%%<br>\nSECRET<br>\nVISIBLE</p>`. `opensObsidianBlock`'s term A scans
+		// charCode 32 only, so it declines the tab-led opener exactly as the renderer's
+		// own `%%` skip loop does, and no term of that predicate changed.
+		["pin-nrl113-space-tab-percent-literal", "Before x.\n\n \t%%\nSECRET\nVISIBLE", "Before x. %% SECRET VISIBLE"],
+		["pin-nrl113-two-space-tab-percent-literal", "Before x.\n\n  \t%%\nSECRET\nVISIBLE", "Before x. %% SECRET VISIBLE"],
+		// THE R-M09 HALF, through the second read site: `containerCarryStops`' lazy arm
+		// (NRL-98, ADR 0029). A lazy continuation led by ` \t` does NOT end the
+		// blockquote for the renderer - one `<p>` spans the break and the destination
+		// lands in an attribute - so the carry must be confirmed and the destination
+		// dropped. Base spoke `](zdestz.png)`. The lone-tab and four-space twins below
+		// are guards: those leads really do end the quote, so failing closed there is
+		// correct.
+		["pin-nrl113-container-lazy-space-tab-destination-dropped", "> A ![alt\n \twords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl113-container-lazy-space-tab-destination-dropped-link", "> A [lbl\n \twords](zdestz.png) B", "A lbl words B", { speakImageAlt: false }],
+		["pin-nrl113-container-lazy-two-space-tab-destination-dropped", "> A ![alt\n  \twords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		// THE CONTINUATION ROW (Q1), which has no cell in the issue's own corpus and so
+		// was measured rather than asserted. Module 134 is a SINGLE loop whose
+		// continuation arm is its opener arm, so a ` \t` line ENDS an open indented code
+		// block for the renderer: `<pre><code>code one\n</code></pre>\n<p> \tSECRETC<br>
+		// \nmore</p>`. Base kept it inside the block and silenced SECRETC, which is
+		// prose loss; the fix speaks it, matching the rendered paragraph. The
+		// four-space-opened twin exercises the same arm from the other opener form.
+		["pin-nrl113-indented-code-continuation-space-tab-ends-block", "Before x.\n\n\tcode one\n \tSECRETC\nmore", "Before x. SECRETC more"],
+		["pin-nrl113-indented-code-continuation-space-tab-ends-block-4sp-opener", "Before x.\n\n    code one\n \tSECRETC\nmore", "Before x. SECRETC more"],
+		// GUARDS. Green on BOTH sides of this change and therefore NOT evidence of it;
+		// they exist so the narrowing cannot be widened or over-narrowed later.
+		//
+		// THE NOT-A-DEFECT PIN, and the one entry here that must never be "fixed"
+		// back. A fresh-block `\t<!--` renders as `<p>Before x.</p>\n<pre><code>&#x3C;!--
+		// \n</code></pre>\n<p>HIDDEN1<br>\nmore</p>` - paragraph, code, paragraph - so
+		// HIDDEN1 and `more` are DISPLAYED and speaking them is renderer-faithful in
+		// both `skipCodeBlocks` positions. The cause is `blockMethods` ORDER, produced
+		// by running the real construction: `indentedCode` sits at index 2 and `html`
+		// at index 11, so module 134 consumes the line before module 8776 is consulted.
+		// Module 8776's skip loop does accept a tab, but it never gets to decide this
+		// shape, which is why `AGENTS.md`, `srs.md:328` and `docs/adr/0025` all drew the
+		// wrong conclusion from a true premise until NRL-113 ran the parser.
+		["guard-nrl113-fresh-block-tab-html-is-indented-code", "Before x.\n\n\t<!--\nHIDDEN1\nmore", "Before x. HIDDEN1 more"],
+		["guard-nrl113-fresh-block-tab-html-is-indented-code-spoken", "Before x.\n\n\t<!--\nHIDDEN1\nmore", "Before x. <!-- HIDDEN1 more", { skipCodeBlocks: false }],
+		["guard-nrl113-fresh-block-four-space-html-is-indented-code", "Before x.\n\n    <!--\nHIDDEN1\nmore", "Before x. HIDDEN1 more"],
+		["guard-nrl113-fresh-block-eight-space-html-is-indented-code", "Before x.\n\n        <!--\nHIDDEN1\nmore", "Before x. HIDDEN1 more"],
+		// `\t ` is a tab FIRST, so module 134's one-literal-tab arm still opens, and so
+		// does ours. The narrowing is about a tab that FOLLOWS spaces, not about any
+		// lead containing a tab.
+		["guard-nrl113-tab-space-still-indented-code", "Before x.\n\n\t %%\nSECRET\nVISIBLE", "Before x. SECRET VISIBLE"],
+		// Three spaces alone was never indented code in either tree, and a tab-led
+		// lazy continuation really does end a blockquote, so both stay put.
+		["guard-nrl113-three-space-html-opener-unmoved", "Before x.\n\n   <!--\nHIDDEN1\nmore", "Before x."],
+		["guard-nrl113-container-lazy-tab-fails-closed", "> A ![alt\n\twords](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl113-indented-code-continuation-tab-stays-in-block", "Before x.\n\n\tcode one\n\tSECRETC\nmore", "Before x. more"],
+		// Two shapes where base already agreed with the fix and the agreement is worth
+		// pinning. At `skipCodeBlocks: false` the continuation row lands on the same
+		// string by a different route - base speaks the line as code content through
+		// `verbatimLine`, the fix speaks it as prose - so the toggle hides the move.
+		// And a ` \t<!--` in a PARAGRAPH CONTINUATION position never reaches the opener
+		// at all (`wasBlank` is false), so this diff cannot touch it; the renderer
+		// displays that line and we still drop it, which is a PRE-EXISTING prose loss
+		// of the `opensHtmlBlock` `.trim()` family (NRL-93's shape), measured identical
+		// on both arms and NOT opened here.
+		["guard-nrl113-indented-code-continuation-space-tab-spoken-unmoved", "Before x.\n\n\tcode one\n \tSECRETC\nmore", "Before x. code one SECRETC more", { skipCodeBlocks: false }],
+		["guard-nrl113-space-tab-paragraph-continuation-unmoved", "Before x.\n \t<!--\nHIDDEN1\nmore", "Before x."],
+		// A TRIPWIRE AND NOT EVIDENCE OF A FIX, in the style of
+		// `pin-nrl74-container-label-still-leaks-destination`. This is the one class
+		// the structured corpora could not see and the 4,000-note fuzz did: a
+		// 1-3-space-plus-tab-led LINK REFERENCE DEFINITION. It is a DISCLOSURE - we
+		// speak a destination the renderer never shows, because module 1616 consumes
+		// the definition and renders nothing at all (real HTML for the first fixture
+		// is `<p>ZPROSEZ <a href="zdestz.png" title="t">a</a>.</p>`, destination in an
+		// attribute only).
+		//
+		// MECHANISM. Base ate the line as indented code, so it was silent for the
+		// wrong reason. The narrowing lets the line reach the `LINK_REF_DEF` branch,
+		// whose own lead rule is `^ {0,3}\[` - spaces only, capped at three, the same
+		// CommonMark-shaped assumption this ticket removed one predicate over. It
+		// declines a tab-bearing lead, so the line falls through to prose.
+		//
+		// IT IS NOT A NEW LEAK CLASS, and the CONTROL is what establishes that rather
+		// than an argument. The second fixture is the ADR 0018 decision-Q8 shape with
+		// NO LEAD ANYWHERE: the second of two consecutive definitions inside a
+		// blockquote fails the branch's empty-paragraph guard, falls through, and
+		// speaks its destination on BASE and on the fix alike. Measured over 6
+		// positions x 15 leads x 512 content-key masks = 46,080 cells: 2,560 cells
+		// newly speak the destination, all in the doc-start and fresh-block positions
+		// with a tab-bearing lead; the SAME shape already leaks 256 of each row's 512
+		// cells on base, at `skipCodeBlocks: false`, where base spoke the destination
+		// as verbatim code content; and the in-quote and two-definition rows leak
+		// 512 of 512 on BOTH arms with or without a tab. 0 cells newly speak a
+		// destination anywhere the renderer displays it.
+		//
+		// NOT FIXED HERE, deliberately: widening a second predicate in the same diff
+		// is what makes a measured result unattributable, and `LINK_REF_DEF`'s lead
+		// needs ADR 0018's own battery re-run. WHEN IT CLOSES, the first expectation
+		// must change on purpose; the control's must not move at all.
+		["pin-nrl113-space-tab-link-ref-def-leaks-destination", " \t[a]: zdestz.png \"t\"\n\nZPROSEZ [a].", "a : zdestz.png \"t\" ZPROSEZ a ."],
+		["guard-nrl113-link-ref-def-fallthrough-control-no-lead", "> [a]: zdestz.png \"t\"\n> [b]: zdestz.png \"u\"\n\nZPROSEZ.", "b : zdestz.png \"u\" ZPROSEZ."],
+		// NRL-113, SHIP REVIEW. The ticket's own corpus had a CONSTRUCT axis three
+		// wide - `<!--`, `%%`, and the image/link label - and the branch this change
+		// narrows carries the comment "Checked before fences, rules, math and
+		// tables". Every one of those four, plus headings, bullets, quotes, callouts,
+		// wikilinks, embeds, footnote definitions and HTML blocks, becomes newly
+		// REACHABLE for a ` \t` / `  \t` / `   \t` lead, and none of them had a cell.
+		// Re-measured at ship review over 20 constructs x 10 leads x 4 option modes =
+		// 800 cells with the renderer verdict from the same harness's real rendered
+		// HTML: 200 cells move, `sourceIndex` lockstep holds with 0 failures in all
+		// four properties on BOTH arms, and the large majority of the 200 are the
+		// narrowing agreeing with the renderer where base did not. The rows worth
+		// pinning are below. The fuzz found one missed class (the link-reference
+		// definition above); it did not find these, so the corpus is what is pinned.
+		//
+		// RENDERER-FAITHFUL MOVES. Each HTML string is what the harness rendered.
+		// A fence really does open on a ` \t` lead, so its body is CODE and the
+		// code-block key governs it, where base ate the fence line as indented code
+		// and then spoke the body as prose with the code key ON.
+		["pin-nrl113-space-tab-fence-opens-a-fence", "Before x.\n\n \t```js\nCODEBODY\n```\nAFTER", "Before x. AFTER"],
+		["pin-nrl113-space-tab-fence-unclosed-is-code-to-eof", "Before x.\n\n \t```js\nPROSEA\nPROSEB", "Before x."],
+		["pin-nrl113-space-tab-fence-unclosed-spoken", "Before x.\n\n \t```js\nPROSEA\nPROSEB", "Before x. PROSEA PROSEB", { skipCodeBlocks: false }],
+		// `<h1 data-heading="HEADA">HEADA</h1>`, `<li>ITEMA</li>`,
+		// `<blockquote><p>QUOTEA</p></blockquote>`, and a real callout div: all four
+		// were silenced whole on base and all four are displayed.
+		["pin-nrl113-space-tab-heading-is-a-heading", "Before x.\n\n \t# HEADA\nAFTER", "Before x. HEADA AFTER"],
+		["pin-nrl113-space-tab-bullet-is-a-list-item", "Before x.\n\n \t- ITEMA\nAFTER", "Before x. ITEMA AFTER"],
+		["pin-nrl113-space-tab-quote-is-a-blockquote", "Before x.\n\n \t> QUOTEA\nAFTER", "Before x. QUOTEA AFTER"],
+		["pin-nrl113-space-tab-callout-title-recovered", "Before x.\n\n \t> [!note] TITLEA\n> CBODY\n\nAFTER", "Before x. TITLEA CBODY AFTER"],
+		// An unterminated `$$` is NOT a math block for the renderer with this lead -
+		// `<p> \t$$<br>MPROSEA<br>MPROSEB</p>` - so the literal `$$` is displayed and
+		// is now spoken, where base dropped it as an indent.
+		["pin-nrl113-space-tab-unclosed-math-is-literal", "Before x.\n\n \t$$\nMPROSEA\nMPROSEB", "Before x. $$ MPROSEA MPROSEB"],
+		// TRIPWIRES, NOT EVIDENCE OF A FIX. Three shapes where the narrowing exposes a
+		// pre-existing divergence in a DIFFERENT predicate, each in the prose-loss or
+		// markup-leak direction and none a disclosure. They are pinned rather than
+		// fixed for the same reason the link-reference definition above is: widening a
+		// second predicate inside this diff would make its measurements unattributable
+		// and would move `interruptsParagraph`'s answer set, which this change
+		// deliberately leaves byte-identical. Tracked as NRL-147.
+		//
+		// `TABLE_ROW` is `/^\s*\|/`, so a tab-led pipe line is a table row for us and
+		// `skipTables` drops it. The renderer makes it a PARAGRAPH -
+		// `<p> \t| a | b |<br>| - | - |<br>| TCELL | y |</p>` - so that key has no
+		// business governing it. Base spoke the first row as verbatim code content at
+		// `skipCodeBlocks: false`; the fix speaks none of it. At the default
+		// `skipCodeBlocks: true` both arms are silent, so this is reachable only in
+		// that one combination. WHEN IT CLOSES, this expectation must change.
+		["pin-nrl113-space-tab-table-row-silenced-by-skiptables", "Before x.\n\n \t| a | b |\n| - | - |\n| TCELL | y |\n\nAFTER", "Before x. AFTER", { skipCodeBlocks: false }],
+		// `opensMathBlock` uses `trimStart()`, which accepts a tab where the renderer's
+		// `$$` predicate skips charCode 32 only - the divergence `AGENTS.md` already
+		// records as NRL-93's family. So we call this a display-math block and say
+		// "equation", where the renderer displays ` \t$$` and `a+b` as paragraph text.
+		// It is asserted BELOW rather than here, because it synthesises an "equation"
+		// chunk and this table's lockstep loop deliberately passes no ADR 0004
+		// exemption. Teaching the shared loop that exemption would loosen it for
+		// every one of its ~200 entries to accommodate one fixture.
+		// `HEADING` is `/^\s{0,3}#{1,6}\s+/` and `BLOCKQUOTE` is `/^(?:\s{0,3}>\s?)+/`,
+		// so FOUR leading whitespace characters exceed the cap and the marker is
+		// spoken as prose. The renderer makes both a heading and a quote. A markup
+		// leak, not prose loss and not a disclosure: nothing hidden is spoken and
+		// nothing displayed is lost, only `#` and `>` are said aloud.
+		["pin-nrl113-three-space-tab-heading-leaks-hash", "Before x.\n\n   \t# HEADA\nAFTER", "Before x. # HEADA AFTER"],
+		["pin-nrl113-three-space-tab-quote-leaks-marker", "Before x.\n\n   \t> QUOTEA\nAFTER", "Before x. > QUOTEA AFTER"],
 		// NRL-116. `containerPrefix`'s list arm peeled with the SHARED `LIST_BULLET`,
 		// whose trailing `\s+` ate a marker's whole lead, and with the SHARED `TASK`,
 		// whose trailing `\s*` did the same after a checkbox. Module 745 takes at most
@@ -2740,8 +2933,18 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// NRL-113's narrowing alone, which hides HIDDENA. TRIPWIRE: when NRL-113
 		// lands the text becomes `<!-- HIDDENA more` / `Intro. <!-- HIDDENA more`,
 		// on purpose; the HIDDENA-is-spoken check after this table must stay green.
-		["guard-nrl155-doc-start-tab-lead", " \t<!--\n===\nHIDDENA\nmore", "=== HIDDENA more"],
-		["guard-nrl155-after-blank-tab-lead", "Intro.\n\n  \t<!--\n---\nHIDDENA\nmore", "Intro. HIDDENA more"],
+		//
+		// NRL-113 HAS NOW LANDED, so both expectations are REPLACED IN PLACE with
+		// the two strings NRL-155 predicted verbatim, keeping the names (the
+		// NRL-66/NRL-67 convention). The reason is the rendered HTML, re-measured
+		// here out of the executed Obsidian 1.13.7 parser and renderer:
+		// ` \t<!--` / `===` is `<h1 data-heading="<!--">\t&#x3C;!--</h1>` followed by
+		// `<p>HIDDENA<br>more</p>`, so the opener line is HEADING TEXT the reader
+		// sees and the two lines under it are a displayed paragraph. Speaking
+		// `<!-- HIDDENA more` is renderer-faithful; main's `=== HIDDENA more` spoke
+		// the setext underline, which the renderer consumes and never displays.
+		["guard-nrl155-doc-start-tab-lead", " \t<!--\n===\nHIDDENA\nmore", "<!-- HIDDENA more"],
+		["guard-nrl155-after-blank-tab-lead", "Intro.\n\n  \t<!--\n---\nHIDDENA\nmore", "Intro. <!-- HIDDENA more"],
 		// (b) Paragraph continuation: a tab-led `<!--` does not interrupt a
 		// paragraph, so the renderer makes one `<p>` and the inline comment hides
 		// HIDDENA. Red on the arm with no block-position gate.
@@ -2781,7 +2984,18 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// choice is masked by INDENTED_CODE and measured only on the NRL-113 arm
 		// (accepting a tab there newly spoke HIDDEN in 1,792 census cells). When
 		// either NRL-113 or the blank-line rule lands, this changes on purpose.
-		["pin-nrl155-tab-whitespace-line-is-not-blank", "Intro.\n \t \n \t<!--\n===\nHIDDENA\n--> t.", "Intro. === HIDDENA --> t."],
+		//
+		// NRL-113 HAS NOW LANDED and the tripwire has fired, so the expectation is
+		// REPLACED IN PLACE keeping the name. It moves in the CLOSING direction:
+		// this was the disclosure, and the narrowing shuts it. Re-measured out of
+		// the executed parser and renderer, the whole note is ONE paragraph -
+		// `<p>Intro.<br><br><!--\n===\nHIDDENA\n--> t.</p>` - whose visible text is
+		// `Intro.` and ` t.` only, because the inline comment hides `===`, HIDDENA
+		// and the `-->`. Main spoke `=== HIDDENA --> t.`, which is author-hidden
+		// text; the fix speaks `Intro. t.`, which is what a reader sees. This is a
+		// FOURTH leaking lead class closed by NRL-113 beyond the three the ticket
+		// named, after the ` \t ` lead Verify found.
+		["pin-nrl155-tab-whitespace-line-is-not-blank", "Intro.\n \t \n \t<!--\n===\nHIDDENA\n--> t.", "Intro. t."],
 		// (f) The QUOTE and LIST arms stay spaces-only (fail-closed). `> \t<!--` is
 		// code inside the quote only through module 6234's one-character peel
 		// (NRL-114), and `- \t<!--` is code inside the item. The quote row is red on
@@ -2880,6 +3094,68 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		check(`NRL-116 ${id}: sourceIndex lockstep by UTF-16 unit`, extractChunks(src, { ...OPTS, ...overrides }).every(
 			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
 		));
+	}
+	// NRL-113. Named character-identity coverage through the shared `unitsMatch`
+	// helper, for the shapes whose SPOKEN text newly spans something: a prose line
+	// that used to be swallowed as indented code, a container-carried label, a
+	// literal `%%`, and an astral character inside a newly-spoken region. Numeric
+	// and UTF-16-based, never a spread - see unitsMatch.
+	const nrl113Lockstep: Array<[string, string, Partial<typeof OPTS>?]> = [
+		["space-tab-html-hidden", "Before x.\n\n \t<!--\nHIDDEN1\nmore"],
+		["space-tab-html-hidden-spoken", "Before x.\n\n \t<!--\nHIDDEN1\nmore", { skipCodeBlocks: false }],
+		["space-tab-percent-literal", "Before x.\n\n \t%%\nSECRET\nVISIBLE"],
+		["code-continuation-space-tab", "Before x.\n\n\tcode one\n \tSECRETC\nmore"],
+		["code-continuation-space-tab-spoken", "Before x.\n\n\tcode one\n \tSECRETC\nmore", { skipCodeBlocks: false }],
+		["container-lazy-space-tab-image", "> A ![alt\n \twords](zdestz.png) B", { speakImageAlt: false }],
+		["container-lazy-space-tab-link", "> A [lbl\n \twords](zdestz.png) B"],
+		["space-tab-astral", "Before x.\n\n \t<!--\nHID\u{1F600}DEN\nmore", { skipCodeBlocks: false }],
+		["space-tab-equation", "Before x.\n\n \t<!--\n$$\na+b\n$$\nmore", { skipCodeBlocks: false }],
+		// Added at ship review with the constructs the corpus had no cell for. Each
+		// of these newly speaks a region base silenced, so each is a new chance for
+		// an offset to drift.
+		["space-tab-fence-spoken", "Before x.\n\n \t```js\nPROSEA\nPROSEB", { skipCodeBlocks: false }],
+		["space-tab-heading", "Before x.\n\n \t# HEADA\nAFTER"],
+		["space-tab-bullet", "Before x.\n\n \t- ITEMA\nAFTER"],
+		["space-tab-quote", "Before x.\n\n \t> QUOTEA\nAFTER"],
+		["space-tab-callout", "Before x.\n\n \t> [!note] TITLEA\n> CBODY\n\nAFTER"],
+		["space-tab-unclosed-math", "Before x.\n\n \t$$\nMPROSEA\nMPROSEB"],
+		["three-space-tab-heading", "Before x.\n\n   \t# HEADA\nAFTER"],
+		["three-space-tab-quote", "Before x.\n\n   \t> QUOTEA\nAFTER"],
+		["space-tab-table-spoken", "Before x.\n\n \t| a | b |\n| - | - |\n| TCELL | y |\n\nAFTER", { skipCodeBlocks: false }],
+		["space-tab-wikilink", "Before x.\n\n \t[[folder/Note]] tail.\n\nAFTER"],
+		["space-tab-image", "Before x.\n\n \t![alt](zdestz.png) tail.\n\nAFTER"],
+	];
+	for (const [id, src, overrides] of nrl113Lockstep) {
+		check(`NRL-113 ${id}: sourceIndex lockstep by UTF-16 unit`, extractChunks(src, { ...OPTS, ...overrides }).every(
+			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
+		));
+	}
+	// NRL-113 TRIPWIRE, asserted here rather than in the table above because it
+	// synthesises an "equation" chunk and so needs ADR 0004's text-keyed exemption.
+	// `opensMathBlock` uses `trimStart()`, which accepts a tab where the renderer's
+	// `$$` predicate skips charCode 32 only (the divergence `AGENTS.md` records as
+	// NRL-93's family). So we call a ` \t$$` line a display-math opener and say
+	// "equation", where the harness renders `<p> \t$$<br>a+b</p>` - paragraph text.
+	// Base never reached this, having eaten the line as indented code. Prose loss,
+	// not a disclosure; pinned not fixed, because narrowing a second predicate in
+	// this diff would make its measurements unattributable. Tracked as NRL-147.
+	// WHEN IT CLOSES, this expectation must change on purpose.
+	{
+		const src = "Before x.\n\n \t$$\na+b\n$$\nAFTER";
+		const ks = extractChunks(src, OPTS);
+		check(
+			"NRL-113 pin-nrl113-space-tab-math-block-says-equation: visible output",
+			ks.map((k) => k.text).join(" ") === "Before x. equation AFTER",
+			`got: ${JSON.stringify(ks.map((k) => k.text))}`,
+		);
+		check(
+			"NRL-113 pin-nrl113-space-tab-math-block-says-equation: UTF-16 mapping and bounds",
+			ks.every(
+				(k) =>
+					k.sourceIndex.length === k.text.length &&
+					unitsMatch(k.text, k.sourceIndex, src, (text) => text === "equation"),
+			),
+		);
 	}
 	const paced = extractChunks("Before.\n\n%%\nhidden\n%%\n\nafter.", OPTS);
 	check("NRL-38 paragraph boundaries retained", paced.length === 2);

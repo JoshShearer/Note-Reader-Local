@@ -2,7 +2,8 @@
 
 - Status: accepted
 - Date: 2026-09-30
-- Ticket: NRL-98 (R-M09, R-M08). Closes **root 1** and the **container members of
+- Ticket: NRL-98 (R-M09, R-M08); the lazy arm's character class corrected by
+  NRL-113. Closes **root 1** and the **container members of
   root 2** of the five ADR 0023 records as residual. Amends ADR 0023 (clause 2 at
   `:56-62`, the residual-roots list, and the "re-measure the five roots"
   paragraph) and ADR 0027's cross-reference. Roots 3 and 5 are untouched, as are
@@ -180,7 +181,35 @@ Four parts.
    the blockquote and becomes an indented CODE block that Obsidian displays
    verbatim, while the same line WITH its `>` is an ordinary paragraph
    continuation and must stay carried, `indentedCode` not being in
-   `interruptParagraph`. **`html`** is covered only through `opensHiddenComment`,
+   `interruptParagraph`.
+
+   **NRL-113 CORRECTING NOTE (2026-10-01).** The reasoning above is unchanged and
+   still correct; what moved is the *character class* it is applied to.
+   `containerCarryStops`' lazy arm reads `INDENTED_CODE`, and that constant
+   carried CommonMark's tab-stop notion of "four columns" -
+   `/^(?: {4}| {0,3}\t)/`. Module 134, executed out of the installed bundle
+   rather than read, has **no tab-stop expansion at all**: four literal spaces, or
+   one literal tab, at offset 0. So "indented four spaces or led by a tab" above
+   is now literally what the arm tests, and a lead of **one to three spaces then a
+   tab** no longer ends the blockquote for us, because it does not end it for the
+   renderer either - one `<p>` spans the break and the destination lands in an
+   `src`/`href` attribute.
+
+   `containerCarryStops`' body is **byte-identical** across NRL-113's diff; it
+   simply reads a narrower constant, and `HTML_BLOCK_OPEN` was deliberately NOT
+   widened in the same diff (its own `^ {0,3}<` divergence from module 8776's
+   uncapped space-and-tab loop is pre-existing and fail-closed).
+
+   Measured on a container-carry corpus of 2 kinds x 8 container families x 12
+   leads x 3 continuation modes x 512 content-key masks = **294,912 cells per
+   arm**, with the renderer verdict from real rendered HTML: the destination was
+   spoken in **21,504 cells on base and 0 on the fix**, **0 newly spoken**, and
+   **273,408 cells are byte-identical output on both arms** rather than merely
+   equal in leak count. Every moved row is a ` \t` / `  \t` / `   \t` lead in the
+   `quote`, `nested-quote`, `indent-quote` or `quoted-list` family; the lone-tab
+   and four-space twins are unmoved and still fail closed, which is correct,
+   because those leads really do end the quote. **NOT observed live**, and
+   reading-view path only. **`html`** is covered only through `opensHiddenComment`,
    i.e. `%%` and `<!--`, where the real entry fires on any block tag and swallows
    the rest of the construct into raw HTML.
 
