@@ -867,6 +867,137 @@ console.log("block markup (NRL-8)");
 	add("1. a\n    1. inner", ["a", "inner"]);
 	add("- a\n\n    - after blank still list", ["a", "after blank still list"]);
 
+	// NRL-131: containerPrefix peels a quote NESTED inside a list item, and a
+	// second list marker with it, so neither the `>` nor the inner `-` is spoken
+	// and a `<!--` or `%%` on such a line is line-start for the predicates that
+	// ask. Every expectation below is the real renderer's: executed out of
+	// Obsidian 1.13.7's own parser and HTML renderer by the harness at
+	// ~/.local/share/note-reader-local/obsidian-parser-harness, which gives
+	// `- > Before x.` as `<ul><li><blockquote><p>Before x.</p>` with no `>`
+	// shown, and `- - > Before x.` as `<ul><li><ul><li><blockquote><p>` with
+	// neither marker shown. See docs/adr/0035.
+	add("- > Before x.", ["Before x."]);
+	add("- - nested item text", ["nested item text"]);
+	add("- - > Before x.", ["Before x."]);
+	add("> - > Before x.", ["Before x."]);
+	add("- > - > Before x.", ["Before x."]);
+	add("- - [x] done", ["done"]);
+	// A callout marker is tested only after a quote was consumed in the SAME
+	// round of the peel, which is why this is a callout and the guard below is
+	// not. Measured: `- > [!note] Title` renders a real
+	// `<div class="callout" data-callout="note">` with `[!note]` not shown, while
+	// `- [!note] x` renders `<li>[!note] x</li>` with the marker shown.
+	add("- > [!note] Title\n- > Body here.", ["Title", "Body here."]);
+	// The ticket's two reproductions. The first is a browser comment inside the
+	// quote, which Obsidian hides; the second an `<span class="internal-embed"
+	// src="zdestz.png">`, whose destination is an ATTRIBUTE and so never shown.
+	add("- >   \t<!-- ZHIDEZ\nmore", []);
+	add("- > Before ![alt\n  > \tplain x\n  > more](zdestz.png) after.", ["Before alt", "plain x", "more after."]);
+
+	// GUARDS. Green on both sides of NRL-131 and not evidence of it; they exist
+	// so the peel cannot be widened into the un-nested shapes or into a heading.
+	add("> Before x.", ["Before x."], OPTS, " (guard-nrl131-plain-quote-unchanged)");
+	add("- Before x.", ["Before x."], OPTS, " (guard-nrl131-plain-list-unchanged)");
+	add("> - Before x.", ["Before x."], OPTS, " (guard-nrl131-list-in-quote-unchanged)");
+	add("> [!note] Title", ["Title"], OPTS, " (guard-nrl131-callout-unchanged)");
+	add("- [x] done item in the list", ["done item in the list"], OPTS, " (guard-nrl131-task-unchanged)");
+	// CALLOUT must stay gated on a quote peeled in the same round, or a plain
+	// list item whose text opens with `[!type]` would lose it.
+	add("- [!note] x", ["!note x"], OPTS, " (guard-nrl131-list-not-a-callout)");
+	// `- - -` and every marker-only HR shape never reach containerPrefix at all:
+	// the HR branch flushes and continues above the call. This is what makes the
+	// computed fixture sweep come out at zero moved expectations.
+	add("Para one.\n- - -\nPara two.", ["Para one.", "Para two."], OPTS, " (guard-nrl131-hr-still-silent)");
+	// The reason containerPrefix returns `outerList` rather than letting the call
+	// site read blockType: `inList` gates the indented-code opener, so without it
+	// a four-space continuation of `- > item` would newly be read as code. Only
+	// the continuation half is asserted, because the `>` dropping IS the fix and
+	// a whole-array assertion would not be green on both sides. Measured against
+	// a diagnostic arm that reads blockType instead: 3,072 cells of prose loss.
+	{
+		const src = "- > item\n\n    four space line";
+		fixtures.push(src);
+		for (const o of [OPTS, codeOn]) {
+			check(
+				`guard-nrl131-indented-continuation-not-code ${JSON.stringify(src)} (code ${o.skipCodeBlocks})`,
+				texts(src, o).includes("four space line"),
+				`got: ${JSON.stringify(texts(src, o))}`,
+			);
+		}
+	}
+	// TRIPWIRES. These pin behaviour NRL-131 moves the WRONG way, signed and
+	// measured, so it can only change deliberately. Both are pre-existing classes
+	// the peel brings the nested form into rather than new ones, each shown by an
+	// un-nested control that behaves identically on both sides of this change.
+	//
+	// 1. A TAB or four-plus spaces before `<!--` on the peeled body. Obsidian's
+	//    `indentedCode` tokenizer sits at blockMethods index 2 and `html` at 11,
+	//    so a tab-indented line inside the quote is CODE and is DISPLAYED, while
+	//    `opensHtmlBlock`'s line-start term accepts the tab and we hide it. The
+	//    un-nested twin `> \t<!-- ...` already spoke nothing on base. NRL-93 and
+	//    NRL-115 own this class; `opensHtmlBlock` is untouched here.
+	add("- > \t<!-- ZHIDEZ\nmore ZPROSEZ", [], OPTS, " (TRIPWIRE: NRL-93/NRL-115 over-hide a nested tab-indented <!--)");
+	// 2. An unterminated `%%` is note-scoped and container-blind for us where
+	//    Obsidian scopes it to the construct holding it, so a later `%%` at a
+	//    different depth closes a block the renderer keeps open. That is NRL-118,
+	//    and the three un-nested twins `%%`, `- %%` and `> %%` all already speak
+	//    exactly this on base.
+	add("- > %%\nZHIDEZ a %% ZHIDEZ b", ["ZHIDEZ b"], OPTS, " (TRIPWIRE: NRL-118 note-scope closes at another depth)");
+
+	// NRL-131, found at Ship review: the peel must STOP where the list marker's
+	// own trailing whitespace has already put the item's content into an
+	// INDENTED CODE BLOCK. Measured out of Obsidian 1.13.7's real renderer, for
+	// a bullet, a star and an ordered marker alike: an extra lead of four or
+	// more spaces, or any lead reaching a tab, makes the item content
+	// `<pre><code>`, so the `>` or the second `-` after it is NOT structural and
+	// IS displayed. `LIST_BULLET`'s greedy `\s+` eats that whole lead, so
+	// without a guard the loop goes round again and peels a marker the reader
+	// can see - which also puts a following `%%` at offset 0 of the body, where
+	// `opensObsidianBlock`'s plain line-start rule fires and `dedentedByList` is
+	// never consulted. That direction SPEAKS AUTHOR-HIDDEN TEXT, so these are
+	// not cosmetic.
+	//
+	// The guard reuses `INDENTED_CODE`, this file's own definition of the
+	// threshold, applied to the consumed run past the marker's one separating
+	// space. It is fail-closed: tripping it leaves the line exactly as the
+	// pre-NRL-131 tree had it.
+	add(
+		"- \t> %%\nVISIBLE_IN_OBSIDIAN\n%%\nSECRET_HIDDEN_BY_OBSIDIAN.",
+		["> %%", "VISIBLE_IN_OBSIDIAN"],
+		OPTS,
+		" (nrl131-tab-lead-is-indented-code-not-a-quote)",
+	);
+	add(
+		"-     > %%\nVISIBLE_IN_OBSIDIAN\n%%\nSECRET_HIDDEN_BY_OBSIDIAN.",
+		["> %%", "VISIBLE_IN_OBSIDIAN"],
+		OPTS,
+		" (nrl131-five-space-lead-is-indented-code-not-a-quote)",
+	);
+	add("-     > ZMARKZ x", ["> ZMARKZ x"], OPTS, " (nrl131-five-space-lead-marker-is-displayed)");
+	add("- \t> ZMARKZ x", ["> ZMARKZ x"], OPTS, " (nrl131-tab-lead-marker-is-displayed)");
+	add("-     - ZMARKZ x", ["- ZMARKZ x"], OPTS, " (nrl131-five-space-lead-second-bullet-is-displayed)");
+	add("- [x] \t> ZMARKZ x", ["> ZMARKZ x"], OPTS, " (nrl131-task-tab-lead-marker-is-displayed)");
+	// The other side of the same boundary, and the reason the guard is not just
+	// "any extra whitespace": at four or fewer columns past the marker the
+	// content is NOT code, the `>` really is a blockquote, and the peel must
+	// still happen. Measured: `-    > x` renders `<li><blockquote><p>x`.
+	add("-    > ZMARKZ x", ["ZMARKZ x"], OPTS, " (nrl131-four-space-lead-is-still-a-quote)");
+	add("-  > ZMARKZ x", ["ZMARKZ x"], OPTS, " (nrl131-two-space-lead-is-still-a-quote)");
+	// 3. A THIRD signed tripwire, also NRL-118's and also pre-existing. A `%%`
+	//    opener repeated per list item at a nested prefix: Obsidian scopes the
+	//    block to the FIRST item's blockquote and DISPLAYS the lines after it,
+	//    while our comment state is note-scoped and container-blind, so a later
+	//    `%%` at another depth closes a block the renderer keeps open. Measured:
+	//    the un-nested twins `- %%` / `- ZHIDEZ` and `> %%` / `> ZHIDEZ` already
+	//    speak exactly this on base, 512 of 512 cells identical on both arms, so
+	//    the nested form is joining that path rather than opening a new one.
+	add(
+		"- > %%\n- > ZHIDEZ\n- > %%\n- > ZPROSEZ tail.",
+		["ZPROSEZ tail."],
+		OPTS,
+		" (TRIPWIRE: NRL-118 per-item %% opener, un-nested twin already identical)",
+	);
+
 	// Offsets: the first spoken word maps to its raw offset.
 	const offsets: Array<[string, string, typeof OPTS]> = [
 		["> [!note] Title\n> Body text goes here.", "Title", OPTS],

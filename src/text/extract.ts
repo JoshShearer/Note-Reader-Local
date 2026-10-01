@@ -1814,44 +1814,134 @@ const BLOCKQUOTE_LEVEL = /^\s{0,3}>\s?/;
  * all-levels BLOCKQUOTE already matched, not by a second independent scan, so
  * the two cannot disagree: the loop is asserted to consume exactly `q[0]`.
  * That assertion is why the count can be trusted as a peel budget.
+ *
+ * A LOOP rather than one BLOCKQUOTE-then-LIST pass, because the two containers
+ * nest in either order and the renderer honours every level (NRL-131). Measured
+ * out of Obsidian 1.13.7's own renderer: `- > x` is
+ * `<ul><li><blockquote><p>x`, with no `>` shown, and `- - > x` is
+ * `<ul><li><ul><li><blockquote><p>x`, with neither the inner `-` nor the `>`
+ * shown. One pass left those markers in the body and we spoke them, and a
+ * single extra BLOCKQUOTE retry is not enough either: it fixes `- > x` and
+ * leaves `- - > x` still saying its inner `-`. Hence the widening to a second
+ * list marker, which also makes `- - x` speak `x` where it used to say `- x`.
+ *
+ * The nested `>` MUST be counted in `quotes`, not merely consumed. `peelQuotes`
+ * spends `quotes` as NRL-98's same-or-shallower compatibility budget, so a peel
+ * that grew `chars` without growing the budget would leave a continuation line
+ * bearing that `>` rejected by the UNCHANGED BLOCKQUOTE arm of
+ * `interruptsParagraph`, aborting the carry and leaving the destination leak in
+ * place. That would be half a fix.
  */
-function containerPrefix(line: string): { chars: number; quotes: number; blockType: BlockType; callout: boolean } {
+function containerPrefix(line: string): {
+	chars: number;
+	quotes: number;
+	blockType: BlockType;
+	callout: boolean;
+	outerList: boolean;
+} {
 	const h = line.match(HEADING);
-	if (h) return { chars: h[0].length, quotes: 0, blockType: "heading", callout: false };
+	if (h) return { chars: h[0].length, quotes: 0, blockType: "heading", callout: false, outerList: false };
 	// Peel prefixes in order, each adding to chars so cleanLine gets the true
 	// raw offset of the first kept character: quote levels, then a callout
-	// marker, or else a list marker and its task checkbox.
+	// marker, or else a list marker and its task checkbox. Then round again,
+	// because either can sit inside the other.
 	let chars = 0;
 	let quotes = 0;
 	let blockType: BlockType = "paragraph";
-	const q = line.match(BLOCKQUOTE);
-	if (q) {
-		chars = q[0].length;
-		blockType = "quote";
-		let at = 0;
-		while (at < chars) {
-			const level = BLOCKQUOTE_LEVEL.exec(line.slice(at, chars));
-			if (!level || level[0].length === 0) break;
-			quotes += 1;
-			at += level[0].length;
+	let sawQuote = false;
+	let sawList = false;
+	// "The OUTERMOST container is a list", which is what the call site's
+	// `inList` actually means and what `blockType === "list"` used to stand in
+	// for. It needs a field of its own now that a quote nested inside a list
+	// item makes `blockType` "quote" on a line whose outer container is still
+	// the list: without it the call site would stop setting `inList`, and
+	// `inList` gates the indented-code opener, so a four-space continuation of
+	// `- > x` would newly be read as code. That is prose loss, in the one
+	// direction this change must not move.
+	let outerList = false;
+	for (;;) {
+		const before = chars;
+		let levelsHere = 0;
+		const q = line.slice(chars).match(BLOCKQUOTE);
+		if (q) {
+			const end = chars + q[0].length;
+			let at = chars;
+			while (at < end) {
+				const level = BLOCKQUOTE_LEVEL.exec(line.slice(at, end));
+				if (!level || level[0].length === 0) break;
+				levelsHere += 1;
+				at += level[0].length;
+			}
+			quotes += levelsHere;
+			chars = end;
+			sawQuote = true;
+			blockType = "quote";
 		}
+		// Gated on the levels consumed in THIS iteration, not on `quotes`
+		// overall, and that is what keeps `- [!note] x` a plain list item:
+		// measured, it renders as `<li>[!note] x</li>` with the marker shown,
+		// while `- > [!note] Title` really is a callout
+		// (`<div class="callout" data-callout="note">` with `[!note]` not
+		// shown). So the marker is a callout exactly when a quote was just
+		// peeled, at any depth rather than only on the first round.
+		if (levelsHere > 0 && CALLOUT.test(line.slice(chars))) {
+			chars += line.slice(chars).match(CALLOUT)![0].length;
+			return { chars, quotes, blockType, callout: true, outerList };
+		}
+		// A list marker whose own trailing whitespace reaches indented-code depth
+		// ENDS the peel, and that is load-bearing in both directions (NRL-131,
+		// found at Ship review). `LIST_BULLET`'s `\s+` is greedy, so it swallows
+		// the whole lead; the renderer instead puts the item's content into a
+		// `<pre><code>` block once that lead passes the threshold, which makes a
+		// `>` or a second `-` after it ORDINARY TEXT THE READER SEES rather than
+		// a container. Measured out of Obsidian 1.13.7's real renderer, for
+		// `-`, `*` and `1.` alike: `-    > x` is `<li><blockquote><p>x` while
+		// `-     > x` and `- \t> x` are `<li><pre><code>> x`. Peeling there drops
+		// a visible marker, and worse, it leaves a following `%%` at offset 0 of
+		// the body, where `opensObsidianBlock`'s plain line-start rule fires and
+		// `dedentedByList` is never consulted - so `- \t> %%` hid displayed prose
+		// AND spoke the author-hidden text after the real opener, the exact
+		// inversion.
+		//
+		// `INDENTED_CODE` is reused deliberately rather than a hand-rolled
+		// "five or more, or a tab": it is this file's one definition of the
+		// threshold, and `.slice(1)` discounts the single space the marker itself
+		// requires. Stopping is FAIL-CLOSED - it leaves the line exactly as the
+		// pre-NRL-131 tree had it - which is why the residual it leaves on the
+		// wider task marker is a leftover rather than a regression.
+		let stop = false;
+		const b = line.slice(chars).match(LIST_BULLET);
+		if (b) {
+			// Read before `chars` moves, so it records whether this marker is
+			// the outermost container or one nested inside a quote.
+			if (!sawQuote) outerList = true;
+			chars += b[0].length;
+			sawList = true;
+			if (INDENTED_CODE.test(b[0].match(/\s*$/)![0].slice(1))) stop = true;
+			const task = line.slice(chars).match(TASK);
+			if (task) {
+				chars += task[0].length;
+				if (INDENTED_CODE.test(task[0].match(/\s*$/)![0].slice(1))) stop = true;
+			}
+		}
+		if (stop) break;
+		// Every matcher that can fire consumes a non-empty string - BLOCKQUOTE
+		// needs a `>`, LIST_BULLET a marker plus whitespace, TASK a bracketed
+		// status char, and CALLOUT returns - so an iteration that moves nothing
+		// has nothing left to peel. That is the termination proof, and it is why
+		// there is deliberately NO iteration cap: a cap would silently truncate
+		// the prefix, which is the "two readings of the same thing" this
+		// function exists to prevent. The shared regexes stay non-sticky for the
+		// same reason the slice is paid for: `BLOCKQUOTE` and `LIST_BULLET` are
+		// read by `interruptsParagraph` and by the `listDedented` pass too, so a
+		// `lastIndex` on either would be a live bug there.
+		if (chars === before) break;
 	}
-	const callout = q ? CALLOUT.test(line.slice(chars)) : false;
-	if (callout) {
-		chars += line.slice(chars).match(CALLOUT)![0].length;
-		return { chars, quotes, blockType, callout: true };
-	}
-	const b = line.slice(chars).match(LIST_BULLET);
-	if (b) {
-		chars += b[0].length;
-		// Only a line that is not already a quote is a list. A quoted list item
-		// matches both matchers, and the outer construct is the quote, because
-		// BLOCKQUOTE is peeled above before LIST_BULLET is even tried.
-		if (blockType === "paragraph") blockType = "list";
-		const task = line.slice(chars).match(TASK);
-		if (task) chars += task[0].length;
-	}
-	return { chars, quotes, blockType, callout: false };
+	// Only a line that is not already a quote is a list. A quoted list item
+	// matches both matchers, and the outer construct is the quote, because
+	// BLOCKQUOTE is peeled above before LIST_BULLET is even tried.
+	if (!sawQuote && sawList) blockType = "list";
+	return { chars, quotes, blockType, callout: false, outerList };
 }
 
 /**
@@ -3361,16 +3451,16 @@ export function extractChunks(
 		const prefix = containerPrefix(raw);
 		const prefixChars = prefix.chars;
 		const blockType: BlockType = prefix.blockType;
-		if (blockType === "quote") prevContainer = true;
-		if (blockType === "list") {
-			prevContainer = true;
-			// A quoted list ends with its quote, so it does not hold the list
-			// state that shields later indented lines from being code. blockType
-			// is "list" only when BLOCKQUOTE did NOT match, which is the same
-			// `if (!q)` this used to spell out: containerPrefix leaves a quoted
-			// list item as "quote".
-			inList = true;
-		}
+		if (blockType === "quote" || blockType === "list") prevContainer = true;
+		// Driven off `outerList` and NOT off `blockType === "list"` (NRL-131). A
+		// quoted list ends with its quote, so it does not hold the list state
+		// that shields later indented lines from being code - which is why the
+		// question is "is the OUTERMOST container a list", not "what construct
+		// does this line belong to". The two agreed until a quote nested inside
+		// a list item started reporting blockType "quote"; reading blockType
+		// here would stop setting `inList` for `- > x` and make a four-space
+		// continuation of it newly read as indented code.
+		if (prefix.outerList) inList = true;
 		const body = raw.slice(prefixChars);
 
 		if (body.trim() === "") {
