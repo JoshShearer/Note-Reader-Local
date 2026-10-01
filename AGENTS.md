@@ -1928,8 +1928,14 @@ rediscover them:
   end-to-end in that same build - both only checkable in a real Obsidian, not bare Node.
 - `speakImageAlt`, `speakEmbeds` and `skipFrontmatter` became live `ExtractOptions` fields in
   NRL-21 (`docs/adr/0008`), and all nine content keys now have one toggle each in the
-  settings tab's "Content" group. `offlinePreferred` is the only reserved key left, and
-  still has no toggle by design (`docs/adr/0001` clause 6). Two consequences worth knowing:
+  settings tab's "Content" group. `offlinePreferred` is not a content key and is **no longer
+  reserved**: `src/ui/settingsTab.ts:572-584` ships a real toggle for it under the Voice
+  group, "Prefer voices that do not require network access", and `src/main.ts:1039` passes it
+  to `resolveStoredVoice`, where it becomes `pickLocaleVoice`'s network tiebreak
+  (`src/audio/voiceChoice.ts:63-70`), so it is live behaviour rather than a dead toggle. It
+  was seen in the real settings tab during NRL-121's Verify phase. `docs/adr/0001` clause 6
+  and its NRL-21 amendment both still call it the one key with no toggle; read those as
+  history, not as the shipped state. Two consequences worth knowing:
   `speakImageAlt` defaults to `true`, so this is the one upgrade that changes what an
   existing user hears; and spoken frontmatter runs its lines through `cleanLine` with
   `blockComments` false and discards the returned `openComment`/`openCode`, which is what
