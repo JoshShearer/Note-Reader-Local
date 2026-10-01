@@ -299,3 +299,216 @@ for every user, not only for engines with no rate control.
 - **A touch drag on the speed readout.** Rejected per decision 6.
 - **Widening `PlatformFlags` with `isMobile`.** Rejected: its docstring records the
   omission as deliberate, and this fix needs no platform predicate in TypeScript.
+
+## NRL-129 amendment: the mobile editor reserves the bar's band
+
+- Date: 2026-10-01
+- Ticket: NRL-129 (https://linear.app/note-reader-local/issue/NRL-129), filed by this
+  ADR's own Residual-risk bullet above. That bullet already carries the correction from
+  "neither direction was observed" to the measured overlap, and is **not** restated here.
+- Amends this ADR in place. No new ADR and no `srs.md` amendment: the placement decision
+  is this document's, and R-M07 was never on the met list, so **no requirement moves and
+  the `2 of 16` MUST headline count does not move.**
+
+### The defect, and why it is a consequence of two correct changes
+
+NRL-112's 44px targets made the bar wrap to three rows, so it grew from 41px to
+**125.64px** tall and its bottom edge moved from y 41 to about **y 236**. NRL-110
+changed the auto-scroll to `{ y: "center" }`, which normally parks the spoken sentence
+near the middle of the editor and well clear of that. Both are right. They interact badly
+in exactly one case: a note too short to scroll, where there is nowhere for the scroll to
+move to. Measured on the Pixel 9 Pro XL (`scrollHeight 997 == clientHeight 997`,
+`scrollTop 0`, keyboard dismissed), the first chunk's sentence mark sat at **y 209.6 to
+255.6** against a bar bottom of **236**: **26.4px of its 46px height behind the bar**, in
+the band x 112 to 336.
+
+### Decision: direction 1, a mobile-only top padding on the editor pane
+
+One rule, one declaration, appended to the `body.is-mobile` region of `styles.css`:
+
+```css
+body.is-mobile.local-tts-control-bar-visible .view-content > .markdown-source-view.mod-cm6 {
+	padding-top: var(--local-tts-control-bar-height, 0px);
+}
+```
+
+`src/ui/controlBar.ts`'s `refresh()` toggles `CONTROL_BAR_VISIBLE_CLASS` on
+`document.body` in the same statement group as the bar's own `.is-visible`, so the two can
+never disagree, and publishes `CONTROL_BAR_HEIGHT_VAR` from `this.el.offsetHeight` when
+that is non-zero. `destroy()` removes both. The two names live in a new DOM-free,
+`obsidian`-free `src/ui/controlBarCss.ts` so the bare-Node suite can pin them - the
+`highlightColour.ts` idiom, and the reason block 12 of `tests/highlight.test.ts` can pin a
+custom-property name at all.
+
+`padding-top`, not `scroll-padding-top`: scroll padding is an inset on the scrollport for
+scrolling operations, and this defect's whole shape is a document that **cannot** scroll.
+
+### Why no literal is needed, and none appears
+
+Padding ADDS to every offset already above the first line, so
+`firstLineTop_new = firstLineTop_old + barHeight`. In both of Obsidian 1.13.7's mobile
+header configurations the first editor line already starts at or below the chrome's
+bottom: under `.is-phone.auto-full-screen` the scroller's own
+`--view-top-spacing-markdown` is itself `calc(var(--safe-area-inset-top) +
+var(--view-header-height) + 16px)` (`app.css:21366`), and otherwise
+`--view-header-position` is `static` (`:18908`) so the header occupies real layout space
+above `.view-content` in a column flex (`:6530`). The bar's top is
+`calc(var(--safe-area-inset-top) + var(--view-header-height))` (decision 1 above). So
+`firstLineTop_old >= barTop`, hence `firstLineTop_new >= barTop + barHeight = barBottom`,
+for any device, row count or theme. The measured case is the slack version:
+209.6 + 125.64 = 335.2 against a bar bottom of 236.
+
+### The pane, not the scroller and not `.cm-content`
+
+All line numbers below are `app.css` unpacked from the installed Obsidian 1.13.7 asar and
+read in this session.
+
+Obsidian already owns the phone scroller's `padding-top`:
+`.is-phone .mod-root .workspace-leaf-content .view-content .markdown-source-view >
+.cm-editor > .cm-scroller { padding-top: var(--view-top-spacing-markdown) }` at `:20426`,
+specificity **(0,7,0)**. Padding is ONE property, so a rule there would **replace** that
+value rather than add to it, and its base differs by configuration -
+`calc(safe-area + header + 16px)` at `:21366`, `var(--size-4-2)` at `:18904`, and on a
+tablet the same box is padded by `padding: var(--file-margins)` at `:3940`. Restating a
+host value we must preserve, or reaching for `!important`, is worse than moving one box
+out. `.markdown-source-view` in this position carries no padding declaration, so our rule
+is uncontested at **(0,5,1)**, and `* { box-sizing: border-box }` (`:3190`) with
+`.markdown-source-view.mod-cm6 { height: 100%; display: flex; flex-direction: column }`
+(`:3530`) means a `padding-top` there shrinks the editor's box from the top rather than
+overflowing it.
+
+`.view-content >` is load-bearing, not tidiness, and the evidence is stronger than a
+hygiene argument: Obsidian nests whole source views inside the editor and really does pad
+one of them - `.inline-embed > .markdown-embed-content > .markdown-source-view { padding:
+var(--embed-padding) }` at `:11953`. A descendant selector would pad every inline embed
+and every table-cell editor by the bar's height for the duration of a read. The child
+boundary is the one Obsidian asserts itself at `:3939`.
+
+Padding `.cm-scroller` or `.cm-content` is additionally worse for the NRL-90 reason
+below: there the content moves **within** the scroller, where pane padding moves the
+scroller's own border box and leaves the content's position inside it untouched.
+
+### Why the height is published by JS, and the honest cost
+
+**Rejected: a CSS-only expression from the bar's own declarations.** It is derivable for
+the one measured device and only for it. The 125.64px decomposes exactly as
+44 + 44 + 16.64 (two 44px control rows and the progress readout alone) + 2 x 4px `gap` +
+12px `padding` + 1px `border-bottom`. Every term is contingent: the row **count** is
+viewport-width dependent (decision 4's arithmetic says a ~360px phone wraps to more rows
+and a wide tablet to fewer) and the third row's height is `--font-ui-smaller`'s line box,
+so it is theme dependent. CSS cannot ask how many rows a `flex-wrap` produced, so the
+expression would have to freeze "three rows" - which under-pads a narrower phone,
+partly reopening this defect, and over-pads a tablet. That is rule 13 exactly.
+
+**The cost of publishing it instead, stated plainly:** `controlBar.ts` imports `obsidian`
+at line 1 and has **no bare-Node runtime**, so the publish, the `> 0` guard and the
+teardown have **no automated coverage of any kind** - identical to NRL-112's position.
+`controlBarCss.ts` recovers the only testable part, the two string names, which is what
+stops a one-character divergence between the TypeScript and the stylesheet silently
+producing no padding with every other check green.
+
+### Consequence for NRL-110: 489.0 is a desktop / bar-hidden figure from here on
+
+This is a deliberate change to a measured number recorded elsewhere, written down so
+nobody finds it by surprise. `scrollRectIntoView`
+(`node_modules/@codemirror/view/dist/index.js:140-200`) builds `bounding` as
+`{ top: rect.top, bottom: rect.top + cur.clientHeight * scaleY }` for the first ancestor
+with `scrollHeight > clientHeight`, and the `center` arm (`:175-181`) lands the cursor
+rect at `bounding.top + (boundingHeight - rectHeight) / 2`. Pane padding moves the
+scroller's `rect.top` **down** by `barHeight` and reduces its `clientHeight` by the same
+`barHeight`. So NRL-110's measured landing of **489.0** = (997 - 19) / 2 becomes, on
+mobile while the bar is visible, **125.64 + (871.36 - 19) / 2 = 551.8** in viewport
+coordinates. **NRL-110's 489.0 is a desktop / bar-hidden figure from here on** (ADR 0022
+and NRL-110's own series are unamended and remain correct for those conditions).
+
+The property NRL-110 cares about is preserved and strengthened: the spoken line is still
+not parked flush with an edge, and it is now centred inside the **unobstructed** band,
+which is direction 3's correctness without touching `src/ui/highlight.ts`. The
+fall-through arm (`rectHeight > boundingHeight`, ADR 0022 decision 3 as corrected by
+NRL-110) is still not reached - 19px against 871px - and `yMargin` is still unread on the
+arm that runs. **551.8 is arithmetic from the library source, not a measurement**; Verify
+measures it.
+
+### Why NRL-90's suppression is not tripped, and the one case where it is
+
+The hazard would be an unarmed `scroll` event fired by the layout change itself, which
+would latch suppression for a whole read. Two mechanisms were checked in the library
+source rather than assumed.
+
+CodeMirror's own re-anchor write (`index.js:7913-7919`:
+`diff = lineBlockAt(scrollAnchorPos).top - scrollAnchorHeight`, then a `scrollTop` write)
+keys on the anchor line's **height-map** top, a document-internal coordinate. Pane padding
+moves the scroller's border box and leaves `scrollTop`, the content's position within the
+scroller and the height map untouched, so `diff` is 0 and no write happens. (That is the
+second reason to prefer the pane over `.cm-scroller` or `.cm-content`.)
+
+The browser's own `scrollTop` clamp fires only when the scrollable **range** shrinks. Pane
+padding shrinks `clientHeight`, which **enlarges** `scrollHeight - clientHeight`, so
+showing the bar cannot clamp. It can clamp when the bar **hides** while the note is
+scrolled to the bottom - **one** unarmed `scroll` event, which latches suppression
+*after* the read has already ended, and `resetScrollSuppression` runs at all three
+read-start sites, so the next read clears it. That is the one named, bounded case and
+Verify measures it. NRL-90's F1 residual (a dispatch that moves the DOM by zero) is
+unchanged in kind, since `center` still computes `moveY` unconditionally, though **which**
+opening chunks clamp at `scrollTop` 0 will differ, the box being smaller.
+
+### What this does not touch
+
+`src/ui/highlight.ts` is **not in the diff**, so ADR 0022 decision 3 (no `coordsAtPos`
+there) and ADR 0030 are satisfied by construction and no new scroll source exists.
+`src/ui/affordances.ts` is untouched. The new rule declares `padding-top` and nothing
+else, so **R-M14 holds by inspection**: there is still no `display: none` and no
+`visibility: hidden` anywhere in the mobile block, and block 20's existing sweep over
+every `body.is-mobile` rule picks the new rule up for free. The rule is deliberately
+**not** wrapped in an `@media`, because block 20's scanner is flat and its own comment
+records that a mobile rule inside an at-rule drops out of that sweep silently.
+Non-negotiable 9 is not on this path.
+
+### Why not the other three directions
+
+- **Direction 3, pass an obstruction height into the scroll target** so `y: "center"`
+  centres within the unobstructed band. The ticket called it the most correct of the four
+  and it **cannot fix this defect at all**: the case is a note that **cannot scroll**, so
+  there is nowhere to move the sentence to however the target is computed. It also reaches
+  into the one file ADR 0022 decision 3 and ADR 0030 both constrain. Note that the chosen
+  fix obtains direction 3's *effect* on scrollable notes as a side effect, by shrinking the
+  box the `center` arm measures - see the NRL-110 section above.
+- **Direction 4, auto-hide the bar** after a few seconds of no interaction. It leaves the
+  first screen occluded for the whole period the bar is up, which includes the start of
+  every read - exactly the window this defect is about - and it changes behaviour the user
+  did not ask to change.
+- **Direction 2, narrow the bar by dropping a control on mobile.** Argued down in this
+  ADR already, at decision 5 and in the "no `display: none`" paragraph of decision 4's
+  block, on R-M14 grounds. Nothing here reopens it, and the chosen fix adds no
+  `display: none` of its own.
+
+### Residual risk - what this amendment does NOT establish
+
+- **Nothing was observed on a device for this fix.** Every number above is either the
+  pre-fix measurement already recorded in this ADR, arithmetic from `app.css` and
+  `@codemirror/view`'s own source, or a derivation. `npm test` checks `styles.css` as
+  **text** and cannot observe a rect; `controlBar.ts` has no bare-Node runtime at all.
+  **A green suite is not evidence here** (rule 11), and 551.8 in particular is predicted,
+  not measured (rule 13).
+- **Reading view is deliberately not padded.** `.markdown-preview-view` gets no rule,
+  because the highlight is a CodeMirror decoration and does not exist there. The bar can
+  still overlay preview text; that is pre-existing and out of scope.
+- **A mid-read rotation leaves a stale published height** until the next player state
+  event re-runs `refresh()`. No `ResizeObserver` was added: it would be more untestable
+  code in the one file the suite cannot reach.
+- **`offsetHeight` is integer-rounded, so the published value will not equal the measured
+  one.** The 125.64px above would publish as `126px`. The 0.36px goes into extra clearance,
+  which is the fail-safe direction, but a reader comparing the two numbers on the device
+  should expect them to differ by under a pixel rather than conclude something is wrong.
+  `getBoundingClientRect().height` would be exact; `offsetHeight` was kept because it is
+  the cheaper read and the difference is below the threshold anything here cares about.
+- **The editor loses `barHeight` of visible height while a read is in progress.** That is
+  the layout shift direction 1 was always going to cost, taken knowingly.
+- **The view-header-disabled case is still open**, and compounds here: this ADR's existing
+  `--view-header-height` residual means the bar's top can sit up to 44px above the real
+  chrome bottom, and the padding is the bar's measured height, so up to 44px of the first
+  line can still be occluded.
+- **Tablet, a ~360 CSS px phone and landscape** remain unobserved, as above.
+- **Desktop rests on construction, not observation.** CDP 9222 is unreachable here, so the
+  argument is that `body.is-mobile` cannot match a desktop Obsidian and the diff deletes
+  zero lines from `styles.css`; block 21's five desktop guards stay green.

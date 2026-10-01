@@ -3,6 +3,7 @@ import type LocalTtsReaderPlugin from "../main";
 import type { PlayerState } from "../audio/player";
 import type { EngineCapabilities } from "../audio/types";
 import { controlAffordances, type Affordance, type Affordances } from "./affordances";
+import { CONTROL_BAR_HEIGHT_VAR, CONTROL_BAR_VISIBLE_CLASS } from "./controlBarCss";
 
 const RATE_MIN = 0.5;
 const RATE_MAX = 2;
@@ -186,6 +187,23 @@ export class ControlBar {
 		const state = this.state;
 		const active = state === "preparing" || state === "playing" || state === "paused";
 		this.el.toggleClass("is-visible", active);
+		// NRL-129, in the same statement group as the line above so the two can
+		// never disagree about whether the bar is up. The bar is
+		// `position: fixed` and cannot push content down itself, and on a note
+		// too short to scroll the auto-scroll has nowhere to move the spoken
+		// sentence to, so styles.css reserves the band off this class.
+		//
+		// The height is measured and published rather than derived in CSS,
+		// because it depends on how many rows `flex-wrap` produced and a CSS
+		// expression cannot ask that - see docs/adr/0032's NRL-129 amendment.
+		// The `> 0` guard is load-bearing: refresh() also runs from the
+		// constructor, before the element has been laid out, and a published
+		// `0px` would stick as a wrong value where the property's ABSENCE is
+		// the fail-safe styles.css falls back on.
+		document.body.toggleClass(CONTROL_BAR_VISIBLE_CLASS, active);
+		if (active && this.el.offsetHeight > 0) {
+			document.body.style.setProperty(CONTROL_BAR_HEIGHT_VAR, `${this.el.offsetHeight}px`);
+		}
 
 		setIcon(this.playPauseBtn, state === "preparing" ? "loader-2" : state === "playing" ? "pause" : "play");
 		this.playPauseBtn.toggleClass("is-loading", state === "preparing");
@@ -201,5 +219,11 @@ export class ControlBar {
 	destroy(): void {
 		for (const off of this.unsubscribers) off();
 		this.el.remove();
+		// Both, or a plugin unload during a read leaves the mobile editor
+		// permanently padded for a bar that no longer exists - the class alone
+		// would be enough to keep the rule matching, and the property alone
+		// would be a stale height waiting for the next install.
+		document.body.removeClass(CONTROL_BAR_VISIBLE_CLASS);
+		document.body.style.removeProperty(CONTROL_BAR_HEIGHT_VAR);
 	}
 }

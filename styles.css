@@ -266,3 +266,71 @@ body.is-mobile .local-tts-cb-speed-btn {
 	min-width: 44px;
 	min-height: 44px;
 }
+
+/*
+ * Reserve the band the bar occupies, while it is shown (NRL-129, docs/adr/0032).
+ *
+ * The bar is `position: fixed` (:78) and so out of flow: it cannot push content
+ * down by itself. The two fixes above made it taller - at 44px targets the
+ * content no longer fits one row, so `flex-wrap` gives three rows and the bar
+ * measured 125.64px tall against the 41px it was, putting its bottom edge at
+ * y 236 instead of y 41. On a note too SHORT to scroll that is unrecoverable
+ * by scrolling: measured on the Pixel 9 Pro XL with
+ * `scrollHeight 997 == clientHeight 997`, the first chunk's sentence mark sat
+ * at y 209.6-255.6, so 26.4px of its 46px height was behind the bar, and
+ * NRL-110's `y: "center"` cannot help because there is nowhere to move to.
+ *
+ * WHY THE PANE AND NOT THE SCROLLER. Obsidian 1.13.7 already owns the phone
+ * scroller's `padding-top`:
+ * `.is-phone .mod-root .workspace-leaf-content .view-content
+ * .markdown-source-view > .cm-editor > .cm-scroller { padding-top:
+ * var(--view-top-spacing-markdown) }` at specificity (0,7,0) (app.css:20426,
+ * read from the installed asar). Padding is ONE property, so a rule there would
+ * REPLACE that value rather than add to it, and its base differs by
+ * configuration - `calc(safe-area + header + 16px)` under
+ * `.is-phone.auto-full-screen` (:21366), `var(--size-4-2)` otherwise (:18904),
+ * and on a tablet the scroller is padded by `padding: var(--file-margins)`
+ * (:3940) instead. Restating a host value we have to preserve, or reaching for
+ * `!important`, is worse than moving one box out. `.markdown-source-view`
+ * itself carries no padding declaration in this position, so our rule is
+ * uncontested at (0,5,1), and `* { box-sizing: border-box }` (:3190) with
+ * `.markdown-source-view.mod-cm6 { height: 100%; display: flex }` (:3530) means
+ * a `padding-top` here shrinks the editor's box from the top rather than
+ * overflowing it.
+ *
+ * `.view-content >` is load-bearing. Obsidian nests whole source views inside
+ * the editor, and it really does pad one of them -
+ * `.inline-embed > .markdown-embed-content > .markdown-source-view { padding:
+ * var(--embed-padding) }` (:11953) - so a descendant selector would pad every
+ * inline embed and table-cell editor by the bar's height for the duration of a
+ * read. The child boundary is the one Obsidian asserts itself at :3939.
+ *
+ * NO LITERAL, and none is needed: padding ADDS to every offset already above
+ * the first line, so firstLineTop_new = firstLineTop_old + barHeight. In both
+ * of Obsidian's mobile header configurations the first editor line already
+ * starts at or below the chrome's bottom - under `.is-phone.auto-full-screen`
+ * the scroller's own spacing is itself `calc(safe-area + header + 16px)`, and
+ * otherwise `--view-header-position` is `static` (:18908) so the header
+ * occupies real layout space above `.view-content` in a column flex
+ * (:6530). The bar's top is `calc(safe-area + header)` (above), so
+ * firstLineTop_old >= barTop and therefore firstLineTop_new >= barBottom, for
+ * any device, row count or theme. The measured case is the slack version:
+ * 209.6 + 125.64 = 335.2 against a bar bottom of 236.
+ *
+ * The height is PUBLISHED by controlBar.ts rather than written here, because
+ * the bar's height depends on how many rows `flex-wrap` produced and CSS
+ * cannot ask that. Freezing "three rows" would under-pad a narrower phone -
+ * reopening this defect - and over-pad a tablet. The `0px` fallback is the
+ * fail-safe: an unpublished height gives today's behaviour, not a wrong offset.
+ *
+ * One declaration, `padding-top`, and nothing else. That is what keeps R-M14
+ * true by inspection: there is still no `display: none` and no
+ * `visibility: hidden` anywhere in this block, so no control becomes missing
+ * rather than dimmed. Deliberately NOT inside an `@media` - block 20 of
+ * tests/highlight.test.ts scans this file flat and its own comment records that
+ * a mobile rule inside an at-rule drops out of that sweep silently.
+ */
+
+body.is-mobile.local-tts-control-bar-visible .view-content > .markdown-source-view.mod-cm6 {
+	padding-top: var(--local-tts-control-bar-height, 0px);
+}
