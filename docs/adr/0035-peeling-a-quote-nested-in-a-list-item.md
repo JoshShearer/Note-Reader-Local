@@ -184,7 +184,7 @@ lines.** Per part: 5,481 test-file literals (1 differing), 9,354 fuzz lines
 
 | property | statement | failures |
 |---|---|---|
-| (a) FIXED POINT | `NEW(L)` equals `iterate(OLD)(L)` for every line, where `iterate` applies OLD to the remaining body until it consumes nothing, summing `chars` and `quotes`, taking `callout` from the round that returned early, `blockType` = quote if any round said quote else list if any said list else paragraph, and honouring HEADING on round 1 only. This makes the loop definitionally "OLD, iterated", which is the honest successor to "an exact refactor". | **0** |
+| (a) FIXED POINT | `NEW(L)` equals `iterate(OLD)(L)` for every line, where `iterate` applies OLD to the remaining body until it consumes nothing, summing `chars` and `quotes`, taking `callout` from the round that returned early, `blockType` = quote if any round said quote else list if any said list else paragraph, and honouring HEADING on round 1 only. This makes the loop definitionally "OLD, iterated", which is the honest successor to "an exact refactor". | **309**, all guard-caused and all fail-closed - **this row used to read 0 and that reading is superseded; see the amendment below** |
 | (b) MONOTONE EXTENSION | `NEW.chars >= OLD.chars` and `NEW.quotes >= OLD.quotes` on every line, and all four old fields are EQUAL wherever `NEW.chars === OLD.chars`. The peel can only grow. | **0** |
 | (c) SIDE-EFFECT PRESERVATION | wherever the four old fields agree, `NEW.outerList === (OLD.blockType === "list")`. Computed, because this is the whole argument that decision 4's fifth field changes nothing on a non-nested line. | **0** |
 | (d) THE DIRECTION | every differing line is one where OLD's own peeled body still begins with a container marker, or is a callout reached after a nested quote; and every differing line falls in a NAMED shape class. A differing line in no named class FAILS. | **0**, 0 unclassified |
@@ -210,6 +210,40 @@ Difference set, 8,189 lines:
 The classifier is shown able to fail rather than assumed to be: with its
 `quote-in-list` arm removed the UNCLASSIFIED bucket fills and the property
 reports FAILURE.
+
+### Amendment at Verify: property (a) is NOT 0, and the F1 guard is why
+
+**The `0` this table recorded for property (a) was measured BEFORE decision 7's F1
+guard was added to the diff, and the guard was appended without going back and
+re-running it.** That reading is kept above as history rather than deleted, because
+the reason it moved is the point. Re-measured by Verify on the SHIPPED tree,
+property (a) has **309 failures**, **every one of them caused by the F1 guard** and
+**every one fail-closed, 0 fail-open**.
+
+This is not a defect and it is not a regression: **the guard deliberately breaks the
+pure fixed-point property**, because the guard exists precisely to STOP peeling at a
+point where `iterate(OLD)` would keep going. A loop that is definitionally "OLD,
+iterated" cannot also refuse to iterate past indented-code depth, so the two
+statements are incompatible by construction and the guard is the one that ships.
+It is hand-checkable on a single line: for `- <TAB>> x`, NEW returns `chars` 3
+(the marker and its one separating space, the guard then breaking) while
+`iterate(OLD)` returns 5 (it peels the `>` too).
+
+**Property (a) as originally stated is therefore SUPERSEDED by a weaker property the
+guard is compatible with:** `NEW(L)` equals `iterate(OLD)(L)` on every line the F1
+guard does not stop, and on every line it does stop `NEW(L)` equals `OLD(L)`
+unchanged from the pre-NRL-131 tree, which is the fail-closed direction. Do not
+re-quote "0 failures" for (a) against any tree that carries the guard.
+
+The other three properties were re-measured by Verify on the shipped tree too, and
+all three hold as stated: **(b) monotone extension, 0 failures**; **(c)
+`NEW.outerList === (OLD.blockType === "list")` wherever the four old fields agree,
+0 failures**; and **(d) the direction, 1,547 differing lines across 2 named classes
+with 0 UNCLASSIFIED**, the classifier shown falsifiable rather than assumed to be.
+Note the corpus: (d)'s 1,547 lines over 2 classes is **Verify's own corpus on the
+shipped tree** and is a different corpus from the 8,189 lines over 12 classes
+tabulated above, which is this ADR's. Neither figure contradicts the other and
+neither may be quoted without the corpus attached.
 
 ## Evidence
 
@@ -347,6 +381,30 @@ code - and the guard keys on the consumed run rather than on a column, so
 of the original defect rather than a regression. Modelling it needs the column
 arithmetic NRL-113 and NRL-116 own.
 
+**Second residual, found at Verify and recorded here as a documentation gap that was
+missed rather than as a new defect (Verify's finding 4d).** `LIST_BULLET`'s lead is
+unbounded, and the F1 guard inspects only the run consumed PAST the marker's one
+separating space, so whitespace sitting in the marker's own LEAD is invisible to it.
+`- >     - x`, five spaces after the `>`, therefore peels and drops a `-` the
+renderer DISPLAYS: **0 to 3,584 cells**.
+
+It is a member of the already-signed regression class above and not a new one, and
+that is measured rather than asserted, by the un-nested control:
+
+| row | cells | base | fix |
+|---|---|---|---|
+| nested `- >     - x`, displayed `-` dropped | 3,584 | 0 | **3,584** |
+| UN-NESTED control `>     - x`, same marker lost | 512 | **512** | 512 |
+| fix vs its un-nested twin, byte-for-byte | 3,584 comparisons | - | **0 differing** |
+| prose sentinel lost | 4,608 | 0 | **0** |
+
+So the un-nested twin already loses that marker in 512 of 512 cells on BASE, the
+fix's nested output is byte-identical to that un-nested twin across all 3,584
+comparisons with 0 differing, and the prose sentinel is never lost in any of 4,608
+cells. The peel brings the nested form onto the same pre-existing path the un-nested
+form was already on, which is the same signature as the tab-and-four-space class
+above, so it belongs to the same tickets and needs the same column arithmetic.
+
 ### 4,000-note fuzz, a floor and not the evidence
 
 16,000 cells. DISCLOSURE 294 -> 142; PROSE LOSS 382 -> 434; DEST-LEAK 47 -> 19
@@ -456,6 +514,18 @@ function body**, and any ticket re-deriving it with a corrected extractor will g
 `1319d83e` instead. That is a weaker prior measurement, not a defect introduced
 here, and it is recorded rather than silently re-based.
 
+**CONFIRMED by independent reproduction at Verify, with the scope limit this
+paragraph did not state.** The three figures are exactly: the 96 bytes AGENTS.md's
+`13030adc` covers are the declaration through the TypeScript return-type annotation
+with **not one body statement in them**; the body alone is 427 bytes, `92023b33`;
+and the whole declaration is 524 bytes, `1319d83e`. The limit the paragraph above
+omits is that **`labelClose` is the ONLY one of the nine protected functions whose
+return type is an object literal, so it is the only affected entry** - this is one
+wrong hash, not a class of them. In particular `opensMathBlock`'s `d2019f06` is a
+legitimate whole-declaration hash, because its return type is `: boolean {` and the
+first `{` after the name is the body's own. Correcting AGENTS.md's recorded figure is
+deliberately NOT done here; it belongs to Finish or to its own ticket.
+
 ## Consequences
 
 - `R-M08` and `R-M09` each lose a leftover. **Neither becomes met and the
@@ -476,7 +546,11 @@ here, and it is recorded rather than silently re-based.
   corpus, not the code: every probe held the whitespace AFTER the `>` and varied
   everything else, so no cell in 122,368 could see a lead INSIDE the marker. A
   later ticket in this family should vary the position of whitespace, not only its
-  amount.
+  amount. **Verify's finding 4d is the same lesson landing a second time**: the
+  guard inspects the run past the marker's separating space and not the marker's
+  own unbounded lead, so `- >     - x` drops a displayed `-` in 3,584 cells. It is
+  recorded with its un-nested control beside decision 7's other residual, and it is
+  a member of the already-signed class rather than a fourth signed regression.
 - **AC4 of the ticket is OUT OF SCOPE.** The four `pin-nrl115-*` tripwires it
   names do not exist on this base, NRL-115 being unmerged (zero `nrl115` hits in
   `tests/extract.test.ts`). Whoever lands second updates them.
