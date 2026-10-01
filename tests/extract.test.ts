@@ -1358,9 +1358,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// twin below, are what a later "simplification" of the opensHiddenComment
 		// narrowing would trip over - nothing else in the suite would.
 		// SCOPE, measured at correction: "0 here" is true of the PLAIN-paragraph
-		// shape these three use, and of that shape only. Put a container prefix
-		// on the same construct and the destination IS spoken on this fix - see
-		// pin-nrl74-container-label-still-leaks-destination below.
+		// shape these three use, and of that shape only. A container prefix on the
+		// same construct used to speak the destination; NRL-98 closed that, and
+		// pin-nrl74-container-label-still-leaks-destination below now holds the
+		// same expectation these do.
 		//
 		// NRL-95 RE-MEASURED all three rather than assuming, because bounding
 		// term 2 of the `<!--` rule WIDENS bracketClosesLater: it narrows
@@ -1371,39 +1372,35 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// UNMOVED: byte-identical output on both arms in 0 of 512 differing
 		// cells each, over every content-key combination. Their cross-paragraph
 		// twins, which DO move, are pinned separately as
-		// pin-nrl95-label-dest-closer-later-para and its link form.
+		// pin-nrl95-label-dest-closer-later-para and its link form. Re-measured
+		// again when NRL-98 was rebased onto NRL-95: still unmoved.
 		["pin-nrl74-label-destination-not-spoken", "Before ![alt <!--x\nmore](zdestz.png) after.", "Before after.", { speakImageAlt: false }],
 		["pin-nrl74-label-destination-not-spoken-alt", "Before ![alt <!--x\nmore](zdestz.png) after.", "Before alt more after.", { speakImageAlt: true }],
 		["pin-nrl74-link-label-destination-not-spoken", "Before [lab <!--x\nmore](zdestz.png) after.", "Before lab more after."],
-		// NOT EVIDENCE OF A FIX. This pins a KNOWN LEAK that this fix UNMASKED,
-		// so it is a guard against silent change and nothing more. Read it as a
-		// tripwire for NRL-88, not as a promise kept.
+		// REPLACED IN PLACE by NRL-98, keeping the name, per the NRL-66/NRL-67
+		// convention. NRL-74 pinned this as a KNOWN LEAK it had unmasked, with a
+		// comment saying in as many words that the expectation must change when
+		// root 1 closes. Root 1 is closed here, so it changed. The attribution in
+		// that comment was wrong and is corrected: root 1 is NRL-98's, not
+		// NRL-88's - NRL-88 closed root 4 only, by its own D-88-1.
 		//
-		// A container-prefixed soft-wrapped label is never confirmed, because
-		// bracketClosesLater runs interruptsParagraph over the opener line and
-		// BLOCKQUOTE/LIST_BULLET match it - NRL-88 root 1, which leaks 512/512 on
-		// base and on this fix alike in its `<!--`-free form. The `<!--`-bearing
-		// members of that class USED to be masked: base opened a comment block on
-		// the mid-line `<!--` and swallowed the rest of the note ("Before [alt"),
-		// which hid the destination by losing prose. Making the `<!--` literal is
-		// the right trade - you do not keep a prose-loss defect to mask a leak -
-		// but it does mean the whole construct, `](zdestz.png)` included, now
-		// falls through as prose.
+		// What it pins now is that a container prefix no longer changes the
+		// answer: this is byte-for-byte what its plain twin
+		// pin-nrl74-label-destination-not-spoken-alt says, so the `<!--x` is
+		// still label content and still not spoken, the destination is gone, and
+		// the `>` is never spoken either because bracketClosesLater peels the
+		// SAME prefix the consumption site strips.
 		//
-		// Measured at correction by bundling both arms against base 5009eb6:
-		// 5,120 of 6,144 cells newly speak the destination, 512 in each of 10
-		// shapes (blockquote / nested quote / bullet / ordered / task, x image,
-		// link, x all 512 content-key combinations), base 0 and fix 512 in every
-		// one. The 2 PLAIN shapes in that 6,144 are 0 on both sides, which is why
-		// the three pins above did not see it. Root traced rather than guessed: a
-		// 3-space indent is not a container interruptsParagraph matches, and that
-		// shape is 0 -> 0 with the destination correctly dropped.
-		//
-		// So when NRL-88 closes root 1, THIS EXPECTATION MUST CHANGE, to the
-		// "Before after." / "Before alt more after." pair its plain twins carry.
-		// It is written down so that happens on purpose. RE-MEASURED at NRL-95
-		// and UNMOVED, 0 of 512 differing cells: NRL-95 does not touch root 1.
-		["pin-nrl74-container-label-still-leaks-destination", "> Before ![alt <!--x\n> more](zdestz.png) after.", "Before [alt <!--x more](zdestz.png) after."],
+		// The 5,120-of-6,144 figure the old comment carried was a pre-NRL-74
+		// baseline over a mixed population and is superseded by ADR 0029's
+		// breakdown, which separates the defect rows from the renderer-faithful
+		// ones. NRL-95's own re-measurement of it ("UNMOVED, 0 of 512 differing
+		// cells") was taken while this pin still carried its leaking value and is
+		// superseded too; the shape is now fixed, not unmoved. Measured on the
+		// REBASE onto ff34b21, which puts NRL-95 underneath this change: this
+		// exact fixture said "Before [alt <!--x more](zdestz.png) after." on that
+		// base and says the expectation below on the rebased tree.
+		["pin-nrl74-container-label-still-leaks-destination", "> Before ![alt <!--x\n> more](zdestz.png) after.", "Before alt more after."],
 		// GUARDS. Green on both sides of the fix, so none is evidence of
 		// anything; they exist so the two-term rule cannot be half-adopted.
 		// AC 2: the line-start term alone still hides through EOF.
@@ -1656,6 +1653,194 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// `heading-tracking` `%%` divergence above. Identical to
 		// heading-html-tracking and out of scope here.
 		["guard-nrl95-atx-opener-not-bounded", "# Heading <!--hidden\nhidden\n--> after.", "after.", { skipHeadings: true }],
+		// NRL-98 ROOTS 1 AND 2 (ADR 0023's residual-roots list, ADR 0029, R-M09).
+		// A soft-wrapped label whose opener line, or any line between opener and
+		// closer, carried a container prefix was never confirmed, so the whole
+		// construct fell through as prose and the destination was read aloud.
+		// `bracketClosesLater` now peels at most the OPENER's own quote levels
+		// from each continuation line before running the UNCHANGED
+		// `interruptsParagraph` and `labelClose` on it, and the bracket arming
+		// guard accepts a "quote" or "list" opener as well as a "paragraph" one.
+		//
+		// Obsidian renders every one of these as an image or a link: module 6234
+		// (blockquote) strips one `>` per line and calls tokenizeBlock on the
+		// JOINED remainder, module 745 (list) strips the marker and up to four
+		// leading spaces per line and does the same, and module 9405's label scan
+		// has no newline exclusion at all. So the destination is an attribute the
+		// renderer does not display and speaking it is a genuine R-M09 leak.
+		// Read out of the installed obsidian.asar 1.13.7, app.js sha256
+		// 8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898.
+		// NOT OBSERVED IN OBSIDIAN - CDP 9222 was not listening for this work.
+		//
+		// Each row's expectation is its plain-paragraph twin's, which is the fix:
+		// `pin-nrl63-softwrapped-image` says "A alt words B" / "A B", and a
+		// container prefix must not change that. The `>` and the bullet are never
+		// spoken, because the peel is the SAME prefix the consumption site uses.
+		["pin-nrl98-root1-blockquote", "> A ![alt\n> words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-root1-blockquote-alt", "> A ![alt\n> words](zdestz.png) B", "A alt words B", { speakImageAlt: true }],
+		["pin-nrl98-root1-nested-blockquote", "> > A ![alt\n> > words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-root1-nested-blockquote-alt", "> > A ![alt\n> > words](zdestz.png) B", "A alt words B", { speakImageAlt: true }],
+		// A continuation with NO prefix is a lazy continuation, which the renderer
+		// accepts (interruptBlockquote holds no `paragraph` entry), so the empty
+		// prefix is inside the peel budget rather than a mismatch.
+		["pin-nrl98-root1-lazy-continuation", "> A ![alt\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-root1-lazy-continuation-alt", "> A ![alt\nwords](zdestz.png) B", "A alt words B", { speakImageAlt: true }],
+		["pin-nrl98-root1-bullet-unindented", "- A ![alt\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-root1-bullet-unindented-alt", "- A ![alt\nwords](zdestz.png) B", "A alt words B", { speakImageAlt: true }],
+		["pin-nrl98-root1-ordered", "1. A ![alt\n   words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-root1-ordered-alt", "1. A ![alt\n   words](zdestz.png) B", "A alt words B", { speakImageAlt: true }],
+		["pin-nrl98-root1-task", "- [ ] A ![alt\n  words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-root1-task-alt", "- [ ] A ![alt\n  words](zdestz.png) B", "A alt words B", { speakImageAlt: true }],
+		// The indent-only continuation at 4+ spaces inside a list item. `inList`
+		// already shields it from being read as indented code, so the only thing
+		// that stopped the carry was the opener line's own bullet.
+		["pin-nrl98-root1-indent-only", "- A ![alt\n      words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-root1-indent-only-alt", "- A ![alt\n      words](zdestz.png) B", "A alt words B", { speakImageAlt: true }],
+		// Root 2: the container marker is on a line BETWEEN opener and closer.
+		["pin-nrl98-root2-bq-interior", "> A ![alt\n> mid\n> words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-root2-bq-interior-alt", "> A ![alt\n> mid\n> words](zdestz.png) B", "A alt mid words B", { speakImageAlt: true }],
+		["pin-nrl98-root2-bq-lazy-interior", "> A ![alt\nmid\n> words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-root2-list-interior", "- A ![alt\n  mid\n  words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-root2-list-interior-alt", "- A ![alt\n  mid\n  words](zdestz.png) B", "A alt mid words B", { speakImageAlt: true }],
+		// A SHALLOWER continuation is carried, matching the renderer's inner-level
+		// lazy continuation. The plan filed this as a guard; it is a REGRESSION
+		// case, measured leaking at e4c9c1d.
+		["pin-nrl98-shallower-quote-carried", "> > A ![alt\n> words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-shallower-quote-carried-alt", "> > A ![alt\n> words](zdestz.png) B", "A alt words B", { speakImageAlt: true }],
+		// The same scanner covers a soft-wrapped LINK in a container, whose label
+		// is spoken in both speakUrls positions and whose destination is not.
+		["pin-nrl98-link-in-quote", "> A [lab\n> words](zdestz.png) B", "A lab words B"],
+		["pin-nrl98-link-in-quote-urls-on", "> A [lab\n> words](zdestz.png) B", "A lab words B", { speakUrls: true }],
+		// And the reference form's `[ref]` tail, exactly as on one line.
+		["pin-nrl98-reference-form-in-quote", "> A ![alt\n> words][zrefz] B", "A B", { speakImageAlt: false }],
+		["pin-nrl98-reference-form-in-quote-alt", "> A ![alt\n> words][zrefz] B", "A alt words B", { speakImageAlt: true }],
+		// GUARDS from here down. Green on BOTH sides of the fix, so none is
+		// evidence of anything; they exist so the peel budget cannot be
+		// half-adopted into a blind peel, which is what the measured blind-peel
+		// diagnostic arm did - it silenced G2, G3, G4, G5 and G6 below, every one
+		// of which Obsidian DISPLAYS.
+		//
+		// A container marker on a continuation of a paragraph that started
+		// OUTSIDE that container really does end the paragraph in Obsidian:
+		// `interruptParagraph` holds a `blockquote` and a `list` entry. So the
+		// destination here is DISPLAYED and speaking it is renderer-faithful.
+		["guard-nrl98-outside-bq-continuation", "A ![alt\n> words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-outside-bq-interior", "A ![alt\n> mid\nwords](zdestz.png) B", "A [alt mid words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-outside-list-interior", "A ![alt\n- mid\nwords](zdestz.png) B", "A [alt mid words](zdestz.png) B", { speakImageAlt: false }],
+		// DEEPER than the opener opens a new container, so it ends the paragraph.
+		// The budget spends the opener's one quote level and the UNCHANGED
+		// BLOCKQUOTE arm then rejects the `>` that is left.
+		["guard-nrl98-deeper-quote", "> A ![alt\n> > words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		// A list marker on a continuation always starts a NEW item (module 745's
+		// `M` branch), so the UNCHANGED LIST_BULLET arm must keep rejecting it.
+		["guard-nrl98-deeper-list", "- A ![alt\n  - words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-same-list-marker", "- A ![alt\n- words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		// Mixed containers, both ways round: the budget peels quotes only, so
+		// neither crossing is accepted.
+		["guard-nrl98-quote-then-list", "> A ![alt\n- words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-list-then-quote", "- A ![alt\n> words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		// A CALLOUT TITLE line as the opener fails closed. Module 6234 matches
+		// /^\[!([^\]]+)\]([+\-]?)(?:\s|$)/ only at `f===0` and then runs
+		// tokenizeBlock on that first stripped line ALONE, so a callout title can
+		// never join the paragraph below it and Obsidian displays the
+		// destination. A callout BODY line as the opener is unaffected.
+		["guard-nrl98-callout-title-opener", "> [!note] A ![alt\n> words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		// The four fail-closed stops inside a container, so the widened
+		// confirmation is shown still to give up where NRL-63 made it give up.
+		["guard-nrl98-blank-in-quote", "> A ![alt\n>\n> words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-fence-in-quote", "> A ![alt\n> ```\n> words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-comment-in-quote", "> A ![alt\n> %%\n> words](zdestz.png) B", "A [alt", { speakImageAlt: false }],
+		// The DISPLAY-MATH stop is root 3 (ADR 0023 clause 7a) and the ONLY one of
+		// the four that is not in `interruptsParagraph`, so the peel does not
+		// reach it: `opensMathBlock` tests `raw.trimStart().startsWith("$$")`,
+		// which a `>`-prefixed line fails. Measured during critique: without the
+		// quote budget threaded into it, this shape CARRIED where its plain twin
+		// `A ![alt / $$ / words](zdestz.png) B / $$` aborts and says
+		// "A [alt equation", so a container prefix changed the answer in the
+		// prose-loss direction - Obsidian renders `$$` inside a blockquote as a
+		// display-math block, which ends the paragraph, so `words](zdestz.png) B`
+		// is displayed as math source and silencing it loses it. The stop is now
+		// container-aware and this shape stays in root 3: destination spoken,
+		// fail-closed, nothing silenced. An indented `$$` under a bullet already
+		// stopped, `trimStart` covering it, and is unchanged.
+		["guard-nrl98-quoted-math-block-fails-closed", "> A ![alt\n> $$\n> words](zdestz.png) B\n> $$", "A [alt $$ words](zdestz.png) B $$", { speakImageAlt: false }],
+		["guard-nrl98-quoted-math-block-fails-closed-alt", "> A ![alt\n> $$\n> words](zdestz.png) B\n> $$", "A [alt $$ words](zdestz.png) B $$", { speakImageAlt: true }],
+		// A COMPLETE `$$x$$` on the interior line is not a block opener (the
+		// second `$$` disqualifies it), so it is carried, exactly as its plain
+		// twin `A ![alt / $$x$$ / words](zdestz.png) B` is. The two rows together
+		// pin that the budget narrows nothing but the block form. The indented
+		// `- A ![alt / \u0020 $$ / \u0020 words](...) / \u0020 $$` form cannot be pinned
+		// HERE, and that is a property of this table rather than of the fix: a
+		// display-math block becomes a synthesised "equation" chunk whose text is
+		// in no source offset, so this table's character-identity assertion fails
+		// on it for the PLAIN twin too (measured). It is unchanged by this diff.
+		["guard-nrl98-quoted-complete-math-span-carried", "> A ![alt\n> $$x$$\n> words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		// TWO MORE STOPS the peel exposes, both found at ship review by EXECUTING
+		// Obsidian's own remark parser out of the asar rather than reading it, and
+		// both prose loss before the correction. Once a `>` is peeled, correctness
+		// needs `interruptBlockquote` modelled and not only `interruptParagraph`,
+		// and the two sets differ:
+		//
+		//   `u.interruptBlockquote` holds ["indentedCode",{commonmark:true}], which
+		//   `interruptParagraph` does NOT, so a LAZY continuation (no `>` at all)
+		//   indented four spaces or led by a tab ENDS the blockquote and becomes an
+		//   indented CODE block, displayed verbatim. A continuation that KEEPS its
+		//   `>` is the opposite case and must stay carried: indented code cannot
+		//   interrupt a paragraph, so `>     words](...)` really is one paragraph
+		//   with an image. Both directions are pinned below.
+		//
+		//   `interruptParagraph` holds "html" and our `interruptsParagraph` covers
+		//   html only through `opensHiddenComment`, i.e. `%%` and `<!--`. A
+		//   block-level tag on a continuation line ends the paragraph and swallows
+		//   the rest into raw HTML, which Obsidian displays. The PLAIN form of that
+		//   shape is already carried at base, so it is PRE-EXISTING and is NOT
+		//   fixed here (filed as a leftover); only the cells the container peel
+		//   newly reaches are stopped, which is why the stop is gated on a
+		//   container being in play.
+		["guard-nrl98-lazy-indented-continuation-fails-closed", "> A ![alt\n    words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-lazy-tab-continuation-fails-closed", "> A ![alt\n\twords](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-lazy-indented-interior-fails-closed", "> A ![alt\n    mid\n> words](zdestz.png) B", "A [alt mid words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-nested-lazy-indented-fails-closed", "> > A ![alt\n    words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		// The counter-direction: a continuation that KEEPS its quote prefix and is
+		// then indented is a paragraph continuation, so it stays carried. These two
+		// are what stops the stop above being widened into a blind indent test.
+		["guard-nrl98-quoted-indented-continuation-carried", "> A ![alt\n>     words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["guard-nrl98-quoted-tab-continuation-carried", "> A ![alt\n>\twords](zdestz.png) B", "A B", { speakImageAlt: false }],
+		["guard-nrl98-quote-html-block-interior-fails-closed", "> A ![alt\n> <div>\n> words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-lazy-html-block-interior-fails-closed", "> A ![alt\n<p>\n> words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-list-html-block-interior-fails-closed", "- A ![alt\n<div>\n  words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		// An AUTOLINK at the start of a continuation line is not a tag, so the html
+		// stop must not match it and the label stays carried.
+		["guard-nrl98-autolink-continuation-carried", "> A ![alt\n> <https://x.example> words](zdestz.png) B", "A B", { speakImageAlt: false }],
+		// A shortcut label in a container still carries no destination, so the
+		// `](`/`][` requirement keeps it unconfirmed and visible (ADR 0023).
+		["guard-nrl98-quote-shortcut-no-tail", "> A ![shortcut\n> more] text", "A [shortcut more] text", { speakImageAlt: false }],
+		["guard-nrl98-quote-never-closes", "> A ![alt\n> no closer here", "A [alt no closer here", { speakImageAlt: false }],
+		// NRL-64's code-span carry inside a container, unchanged. Beside the four
+		// function-body hashes this is the behavioural half of "the code carry did
+		// not move".
+		["guard-nrl98-code-carry-in-quote", "> A `code\n> more` B", "A code more B", { skipInlineCode: false }],
+		// NOT DEFECTS, pinned so they are not "fixed". A setext underline after
+		// ONE content line really is a heading in Obsidian: module 8671 eats
+		// content to the FIRST newline only and is tried before `paragraph`
+		// (8607) at every block start, so `A ![alt` is an h1 with a literal `![`
+		// and `words](zdestz.png) B` is a DISPLAYED paragraph.
+		["guard-nrl98-setext-one-content-line", "A ![alt\n===\nwords](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		// The out-of-scope nested-bracket family (`![a [[N|l]] b](dest.png)`),
+		// pinned in a container so this ticket is not credited with it.
+		["guard-nrl98-nested-bracket-in-quote", "> A ![al [x] t\n> words](zdestz.png) B", "A t words](zdestz.png) B", { speakImageAlt: false }],
+		// THE FOLLOW-UP's THREE SHAPES, pinned at their CURRENT values so the
+		// residue is recorded rather than lost. None is a container problem and
+		// none is fixed here: `table` is absent from Obsidian's
+		// `interruptParagraph` entirely and `setextHeading` is gated out of it by
+		// `commonmark: true` (module 6047), so all three are genuine leaks whose
+		// fix direction is NARROWING interruptsParagraph - which collides with
+		// ADR 0019's F5 guard below and must be scoped the way this peel was.
+		// Tracked as NRL-109; when it closes these three expectations must change
+		// on purpose, and guard-nrl98-setext-one-content-line must NOT.
+		["guard-nrl98-residual-table-opener", "| A ![alt |\nwords](zdestz.png) B", "words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-residual-table-interior", "A ![alt\n| a |\nwords](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		["guard-nrl98-residual-setext-two-lines", "A ![alt\nmore\n===\nwords](zdestz.png) B", "A [alt more words](zdestz.png) B", { speakImageAlt: false }],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -1934,7 +2119,10 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		["nrl63-comment-in-label", "A ![alt %%SENTINEL%%\nwords](zdestz.png) B", "A alt words B"],
 		// Prose-loss direction. A label that never closes, or whose closer is past
 		// a paragraph boundary, is never recognised, so nothing is swallowed and
-		// every one of these is byte-identical to the pre-NRL-63 tree.
+		// every one of these is byte-identical to the pre-NRL-63 tree - with ONE
+		// carve-out: guard-nrl63-opening-line-is-list below was REPLACED IN PLACE
+		// by NRL-98, which recognises a container-prefixed label, so that row is
+		// no longer identical to the pre-NRL-63 tree. Its heading sibling still is.
 		["guard-nrl63-never-closed", "A ![alt\nwords B\n\nlast here.", "A [alt words B last here."],
 		["guard-nrl63-blank-breaks-label", "A ![alt\n\nwords](zdestz.png) B", "A [alt words](zdestz.png) B"],
 		["guard-nrl63-heading-breaks-label", "A ![alt\n# H\nwords](zdestz.png) B", "A [alt H words](zdestz.png) B"],
@@ -1945,7 +2133,14 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		// closed-block case cannot live in this table - see the block below.)
 		["guard-nrl63-stray-math-still-carries", "PA ![alt W1 W2\n$$ stray\nW3](zdestz.png) PC", "PA PC", { speakImageAlt: false }],
 		["guard-nrl63-opening-line-is-heading", "# A ![alt\nwords](zdestz.png) B", "A [alt words](zdestz.png) B"],
-		["guard-nrl63-opening-line-is-list", "- A ![alt\n  words](zdestz.png) B", "A [alt words](zdestz.png) B"],
+		// REPLACED IN PLACE by NRL-98, keeping the name, per the NRL-66/NRL-67
+		// convention. It was root 1's bullet member and is now carried: module
+		// 745 strips the marker and up to four leading spaces per line and
+		// tokenizes the JOINED remainder, so Obsidian renders one image here and
+		// the destination is an attribute it does not display. Measured at
+		// e4c9c1d as "A [alt words](zdestz.png) B". Its ATX sibling above is NOT
+		// replaced and must not be: a heading is one line and cannot soft-wrap.
+		["guard-nrl63-opening-line-is-list", "- A ![alt\n  words](zdestz.png) B", "A alt words B"],
 		// A shortcut `![alt\nwords]` carries no destination and renders literally
 		// when nothing defines the reference, so the carry deliberately requires
 		// `](` or `][` on the closing line and this stays spoken (ADR 0023).

@@ -566,27 +566,42 @@ fixed: **512/512 leaking cells fell to 0/512** for each, and the wrapped form is
 byte-identical to the single-line form, so `speakImageAlt` governs the alt text across the
 break exactly as it does on one line.
 
-**A destination is still spoken**, tracked as **NRL-88**. Record it as **five distinct roots
+**A destination is still spoken in some shapes.** Record it as **five distinct roots
 and not one**, because earlier drafts of ADR 0023 and `srs.md` said "one mechanism" and a
 reader who assumes it is just containers will fix two of the five and believe they are done.
-**Root 4 is CLOSED as of NRL-88** (`docs/adr/0027`); **four remain** and root 4 leaves
-named residual shapes of its own. The numbering is kept as it was so every existing citation still
-resolves. The `11,520 of 19,456` headline this paragraph used to carry is **deleted rather
-than updated**: it was a pre-NRL-74 baseline on a corpus nobody can reconstruct, and NRL-88
-re-measured its own (below) rather than trying to reconcile it.
+**Root 4 is CLOSED as of NRL-88** (`docs/adr/0027`) and the **CONTAINER MEMBERS of roots 1 and 2
+are CLOSED as of NRL-98** (`docs/adr/0029`); root 4 and roots 1 and 2 each leave named residual
+shapes of their own, and roots 3 and 5 are untouched. The numbering is kept as it was so every
+existing citation still resolves. The `11,520 of 19,456` headline this paragraph used to carry is
+**deleted rather than updated**: it was a pre-NRL-74 baseline on a corpus nobody can reconstruct,
+and NRL-88 and NRL-98 each re-measured their own rather than trying to reconcile it.
 
-**Every count in this list is a pre-NRL-74 baseline and root 1's is known to be low.** NRL-74
-made an unmatched mid-line `<!--` literal instead of opening a comment block, and that
-**unmasked 5,120 cells of root 1** which the prose-loss bug had been hiding: a container-prefixed
-soft-wrapped label carrying a mid-line `<!--` used to swallow the rest of the note, so its
-destination was never reached. Measured at NRL-74's correction against base `5009eb6`, base 0 and
-fix 512 in each of 10 shapes; the same shapes without the `<!--` already leaked 512/512 on both
-sides, which is what makes them root 1 rather than a new class. **Re-measure this list before
-reasoning from it** - see NRL-74's bullet below for the numbers and the method.
+**Every count in this list is a pre-NRL-74 baseline, and roots 1 and 2 are now known to have been
+single numbers over MIXED populations.** NRL-98 measured them per row and `docs/adr/0029` carries
+the table; do not quote the two figures below. NRL-74 made an unmatched mid-line `<!--` literal
+instead of opening a comment block, and that **unmasked 5,120 cells of root 1** which the
+prose-loss bug had been hiding: a container-prefixed soft-wrapped label carrying a mid-line `<!--`
+used to swallow the rest of the note, so its destination was never reached. NRL-98 re-measured
+that class as its own row - 5 shapes x 2 opener forms x 512 content-key combinations = 5,120
+cells, all 5,120 leaking at `e4c9c1d` and **0 at the fix** - rather than folding it in. **Re-measure
+this list before reasoning from it.**
 
-1. `interruptsParagraph` matching on the **opener** line - 2,048 of 2,048 cells, **plus the
-   5,120 NRL-74 unmasked**; this row is the one the re-measure will move most.
-2. `interruptsParagraph` matching on a line **between** opener and closer - 1,792 of 2,048.
+1. `interruptsParagraph` matching on the **opener** line. **CONTAINER MEMBERS CLOSED as of
+   NRL-98** (`docs/adr/0029`). The recorded `2,048 of 2,048` **plus the 5,120 NRL-74 unmasked**
+   was one number over three populations and must not be quoted: measured at `e4c9c1d` on a
+   shape x 2 opener forms x 512 matrix, the container openers were **12,288 of 12,288 -> 0**, the
+   `<!--`-bearing members of that class **5,120 of 5,120 -> 0**, the ATX heading opener
+   **2,048 -> 2,048 and CORRECT**, and a TABLE_ROW opener **2,048 -> 2,048 and still a leak**
+   (root 1c, NRL-109).
+2. `interruptsParagraph` matching on a line **between** opener and closer. **CONTAINER MEMBERS
+   CLOSED as of NRL-98**, same caveat on the recorded `1,792 of 2,048`. Measured at `e4c9c1d`:
+   a container interior whose opener is in the SAME or a DEEPER container **8,192 of 8,192 -> 0**;
+   one whose opener is OUTSIDE that container **10,240 -> 10,240 and CORRECT**, because
+   Obsidian's `interruptParagraph` holds a `blockquote` and a `list` entry so the renderer breaks
+   there too and silencing it would be prose loss; a setext underline after ONE content line
+   **2,048 -> 2,048 and CORRECT**; after TWO OR MORE **2,048 -> 2,048 and still a leak** (root
+   2d); a TABLE_ROW interior **2,048 -> 2,048 and still a leak** (root 2e); blank / fence / HR /
+   hidden-comment interiors **4,096 of 5,120 -> 4,096 and CORRECT**.
 3. `opensMathBlock`, clause 7a's separate stop - 512 of 512.
 4. **CLOSED as of NRL-88** (`docs/adr/0027`). `bracketClosesLater` returned at the first later
    line bearing any `]` and tested only that one, so a line that does *not* end the paragraph
@@ -639,17 +654,159 @@ it reads**, measured at NRL-88: what is carried is an underline sitting *after* 
 closed (0 of 1,024 leaking, both sides). An underline *between* opener and closer is
 `SETEXT.test` and therefore `interruptsParagraph`, so it is **root 2** and it leaks 1,024 of
 1,024 on both sides. The ATX form leaks 1,024 of 1,024 on both sides and is correct.
+**NRL-98 split that root-2 setext member by SHAPE and only one half is a defect.** Obsidian's
+setext tokenizer (module 8671) eats content to the FIRST newline only, so with ONE content line
+before the underline the renderer really does produce a heading plus a separate DISPLAYED
+paragraph and speaking the destination is renderer-faithful - the NRL-68 outcome, now pinned by
+`guard-nrl98-setext-one-content-line`. With TWO OR MORE content lines the tokenizer fails at
+block start and, being gated out of `interruptParagraph` by `commonmark: true` (module 6047),
+cannot interrupt either, so it is one paragraph, the image IS matched and we leak. That half is
+root 2d and is NRL-109's.
 
-**Roots 1 and 2 were deferred, not attempted, and are tracked as NRL-98**, and the reason is a
-standing rule rather than time: fixing them means widening `interruptsParagraph`, which is
-shared with `codeSpanClosesLater` and which NRL-73 and NRL-74 had just narrowed in the same run.
-NRL-98 carries the reproductions, the pre-NRL-74 baselines with the instruction to re-measure
-before quoting them, and the setext correction below. Root 3 is
+**Roots 1 and 2's container members CLOSED with NRL-98** (`docs/adr/0029`), and the way they
+closed is the thing to carry: `interruptsParagraph` was **not** widened. NRL-88 deferred them
+because widening that shared predicate would move NRL-64's carry and collide with ADR 0019's F5
+guard; NRL-98 avoided the collision by feeding the UNCHANGED predicate a different string.
+`bracketClosesLater` peels at most the **opener's own quote levels** from each continuation line -
+`peelQuotes(line, op.quotes)` - and runs the unchanged `interruptsParagraph` and the unchanged
+`labelClose` on that peeled string, while `opensMathBlock` still takes the RAW line. Three things
+about it are load-bearing. **The budget IS the compatibility rule**, not a performance bound:
+Obsidian's `interruptParagraph` contains `blockquote` and `list`, so any marker DEEPER than the
+opener's opens a new container and ends the paragraph, while a MISSING prefix is a lazy
+continuation the renderer tolerates - so the rule is SAME OR SHALLOWER, and a deeper continuation
+is rejected by the unchanged BLOCKQUOTE arm once the budget is spent. This **reverses** the
+pre-flight decision, which said same-or-deeper; a blind peel silenced five shapes Obsidian
+displays, measured. **Quote levels only, never the opener's list marker**, because a marker on a
+continuation always starts a new item (module 745's `M` branch). And **peeling alone does not
+close root 1**: the BRACKET arming guard also had to relax from `blockType === "paragraph"` to
+`(paragraph || quote || list)`, measured, because for `> A ![alt` the arm is gated independently
+of the predicate - a diagnostic arm with the peel at both ends and the guard untouched left all
+eight container shapes still leaking. **Never "heading"**, which
+`guard-nrl63-opening-line-is-list`'s unreplaced ATX sibling pins. A **callout title** opener
+fails closed, because module 6234 tokenizes that first stripped line alone. What remains of
+roots 1 and 2 is three NON-container shapes - a TABLE_ROW opener (root 1c), a TABLE_ROW interior
+(root 2e) and a setext underline after two or more content lines (root 2d) - whose fix direction
+is NARROWING `interruptsParagraph` and which therefore DOES collide with ADR 0019's F5 guard, so
+they are **one** follow-up, **NRL-109**, and must be scoped the way NRL-98 scoped the peel. Root 3 is
 left because clause 7a's `opensMathBlock` stop exists to fix a real prose-loss defect, and
 removing it trades prose for a destination - the trade ADR 0007 clause 6 refuses. Root 5 is
 clause 6's own recorded precedence rule. Neither root 3 nor root 5 has a ticket, deliberately:
 each is a recorded decision rather than an open defect, so reopening either means arguing with
 the reason and not just picking up a number.
+
+**NRL-98's evidence, all bare-Node, every arm rebuilt from source against `e4c9c1d` with the
+repo's own esbuild.** Fixtures: **27 checks RED before the change and 0 after** - 26 core pins in
+the NRL-38 table plus one in-place replacement in the NRL-42 table - against **21 guards green on
+both sides**, which are evidence of nothing and exist so the peel cannot be half-adopted into a
+blind one.
+
+**SHIP REVIEW FOUND A THIRD EDIT WAS NEEDED, and it is the thing to carry out of this ticket.**
+It is counted separately from the 27 because it was red against this branch's own first revision
+rather than against `e4c9c1d`, and it was found by **executing** Obsidian's remark parser out of
+the installed asar - a loader pulled the webpack factories out of `app.js`, instantiated the real
+Parser (module 1528) with Obsidian's own `{breaks:true, commonmark:true}` and its own math and
+comment tokenizer registrations - rather than by reading it. **Once a `>` is peeled, correctness
+needs `interruptBlockquote` modelled and not only `interruptParagraph`, and they are different
+sets.** Read verbatim with module 6047's gate applied at `commonmark: true`:
+
+```
+interruptParagraph   thematicBreak list atxHeading fencedCode comment math blockquote html
+interruptBlockquote  indentedCode fencedCode comment math atxHeading setextHeading
+                     thematicBreak html list
+```
+
+Three entries were not modelled, and each silenced text Obsidian displays:
+
+- **`math`**, which `interruptsParagraph` never covered because `opensMathBlock` is a separate
+  stop (root 3) testing `raw.trimStart().startsWith("$$")` - which a `>`-prefixed line FAILS. A
+  quoted `$$` block was CROSSED where the plain twin aborts. `opensMathBlock` now takes the same
+  quote budget as a defaulted third parameter. The claim in the first revision's own comment, that
+  keeping it byte-identical kept the stop intact, was **inverted**: it failed open.
+- **`indentedCode`**, which has no arm at all and is in `interruptBlockquote` ONLY. A LAZY
+  continuation - no `>` whatever - indented four spaces or led by a tab ENDS the blockquote and
+  becomes an indented CODE block. The same line WITH its `>` is an ordinary paragraph continuation
+  and must stay carried, which is why the new stop takes a `lazy` flag rather than testing indent
+  blindly.
+- **`html`**, covered only through `opensHiddenComment` (`%%`, `<!--`) where the real entry fires
+  on any block tag and swallows the rest of the construct into raw HTML.
+
+Measured before the correction, 10 shapes x 512 content-key combinations: **5,120 of 5,120 cells
+of NEW prose loss, 0 pre-existing in any of them.** `> A ![alt` / `    filler` /
+`> words](zdestz.png) B` went `"A [alt filler words](zdestz.png) B"` -> `"A alt filler words B"`,
+while the renderer puts `words](zdestz.png) B` in a NEW blockquote and displays it. **The premise
+that a blank line stops the scan, so a new blockquote cannot be reached, is FALSE** -
+`interruptBlockquote` ends a blockquote with no blank line at all. `containerCarryStops(peeled,
+lazy)` adds the two missing stops at both ends, **gated on a container being in play** so it
+reaches only the cells the peel exposes; `HTML_BLOCK_OPEN` is a deliberately WIDE approximation
+because every error it can make is fail-closed, and it excludes an autolink by requiring a tag
+name followed by whitespace, `/`, `>` or end of line. `lazy` uses `/^\s*>/` and NOT `BLOCKQUOTE`,
+because module 6234's whitespace skip is UNBOUNDED where `BLOCKQUOTE` caps at `\s{0,3}`, so a
+six-space-indented `>` is a quote line for the renderer and must keep being carried. **9 checks
+red before the two corrections and 0 after**, against 4 new counter-direction guards.
+
+**Two shapes are PRE-EXISTING and NOT fixed**, recorded so they are not read as opened here. A
+block-level HTML tag on a continuation line of a PLAIN paragraph (`A ![alt` / `<div>` /
+`words](dest.png) B`) already loses that prose before NRL-98, 0 of 512 leaking on both arms;
+closing it needs an html arm on the SHARED `interruptsParagraph`, which moves
+`codeSpanClosesLater` and collides with ADR 0019's F5 guard, so it belongs with NRL-109. And
+`opensMathBlock`'s `trimStart()` accepts a tab where the renderer's `$$` predicate skips charCode
+32 only, so `>\t$$` aborts our carry and is not a math opener for Obsidian - NRL-93's family, a
+different predicate, and a destination leak rather than prose loss. Two pre-existing fixtures were **replaced in place** per the NRL-66/NRL-67 convention,
+keeping their names: `pin-nrl74-container-label-still-leaks-destination` (whose own comment said
+its expectation must change when root 1 closes, and whose attribution of root 1 to NRL-88 is
+corrected there) and `guard-nrl63-opening-line-is-list`. **No other fixture in the suite moved.**
+**Three** of the four function bodies the must-not-weaken criterion names are **byte-identical**,
+brace-matched out of both trees and compared by sha256: `codeSpanClosesLater` `571b6d43`,
+`interruptsParagraph` `3548e825`, `labelClose` `13030adc`. `opensMathBlock` was the fourth and
+**moves**, `7a37672d` -> `d2019f06`, for the ship-review correction above; that is a narrowing in
+the fail-closed direction and it does not touch `interruptsParagraph`, so ADR 0019's F5 guard is
+still green by construction. NRL-64's two-pass code block is unchanged at `e7dc204f`, and
+`bracketClosesLater` itself moves from `1cf89106` to `df68d86a`.
+`containerPrefix` is asserted to be an exact refactor of the inline peel rather than assumed to
+be: 20,782 corpus lines, 14,267 with a non-zero prefix, **0 mismatches** of `chars`, `blockType`,
+`callout`, the three derived side effects, or the iterated quote-level consumption against what
+the all-levels `BLOCKQUOTE` match consumed.
+
+The destination itself was enumerated directly rather than inferred from a two-class oracle,
+because a destination is an **attribute** and sits in neither the renderer's hide nor its display
+class - the exact scope limit that let NRL-74's 5,120-cell class through. Over 13 container
+families x 5 shapes x 512 content-key combinations = **33,280 cells, all 33,280 leaking at base
+and 0 at the fix, 0 newly leaking.** Prose loss was probed with **three** instruments because none
+sees everything: the 20 named guards; the **skip-path enumeration re-derived**, not cited - the
+per-line loop holds exactly **20 `continue` sites** counting inline `if (...) continue;` forms,
+with the confirmation at `:2530` and the write-back at `:2596`, so 16 precede the confirmation, 2
+sit between, 2 are past it and **18 can bypass the arm**, and all 18 driven with a
+container-prefixed label landing on them over 9,216 cells gave **0 new destinations, 0 new hidden
+text, 0 newly lost displayed prose**; and a **4,000-note fuzz** x 8 sampled combinations = 32,000
+cells with **0 newly leaking, 0 newly disclosing hidden text, 0 losing a prose sentinel** and 44
+cells of the designed `speakImageAlt: false` alt-text class NRL-88 documented. A token-level word
+diff **cannot grade this change** and the first fuzz pass proved it: the tokens it calls "lost"
+are `[alt` and `](zdestz.png)`, which is the fix removing markup, so the corpus carries separate
+sentinels per axis. Disclosure was re-measured in **three buckets kept apart** - genuinely hidden
+text 0 of 28,672 on both sides; ADR 0019's deliberately-literal `%%` pair inside a SPOKEN code
+span **2,048 on both sides**, which must stay its own bucket or it scores as a leak; and the
+attribute bucket above. `sourceIndex` is clean by numeric UTF-16 code-unit index over 61,440
+cells on both arms (126,976 chunks / 747,264 code units at the fix), and the checker is
+**mutation-tested with every row nonzero on both sides**: drop-one 90,368 length + 416,384
+identity, shift-all-by-one 61,440 bounds + 572,288 identity, swap-two 90,368 monotonic + 133,888
+identity, negate-one 90,368 monotonic + 126,976 bounds.
+
+**NOTHING WAS OBSERVED IN OBSIDIAN.** CDP port 9222 was not listening and no deploy happened, so
+rule 11 applies to every figure above and the premise the whole ticket rests on - that Obsidian
+renders a container-prefixed soft-wrapped image AS an image - is unverified in the app. It WAS
+re-derived independently at ship review by the stronger method above, executing the shipped parser
+rather than reading it, and it held: `> A ![alt` / `> words](zdestz.png) B` parses to
+`blockquote > paragraph > [text, image url="zdestz.png", text]`, the destination a url attribute
+and never a text leaf, and the same for the nested, lazy, bullet, ordered and task forms. Three
+stated mechanisms were wrong without changing the conclusion and are corrected in ADR 0029: module
+6234's whitespace skip is unbounded rather than three-space-capped, the list de-indent
+`/^( {1,4}|\t)?/gm` is the PEDANTIC path and Obsidian is not pedantic, and module 9405's `]` rule
+requires `(` only, the `][` form coming from a separate tokenizer. **That execution is still not
+the application**: it is the READING-VIEW parser, and Live Preview's CodeMirror/Lezer parser was
+not read at all. **R-M09 is NOT met** and
+the `2 of 16` MUST headline count does not move: roots 3 and 5, root 4's named residuals, roots 1
+and 2's three non-container shapes, and the two pre-existing image shapes
+`![a [[N|l]] b](dest.png)` and `![alt](dest(1).png)` all stay open against it.
 
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
@@ -866,23 +1023,28 @@ with the destination on the following line, is out of scope (decision Q7) - it h
 per-line-scanner root as NRL-44's whole family. **Do not record R-M08 as fully met.** NRL-44
 closed the literal-region family (see the NRL-42/NRL-44 bullet below), NRL-64 closed its
 opening-line leftover and NRL-63 closed the plain-paragraph half of F9, but NRL-63's remainder
-- five roots, tracked as **NRL-88** and enumerated in the R-M09 section above - keeps
+- five roots, of which root 4 closed with **NRL-88** and roots 1 and 2's CONTAINER members with
+**NRL-98**, all enumerated in the R-M09 section above - keeps
 `srs.md`'s "known gap" clause alive against the same requirement; NRL-45's own
 `[a]: x.png "%%"` leftover in the paragraph above is untouched; and the 2026-09-30 batch filed
 two **new** defects against R-M08 that go the opposite way, hiding text Obsidian displays.
 **NRL-73** (High) and **NRL-74** (Medium) are **both closed**; both are in the last
 bullet of this section. Nothing in that family has been observed in Obsidian. The headline count
 stays at 2 of 16, and neither closing moves it. **Three** things remain open against R-M08, and
-this list is the one to check before anyone proposes closing the requirement: NRL-88's remaining
-roots (read `srs.md` for the current count - root 4 closed with ADR 0027 and the container pair
-is tracked as NRL-98); NRL-45's `[a]: x.png "%%"` leftover in the paragraph above; and
-**NRL-93**, the tab-led `%%` that our `.trim()` accepts and the renderer's spaces-only skip loop
-does not, which silences a paragraph's remaining lines and a container whole (NRL-74 left it
-untouched by construction, not by measurement: `opensHtmlBlock` is a second predicate beside
+this list is the one to check before anyone proposes closing the requirement: the surviving
+roots of NRL-63's five - roots 3 and 5 in full, root 4's named residuals (root 4 itself closed
+with **NRL-88**, ADR 0027), and roots 1 and 2's three NON-container shapes (a TABLE_ROW opener,
+a TABLE_ROW interior, and a setext underline after two or more content lines), which are **one
+follow-up, NRL-109**, and not three, roots 1 and 2's CONTAINER members having closed with
+**NRL-98**; NRL-45's `[a]: x.png "%%"` leftover in the paragraph above; and **NRL-93**, the
+tab-led `%%` that our `.trim()` accepts and the renderer's spaces-only skip loop does not, which
+silences a paragraph's remaining lines and a container whole (NRL-74 left it untouched by
+construction, not by measurement: `opensHtmlBlock` is a second predicate beside
 `opensObsidianBlock` rather than a widened one, and `.trim()` is correct for `<!--` where it is
 wrong for `%%`). **NRL-95 came off this list** - a mid-line `<!--` whose only `-->` sits in a
-LATER paragraph is no longer hidden; see its own paragraph at the end of this section. Nothing in
-any of the three was exercised in a real Obsidian (rule 11).
+LATER paragraph is no longer hidden; see its own paragraph at the end of this section, and read
+the NRL-111 correction there before quoting its probe. Nothing in any of the three was exercised
+in a real Obsidian (rule 11).
 
 The remaining gaps are tracked in Linear. Notable reproduced defects, so you do not
 rediscover them:
@@ -1474,11 +1636,13 @@ rediscover them:
   soft-wrapped image was not recognised across the break at all), closed **partially** with
   `0e44050` / `docs/adr/0023`: `bracketClosesLater` now carries a label across the break, the
   plain-paragraph image and link cases went 512/512 leaking to 0/512, and **a destination is
-  still spoken through five distinct roots**, tracked as **NRL-88** and
-  enumerated in the R-M09 section above. **Root 4 of the five closed with NRL-88**
-  (`docs/adr/0027`); four remain, plus root 4's own named residuals. The
+  still spoken through five distinct roots**, enumerated in the R-M09 section above. **Root 4 of
+  the five closed with NRL-88** (`docs/adr/0027`) and the **container members of roots 1 and 2
+  closed with NRL-98** (`docs/adr/0029`); roots 3 and 5 remain in full, plus root 4's own named
+  residuals and roots 1 and 2's three non-container shapes. The
   `11,520 of 19,456` figure that used to sit in this sentence is deleted rather than updated:
-  it was a pre-NRL-74 baseline on an unreconstructable corpus, and NRL-88 measured its own.
+  it was a pre-NRL-74 baseline on an unreconstructable corpus, and NRL-88 and NRL-98 each
+  measured their own.
   Nothing in either fix was observed in Obsidian.
   Two things NRL-44 did **not** weaken, and must not be: `codeSpanClosesLater`'s
   confirmation, which now prevents silencing visible prose as well as disclosing hidden
@@ -1765,8 +1929,12 @@ rediscover them:
   is current. **NRL-88 merged second and did re-measure**, for root 4 only, which is the one it
   scoped: root 4 had **not** moved, and that was traced rather than assumed - its shapes carry
   no `%%` and no `<!--` on either the opener or the stray line, so the narrowing never fires
-  inside them, and the unmasking landed on root 1. Roots 1, 2, 3 and 5 are **still
-  un-re-measured** and their recorded counts are still pre-NRL-74 baselines.
+  inside them, and the unmasking landed on root 1. **NRL-98 then re-measured roots 1 and 2 on
+  its own corpus against its own base `e4c9c1d`** and found they had each been a single number
+  over a mixed population; the per-row breakdown is in `docs/adr/0029` and the 5,120 unmasked
+  cells are reported there as their own row, measured 5,120 of 5,120 at base and 0 at the fix.
+  Roots 3 and 5 are **still un-re-measured** and their recorded counts are still pre-NRL-74
+  baselines.
   R-M08 is **NOT** met and the `2 of 16` count does not move.
 
   **NRL-95 closed NRL-74's own known gap**, the last one on that bullet's list: term 2 of the

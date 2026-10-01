@@ -1708,6 +1708,165 @@ const CALLOUT = /^\[![A-Za-z][\w-]*\][+-]?\s*/;
  * task state is looking at the screen. If it proves wrong, add a setting.
  */
 const TASK = /^\[[^\]]\](?=\s|$)\s*/;
+/** One quote level, for counting. See containerPrefix. */
+const BLOCKQUOTE_LEVEL = /^\s{0,3}>\s?/;
+
+/**
+ * The container prefix this line carries: how many characters of it there are,
+ * how many quote LEVELS, which block it belongs to, and whether a callout
+ * marker was consumed.
+ *
+ * Extracted from the per-line loop by NRL-98 so there is ONE definition of
+ * "the prefix". `cleanLine` is already handed `raw.slice(prefixChars)`, and
+ * `bracketClosesLater` now evaluates its paragraph bound on a peeled line, so
+ * the confirmation and the consumption would otherwise be two separate
+ * readings of the same thing and free to disagree about where the prefix ends.
+ *
+ * PURE on purpose. The three side effects the inline block had - `prevContainer
+ * = true`, `inList = true` and the "only a non-quote line is a list" write -
+ * stay at the call site and are driven off the returned fields, because a
+ * lookahead must be able to ask this question about a line it is not consuming.
+ *
+ * `quotes` is counted by iterating a SINGLE-level pattern over what the
+ * all-levels BLOCKQUOTE already matched, not by a second independent scan, so
+ * the two cannot disagree: the loop is asserted to consume exactly `q[0]`.
+ * That assertion is why the count can be trusted as a peel budget.
+ */
+function containerPrefix(line: string): { chars: number; quotes: number; blockType: BlockType; callout: boolean } {
+	const h = line.match(HEADING);
+	if (h) return { chars: h[0].length, quotes: 0, blockType: "heading", callout: false };
+	// Peel prefixes in order, each adding to chars so cleanLine gets the true
+	// raw offset of the first kept character: quote levels, then a callout
+	// marker, or else a list marker and its task checkbox.
+	let chars = 0;
+	let quotes = 0;
+	let blockType: BlockType = "paragraph";
+	const q = line.match(BLOCKQUOTE);
+	if (q) {
+		chars = q[0].length;
+		blockType = "quote";
+		let at = 0;
+		while (at < chars) {
+			const level = BLOCKQUOTE_LEVEL.exec(line.slice(at, chars));
+			if (!level || level[0].length === 0) break;
+			quotes += 1;
+			at += level[0].length;
+		}
+	}
+	const callout = q ? CALLOUT.test(line.slice(chars)) : false;
+	if (callout) {
+		chars += line.slice(chars).match(CALLOUT)![0].length;
+		return { chars, quotes, blockType, callout: true };
+	}
+	const b = line.slice(chars).match(LIST_BULLET);
+	if (b) {
+		chars += b[0].length;
+		// Only a line that is not already a quote is a list. A quoted list item
+		// matches both matchers, and the outer construct is the quote, because
+		// BLOCKQUOTE is peeled above before LIST_BULLET is even tried.
+		if (blockType === "paragraph") blockType = "list";
+		const task = line.slice(chars).match(TASK);
+		if (task) chars += task[0].length;
+	}
+	return { chars, quotes, blockType, callout: false };
+}
+
+/**
+ * Strip at most `budget` quote levels from `line`, and nothing else.
+ *
+ * This is NRL-98's compatibility rule between a label's opener line and its
+ * continuations, and the budget IS the rule rather than a performance bound.
+ * Obsidian's `interruptParagraph` holds a `blockquote` and a `list` entry, so
+ * any container marker BEYOND the opener's own opens a new container and ends
+ * the paragraph, while a MISSING prefix is a lazy continuation that
+ * `interruptBlockquote` and `interruptList` tolerate for plain prose. The rule
+ * is therefore SAME OR SHALLOWER, including the fully-lazy empty prefix.
+ *
+ * Expressing it as a budget means no second predicate is needed. A deeper
+ * continuation still has a leading `>` after the budget is spent, so the
+ * UNCHANGED BLOCKQUOTE arm of interruptsParagraph rejects it; a continuation
+ * bearing a list marker after quote-peeling is rejected by the UNCHANGED
+ * LIST_BULLET arm, which is right in every case because a marker on a
+ * continuation line always starts a new item. Every rejection is the
+ * pre-NRL-63 outcome: no confirmation, no carry, the line left exactly as it
+ * was, destination-only and prose-safe (ADR 0023 clause 3).
+ *
+ * Quote levels ONLY, and not the list marker the opener may also have had: a
+ * list continuation's indent is whitespace, which every arm of
+ * interruptsParagraph already tolerates, and peeling a marker would accept the
+ * new item the renderer starts there.
+ */
+function peelQuotes(line: string, budget: number): string {
+	let rest = line;
+	for (let n = 0; n < budget; n++) {
+		const level = BLOCKQUOTE_LEVEL.exec(rest);
+		if (!level || level[0].length === 0) break;
+		rest = rest.slice(level[0].length);
+	}
+	return rest;
+}
+
+/**
+ * Any quote marker at all, with an UNBOUNDED leading-whitespace skip.
+ *
+ * Deliberately not `BLOCKQUOTE`, whose `\s{0,3}` cap is the CommonMark one.
+ * Obsidian's blockquote tokenizer skips spaces and tabs with no cap at all
+ * (`for(;D<E&&((c=t.charAt(D))===a||c===o);)D++;`), so a six-space-indented `>`
+ * is still a quote line there while `peelQuotes` leaves it alone. This predicate
+ * answers "is this line LAZY", i.e. does it carry no `>` for the renderer
+ * either, and it has to use the renderer's rule or a line the renderer keeps
+ * inside the quote would be judged lazy and stopped for nothing.
+ */
+const ANY_QUOTE_MARKER = /^\s*>/;
+/**
+ * A line opening a block-level HTML construct, approximated deliberately WIDE.
+ *
+ * `interruptsParagraph` covers Obsidian's `html` interrupter only through
+ * `opensHiddenComment`, i.e. `%%` and `<!--`. The real entry fires on any block
+ * tag, so a `<div>` on a continuation line ends the paragraph and swallows the
+ * rest of the construct into raw HTML that Obsidian DISPLAYS. This is a wide
+ * approximation rather than CommonMark's seven conditions because every error it
+ * can make is in the fail-closed direction: an extra stop leaves the line exactly
+ * as the pre-NRL-63 tree had it, destination spoken and no prose lost.
+ *
+ * The one false positive worth excluding is an AUTOLINK, `<https://x.example>`.
+ * Requiring a tag name followed by whitespace, `/`, `>` or end of line does it:
+ * `https` is followed by `:`, which is in none of those, so the branch fails for
+ * every prefix of it.
+ */
+const HTML_BLOCK_OPEN = /^ {0,3}<(?:[!?/]|[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$))/;
+
+/**
+ * The paragraph-ending constructs the container peel newly EXPOSES, and only
+ * those. Found at NRL-98's ship review by executing Obsidian's own remark parser
+ * out of the installed asar rather than reading it.
+ *
+ * Once a `>` is peeled, correctness needs `interruptBlockquote` modelled and not
+ * only `interruptParagraph`, and the two sets differ. Obsidian's, read verbatim
+ * and with module 6047's option gate applied at `commonmark: true`:
+ *
+ *   interruptParagraph  thematicBreak list atxHeading fencedCode comment math
+ *                       blockquote html
+ *   interruptBlockquote indentedCode fencedCode comment math atxHeading
+ *                       setextHeading thematicBreak html list
+ *
+ * `interruptsParagraph` already covers every one of those except two.
+ * `indentedCode` has no arm at all, and it is in `interruptBlockquote` only - so
+ * a LAZY continuation (no `>`) indented four spaces or led by a tab ENDS the
+ * blockquote and becomes an indented CODE block, while the same line WITH its `>`
+ * is an ordinary paragraph continuation and must stay carried. That asymmetry is
+ * why `lazy` is a parameter rather than being folded in. And `html` is covered
+ * only for `%%`/`<!--`, which `HTML_BLOCK_OPEN` widens here.
+ *
+ * Gated at the call site on a container being in play, which is what keeps this
+ * to the cells the peel newly reaches: the PLAIN form of the html shape
+ * (`A ![alt` / `<div>` / `words](dest.png) B`) is already carried before NRL-98
+ * and is a pre-existing defect recorded as a leftover, not opened here.
+ */
+function containerCarryStops(peeled: string, lazy: boolean): boolean {
+	return (lazy && INDENTED_CODE.test(peeled)) || HTML_BLOCK_OPEN.test(peeled);
+}
+
 /**
  * Setext underline. Only an underline when a paragraph line sits directly
  * above it; otherwise "---" is a rule and "===" is text, so this is checked
@@ -1948,9 +2107,24 @@ function codeSpanClosesLater(lines: string[], from: number, len: number, htmlClo
  * with codeSpanClosesLater, and widening it would move NRL-64's just-landed
  * carry as well. The identical gap exists for that carry and is pre-existing;
  * it is not opened or closed here.
+ *
+ * `quoteBudget` is NRL-98's, and it is the one place the container peel has to
+ * reach INSIDE this test rather than being applied to its argument. This stop is
+ * the only one of the label carry's four that is not an arm of
+ * `interruptsParagraph`, so peeling the line the predicate sees does nothing for
+ * it: `> $$` fails `trimStart().startsWith("$$")` and the block is missed.
+ * Left unthreaded, the carry CROSSED a quoted math block where it aborts across
+ * a plain one, so a container prefix changed the answer in the prose-loss
+ * direction - Obsidian renders `$$` inside a blockquote as a display-math block,
+ * which ends the paragraph, so the closing line is math source it displays. The
+ * budget keeps the shape in root 3: destination spoken, fail-closed, nothing
+ * silenced. It defaults to 0, so codeSpanClosesLater's call is unchanged and the
+ * pre-existing gap for THAT carry is neither opened nor closed, exactly as the
+ * paragraph above says. The CLOSER search deliberately still scans the RAW lines,
+ * because peeling never removes a `$$`.
  */
-function opensMathBlock(lines: string[], n: number): boolean {
-	const raw = lines[n]!;
+function opensMathBlock(lines: string[], n: number, quoteBudget = 0): boolean {
+	const raw = quoteBudget === 0 ? lines[n]! : peelQuotes(lines[n]!, quoteBudget);
 	const open = raw.indexOf("$$");
 	if (!raw.trimStart().startsWith("$$") || raw.indexOf("$$", open + 2) !== -1) return false;
 	for (let k = n + 1; k < lines.length; k++) if (lines[k]!.includes("$$")) return true;
@@ -2020,10 +2194,16 @@ function labelClose(line: string, from: number, depth: number): { close: number;
  * Does an `![` or `[` left unmatched on line `from` have its `]` on a later line
  * of the same paragraph, followed by a destination or a reference tail?
  *
- * Deliberately the same stopping rules as codeSpanClosesLater, run through the
- * identical interruptsParagraph predicate at both ends, so the two carries can
- * never disagree about where a paragraph ends. A label cannot leave its own
- * block any more than a code span can.
+ * The same stopping rules as codeSpanClosesLater, through the SAME
+ * interruptsParagraph predicate at both ends - but NOT on the same input, and
+ * that is NRL-98. A code span cannot leave its own block; a paragraph CAN span a
+ * container's lines, because the blockquote and list tokenizers strip their
+ * prefix per line and tokenize the JOINED remainder. So this carry evaluates the
+ * bound on a container-PEELED line where codeSpanClosesLater evaluates it on the
+ * raw one, and the two can now disagree about where a paragraph ends,
+ * deliberately. ADR 0023 clause 2 said they could not and is amended; ADR 0029
+ * records why. The predicate itself is untouched and shared byte for byte, which
+ * is what keeps ADR 0019's F5 disclosure guard green by construction.
  *
  * The `](` / `][` requirement is the difference from codeSpanClosesLater, and it
  * is what keeps this fix on the prose-loss side of the line. The defect is that
@@ -2039,7 +2219,33 @@ function labelClose(line: string, from: number, depth: number): { close: number;
  * `]` is the label's own (NRL-88, D-88-10).
  */
 function bracketClosesLater(lines: string[], from: number, htmlCloserAhead: readonly boolean[]): boolean {
-	if (interruptsParagraph(lines[from]!, htmlCloserAhead[from]!) || opensMathBlock(lines, from)) return false;
+	// `htmlCloserAhead` is indexed by RAW line number and stays so under the peel
+	// (NRL-95 landing under NRL-98). That is sound rather than an oversight: the
+	// array answers "is there a `-->` later in THIS line's paragraph", and
+	// `endsTerm2Scan` deliberately drops BLOCKQUOTE from its stop set for exactly
+	// the reason the peel exists - the renderer strips the `>` and re-runs the
+	// paragraph tokenizer on the joined remainder, so a quote continuation is not
+	// a new paragraph for either of them. The two changes agree; nothing is
+	// recomputed on the peeled string.
+	const op = containerPrefix(lines[from]!);
+	// A CALLOUT TITLE line fails closed. Module 6234 matches the `[!type]`
+	// marker only at the blockquote's first line and then runs tokenizeBlock on
+	// THAT stripped line alone, before tokenizing the rest of the quote, so a
+	// callout title can never join the paragraph below it: Obsidian displays the
+	// destination and silencing it would be prose loss. A callout BODY line as
+	// the opener has no marker and is carried.
+	if (op.callout) return false;
+	// An ATX heading is ONE line and cannot soft-wrap, so peeling its `#` run and
+	// then asking whether the paragraph continues would be asking the wrong
+	// question. Stated here as well as at the arming site because this function
+	// must answer correctly about a line on its own terms; the arming guard below
+	// never passes a heading, and guard-nrl63-opening-line-is-heading pins it.
+	if (op.blockType === "heading") return false;
+	// Only where the peel exposed them. A plain-paragraph opener is left exactly
+	// as it was, pre-existing holes included.
+	const containerInPlay = op.quotes > 0 || op.blockType === "list";
+	if (interruptsParagraph(lines[from]!.slice(op.chars), htmlCloserAhead[from]!) || opensMathBlock(lines, from, op.quotes)) return false;
+	if (containerInPlay && containerCarryStops(lines[from]!.slice(op.chars), false)) return false;
 	// Starts at 0 rather than at a depth read off the opener line, and that is
 	// provable rather than an approximation: the carry is armed only when
 	// `inlineContainerClose(raw, openerAt, "]")` is -1, so there is no `]` after
@@ -2049,8 +2255,18 @@ function bracketClosesLater(lines: string[], from: number, htmlCloserAhead: read
 	// to re-derive.
 	let depth = 0;
 	for (let n = from + 1; n < lines.length; n++) {
-		const line = lines[n]!;
-		if (interruptsParagraph(line, htmlCloserAhead[n]!) || opensMathBlock(lines, n)) return false;
+		// Peeled for the predicate AND for labelClose, from the same string, so
+		// the bound and the closer search cannot disagree about what this line
+		// is. opensMathBlock is handed the same budget rather than the peeled
+		// string, because its own closer search must still see the RAW lines; a
+		// container-prefixed `$$` therefore still aborts the carry, which is root
+		// 3's territory and can only fail closed. An earlier revision of this
+		// change left the budget off and that claim was FALSE - measured during
+		// critique, the carry crossed a quoted math block where the plain twin
+		// aborts, silencing a line Obsidian displays as math source.
+		const line = peelQuotes(lines[n]!, op.quotes);
+		if (interruptsParagraph(line, htmlCloserAhead[n]!) || opensMathBlock(lines, n, op.quotes)) return false;
+		if (containerInPlay && containerCarryStops(line, op.quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!))) return false;
 		const found = labelClose(line, 0, depth);
 		if (found.close === -1) {
 			depth = found.depth;
@@ -2511,51 +2727,29 @@ export function extractChunks(
 				continue;
 			}
 		}
-		let body = raw;
-		let prefixChars = 0;
 		// The block scan already knows which construct this line belongs to, so
 		// it says so rather than setting a boolean and throwing the answer away.
 		// "paragraph" is the else: a plain prose line, and also a lazy
 		// continuation of a list or quote, which matches nothing on its own line.
-		let blockType: BlockType = "paragraph";
-		const m = raw.match(HEADING);
-		if (m) {
-			prefixChars = m[0].length;
-			blockType = "heading";
-		} else {
-			// Peel prefixes in order, each adding to prefixChars so cleanLine gets
-			// the true raw offset of the first kept character: quote levels, then
-			// a callout marker, or else a list marker and its task checkbox.
-			const q = raw.match(BLOCKQUOTE);
-			if (q) {
-				prefixChars = q[0].length;
-				blockType = "quote";
-				prevContainer = true;
-			}
-			const callout = q ? raw.slice(prefixChars).match(CALLOUT) : null;
-			if (callout) {
-				prefixChars += callout[0].length;
-			} else {
-				const b = raw.slice(prefixChars).match(LIST_BULLET);
-				if (b) {
-					prefixChars += b[0].length;
-					// Only a line that is not already a quote is a list. A quoted
-					// list item matches both matchers, and the outer construct is
-					// the quote, because BLOCKQUOTE is peeled above before
-					// LIST_BULLET is even tried - the same order the `if (!q)
-					// inList = true` below already draws. Without the guard the
-					// two writes would race and the inner one would win.
-					if (blockType === "paragraph") blockType = "list";
-					prevContainer = true;
-					// A quoted list ends with its quote, so it does not hold the
-					// list state that shields later indented lines from being code.
-					if (!q) inList = true;
-					const task = raw.slice(prefixChars).match(TASK);
-					if (task) prefixChars += task[0].length;
-				}
-			}
+		//
+		// The peel itself lives in containerPrefix (NRL-98), so the lookahead and
+		// this consumption read one definition of where the prefix ends. Only the
+		// three SIDE EFFECTS stay here, because a lookahead must be able to ask
+		// the question about a line it is not consuming.
+		const prefix = containerPrefix(raw);
+		const prefixChars = prefix.chars;
+		const blockType: BlockType = prefix.blockType;
+		if (blockType === "quote") prevContainer = true;
+		if (blockType === "list") {
+			prevContainer = true;
+			// A quoted list ends with its quote, so it does not hold the list
+			// state that shields later indented lines from being code. blockType
+			// is "list" only when BLOCKQUOTE did NOT match, which is the same
+			// `if (!q)` this used to spell out: containerPrefix leaves a quoted
+			// list item as "quote".
+			inList = true;
 		}
-		body = raw.slice(prefixChars);
+		const body = raw.slice(prefixChars);
 
 		if (body.trim() === "") {
 			flushParagraph();
@@ -2623,9 +2817,27 @@ export function extractChunks(
 		 * leaves NRL-64's path untouched and leaves the mixed shape exactly as it
 		 * was rather than half-changed. ADR 0023 records the residual.
 		 */
+		/*
+		 * `blockType` HERE is the one conjunct NRL-98 relaxed, and it is the
+		 * second of this fix's two edits rather than tidying. Measured, not read:
+		 * teaching bracketClosesLater to peel a container prefix at both ends and
+		 * leaving this test alone left ALL EIGHT root-1 container shapes still
+		 * speaking their destination, because for `> A ![alt` or `- A ![alt`
+		 * blockType is "quote"/"list" and this arm is gated independently of the
+		 * predicate. So the carry has to be armable off a quote or a list line.
+		 *
+		 * NEVER "heading": an ATX heading is one line and cannot soft-wrap, which
+		 * guard-nrl63-opening-line-is-heading pins. The CODE arm above keeps the
+		 * bare `blockType === "paragraph"`, so `confirmed` stays undefined on a
+		 * container line and the `confirmed === undefined` precedence rule below
+		 * is satisfied for free. The comment on the first pass calls that guard
+		 * "redundant belt-and-braces today"; that remains true of the CODE arm and
+		 * is NOT true of this copy, which is now load-bearing in the opposite
+		 * direction - widening it is what arms the carry at all.
+		 */
 		let confirmedBracket: BracketKind | undefined;
 		if (
-			blockType === "paragraph" &&
+			(blockType === "paragraph" || blockType === "quote" || blockType === "list") &&
 			confirmed === undefined &&
 			cleaned.unclosedBracket !== undefined &&
 			bracketClosesLater(lines, lineNo, htmlCloserAhead)
@@ -2677,7 +2889,7 @@ export function extractChunks(
 		}
 		// Output exclusions do not exclude parsing: an HTML or Obsidian comment
 		// opened in a skipped heading/table must still hide its following lines.
-		if ((opts.skipTables && TABLE_ROW.test(raw)) || (opts.skipHeadings && m)) {
+		if ((opts.skipTables && TABLE_ROW.test(raw)) || (opts.skipHeadings && blockType === "heading")) {
 			flushParagraph();
 			continue;
 		}
