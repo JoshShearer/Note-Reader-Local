@@ -1147,8 +1147,18 @@ rediscover them:
   real measurement, the first this project has ever taken of the scroll on screen - under
   `"nearest"` on a Pixel 9 Pro XL in real Obsidian the spoken sentence's top sat at 973px of
   a 997px editor on every chunk from the eleventh onward, flush with the bottom edge. Only
-  `y` is passed, so `x` stays `"nearest"`, and no `yMargin` is passed because the `center`
-  arm at `dist/index.js:177` never reads one - passing one would be dead config. A
+  `y` is passed, so `x` stays `"nearest"`, and no `yMargin` is passed because the arm that
+  actually runs for us never reads one. **That is geometry, not structure, and the
+  mechanism first recorded for it was wrong** - corrected at NRL-110's close in ADR 0022
+  decision 3, which NRL-90 must read rather than the earlier version. `side` is 1 (the
+  effect carries an empty cursor range), and that kills the **middle** arm, the one guarded
+  by `y == "start" || (y == "center" && side < 0)`; it is the *precondition* of the
+  fall-through arm, which also reads `yMargin` and is reached when
+  `rectHeight > boundingHeight`. What keeps us off it is only that a cursor rect is 19px
+  against a 997px editor on the measured device, confirmed by the landing position being
+  exactly `(997 - 19) / 2 = 489.0` with no `yMargin` term, 24 dispatches out of 24. So
+  "passing one would be dead config" overstates it: a line taller than the viewport would
+  read one. A
   `coordsAtPos` visibility test is **still not added, but the old reason is dead**: it no
   longer "duplicates what `nearest` already does", because on this path `nearest` does
   nothing. It stays unwritten purely because it needs a DOM the bare-Node suite cannot build
@@ -1179,14 +1189,38 @@ rediscover them:
   old code also dispatched exactly one transaction and simply put no scroll in it, so it is
   relabelled a guard rather than conjoined with 14a to manufacture a red. Blocks 15 and 16
   and checks 14d/14e/14g are all guards, green both sides, and are not counted.
-  **NOTHING WAS OBSERVED IN OBSIDIAN.** No deploy happened and no CDP session was
-  attempted. A bare-Node assertion that a `StateEffect` with `range.head === 18` rode on
-  the transaction is **not** evidence that a user sees the view move: it says nothing about
-  `scrollDOM.scrollTop`, nothing about whether Obsidian's own editor extensions intercept
-  or override a scroll effect, nothing about whether the movement reads as smooth or as a
-  jolt, and nothing about whether Live Preview's folds and widgets put `chunk.sourceStart`
-  at the screen position a plain-text offset implies - which would scroll to the wrong
-  place with a fully green suite. **Not solved, and an explicit follow-up:** nothing
+  NRL-72 itself recorded **NOTHING WAS OBSERVED IN OBSIDIAN** - no deploy and no CDP
+  session - and that sentence is kept as history because the reasoning around it still
+  stands: a bare-Node assertion that a `StateEffect` with `range.head === 18` rode on the
+  transaction is **not** evidence that a user sees the view move.
+  **NRL-110 changed that, and this is one of the few things in this file that WAS exercised
+  in a real Obsidian.** On a Pixel 9 Pro XL (Android 17, WebView Chromium 154), real
+  Obsidian, `AcceptanceTest/ScrollAcceptance.md` (16,211 characters, ~9.5 screens against a
+  997px editor), source mode, sampling `scrollDOM.scrollTop` and
+  `coordsAtPos(chunk.sourceStart).top` relative to `scrollDOM`'s own box on every chunk
+  advance: the baseline `y: "nearest"` build pinned the spoken line's top at **0.976 of
+  `clientHeight`** (973px of 997, flush with the bottom edge) on every chunk from 11
+  onward, and the shipped `y: "center"` build pins it at **0.490** (489px of 997, 508px of
+  context below) on every chunk from 5 through 23, with chunks 0-4 clamped at the document
+  top because centring them would need a negative `scrollTop`. A hook on
+  `EditorView.dispatch` confirmed every scroll effect as `y "center"`, `x "nearest"`,
+  `yMargin 5`, in a three-effect single dispatch. **Both series were independently
+  reproduced to the digit by a second agent** on its own build of the merged commit,
+  including re-measuring the baseline by reverting the one argument in a copied shadow root
+  and pushing that build to the device - so the numbers are not one agent's run replayed.
+  **Three limits stay open and must travel with those numbers.** Desktop **feel** - whether
+  recentring on every chunk reads as comfortable tracking or as the page twitching every
+  two seconds - has been watched on no platform by anyone; a `scrollTop` series is not a
+  person looking at a screen. Whether Obsidian's own **desktop** editor extensions
+  intercept or override the scroll effect is untested, CDP 9222 being unreachable, so the
+  Android evidence rests on exactly one stated ground: both platforms run the same bundled
+  `@codemirror/view` `scrollRectIntoView`. And NRL-72's **Live Preview** premise is
+  untouched - whether folds and widgets put `chunk.sourceStart` at the screen position a
+  plain-text offset implies - because all measurement was in source mode. One artefact is
+  recorded in ADR 0022 rather than here: two early post-fix runs scrolled not at all right
+  after a `disablePlugin`/`enablePlugin` reload, cause **unidentified**, not reproduced
+  from a clean state by either the implementer or the independent re-measure, and not
+  attributable to this change. **Not solved, and an explicit follow-up:** nothing
   detects a manual mid-read scroll, so one is overridden at the next sentence boundary.
   R-S03 is a SHOULD, so the `2 of 16` MUST headline count does not move.
 - A note switch mid-read no longer drags the highlight or the NRL-72 scroll onto the

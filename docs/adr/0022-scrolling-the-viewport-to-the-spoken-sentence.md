@@ -56,8 +56,28 @@ deliberately ends a property `highlight.ts` used to state about itself and ADR
    with `rectHeight <= boundingHeight` `targetTop` centres the rect, so the gate
    almost never zeroes and **a chunk event now scrolls even when the sentence is
    already on screen**. That property is traded away deliberately, for the reason
-   in the amendment section. `yMargin` is **not** passed, because the `center` arm
-   at `:177` never reads it and a passed value would be dead config. A visibility
+   in the amendment section. `yMargin` is **not** passed, because the arm that
+   actually runs for us never reads it. **That is an empirical property of the
+   geometry and not a structural guarantee, and the mechanism recorded here at
+   first was wrong** - corrected at NRL-110's close, and NRL-90 must take the
+   corrected version. The `y` ternary has three arms. Arm 1,
+   `y == "center" && rectHeight <= boundingHeight`, centres the rect and reads no
+   `yMargin`. Arm 2, `y == "start" || (y == "center" && side < 0)`, reads
+   `yMargin` and is dead for us, and *this* is what `side` excludes:
+   `EditorView.scrollIntoView(pos)` with a number builds an empty cursor range
+   (`dist/index.js:8337`, `EditorSelection.cursor(pos)`), so `head === anchor` and
+   `side` is 1 (`:3321`, `range.head < range.anchor ? -1 : 1`). Arm 3, the
+   fall-through `rect.bottom - boundingHeight + yMargin`, **also reads `yMargin`**,
+   and it is reached exactly when `side >= 0` **and**
+   `rectHeight > boundingHeight` - so `side` being 1 is arm 3's *precondition*,
+   not its exclusion. What keeps us off arm 3 is only `rectHeight <=
+   boundingHeight`: a single cursor position's rect measured at 19px (30.3px on
+   chunk 0) against a 997px editor on the device in the amendment below, confirmed
+   by the landing position matching `(997 - 19) / 2 = 489.0` exactly on 24 of 24
+   observed dispatches with no `yMargin` term in it. A single line taller than
+   the editor viewport would take arm 3 and would read a `yMargin`, so "passing
+   one would be dead config" overstates it; the accurate claim is the narrow one,
+   that the arm we run on never reads it. A visibility
    test of our own would still need `coordsAtPos` and a real DOM, which the
    bare-Node suite cannot build, so it stays unwritten - but no longer on the
    ground that `nearest` already does it, because on this path it does not.
@@ -294,7 +314,15 @@ But NRL-90's F1 - a chunk dispatch that moves by zero fires no native `scroll`
 event, so the armed flag is never read-and-cleared and the next genuine user
 scroll is misattributed as ours - becomes close to measure-zero in practice rather
 than fixed, because `"center"` almost always produces a real movement. The stale-arm
-window shrinks to the residual cases where `center` still computes zero: a target
-rect taller than the viewport, which falls through to the start/end arm, or a rect
-already exactly centred. **NRL-90 must re-derive F1 against what this ticket
+window shrinks to the residual cases where `center` still computes zero - and
+**that residual set is narrower than this paragraph originally said**, corrected at
+NRL-110's close. It listed "a target rect taller than the viewport, which falls
+through to the start/end arm" as a zero-movement case. That is wrong in the other
+direction: the fall-through arm computes
+`moveY = rect.bottom - boundingHeight + yMargin - bounding.top`, which is non-zero
+in general, so a rect taller than the viewport stops being **centred** - it becomes
+end-aligned - rather than becoming motionless. It therefore still fires a native
+`scroll` event and still consumes the arm. What is left of the zero-movement set is
+a rect already exactly centred, and nothing else that has been identified.
+**NRL-90 must re-derive F1 against what this ticket
 actually landed and must not reuse any pre-NRL-110 measurement of it.**

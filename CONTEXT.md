@@ -404,9 +404,12 @@ These are design-level, not bugs, and they shape any new work:
   `nearest` does nothing. See ADR 0022's NRL-110 amendment. What
   survives of the old decoration-only guarantee is the cursor, the text selection, the
   focused element and the undo history. What does not is the user's scroll position, by
-  design. **Nothing was observed in Obsidian:** whether Obsidian's own editor extensions
-  intercept the scroll effect, and whether Live Preview's folds put `sourceStart` at the
-  screen position a plain-text offset implies, are both unknown.
+  design. **Observed on Android, not on desktop:** NRL-110 measured the fraction pinning at
+  0.490 post-fix against 0.976 on the baseline in a real Obsidian on a Pixel 9 Pro XL, so
+  the geometry is no longer unverified; what is still unknown is whether Obsidian's own
+  **desktop** editor extensions intercept the scroll effect, whether Live Preview's folds
+  put `sourceStart` at the screen position a plain-text offset implies (all measurement was
+  in source mode), and how recentring every chunk **feels**, which nobody has watched.
 - **Segmentation is `Intl.Segmenter` unioned with the old regex, not either alone**
   (NRL-28, ADR 0009). `src/text/segment.ts` owns it, pure and dependency-free, and the
   segmenters arrive through an injected `SegmenterSource` so the no-segmenter path is
