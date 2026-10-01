@@ -18,8 +18,17 @@ import type {
  * better picks there.
  *
  * The long-standing trap is that `getVoices()` returns an empty array on first
- * call and fills in later, so every entry point polls and listens rather than
- * trusting the first read.
+ * call and fills in later, so the first read is never trusted: the engine polls
+ * for up to VOICE_TIMEOUT_MS and listens for `voiceschanged`.
+ *
+ * NRL-141: that poll is paid once per engine, not once per call. On a host
+ * whose speechSynthesis reports no voices at all (measured on a Flatpak
+ * Obsidian on Linux), every probe used to wait out the full timeout, and
+ * `buildProbes()` waits for every engine's probe, so every Auto read did too.
+ * A confirmed-empty outcome is now remembered, concurrent callers share one
+ * poll, and the memory can only ever hold "no voices": it is dropped by any
+ * `voiceschanged` event, and every call still reads `getVoices()` once first,
+ * so voices that arrive without an event are seen on the next call.
  */
 
 const VOICE_POLL_MS = 100;
@@ -53,32 +62,6 @@ const CAPABILITIES: EngineCapabilities = {
 
 function hasSpeechSynthesis(): boolean {
 	return typeof window !== "undefined" && "speechSynthesis" in window;
-}
-
-/** Wait for the voice list to populate, which is never immediate. */
-function waitForVoices(): Promise<SpeechSynthesisVoice[]> {
-	if (!hasSpeechSynthesis()) return Promise.resolve([]);
-	const immediate = window.speechSynthesis.getVoices();
-	if (immediate.length > 0) return Promise.resolve(immediate);
-
-	return new Promise((resolve) => {
-		let waited = 0;
-		const tick = (): void => {
-			const voices = window.speechSynthesis.getVoices();
-			if (voices.length > 0) {
-				resolve(voices);
-				return;
-			}
-			waited += VOICE_POLL_MS;
-			if (waited >= VOICE_TIMEOUT_MS) {
-				resolve([]);
-				return;
-			}
-			window.setTimeout(tick, VOICE_POLL_MS);
-		};
-		window.speechSynthesis.addEventListener("voiceschanged", tick, { once: true });
-		tick();
-	});
 }
 
 /**
@@ -128,11 +111,110 @@ export class WebSpeechEngine implements SpeechEngine {
 	private voices: VoiceInfo[] = [];
 	private voicesLoaded = false;
 
+	/**
+	 * A full VOICE_TIMEOUT_MS poll ended with no voices. Holds only that
+	 * negative, never a voice list, so it cannot make a voice appear: the
+	 * fail-closed local-voice gate (ADR 0010) is unaffected by it.
+	 */
+	private emptyConfirmed = false;
+	/** The one poll in progress, shared by every caller that arrives during it. */
+	private inflight: Promise<SpeechSynthesisVoice[]> | null = null;
+	/** Ends the in-flight poll early with whatever `getVoices()` now holds. */
+	private settleInflight: (() => void) | null = null;
+	/** Ends the in-flight poll with no voices and caches nothing (dispose). */
+	private abortInflight: (() => void) | null = null;
+	/** The speechSynthesis our persistent listener is attached to. */
+	private listeningOn: SpeechSynthesis | null = null;
+
+	/**
+	 * Any `voiceschanged` invalidates every cached answer. It also settles an
+	 * in-flight poll at once if the event brought voices; if it brought none
+	 * the poll simply carries on to its timeout.
+	 */
+	private readonly onVoicesChanged = (): void => {
+		this.emptyConfirmed = false;
+		this.voices = [];
+		this.voicesLoaded = false;
+		this.settleInflight?.();
+	};
+
+	/** Register the persistent listener once, lazily, and move it if the API object changes. */
+	private listen(synth: SpeechSynthesis): void {
+		if (this.listeningOn === synth) return;
+		this.unlisten();
+		synth.addEventListener("voiceschanged", this.onVoicesChanged);
+		this.listeningOn = synth;
+	}
+
+	private unlisten(): void {
+		this.listeningOn?.removeEventListener("voiceschanged", this.onVoicesChanged);
+		this.listeningOn = null;
+	}
+
+	/** Wait for the voice list to populate, which is never immediate. */
+	private waitForVoices(): Promise<SpeechSynthesisVoice[]> {
+		if (!hasSpeechSynthesis()) return Promise.resolve([]);
+		const synth = window.speechSynthesis;
+		this.listen(synth);
+
+		// Always one live read first, even with an empty outcome cached: a host
+		// can fill its list without ever firing voiceschanged.
+		const immediate = synth.getVoices();
+		if (immediate.length > 0) {
+			this.emptyConfirmed = false;
+			return Promise.resolve(immediate);
+		}
+		if (this.emptyConfirmed) return Promise.resolve([]);
+		if (this.inflight) return this.inflight;
+
+		let waited = 0;
+		let done = false;
+		let resolvePoll!: (voices: SpeechSynthesisVoice[]) => void;
+		const poll = new Promise<SpeechSynthesisVoice[]>((resolve) => {
+			resolvePoll = resolve;
+		});
+		const finish = (voices: SpeechSynthesisVoice[]): void => {
+			if (done) return;
+			done = true;
+			if (this.inflight === poll) {
+				this.inflight = null;
+				this.settleInflight = null;
+				this.abortInflight = null;
+			}
+			// Only a poll that ran to its timeout confirms "no voices"; one ended
+			// by dispose() caches nothing.
+			if (voices.length === 0 && waited >= VOICE_TIMEOUT_MS) this.emptyConfirmed = true;
+			resolvePoll(voices);
+		};
+		const tick = (): void => {
+			if (done) return;
+			const voices = window.speechSynthesis.getVoices();
+			if (voices.length > 0) {
+				finish(voices);
+				return;
+			}
+			waited += VOICE_POLL_MS;
+			if (waited >= VOICE_TIMEOUT_MS) {
+				finish([]);
+				return;
+			}
+			window.setTimeout(tick, VOICE_POLL_MS);
+		};
+		this.inflight = poll;
+		this.settleInflight = () => {
+			const voices = hasSpeechSynthesis() ? window.speechSynthesis.getVoices() : [];
+			if (voices.length > 0) finish(voices);
+		};
+		this.abortInflight = () => finish([]);
+		tick();
+		return poll;
+	}
+
 	async isAvailable(): Promise<EngineAvailability> {
 		if (!hasSpeechSynthesis()) {
 			return { available: false, reason: "This platform has no Web Speech API." };
 		}
-		const voices = await waitForVoices();
+		const voices = await this.waitForVoices();
 		if (voices.length === 0) {
 			return {
 				available: false,
@@ -144,9 +226,11 @@ export class WebSpeechEngine implements SpeechEngine {
 
 	async listVoices(): Promise<VoiceInfo[]> {
 		if (this.voicesLoaded) return this.voices;
-		const raw = await waitForVoices();
+		const raw = await this.waitForVoices();
 		this.voices = raw.map(toVoiceInfo);
-		this.voicesLoaded = true;
+		// An empty list is not memoised here: it would outlive a later
+		// voiceschanged. waitForVoices() already makes the empty case cheap.
+		this.voicesLoaded = raw.length > 0;
 		return this.voices;
 	}
 
@@ -161,13 +245,13 @@ export class WebSpeechEngine implements SpeechEngine {
 	 * pin to this engine never calls this method and is unaffected.
 	 */
 	async hasLocalVoice(): Promise<boolean> {
-		const raw = await waitForVoices();
+		const raw = await this.waitForVoices();
 		return raw.some((v) => v.localService === true);
 	}
 
 	/** Only the voices `hasLocalVoice()` would count as local, mapped like `listVoices()`. */
 	async listLocalVoices(): Promise<VoiceInfo[]> {
-		const raw = await waitForVoices();
+		const raw = await this.waitForVoices();
 		return raw.filter((v) => v.localService === true).map(toVoiceInfo);
 	}
 
@@ -298,6 +382,12 @@ export class WebSpeechEngine implements SpeechEngine {
 
 	async dispose(): Promise<void> {
 		await this.stop();
+		this.unlisten();
+		this.abortInflight?.();
+		this.abortInflight = null;
+		this.inflight = null;
+		this.settleInflight = null;
+		this.emptyConfirmed = false;
 		this.voices = [];
 		this.voicesLoaded = false;
 	}
