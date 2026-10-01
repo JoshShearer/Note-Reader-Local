@@ -624,9 +624,8 @@ Only when `verifyVerdict` is `pass`:
 
 ```bash
 gh pr view <prNumber> --json state,mergeable
-gh pr merge <prNumber> --squash
-gh pr view <prNumber> --json state,mergedAt,mergeCommit   # state MERGED before the next line
-gh api -X DELETE "repos/{owner}/{repo}/git/refs/heads/<branch>"   # only if that view said MERGED
+gh pr merge <prNumber> --squash && gh api -X DELETE "repos/{owner}/{repo}/git/refs/heads/<branch>"   # delete runs only if merge exited 0
+gh pr view <prNumber> --json state,mergedAt,mergeCommit   # must say MERGED; record mergeCommit
 git ls-remote --heads origin '<branch>'   # must print nothing; exit code is 0 either way
 ```
 
@@ -637,12 +636,19 @@ to `JoshShearer/Note-Reader-Local` on `gh 2.45.0` here (the literal
 because the `gh` version is not pinned anywhere in this repo). Write the ref path exactly as above:
 neither `.../refs/heads/<branch>` nor `.../git/refs/<branch>` is it.
 
-**The ref delete comes after the confirming view, and only runs if that view said `state: MERGED`.**
-Unlike `--delete-branch`, which `gh` runs for you only on a merge it just completed, these are five
-independent commands: run them blind and a `gh pr merge` that failed (a conflict, a missing Verify
-pass, an API error) is still followed by a delete of the one pushed copy of that branch. Read the
-second view before the fourth line. `git ls-remote` is then the proof, and read its **output**, not
-its exit status: it exits 0 whether or not the pattern matched, so a check on `$?` passes either way.
+**The ref delete is chained to the merge with `&&`, and that chain is the guard.** Unlike
+`--delete-branch`, which `gh` runs for you only on a merge it just completed, separate lines carry no
+such coupling: run blind, a `gh pr merge` that failed (a conflict, a missing Verify pass, an API
+error) would still be followed by a delete of the one pushed copy of that branch. The `&&` stops
+that mechanically, because a failed merge exits non-zero (measured on `gh 2.45.0`:
+`gh pr merge 999999 --squash` exits 1), so the delete never runs. A PR that is already merged makes
+`gh pr merge` exit 0 (measured on PR #176), so the delete still runs, which is correct, and a 422 on
+a ref that is already gone is harmless. **Neither `gh pr view` is in the chain, deliberately.** It
+exits 0 whatever state it reports, open or merged, so chaining it would look like a guard and be
+none. The view after the chained line is therefore content evidence and the place to record
+`mergeCommit`, not the delete's gate: it must still say `state: MERGED`. `git ls-remote` is then the
+proof, and read its **output**, not its exit status: it exits 0 whether or not the pattern matched,
+so a check on `$?` passes either way.
 
 **No `--delete-branch`.** It makes `gh` switch off the merged branch afterwards, and the branch it
 switches to is the default one, which is permanently checked out in the primary repo, so git refuses
@@ -692,9 +698,11 @@ Done with `save_issue`, passing `id` and `state: \"Done\"`: the parameter is `st
 check whether this ticket removed one of the defects listed in the `AGENTS.md` Known state section,
 or moved a requirement's status in `srs.md`. If so, make the doc edit on a `docs/<id>-finish`
 branch, open a PR, and squash-merge it yourself; never commit to `main` directly. Merge it the way
-Phase 6 does and for the same reason: `gh pr merge <n> --squash` with no `--delete-branch`, then,
-only once a `gh pr view <n>` reports `state: MERGED`,
-`gh api -X DELETE \"repos/{owner}/{repo}/git/refs/heads/docs/<id>-finish\"`, then
+Phase 6 does and for the same reason, with no `--delete-branch` and the delete chained to the
+merge as one command,
+`gh pr merge <n> --squash && gh api -X DELETE \"repos/{owner}/{repo}/git/refs/heads/docs/<id>-finish\"`,
+so the delete runs only if the merge exited 0; then `gh pr view <n>` must report `state: MERGED`
+(not chained, since it exits 0 whatever state it reports); then
 `git ls-remote --heads origin 'docs/<id>-finish'`, which must print nothing. Quote the branch name in
 that `ls-remote`, because it contains a `/`; the ref path after `heads/` takes the same slash
 literally. Only move a requirement to fully met with evidence, and name that evidence.
