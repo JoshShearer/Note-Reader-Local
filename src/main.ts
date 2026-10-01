@@ -46,7 +46,10 @@ import {
 	clearSentenceHighlight,
 	clearWordHighlight,
 	highlightPlan,
+	isScrollSuppressed,
 	registerHighlighting,
+	registerScrollSuppression,
+	resetScrollSuppression,
 	scrollTargetForChunk,
 	shouldHighlightLeaf,
 	type HighlightLayers,
@@ -577,6 +580,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		this.retargetHighlightEditor(current.editor);
 		registerHighlighting(current.editor);
+		registerScrollSuppression(current.editor);
+		resetScrollSuppression(current.editor);
 
 		const chunks = extractChunks(
 			current.source,
@@ -825,6 +830,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			retarget: () => {
 				this.retargetHighlightEditor(current.editor);
 				registerHighlighting(current.editor);
+				registerScrollSuppression(current.editor);
+				resetScrollSuppression(current.editor);
 			},
 			showEmptyNotice: () => new Notice("No text in selection."),
 		};
@@ -875,6 +882,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		this.retargetHighlightEditor(current.editor);
 		registerHighlighting(current.editor);
+		registerScrollSuppression(current.editor);
+		resetScrollSuppression(current.editor);
 
 		const chunks = extractChunks(
 			current.source,
@@ -1132,11 +1141,12 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// decided here; highlight.ts only knows how to build the effect.
 		//
 		// `scrollTargetForChunk` is the gate, and it returns null when
-		// neither layer is drawn. It lives in highlight.ts rather than
-		// inline here because main.ts has no runtime in the suite, which is
-		// exactly how this shipped ungated in the first place: the offset
-		// was passed unconditionally, so with highlighting switched off the
-		// dispatch below drew zero ranges and still moved the viewport.
+		// neither layer is drawn OR the editor's auto-scroll is suppressed
+		// (NRL-90). It lives in highlight.ts rather than inline here because
+		// main.ts has no runtime in the suite, which is exactly how this
+		// shipped ungated in the first place: the offset was passed
+		// unconditionally, so with highlighting switched off the dispatch
+		// below drew zero ranges and still moved the viewport.
 		//
 		// One `highlightLayers()` call, not two, so the sentence range and
 		// the scroll decision cannot be computed from different plans.
@@ -1149,7 +1159,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 					: null,
 				word: null,
 			},
-			scrollTargetForChunk(layers, chunk.sourceStart),
+			scrollTargetForChunk(layers, chunk.sourceStart, isScrollSuppressed(this.activeEditor)),
 		);
 	}
 
