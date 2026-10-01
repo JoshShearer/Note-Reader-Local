@@ -625,7 +625,7 @@ Only when `verifyVerdict` is `pass`:
 gh pr view <prNumber> --json state,mergeable
 gh pr merge <prNumber> --squash
 gh pr view <prNumber> --json state,mergedAt,mergeCommit   # state MERGED before the next line
-gh api -X DELETE "repos/{owner}/{repo}/git/refs/heads/<branch>"
+gh api -X DELETE "repos/{owner}/{repo}/git/refs/heads/<branch>"   # only if that view said MERGED
 git ls-remote --heads origin '<branch>'   # must print nothing; exit code is 0 either way
 ```
 
@@ -673,7 +673,7 @@ removed once for the whole run by Step 8, not per ticket. A phase that removed i
 delete the checkout the next ticket needs.
 
 `finish.md` **step 4 needs no skip and no change.** Phase 6 already deleted the remote ref, so its
-`git ls-remote` finds nothing, its "Already gone" arm fires and records `remote: already-deleted`, and
+`git ls-remote` finds nothing, its `Already gone` arm fires and records `remote: already-deleted`, and
 the gated `git push origin --delete` on the other arm is never reached.
 
 **Do not check out `main`.** It is checked out in the primary repo and git will refuse. Where
@@ -691,7 +691,8 @@ Done with `save_issue`, passing `id` and `state: \"Done\"`: the parameter is `st
 check whether this ticket removed one of the defects listed in the `AGENTS.md` Known state section,
 or moved a requirement's status in `srs.md`. If so, make the doc edit on a `docs/<id>-finish`
 branch, open a PR, and squash-merge it yourself; never commit to `main` directly. Merge it the way
-Phase 6 does and for the same reason: `gh pr merge <n> --squash` with no `--delete-branch`, then
+Phase 6 does and for the same reason: `gh pr merge <n> --squash` with no `--delete-branch`, then,
+only once a `gh pr view <n>` reports `state: MERGED`,
 `gh api -X DELETE \"repos/{owner}/{repo}/git/refs/heads/docs/<id>-finish\"`, then
 `git ls-remote --heads origin 'docs/<id>-finish'`, which must print nothing. Quote the branch name in
 that `ls-remote`, because it contains a `/`; the ref path after `heads/` takes the same slash
