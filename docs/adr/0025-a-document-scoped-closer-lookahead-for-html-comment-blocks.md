@@ -2684,3 +2684,44 @@ approximate (callout titles, nested quote laziness, tab stops beyond those measu
 **Reading view only. NOT VERIFIED IN OBSIDIAN**: no deploy, no running app, Live
 Preview never read; rule 11 applies to every number here. R-M08 is still NOT met and
 the `2 of 16` count does not move.
+
+**Ship addendum (2026-10-01): rebased onto NRL-131, four more fixes.** The numbers
+above were measured against `844b7f6`. Ship rebased onto `2c4e2ca`, which carries
+NRL-131's peel of a quote nested in a list item (ADR 0035, `containerPrefix` now peels
+`- > `, `- - > ` and their alternations), and re-measured against that base. The four
+censuses above came out cell-for-cell identical (0 newly disclosing, 0 newly lost), and
+a fifth, the port census plus ten nested-container positions (`- > `, `- - > `,
+`> - > `, `- > - > `, a nested continuation and lazy line, `- - `, a nested callout,
+`-    > ` and `-     > `), 56,700 notes / 439,740 cells, also 0 and 0. A fuzz with
+nested-container leads added (`fuzz3.cjs`, same seven seeds, 338,716 cells) then found
+four defects in this ticket's own model, all fixed with a core row red on the pre-Ship
+tree and green after:
+
+- A `%%` led by spaces then a tab is paragraph text (the app's comment tokenizer skips
+  spaces only), but `containerViews` took it for a `%%` block, swallowed the list under
+  it and left a reopening line unstripped. `  \t%% Z0Q` / `1. <!-- a --> x <!-- Z6Q` /
+  `    <!-- y --> <!-- Z7Q` newly spoke `<!-- Z7Q` against `2c4e2ca`. Present before the
+  rebase too; the earlier fuzz's leads did not reach it.
+- A lazy `=` under a quoted line underlines it only while it stays in the quote run; an
+  exact underline after it ends the quote there (NRL-120's run break) and makes `=` the
+  content of its own heading. `setextLike` and `browserSetextText` now ask whether the
+  next line left the quote. `<!-- y --> <!-- Z0Q` / `> A Z1Q --> Z2Q B` / `=` / `===`
+  newly spoke Z1Q; `> <!-- y --> <!-- S2Z` / `=` / `===` / `S3Z`, spoken by base too,
+  is now hidden.
+- A `%%` straight after a callout marker is title text, not a block, so under a browser
+  comment the next line's `-->` still closes it. NRL-131's peel of `- > [!note]` is what
+  brought the nested form into the fuzz's reach.
+- A heading as a list item's content (`- # Z2Q`) leaves no paragraph open, so a
+  six-space line under it is indented code and its `-->` closes, `%%` pair and all; and
+  a line that left a quote run starts a block, so over an exact underline it is setext
+  content. Both were prose loss in the pre-Ship tree.
+
+After those, the same fuzz: **14 newly disclosing**, 8 reproducing on base defused and 6
+in two notes holding a `<div> <!--` line, which `2c4e2ca` speaks with the line alone
+(NRL-137); **15 newly lost**, 13 reproducing on base defused and 2 in one note where
+term 2 crosses a `%%` comment line (N10 above, whose control still loses on `2c4e2ca`);
+23,901 disclosures and 430 losses closed; 0 `sourceIndex` failures on either arm. The
+censuses after the fixes: Q1-Q3 unchanged, the port census's closed disclosures rose
+28,763 -> 29,303, the nested census 41,513, each still 0 new in both directions.
+Measured with the same harness (app.js sha256 `8efbf581...`), reading view only; NOT
+VERIFIED IN OBSIDIAN.

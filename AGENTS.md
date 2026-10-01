@@ -3627,7 +3627,14 @@ rediscover them:
   items, callout-title `%%`, `%%` in item code, term 2 crossing a `%%` line); the first draft's 41
   unexplained loss cells all spoken now; `sourceIndex` clean over 50,128 notes on both arms with
   all four mutators firing. The four NRL-120 rows naming NRL-136 were replaced in place, names
-  kept; the NRL-137 rows did not move. **NOT VERIFIED IN OBSIDIAN**: reading view only, no deploy,
+  kept; the NRL-137 rows did not move. Those figures are against `844b7f6`. **Ship rebased onto
+  NRL-131** (`2c4e2ca`) and re-measured: every census unchanged, a nested-container census (56,700
+  notes) 0 and 0, and a nested-lead fuzz found four more defects in this model, fixed with core
+  rows: a space-then-tab `%%` is not a block, a lazy `=` that leaves its quote does not underline
+  it, a callout title's `%%` is not a block, and a heading in a list item or a line leaving a quote
+  starts a block. After them, 14 newly disclosing (8 base-defused, 6 NRL-137 `<div>`) and 15 newly
+  lost (13 base-defused, 2 N10) over 338,716 cells; ADR 0025's Ship addendum has the detail.
+  **NOT VERIFIED IN OBSIDIAN**: reading view only, no deploy,
   rule 11 applies. R-M08 is still **NOT** met and the `2 of 16` count does not move.
 - R-C02's Context table named three gaps: three of five install-time fields missing (language,
   installed size, license), and no remove action at all, so up to 573 MB across three Kokoro

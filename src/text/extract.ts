@@ -3561,7 +3561,13 @@ function containerViews(
 		const lead = t.match(/^[ \t]*/)![0];
 		if (wasOpen ? /^ {0,3}$/.test(lead) : !/^(?: {4}|\t)/.test(lead)) {
 			const body = t.slice(lead.length);
-			if (body.startsWith("%%") && body.indexOf("%", 2) === -1) {
+			// The app's comment tokenizer skips SPACES only before `%%` (read off the
+			// bundle, the same rule the list loop below applies), so a lead holding a
+			// tab is not a `%%` block: measured, `  \t%% Z0Q` displays `%% Z0Q` as a
+			// paragraph. Reading it as a block swallowed the lines under it, and a
+			// list item there lost its strip, so a reopening `<!--` in it was read
+			// as inline and spoken (Ship fuzz, NRL-136).
+			if (!lead.includes("\t") && body.startsWith("%%") && body.indexOf("%", 2) === -1) {
 				rawUntil = /%%/;
 				n += 1;
 				continue;
@@ -5414,6 +5420,15 @@ export function extractChunks(
 	// `<!-- S2Z` and then S3Z. NRL-120's own refusal stays as it was: this is not
 	// handed to cleanLine's `setextContent`. The `-` form is taken only outside
 	// a list, where a lone `-` run is the next item (NRL-120's measured veto).
+	// A lazy underline is one only while it stays in line k's quote run. When the
+	// line after it is itself an exact underline, `containerViews` ends the quote
+	// there and the would-be underline is setext content of its own heading, so
+	// line k is a plain quoted paragraph. Measured: `<!-- y --> <!-- Z0Q` /
+	// `> A Z1Q --> Z2Q B` / `=` / `===` / `TAIL` shows `Z2Q B`, then `=` as an
+	// `<h1>`, and hides Z1Q; reading line k as a heading spoke it (Ship fuzz,
+	// NRL-136). Without the second underline the lazy `=` does underline it.
+	const underlineLeftQuote = (k: number): boolean =>
+		k + 1 < lines.length && containerHome[k]!.some((id) => quoteIds.has(id) && !containerHome[k + 1]!.includes(id));
 	const setextLike: boolean[] = new Array<boolean>(lines.length).fill(false);
 	for (let k = 0; k < lines.length; k++) {
 		const next = lines[k + 1];
@@ -5423,7 +5438,8 @@ export function extractChunks(
 		}
 		const nextView = next.replace(BLOCKQUOTE, "").slice(listStrip[k + 1]!);
 		setextLike[k] =
-			setextContent[k]! || /^=+\r?$/.test(nextView) || (!lazyList[k]! && /^-+\r?$/.test(nextView));
+			setextContent[k]! ||
+			(!underlineLeftQuote(k) && (/^=+\r?$/.test(nextView) || (!lazyList[k]! && /^-+\r?$/.test(nextView))));
 	}
 	// Did line k leave a quote run line k-1 was in (lazy or not)? Then line k
 	// was refused as a lazy quote line by one of `interruptBlockquote`'s
@@ -5468,7 +5484,12 @@ export function extractChunks(
 				if (FENCE.test(view)) fenced = !fenced;
 				continue;
 			}
-			if (p.blockType === "heading" || view.trim() === "" || (!wasOpen && /^(?: {4}|\t)/.test(view))) continue;
+			// A heading as a list item's content (`- # Z2Q`) is a heading too, which
+			// `containerPrefix` reports as "list": it leaves no paragraph open, so a
+			// six-space line under it is indented code whose `-->` closes a browser
+			// comment, `%%` pair and all. Measured: `- <!----> <!-- Z1Q` / `- # Z2Q` /
+			// `      %%Z3Q --> Z4Q%% Z5Q` shows `Z4Q%% Z5Q` (Ship fuzz, NRL-136).
+			if (p.blockType === "heading" || HEADING.test(view) || view.trim() === "" || (!wasOpen && /^(?: {4}|\t)/.test(view))) continue;
 			if (HR.test(view) || HR.test(lines[k]!) || (wasOpen && SETEXT_UNDERLINE_EXACT.test(view))) continue;
 			if (!setextLike[k]! && htmlBlockLine(view, 0, htmlOpen)) continue;
 			open = true;
@@ -5754,6 +5775,7 @@ export function extractChunks(
 		if (next === undefined) return false;
 		const nextView = next.replace(BLOCKQUOTE, "").slice(listStrip[lineNo + 1]!);
 		if (!SETEXT_UNDERLINE_EXACT.test(nextView)) return false;
+		if (underlineLeftQuote(lineNo)) return false;
 		const raw = lines[lineNo]!;
 		const cur = containerPrefix(raw);
 		if (cur.callout) return false;
@@ -5764,7 +5786,16 @@ export function extractChunks(
 			return false;
 		}
 		if (!/^ {0,3}\S/.test(raw.slice(cur.chars).slice(listStrip[lineNo]!))) return false;
-		return !paraBefore[lineNo]! || cur.blockType === "list" || (cur.blockType === "quote" && !BLOCKQUOTE.test(lines[lineNo - 1] ?? ""));
+		// A line that left the quote run the line above it was in cannot continue
+		// that quote's paragraph, so it starts a block: measured, `- - Z3Q` / ... /
+		// `> Z7Q` / `      %%%Z8Q --> Z9Q%% Z10Q` / `=` renders that line as an
+		// `<h1>` inside the nested item (Ship fuzz, NRL-136).
+		return (
+			!paraBefore[lineNo]! ||
+			cur.blockType === "list" ||
+			(cur.blockType === "quote" && !BLOCKQUOTE.test(lines[lineNo - 1] ?? "")) ||
+			(lineNo > 0 && leftAQuote(lineNo))
+		);
 	};
 
 	/**
@@ -6064,7 +6095,14 @@ export function extractChunks(
 				);
 				const pct = peeled.indexOf("%%");
 				const pctAt = raw.length - peeled.length + pct;
-				if (!fenceLine && pct !== -1 && (close === -1 || pctAt < close) && opensObsidianBlock(peeled, pct, listDedented[lineNo]!)) {
+				// A callout marker's `%%` is title text, not a block: module 6234 hands
+				// the title line to the inline tokenizers alone, so the next line's
+				// `-->` still reaches the HTML. Measured: `<!-- a --> x <!-- Z2Q` /
+				// `> [!note] %%` / ` Z4Q --> Z5Q` / `  Z6Q` renders an empty title and
+				// shows Z5Q and Z6Q. A late `[!note]` is paragraph text, so its `%%` is
+				// mid-line and no block either. NRL-131's peel of a callout nested in a
+				// list item (`- > [!note] %%`) is what made Ship's fuzz reach this.
+				if (!fenceLine && !prefix.callout && pct !== -1 && (close === -1 || pctAt < close) && opensObsidianBlock(peeled, pct, listDedented[lineNo]!)) {
 					inComment = "%%";
 					inCommentBrowser = false;
 					resumeBrowser = true;

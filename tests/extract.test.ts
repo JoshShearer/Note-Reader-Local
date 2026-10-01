@@ -4343,6 +4343,26 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl136-q3-nested-seven-space", "- A\n  - B\n       <!-- y --> <!-- Q1Z\nTAIL", "A B"],
 		["pin-nrl136-q3-tab", "- item\n\t<!-- y --> <!-- Q1Z\nTAIL", "item"],
 		["pin-nrl136-q3-quoted-list-six-space", "> - A\n>      <!-- y --> <!-- Q1Z\n> TAIL", "A"],
+		// CORE, found by Ship's fuzz on the rebased tree. The app's `%%` block tokenizer skips SPACES only, so a `%%` led by spaces then a tab is paragraph text (renderer: `  \t%% Z0Q` displays `%% Z0Q`). `containerViews` took it for a `%%` block, swallowed the list below it and left the reopening line unstripped, so the first row newly spoke `<!-- Z7Q` against origin/main (which says `x`), and the second spoke Z7Q and Z8Q on main and on the fix alike. Red before the tab test, green after. The second row's missing `%% Z0Q` under default options is NRL-93's pre-existing tab-led `%%` loss (origin/main drops it too), not this change.
+		["pin-nrl136-tab-led-pct-is-not-a-block", "  \t%% Z0Q\n1. <!-- a --> x <!-- Z6Q\n    <!-- y --> <!-- Z7Q", "%% Z0Q x", { skipCodeBlocks: false, skipInlineCode: false, skipTables: false }],
+		["pin-nrl136-tab-led-pct-list-strip", " \t%% Z0Q\n\n- A\n     <!-- y --> <!-- Z7Q\nZ8Q", "A"],
+		// CORE, also from Ship's fuzz. A lazy `=` under a quoted line underlines it only while it stays in the quote run; when an exact underline follows it, the quote ends there and `=` is the content of its own `<h1>`. Renderer: the first row shows `Z2Q B`, `=` and TAIL and hides Z1Q, which the pre-Ship tree spoke by reading the quoted line as a heading; the second hides everything, which origin/main and the pre-Ship tree both spoke.
+		["pin-nrl136-quote-lazy-underline-left-quote", "<!-- y --> <!-- Z0Q\n> A Z1Q --> Z2Q B\n=\n===\nTAIL", "Z2Q B = === TAIL"],
+		["pin-nrl136-quote-block-lazy-underline-left-quote", "> <!-- y --> <!-- S2Z\n=\n===\nS3Z", ""],
+		// CORE, from Ship's fuzz after the rebase onto NRL-131. A `%%` straight after a callout marker is title text, not a block, so the next line's `-->` closes the browser comment (renderer: empty title, Z5Q and Z6Q shown). The pre-Ship tree read it as a block and hid the rest; NRL-131's peel of `- > [!note]` is what brought the nested form into reach.
+		["pin-nrl136-callout-title-pct-not-a-block", "<!-- a --> x <!-- Z2Q\n> [!note] %%\n Z4Q --> Z5Q\n  Z6Q", "x Z5Q Z6Q"],
+		["pin-nrl136-nested-callout-title-pct-not-a-block", "- > [!note] <!-- a --> x <!-- Z2Q\n- > [!note] %%\n Z4Q --> Z5Q\n  Z6Q\n1. %%Z7Q --> Z8Q%% Z9Q", "x Z5Q Z6Q Z9Q"],
+		// Red on an arm that drops the `%%` block test for every quoted line: a `%%` on a callout BODY line is still a block, removed by the parser, so the comment closes only at the `-->` after it.
+		["guard-nrl136-callout-body-pct-is-a-block", "<!-- a --> x <!-- Z2Q\n> [!note] t\n> %%\n> Z4Q --> Z5Q\n> %%\nZ6Q --> Z7Q", "x Z7Q"],
+		// CORE, Ship fuzz. A heading as a list item's content leaves no paragraph open, so a six-space line under it is indented code and its `-->` closes the browser comment, `%%` pair and all (renderer shows `Z4Q%% Z5Q`); the pre-Ship tree kept the paragraph open, skipped the pair and hid the rest. The `- Z2Q` twin, a real paragraph, stays hidden.
+		["pin-nrl136-item-heading-then-code", "- <!----> <!-- Z1Q\n- # Z2Q\n      %%Z3Q --> Z4Q%% Z5Q\nTAIL", "Z4Q%% Z5Q TAIL", { skipCodeBlocks: false }],
+		["guard-nrl136-item-paragraph-then-continuation", "- <!----> <!-- Z1Q\n- Z2Q\n      %%Z3Q --> Z4Q%% Z5Q\nTAIL", ""],
+		// CORE, Ship fuzz. A line that leaves the quote above it starts a block, so over an exact underline it is setext content and its raw text, pair and all, is in `data-heading` (renderer shows `Z9Q%% Z10Q">A Z10Q TAIL`). The pre-Ship tree read it as continuing the quote's paragraph and hid everything.
+		["pin-nrl136-setext-after-quote", "<!-- a --> <!-- Z6Q\n> Z7Q\nA %%x --> Z9Q%% Z10Q\n===\nTAIL", "Z9Q%% Z10Q A Z10Q TAIL"],
+		// Red on an arm that refuses every lazy underline: with no second underline the lazy `=` does underline the quoted line, so its raw text is in `data-heading` and shown.
+		["guard-nrl136-quote-lazy-underline-holds", "<!-- y --> <!-- Z0Q\n> A Z1Q --> Z2Q B\n=\nTAIL", "Z2Q B A Z1Q --> Z2Q B = TAIL"],
+		// Green on origin/main, on the pre-Ship tree and on an arm that refuses any `%%` led by whitespace (measured), so it pins only that spaces alone still open the block and hide the rest of the note; it is not evidence for the tab test.
+		["guard-nrl136-space-led-pct-is-a-block", "  %% Z0Q\n1. <!-- a --> x <!-- Z6Q\n    <!-- y --> <!-- Z7Q", ""],
 		// GUARDS: green on origin/main and on the fix, so evidence of nothing on their own. Each names what breaks it: `old` is the first NRL-136 draft (d021898); the others are scratch arms of this fix with one mechanism removed or widened.
 		// Red on wrong-q1-noinline: a complete inline comment binds before a `%%` pair inside it.
 		["guard-nrl136-q1-inline-comment-binds-first", "<!-- y --> <!-- Q1Z\nA <!-- %%x --> SEENZ%% B\nTAIL", "SEENZ%% B TAIL"],
