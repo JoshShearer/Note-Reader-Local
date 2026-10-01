@@ -42,6 +42,7 @@ import {
 	WORD_HIGHLIGHT_VAR,
 	applySentenceHighlightColour,
 } from "../src/ui/highlightColour.ts";
+import { CONTROL_BAR_VISIBLE_CLASS, CONTROL_BAR_HEIGHT_VAR } from "../src/ui/controlBarCss.ts";
 import { DEFAULT_SETTINGS, normaliseSettings } from "../src/settings/index.ts";
 import { controlAffordances } from "../src/ui/affordances.ts";
 import type { EngineCapabilities } from "../src/audio/types.ts";
@@ -1178,6 +1179,157 @@ console.log("21. GUARDS: the desktop control-bar rules are still literally prese
 	const desktopSpeed = declarations(rulesMatching((s) => s === ".local-tts-cb-speed-btn")[0]?.body ?? "");
 	check("GUARD: desktop speed buttons are still 20px wide", desktopSpeed.get("width") === "20px", desktopSpeed.get("width") ?? "(absent)");
 	check("GUARD: desktop speed buttons are still 20px tall", desktopSpeed.get("height") === "20px", desktopSpeed.get("height") ?? "(absent)");
+}
+
+// --- NRL-129: the mobile editor clears the control bar's band -------------
+
+/*
+ * What this section can and cannot show, stated first because a green run here
+ * is NOT evidence that the defect is fixed (AGENTS.md rule 11).
+ *
+ * The defect is an on-screen rect on a phone: measured over CDP on a Pixel 9
+ * Pro XL against the 0455aa9 build, on a note too short to scroll
+ * (`scrollHeight 997 == clientHeight 997`), the first chunk's sentence mark
+ * occupied y 209.6-255.6 while the wrapped three-row bar's bottom edge was at
+ * 236, so 26.4px of the mark's 46px height sat behind the bar in the band
+ * x 112-336. Nothing in this file can observe any of that.
+ *
+ * The fix has two halves and only one of them is reachable from here. The CSS
+ * rule is checkable as TEXT, which is what 22a-22h do. The one-line publish in
+ * `src/ui/controlBar.ts` - the body class and the measured height - has NO
+ * automated coverage of any kind, because that file imports `obsidian` at line
+ * 1 and has no bare-Node runtime, exactly as NRL-112's position was. The only
+ * part of it that is testable is the two string NAMES, pinned by 22b and 22f
+ * against the constants `controlBar.ts` itself writes, which is what stops a
+ * one-character divergence between the TypeScript and the stylesheet producing
+ * no padding at all with every other check still green. That is block 12's
+ * stated reason for doing the same with the colour properties.
+ *
+ * MEASURED: 22a, 22b, 22c, 22d, 22e, 22e', 22f and 22g - eight checks - are RED
+ * against the unfixed tree, and red only because the rule does not exist yet:
+ * new-capability pins in the NRL-112 sense, not reproductions of the defect.
+ * 22h, 22i and 22j are GUARDS and TRIPWIRES, measured green on BOTH sides, and
+ * are evidence of nothing; 22h in particular was expected red by the plan and
+ * is not, because the unfixed stylesheet holds no frozen literal to find.
+ *
+ * This section reuses block 20's `CSS_RULES` / `rulesMatching` /
+ * `declarations` scanner and deliberately does not touch `ruleBody()` or
+ * `declaredProps()`, which blocks 11 and 12 depend on.
+ */
+
+const PANE_SELECTOR = `body.is-mobile.${CONTROL_BAR_VISIBLE_CLASS} .view-content > .markdown-source-view.mod-cm6`;
+
+console.log("22. NRL-129: styles.css reserves the control bar's band on mobile");
+{
+	const paneRule = rulesMatching((s) => s === PANE_SELECTOR)[0];
+	check(`22a a rule exists for exactly ${PANE_SELECTOR}`, paneRule !== undefined, PANE_SELECTOR);
+	const selector = paneRule?.selectors[0] ?? "";
+	const pane = declarations(paneRule?.body ?? "");
+
+	/*
+	 * 22b and 22f are the cross-file pins. Built from the exported constants
+	 * rather than written out, so renaming either in TypeScript without
+	 * touching styles.css fails here by name instead of silently publishing a
+	 * property nothing reads.
+	 */
+	check(
+		`22b the selector is gated on .${CONTROL_BAR_VISIBLE_CLASS}, the class controlBar.ts toggles`,
+		selector.includes(`.${CONTROL_BAR_VISIBLE_CLASS} `),
+		selector,
+	);
+	check("22c the rule is mobile-only", selector.startsWith("body.is-mobile"), selector);
+
+	/*
+	 * 22d. The `.view-content >` child boundary is load-bearing, not tidiness.
+	 * Obsidian nests whole source views inside the editor, and app.css really
+	 * does pad one of them: `.inline-embed > .markdown-embed-content >
+	 * .markdown-source-view { padding: var(--embed-padding) }` (app.css:11953,
+	 * read from the installed 1.13.7 asar this session). A descendant selector
+	 * would pad every inline embed and table-cell editor by the bar's height
+	 * for the duration of a read, and would do it on top of that declaration.
+	 * The child boundary is the one Obsidian itself asserts at app.css:3939.
+	 */
+	check(
+		"22d the rule is scoped to the pane's own source view by the .view-content > child boundary",
+		selector.includes(".view-content > .markdown-source-view"),
+		selector,
+	);
+
+	/*
+	 * 22e. Exactly one declaration is what keeps the R-M14 and the
+	 * desktop-unchanged arguments true by inspection rather than by a probe:
+	 * a rule that declares only `padding-top` cannot hide a control and cannot
+	 * reach a desktop layout.
+	 */
+	check("22e the rule declares padding-top", pane.has("padding-top"), JSON.stringify([...pane]));
+	check("22e' and declares nothing else", pane.size === 1, JSON.stringify([...pane]));
+
+	const value = pane.get("padding-top") ?? "";
+	check(
+		`22f the value reads ${CONTROL_BAR_HEIGHT_VAR}, the property controlBar.ts publishes`,
+		value.includes(`var(${CONTROL_BAR_HEIGHT_VAR},`),
+		value,
+	);
+	/*
+	 * 22g. The fallback is the fail-safe: no published height - a bar that has
+	 * never been laid out, a plugin that unloaded mid-read, or a DOM Obsidian
+	 * has reshaped - gives today's behaviour rather than a wrong offset.
+	 */
+	check("22g an unpublished height falls back to 0px, i.e. to the status quo", value === `var(${CONTROL_BAR_HEIGHT_VAR}, 0px)`, value);
+
+	/*
+	 * 22h TRIPWIRE, and measured green on BOTH sides - the plan expected it red,
+	 * and it is not, because the unfixed stylesheet has no frozen literal to
+	 * find. It is the tripwire for the wrong implementation of this same fix.
+	 *
+	 * No frozen bar height anywhere in the mobile rules. The measured
+	 * 125.64px decomposes exactly as 44 + 44 + 16.64 + 2x4px gap + 12px
+	 * padding + 1px border, but every term of that is contingent: the row
+	 * count is viewport-width dependent and the third row's height is
+	 * `--font-ui-smaller`'s line box, so it is theme dependent. Writing it
+	 * down would be rule 13 exactly - a number true of one device.
+	 */
+	const mobileBodies = rulesMatching((s) => s.startsWith("body.is-mobile")).map((r) => r.body).join("");
+	check(
+		"22h TRIPWIRE no three-digit pixel literal in the mobile rules, i.e. no frozen bar height",
+		!/1[0-9][0-9](\.\d+)?px/.test(mobileBodies),
+		mobileBodies.replace(/\s+/g, " ").trim(),
+	);
+
+	/*
+	 * 22i TRIPWIRE, green on both sides. Block 20's scanner is flat and says so
+	 * in its own comment: a mobile rule wrapped in an `@media` drops out of its
+	 * hidden-control sweep SILENTLY. The new rule is deliberately not inside
+	 * one, and this check is what stops a later tidy-up putting it there.
+	 *
+	 * Asserted over CSS_NO_COMMENTS and not over CSS, for the reason that
+	 * constant exists at all: prose in a comment must not be able to satisfy or
+	 * break a check, and NRL-129's own comment block contains the string
+	 * "@media" while explaining why no at-rule appears in a rule. Measured -
+	 * this check failed against `CSS` on exactly that string.
+	 */
+	check("22i GUARD styles.css still has no @media, so block 20's flat scanner sees every mobile rule", !/@media/.test(CSS_NO_COMMENTS));
+
+	/*
+	 * 22j TRIPWIRE, vacuously true before the fix: there was no rule mentioning
+	 * `.markdown-source-view` at all. It exists so a later edit cannot reach
+	 * the editor pane on desktop, where `body.is-mobile` cannot match.
+	 */
+	const paneRules = rulesMatching((s) => s.includes(".markdown-source-view"));
+	check(
+		"22j GUARD every rule touching the editor pane is mobile-scoped",
+		paneRules.every((r) => r.selectors.every((s) => s.startsWith("body.is-mobile"))),
+		JSON.stringify(paneRules.map((r) => r.selectors)),
+	);
+
+	/*
+	 * 22k is not a check. Where the new rule's `display: none` /
+	 * `visibility: hidden` / `color-mix()` / `:has()` coverage comes from is
+	 * block 20's existing sweeps, which select on `s.startsWith("body.is-mobile")`
+	 * and so pick this rule up for free. Block 21's five desktop guards are
+	 * likewise unchanged and still green - that is 22l. Noted here so a reader
+	 * does not conclude those properties went unchecked.
+	 */
 }
 
 if (failures > 0) {
