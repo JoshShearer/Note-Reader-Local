@@ -12,7 +12,7 @@ table before the first run.
 | Fact | Consequence |
 |---|---|
 | **The run is fully autonomous.** The owner tests features by using the app and files new tickets for what they find. | No phase waits for a reply. Verify is automated, merge is automatic. Anything that would have needed a human blocks **that ticket only**, and the run moves on to the next one. Everything blocked or decided on the owner's behalf is listed in the end-of-run report. |
-| **CI runs the gates on `push` and `pull_request`** (`.github/workflows/ci.yml`), but there is still no hook: `.git/hooks` holds only samples. | Verify still runs the gates and the probes itself; the check is a backstop, not the source of truth. Verify **may** read the conclusion (`gh pr checks <n>` once, or `gh run list`) and report it, and **must not wait on it**. Never write a polling loop. Branch protection is out of scope, so a red check does not block a merge. |
+| **CI runs the gates on `push` and `pull_request`** (`.github/workflows/ci.yml`), but there is still no hook: `.git/hooks` holds only samples. | Verify still runs the gates and the probes itself; the check is a backstop, not the source of truth. Verify **may** read the conclusion (`gh pr checks <n>` once, or `gh run list`) and report it, and **must not wait on it**. Never write a polling loop. Read it with the one-shot snippet under `Reading a CI conclusion` at the end of this file, not with a selector of your own: `gates` is the **job** name and `gh run list` cannot see a job name at all, so the obvious filter matches nothing, prints nothing and exits 0 (NRL-86). Branch protection is out of scope, so a red check does not block a merge. |
 | **A green suite is not a working feature** (`AGENTS.md` rule 11). The suites run in bare Node against fakes. | Automated Verify also runs the real bundled module against the ticket's acceptance inputs, and drives real Obsidian over CDP when it is reachable. Nothing a human did not observe is ever described as "verified in Obsidian". PRs carry `NOT VERIFIED IN OBSIDIAN`, and Linear comments say so plainly. |
 | **Bugs must be reproduced before they are fixed** (`AGENTS.md` rule 12). | Implement begins by reproducing, not by editing. If the repro fails, the ticket blocks rather than proceeding on a guess. |
 | **The run works in a disposable worktree it creates itself.** Step 0c adds `note-reader-local-run-<stamp>` beside the primary repo and removes it at the end. | Nothing the run does touches the primary checkout, so the owner can keep working in it. But the run's *records* must outlive the tree, so the state file and the archive live in the **primary** repo, not in the lane. Step 0 resolves `$PRIMARY` before anything else. |
@@ -551,6 +551,10 @@ scope, so a red check does not block a merge. Record whatever you saw, including
 `verifyNotes` so the end-of-run report can point the owner at `/test-issue <ID>` for any PR whose
 check went red. Do not run `/test-issue` yourself: it triages by reproducing a failure locally and by
 waiting on a conclusion, and neither belongs in an unattended run.
+If you do read it, use the one-shot snippet under `Reading a CI conclusion` at the end of
+`run-tickets.md` rather than writing your own selector: `gates` is the **job** name and `gh run
+list` cannot see a job name at all, so the obvious filter matches nothing, prints nothing and
+exits 0 (NRL-86).
 
 Run `/check-constraints`. A BLOCK is not overridable: set `status: \"blocked\"` with the findings
 and stop without committing. Same for a `/critique` BLOCK verdict. With no human reviewing the
@@ -842,7 +846,86 @@ next run leaves a second sibling beside it.
 | **Remote** | `git@github.com:JoshShearer/Note-Reader-Local.git` |
 | **Tracker** | Linear workspace `note-reader-local`, MCP server `linear-nrl`, team key `NRL` |
 | **Gates** | `npm test` · `npm run typecheck` · `npm run build` when the bundle moved. Run once in the fresh lane at Step 0c before any ticket |
-| **CI** | `.github/workflows/ci.yml`, job `gates`, on `push` (`branches: ["**"]`) and `pull_request`, so it runs twice on a PR branch. May be read once, never waited on. No branch protection, so a red check does not block a merge. `/test-issue` is the human-invoked triage |
+| **CI** | `.github/workflows/ci.yml`: the workflow is **named `CI`** and its one job is **named `gates`**, on `push` (`branches: ["**"]`) and `pull_request`, so it runs twice on a PR branch and the two runs do not conclude together. `gh run list` can only ever see the workflow name, never the job name; read a conclusion with the snippet under `Reading a CI conclusion` below. May be read once, never waited on. No branch protection, so a red check does not block a merge. `/test-issue` is the human-invoked triage |
 | **Push gate** | None. No husky, no active git hooks. |
 | **Permission gate** | Four commands the pipeline needs are `ask` in `opencode.json`. Launch headless (`opencode run --auto --command run-tickets "<ids>"`) or in a Claude Code bypass session. See "How to launch it, per runtime". |
 | **Human gate** | None. The owner tests by using the app and files new tickets for what they find. |
+
+## Reading a CI conclusion
+
+`.github/workflows/ci.yml` declares `name: CI` at the top and one job, `gates`, underneath. Those
+are two different names, and only one of them is reachable from here: **`gh run list` reports the
+workflow name and never the job name.** `gh` 2.45.0 accepts exactly `conclusion`, `createdAt`,
+`databaseId`, `displayTitle`, `event`, `headBranch`, `headSha`, `name`, `number`, `startedAt`,
+`status`, `updatedAt`, `url`, `workflowDatabaseId` and `workflowName` for `--json`; **there is no
+`jobs` field**, and `name` is identical to `workflowName` on every row. So the obvious
+`--jq '.[] | select(.name == "gates")'` matches nothing, prints nothing and exits 0. That silence
+is the whole of NRL-86: a loop built on it never breaks and burns its full deadline while the runs
+themselves concluded in about 35 s.
+
+This is a **one-shot read, not a loop.** Run it once, record what it printed, and move on. The rule
+at the top of this file and in the Ship prompt stands unchanged: a phase **may** read the
+conclusion and **must not** wait on it.
+
+```bash
+# `gates` is the JOB name of the one job inside the workflow whose NAME is `CI`.
+# `gh run list --json name` returns the WORKFLOW name, so it is always `CI` and
+# never `gates`, and there is no `jobs` field on `gh run list` at all - which is
+# why `select(.name == "gates")` silently matches nothing (NRL-86).
+# The job name is reachable only per-run: gh run view <id> --json jobs
+# Select on headSha AND workflowName, both: headSha cannot silently answer for
+# an older push, and workflowName separates CI from release.yml, which still
+# fires on pushes of refs predating 01c9a84 (AGENTS.md).
+SHA="$(git rev-parse HEAD)"
+gh run list --branch "$(git branch --show-current)" --limit 20 \
+  --json headSha,workflowName,event,status,conclusion,databaseId \
+| jq -r --arg sha "$SHA" '
+    [ .[] | select(.headSha == $sha and .workflowName == "CI") ] as $runs
+    | if ($runs | length) == 0
+      then "CI: no run recorded yet for \($sha)"
+      else ($runs | map("\(.event) \(.status) \(.conclusion // "-") \(.databaseId)") | join("  |  "))
+           + (if ($runs | all(.status == "completed"))
+              then "  -> all concluded" else "  -> still running; do NOT wait" end)
+      end'
+```
+
+**It prints every matching row, and that is deliberate.** `ci.yml` runs on both `push` and
+`pull_request`, so one commit on a PR branch has **two** runs, and they do not conclude together. A
+snippet that read `.[0]` would report whichever row came back first and call the commit done while
+the other was still `in_progress` - which is exactly what every Ship phase in run
+`2026-09-30T22:16:52Z` reported. So each row is printed with its own `event`, and the trailing
+verdict is an aggregate over all of them: `all concluded` only when every row has
+`status == "completed"`.
+
+Measured on this machine with `gh` 2.45.0, running the snippet above verbatim - its two inputs,
+`git rev-parse HEAD` and `git branch --show-current`, supplied per row - against three concluded
+pairs from this repo's own pushes, plus the lane's own unpushed commit as the no-run control.
+The wall clock is one measured run each; a second run of this exact block, re-extracted from
+this file, reproduced every `Output` cell byte for byte and landed between 0.37 s and 0.78 s,
+so treat the column as sub-second and network-bound rather than as a fixed figure.
+
+| Commit | Output | Wall clock |
+|---|---|---|
+| `8235feef` | `pull_request completed success 36791590756  \|  push completed success 36791478959  -> all concluded` | 0.60 s |
+| `8885afc5` | `pull_request completed success 36788998731  \|  push completed success 36788912605  -> all concluded` | 0.59 s |
+| `ba5c6440` | `pull_request completed success 36786851424  \|  push completed success 36786757433  -> all concluded` | 0.57 s |
+| `e4c9c1d5` (unpushed) | `CI: no run recorded yet for e4c9c1d5d7590fb703ae602ebbfe9ac2c54892e9` | 0.39 s |
+
+The broken selector was re-run beside it on `8235feef`'s branch for contrast:
+`gh run list --branch <branch> --json name,status,conclusion --jq '.[] | select(.name == "gates")'`
+printed nothing and exited 0 in 0.59 s. On that same branch
+`gh run list --json name,workflowName` prints `CI || CI` for both rows, and
+`gh run view 36791478959 --json jobs --jq '.jobs[] | "\(.name) \(.conclusion)"'` prints
+`gates success`, which is the only route to the job name.
+
+If nothing has concluded, that is the answer: report `still running` and stop. **The one sanctioned
+bounded wait in this repo lives in `/test-issue`**, at `test-issue.md:125-128`
+(`timeout 900 gh pr checks <PR> --watch --interval 30`, where a `timeout` exit of 124 is
+`CI INCONCLUSIVE`), and `/test-issue` is human-invoked precisely because a wait does not belong in
+an unattended phase.
+
+Three known limits, recorded rather than fixed. The snippet needs `jq` on `PATH`, which every other
+snippet in this file already assumes. `--limit 20` could in principle miss a matching run behind 20
+newer ones on the same branch, which cannot happen on a fresh ticket branch. And it reads each
+run's *status*, not the `gates` job's own conclusion; a workflow that grew a second job would need
+`gh run view <id> --json jobs`, which the comment in the snippet names.
