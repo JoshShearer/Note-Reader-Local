@@ -970,7 +970,9 @@ bare-`1)` fail-closed gap, 5,120 the already-pinned NRL-88 root-1 quote class,
 set, and 30,720 a **line-start** `<!--` whose next line is a setext underline or a
 dash run, which makes it an `<h1>`/`<h2>` rather than an HTML block - i.e. **term 1
 needs block position too**, in the prose-loss direction. None of the five is opened
-by NRL-111 and none has a ticket yet.
+by NRL-111 and none has a ticket yet. **(Amended by NRL-120: the `$$` component and the
+line-start-over-underline component are closed, 51,200 -> 15,360 on this same
+corpus; see the NRL-120 section at the end of this ADR. The other three stand.)**
 
 **"EVERY RESIDUAL ACCOUNTED FOR" MISSED TWO, both class A and both 512 cells on
 both arms, so both inherited rather than opened here**, found by the independent
@@ -1264,3 +1266,189 @@ pipeline only, and **Live Preview is separate code that no ticket in this family
 ever read or run**. The hast transformers are stubbed empty in the render harness
 (they only decorate `<a>` elements). Rule 11 applies to every number in this
 section.
+
+### CLOSED by NRL-120: term 1 needs block position, and `$$` ends the term-2 paragraph
+
+Both were found by NRL-111 as part of its accounted-for Class B residual and both
+were pre-existing. **Reproduced on base `f250ddd` before any change**, through the
+durable harness (app.js sha256 `8efbf581...9898` re-verified against the installed
+flatpak asar, `selftest.cjs` 6 ok, `oracle-selftest.cjs` 9 ok, the extractor COPIED
+into each arm and sanity-mutated once): NRL-111's own 1,350-shape corpus lost
+**51,200** Class B cells on base, of which **30,720** are exactly the line-start
+`<!--` over an underline (60 shapes x 512) and **5,120** exactly the `$$` shape
+(10 shapes x 512).
+
+**Part 1, term 1.** `blockMethods` runs `setextHeading` (index 10) before `html`
+(index 11), so a line-start `<!--` whose next line is an exact underline is the
+heading's one content line and never reaches module 8776. Measured:
+`<!--` / `===` / `HIDDENA` renders
+`<h1 data-heading="<!--">&#x3C;!--</h1><p>HIDDENA</p>`, `-`, `--` and `---` give
+`<h2>`, and ` ===`, `===  `, four spaces, `- - -` and ` -- ` are not underlines and
+leave the HTML block open. `opensHtmlBlock` gained a required fourth argument,
+`setextContent`, and became `!setextContent && (term1 || term2)` (decision Q7: the
+refusal gates both terms, because the heading is its own block). The answer comes
+from a forward pass, `isSetextContentLine`, and is cleanLine's only. Decisions,
+each measured rather than argued:
+
+1. **Three container shapes, everything else fails closed.** Plain; quote levels
+   only with the underline at the same depth; a column-0 list marker with one
+   space, the underline indented by exactly the marker width, and no later line of
+   the item indented by less (module 5540 strips the SMALLEST non-zero indent
+   across the item, so `- <!--` / `  -` / `HIDDEN` / `<div>` / ` ===` keeps the
+   `<!--` raw and HIDDEN hidden; the fuzz found it).
+2. **Lead at most three SPACES.** A tab or four columns is a lazy continuation or
+   indented code, never a setext content line. The `^\s*<!--` arm newly leaked
+   **8,640** census cells.
+3. **Not inside a raw HTML block.** `rawHtml` state in the pass: a `<div>`,
+   `<span>`, `<script>`, `<?` or `<!X` block emits the later `<!--` raw. Without it
+   **73,536** cells newly leaked (`nohtmlstate` arm); without it and the list veto
+   together **82,752** (`nogate`). The same state also stays open after a ` \t<!--`
+   with no closer, because that line is an HTML comment block to the renderer and
+   indented code to us (NRL-93 / NRL-115's divergence, not fixed here), so the
+   refusal must not reach inside it; the fuzz found that one.
+4. **Not a lazy list continuation.** Inside a list a lone `-` is the next item,
+   not an underline: `- item` / `<!--` / `-` / `HIDDEN` is one list with the `<!--`
+   raw in the first item. Vetoed by `listDedented` plus `listInRun`, a list marker
+   (bare ones included, since `LIST_BULLET` misses `-` alone) anywhere in the run
+   of non-blank lines above. Gives up the lazy `===` and `--` headings, fail-closed.
+5. **The refused line still starts a block.** `html` fires on it in the
+   `interruptParagraph` walk before `setextHeading` claims the block, so the
+   paragraph above is flushed first. Without the flush, `SEEN` / `<!--` / `===`
+   made the whole buffer a heading and skipHeadings dropped SEEN; fuzz-found.
+6. **Not threaded into `opensHiddenComment`**, a deliberate deviation from the
+   plan. The lookaheads ask "does this line END the paragraph", and a refused
+   `<!--` line still does (`Intro. \`a` / `<!--` / `===` / `b\` c` renders no code
+   span). The threaded arm newly DISCLOSES: it turns
+   `guard-html-opener-in-carry` and `guard-nrl64-html-opener-before-closer` red on
+   their "hidden text not disclosed" checks. `interruptsParagraph`,
+   `codeSpanClosesLater`, `bracketClosesLater`, `opensObsidianBlock`,
+   `opensMathBlock`, `labelClose`, `containerPrefix`, `peelQuotes` and
+   `endsTerm2Scan` are byte-identical across the diff by sha256 of each
+   brace-matched body (extractor sanity-mutated first: one edit, one MOVED).
+7. **`appendRemainder` passes `false`.** The rest of a comment's closing line is
+   still inside that HTML block for the renderer.
+
+**Part 2, `TERM2_MATH`.** `math` is in `u.interruptParagraph` unconditionally, so a
+`$$` line ends the paragraph a mid-line `<!--` belongs to. It is a block end, so it
+sits in `endsTerm2Block` and resets the content-line count. The shape is the
+executed parser's: `/^ {0,3}\$\$+[^$]*$/` disagrees with the renderer in **0** of
+48,018 exhaustive cases (every non-blank line up to length 6 over
+{space, tab, `$`, `y`}, and up to 5 with backslash, backtick and a trailing CR
+added, between `Prose <!--` and three tails). No closer is needed. `opensMathBlock`
+is untouched and is the wrong predicate here: it asks whether extractChunks will
+consume a block, not whether the paragraph ends. The term-2 pass still reads raw
+lines, so `> $$` is not a stop: fail-closed, pinned as
+`pin-nrl120-quoted-math-still-hidden`.
+
+**Both directions, signed per cell at each cell's own position, on ONE arm that
+carries both parts.** Room to fail is the Class A cells silent on base.
+
+| corpus | cells | Class A spoken base -> fix | Class B lost base -> fix | newly leaking | newly lost | room |
+|---|---|---|---|---|---|---|
+| NRL-111's, 1,350 shapes x 512 | 691,200 | 0 -> 0 | 51,200 -> **15,360** | 0 | 0 | 301,056 |
+| part 1 census, 870,780 shapes x 16 masks, 2 sentinels | 18,778,560 | 385,352 -> 385,352 | 8,030,816 -> 7,569,504 | **0** | **0** | 9,168,936 |
+| part 1 reduced, 22,085 shapes x all 512 masks | 13,569,024 | 133,632 -> 133,632 | 6,993,920 -> 5,755,648 | **0** | **0** | 5,640,192 |
+| supplement (bare markers, shallower item lines, a ` \t<!--` block above), 7,840 x 512 | 6,021,120 | 32,768 -> 32,768 | 2,166,784 -> 1,890,304 | **0** | **0** | 3,788,800 |
+| part 2 math census, 92,340 shapes x 16 masks | 2,068,416 | 0 -> 0 | 649,728 -> 448,608 | **0** | **0** | 1,032,000 |
+| lookahead probe for `codeSpanClosesLater` / `bracketClosesLater`, 2,970 sources (9 container forms incl. lazy quote and lazy bullet, 5 leads, code / image / link, setext and math middles) x 512, 5 tokens | 7,603,200 | 124,928 -> 124,928 | 3,180,032 -> 2,389,504 | **0** | **0** | 1,038,336 |
+
+The part 1 census axes: 22 container forms (plain, quote, lazy quote underline,
+lazy quote, quote only on the underline, `>  `, nested, nested-shallower,
+list, lazy list underline, deep list underline, list continuation, ordered,
+ordered short, list-in-quote, quote-in-list, task, two-space marker, star, nested
+list, lazy nested list, one-space indent), 30 positions (document start, after one
+and two blanks, continuation, ATX, setext `===` and `---`, HR, closed fence, list
+and quote and ordered items above, indented code, a dash pair, a closed math
+block, tab-only and space-tab lines, a loose list, nested lists, a quote blank,
+`<div>`, `<div>` then blank, `<span>`, an unclosed and a closed `<script>`, `<?x`,
+a quoted `<div>`, frontmatter, a table, and the form's own container), 7 leads x 3
+opener texts plus two mid-line openers, 20 underline and near-miss lines, 3 tails.
+The 16 masks vary skipHeadings, skipCodeBlocks and skipTables over two settings of
+the other six keys; the 512-mask run above covers every combination on a reduced
+shape set.
+
+**Every probe was shown able to fail with a deliberately wrong arm**, on the same
+corpus: part 1 census `broadul` (CommonMark underline shape) **660,360** newly
+leaking, `nogate` 82,752, `nohtmlstate` 73,536, `trimlead` 8,640; math census
+ `includes("$$")` **208,320** and `trimStart()` **140,880** newly leaking (the
+arm with no math stop at all differs from base in 0 cells); the supplement,
+dropping `listInRun` **69,120**, dropping the list dedent scan **345,600**,
+dropping the ` \t<!--` state **368,640**. The census cannot see the flush (no
+sentinel sits above the opener), so that arm is caught by its pin and the fuzz. Every guard fixture added here is red
+on the wrong arm it stands in front of and green on base and on the fix.
+
+**Fuzz**, 12 seeds x 4,000 notes x 4 option sets = 192,000 cells over a vocabulary
+extended with every NRL-120 shape. NRL-111's LCG lost precision past 2^53 and
+different seeds converged on the same notes, so it was replaced with mulberry32.
+Class A spoken 4,492 on base and 4,508 on the fix, Class B lost 28,637 and 27,819.
+**16 newly leaking cells in 5 distinct notes, every one the same-line reopen class
+below**, and **6 newly lost cells in 2 notes**, both the prose-loss unmaskings
+below. Against wrong arms on seeds 1 and 2: `nogate` 14 / 12, `trimlead` 16 / 8,
+`notabstate` 8 / 4, `nolistrun` 4 / 4, `noscan` 4 / 0, `mathung` 10 / 0 newly
+leaking, and dropping the flush 30 / 14 newly lost.
+
+**UNMASKED, NOT OPENED, and the only newly-spoken class left.** A line that starts
+an HTML comment block and closes it on the same line (`<!-- y --> <!--`) ends that
+block at the end of the line, so a further unclosed `<!--` on it is raw HTML that
+hides the rest of the note in the reading view. We read the second `<!--` as a
+mid-line opener and, with no closer in its paragraph, speak what follows. That is
+a **pre-existing Class A disclosure on base**: `<!-- y --> <!--` / `- x` /
+`HIDDENA` speaks HIDDENA on base, and so does the guard row
+`SEEN` / `---` / `<!-- y --> <!--` / `HIDDENA`. Before NRL-120 an earlier line-start
+`<!--` over an underline opened our own comment and happened to hide the same
+text; the refusal removes that mask. Pinned as
+`pin-nrl120-unmasked-same-line-reopen`, a tripwire. Tracked as **NRL-136**.
+
+**Corrected at Ship: "the only newly-spoken class left" was wrong, because the
+census rows above never put a raw HTML block or a reopen line AFTER a refused
+heading.** Ship ran its own census against real rendered HTML, 1,656 notes (12 heading
+shapes in plain, quote, nested-quote and list containers x 23 follow-ups x 6
+preambles) x 512 content-key combinations, 989,184 sentinel cells in all: **73,728
+newly speaking, 0 newly lost**, in 144 notes and exactly three classes of 24,576 each, and **every one of the 73,728 reproduces on base** once
+the heading's `<!--` is replaced by plain text, so each is an unmasking rather than a
+new disclosure, the NRL-74 precedent. (1) The same-line reopen above. (2) A
+processing-instruction raw HTML block, `<!--` / `===` / `<?x` / `HIDDENP`, whose
+content the browser hides as a bogus comment. (3) A `<div>` raw HTML block holding a
+mid-line `<!--`. (2) and (3) are one pre-existing class, raw HTML blocks spoken as
+prose, tracked as **NRL-137**. **Part 2 unmasks class (1) by a second route**:
+`<!-- y --> <!--` / `HIDDENA` / `$$` / `--> t.` was hidden on base only because the
+term-2 scan ran past the `$$` to the `-->`, and base already speaks it with a blank
+line in that position. Tripwires: `pin-nrl120-unmasked-reopen-by-math-stop`,
+`pin-nrl120-unmasked-processing-instruction`, `pin-nrl120-unmasked-div-block-comment`,
+each beside its base control. A Ship fuzz (8 seeds x 4,000 notes x 7 option sets)
+agreed: every newly-speaking cell either reproduced on base in a defused form or was
+shown causal on the reopen shape, and the cells left over were image alt text spoken
+by design under `speakImageAlt`.
+Two prose-loss classes are unmasked the same way and are shown to reproduce on base
+in a defused form: a display-math block we consume as "equation" (ADR 0004's
+design, which the oracle counts as loss), and our CommonMark-wide `SETEXT` taking
+`===  ` under a paragraph that an unclosed `$$` had already ended for the renderer.
+
+**`sourceIndex` lockstep**, by numeric UTF-16 index, both arms: 0 length, monotonicity, bounds or identity failures on
+NRL-111's corpus (512 masks; 1,012,224 chunks / 15,476,224 units on the fix), the
+reduced part 1 corpus (16 masks; 726,208 / 3,609,440), the math census corpus (16
+masks; 3,466,976 / 26,603,392) and a dedicated 420-note equation corpus (512 masks;
+471,040 / 5,518,848 on the fix, 363,520 / 4,135,424 on base) that really produces
+equation chunks, display and inline `$$y$$` alike (212,992 on the fix, 159,744 on
+base). All four mutators nonzero on every corpus and both arms (on the equation
+corpus, fix: drop 458,752 length, shift 194,560 bounds + 184,320 identity, swap
+285,184 monotonic + 233,984 identity, zero 378,880 identity; base: 355,328,
+186,368 + 115,712, 201,728 + 153,600, 302,080). The equation exemption keys on the
+synthetic TEXT and is mandatory on both arms: without it, 212,992 and 159,744
+identity failures. The space exemption is pre-existing: without it base fails too.
+
+**Residuals, all fail-closed (prose loss, never disclosure):** a `$$` behind a `>`
+prefix; a lazy list continuation's `===` / `--` heading; a nested or quoted list
+marker, a task item, or a marker with two or more spaces; a line under any raw
+HTML block until its end condition; NRL-111's other three Class B components
+(5,120 skipCodeBlocks, 5,120 bare `1)` = NRL-119, 5,120 the NRL-88 root-1 quote
+class), unchanged. A quoted or listed setext heading still speaks its underline
+(`<!-- === HIDDENA`), exactly as `> Title` / `> ===` always has.
+
+**NRL-115 overlaps term 1 and must re-run this census when it rebases**, and this
+ticket must re-run NRL-115's if NRL-115 lands first. The `after setext` rows with
+leads ` `, `  `, `   `, ` \t` and `\t` are in this corpus for that purpose.
+
+**NOTHING IN NRL-120 WAS OBSERVED IN A RUNNING OBSIDIAN.** No deploy and no CDP
+session. The oracle is the shipped reading-view parser and renderer executed in
+Node; Live Preview has never been read. Rule 11 applies to every number here.

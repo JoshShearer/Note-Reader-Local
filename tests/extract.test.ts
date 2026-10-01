@@ -2322,6 +2322,142 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// PURPOSE: SECRET stops being spoken in each.
 		["pin-nrl118-note-scope-closes-at-another-depth", ">> %%\n%% SECRET", "SECRET"],
 		["guard-nrl118-note-scope-control-no-container", "%%\n%% SECRET", "SECRET"],
+		// NRL-120 PART 1. Term 1 of the HTML-comment rule needs block position: a
+		// line-start `<!--` whose NEXT line is an exact setext underline is not an
+		// HTML block at all, because `blockMethods` runs `setextHeading` (index 10)
+		// before `html` (index 11) and module 8671 takes the `<!--` line as the
+		// heading's one content line. Measured against real rendered HTML out of the
+		// installed obsidian.asar 1.13.7 (app.js sha256 8efbf581...9898):
+		// `<!--` / `===` / `HIDDENA` is
+		// `<h1 data-heading="<!--">&#x3C;!--</h1><p>HIDDENA</p>`, so the heading
+		// text and everything after it are DISPLAYED. We hid all of it. Decision Q1:
+		// the heading speaks its literal `<!--`, delimiters included, as NRL-74's
+		// mid-line opener already does. Every row below was RED against base
+		// f250ddd and each expectation is what the reading view shows. NOT OBSERVED
+		// IN A RUNNING OBSIDIAN; the harness executes the shipped parser in Node.
+		["pin-nrl120-h1-literal-opener", "<!--\n===\nHIDDENA\nmore", "<!-- HIDDENA more"],
+		["pin-nrl120-h1-closer-later", "<!--\n===\nHIDDENA\n--> t.", "<!-- HIDDENA --> t."],
+		["pin-nrl120-h1-single-eq", "<!--\n=\nHIDDENA\n--> t.", "<!-- HIDDENA --> t."],
+		["pin-nrl120-h2-single-dash", "<!--\n-\nHIDDENA\nmore", "<!-- HIDDENA more"],
+		["pin-nrl120-h2-dash-pair", "<!--\n--\nHIDDENA\n--> t.", "<!-- HIDDENA --> t."],
+		["pin-nrl120-h2-dash-run", "<!--\n---\nHIDDENA\n--> t.", "<!-- HIDDENA --> t."],
+		// The Q7 shape: the `<!--` interrupts `Intro.` (html is in
+		// `u.interruptParagraph`), and the block it starts is then a heading. The
+		// term-2 pass calls that `===` a third content line, so the refusal has to
+		// gate both terms and not term 1 alone.
+		["pin-nrl120-after-paragraph", "Intro.\n<!--\n===\nHIDDENA\n--> t.", "Intro. <!-- HIDDENA --> t."],
+		["pin-nrl120-lead-spaces", "  <!--\n===\nHIDDENA\n--> t.", "<!-- HIDDENA --> t."],
+		["pin-nrl120-after-setext", "PROSEP\n===\n<!--\n===\nHIDDENA\n--> t.", "PROSEP <!-- HIDDENA --> t."],
+		["pin-nrl120-heading-text-shown", "<!-- SECRETH\n===\nHIDDENA\n--> t.", "<!-- SECRETH HIDDENA --> t."],
+		["pin-nrl120-crlf-underline", "<!--\n===\r\nHIDDENA\r\n--> t.", "<!-- HIDDENA --> t."],
+		["pin-nrl120-skip-headings", "<!--\n===\nHIDDENA\n--> t.", "HIDDENA --> t.", { skipHeadings: true }],
+		// The container forms. The spoken `===` is NOT new: a quoted or listed setext
+		// heading has always spoken its underline here (`> Title` / `> ===` says
+		// "Title ===" on base), because the setext branch never runs on a container
+		// line. What moved is HIDDENA, which the reading view displays.
+		["pin-nrl120-quote", "> <!--\n> ===\n> HIDDENA\n> --> t.", "<!-- === HIDDENA --> t."],
+		["pin-nrl120-list", "- <!--\n  ===\n  HIDDENA\n  --> t.", "<!-- === HIDDENA --> t."],
+		// Guards: each is a shape where the renderer DOES open an HTML block, so the
+		// refusal must not fire. All green on base and on the fix; labelled guards,
+		// not counted. Each names the measured disclosure it stands in front of.
+		//
+		// Not exact underlines: module 8671 refuses leading or trailing whitespace.
+		["guard-nrl120-indented-eq-not-an-underline", "<!--\n ===\nHIDDENA\n--> t.", "t."],
+		["guard-nrl120-trailing-space-not-an-underline", "<!--\n===  \nHIDDENA\n--> t.", "t."],
+		["guard-nrl120-spaced-dashes-not-an-underline", "<!--\n- - -\nHIDDENA\n--> t.", "t."],
+		["guard-nrl120-quote-two-spaces-not-an-underline", "> <!--\n>  ===\n> HIDDENA\n> --> t.", "t."],
+		// A second content line: the `<!--` line opened an HTML block and `===` is
+		// inside it, not under it.
+		["guard-nrl120-underline-not-next-line", "<!--\nmore\n===\nHIDDENA\n--> t.", "t."],
+		// A tab-led `<!--` after a paragraph is a lazy continuation, never a setext
+		// content line. The `^\s*<!--` arm newly spoke HIDDENA in 8,640 census cells.
+		["guard-nrl120-tab-lead-is-lazy", "Intro.\n\t<!--\n===\nHIDDENA\n--> t.", "Intro. t."],
+		// Inside a list a lone `-` is a new ITEM, not an underline, so the `<!--`
+		// stays raw HTML in the first item. Without the listDedented veto: 2,304
+		// census cells newly spoken.
+		["guard-nrl120-lazy-list-dash-is-an-item", "- item\n<!--\n-\nHIDDENA\n--> t.", "item t."],
+		// Inside a raw HTML block the `<!--` is emitted raw. Without the rawHtml
+		// state: 22,656 census cells newly spoken.
+		["guard-nrl120-inside-html-block", "<div>\n</div>\n<!--\n=\nHIDDENA\n--> t.", "t."],
+		// The remainder of a comment's closing line is still inside that HTML block
+		// for the renderer, so appendRemainder must not be handed the setext answer.
+		["guard-nrl120-remainder-not-refused", "<!--\nx\n<!-- y --> <!--\n===\nHIDDENA\nmore", ""],
+		// The refused line still STARTS a block, so the paragraph above is flushed
+		// first and only the `<!--` line becomes the heading. Without the flush the
+		// underline turned the whole buffer into a heading and skipHeadings dropped
+		// SEEN, which the renderer displays: found by the fuzz, not the census.
+		["pin-nrl120-paragraph-above-is-not-heading", "SEEN\n<!--\n===\nHIDDENA", "SEEN HIDDENA", { skipHeadings: true }],
+		// A BARE marker is a list item too (module 745 accepts `-` with nothing
+		// after it), and inside a list a lone `-` is the next item, not an
+		// underline. `listDedented` misses bare markers; `listInRun` catches it.
+		["guard-nrl120-bare-marker-dash-is-an-item", "-\n<!--\n-\nHIDDENA\n--> t.", "- t."],
+		// Module 5540 strips the SMALLEST non-zero indent across a list item's
+		// lines, so the later ` ===` re-indents `  -` to ` -` and the `<!--` stays
+		// raw HTML. The scan in isSetextContentLine's list branch refuses that.
+		["guard-nrl120-list-dedent-follows-the-item", "- <!--\n  -\nHIDDENA\n<div>\n ===", ""],
+		["pin-nrl120-list-dash-underline", "- <!--\n  -\n  HIDDENA", "<!-- - HIDDENA"],
+		// A ` \t<!--` is a raw HTML comment block to the renderer and indented code
+		// to us (NRL-93 / NRL-115's divergence, not fixed here). The refusal must
+		// not reach inside it: SECRETH and HIDDENA are both hidden.
+		["guard-nrl120-no-refusal-inside-tab-led-block", " \t<!--\n<!-- SECRETH\n--\nHIDDENA", ""],
+		// UNMASKED, NOT OPENED: the pre-existing disclosure this ticket newly
+		// exposes, pinned as a tripwire. A line that starts an HTML comment block
+		// and closes it on the same line (`<!-- y -->`) ends that block at the end of
+		// the line, so a further unclosed `<!--` on it is RAW HTML that hides the
+		// rest of the note in the reading view. We treat the second `<!--` as a
+		// mid-line opener and, with no closer in its paragraph, speak what follows.
+		// The control row below shows base does exactly this with nothing masking
+		// it. Before NRL-120 an earlier line-start `<!--` over an underline opened
+		// OUR comment and happened to hide the same text; the refusal removes that
+		// mask. The fuzz found this as its only remaining newly-spoken class. When
+		// the same-line reopen is fixed, both expectations change on purpose.
+		["pin-nrl120-unmasked-same-line-reopen", "<!-- SECRETH\n---\n<!-- y --> <!--\nHIDDENA", "<!-- SECRETH <!-- HIDDENA"],
+		["guard-nrl120-same-line-reopen-on-base", "SEEN\n---\n<!-- y --> <!--\nHIDDENA", "SEEN <!-- HIDDENA"],
+		// Three more unmaskings, found by NRL-120's Ship census (73,728 newly
+		// speaking cells over 144 rows x 512 content-key combinations, every one of
+		// them reproduced on base by replacing the heading's `<!--` with plain text,
+		// so base = fix once the mask is gone). Each tripwire is paired with that
+		// defused control. (1) The SAME same-line reopen class, unmasked by part 2
+		// rather than part 1: base hid it only because its term-2 scan ran past the
+		// `$$` to the `-->`; base already speaks it when a blank line sits there.
+		// (2) A processing-instruction raw HTML block (`<?x`), which the renderer
+		// passes through raw so the browser hides its content as a bogus comment.
+		// (3) A `<div>` raw HTML block holding a mid-line `<!--`. (2) and (3) are a
+		// pre-existing raw-HTML-block class, not a comment-rule defect. When either
+		// is fixed, these expectations change on purpose.
+		["pin-nrl120-unmasked-reopen-by-math-stop", "<!-- y --> <!--\nHIDDENA\n$$\n--> t.", "<!-- HIDDENA $$ --> t."],
+		["guard-nrl120-reopen-blank-stop-on-base", "<!-- y --> <!--\nHIDDENA\n\n--> t.", "<!-- HIDDENA --> t."],
+		["pin-nrl120-unmasked-processing-instruction", "<!--\n===\n<?x\nHIDDENP", "<!-- <?x HIDDENP"],
+		["guard-nrl120-processing-instruction-on-base", "SEEN\n===\n<?x\nHIDDENP", "SEEN <?x HIDDENP"],
+		["pin-nrl120-unmasked-div-block-comment", "<!--\n===\n<div>\nProse <!-- HIDDEND", "<!-- Prose <!-- HIDDEND"],
+		["guard-nrl120-div-block-comment-on-base", "SEEN\n===\n<div>\nProse <!-- HIDDEND", "SEEN Prose <!-- HIDDEND"],
+		// NRL-120 PART 2. `math` is in `u.interruptParagraph` unconditionally, so a
+		// `$$` line ends the paragraph a mid-line `<!--` belongs to and module 4839's
+		// inline regex cannot reach the `-->` past it. Measured: `Prose <!--` / `$$` /
+		// `HIDDENM --> t.` renders `<p>Prose &#x3C;!--</p>` then a math block holding
+		// `HIDDENM --> t.`: DISPLAYED, as math source. No closer is needed - the block
+		// runs to end of input. Each pin RED against base f250ddd.
+		["pin-nrl120-math-stop", "Prose <!--\n$$\nHIDDENM --> t.", "Prose <!-- $$ HIDDENM --> t."],
+		["pin-nrl120-math-three-space-lead", "Prose <!--\n   $$\nHIDDENM --> t.", "Prose <!-- $$ HIDDENM --> t."],
+		["pin-nrl120-math-dollar-run", "Prose <!--\n$$$\nHIDDENM --> t.", "Prose <!-- $$$ HIDDENM --> t."],
+		["pin-nrl120-math-trailing-text", "Prose <!--\n$$ y\nHIDDENM --> t.", "Prose <!-- $$ y HIDDENM --> t."],
+		["pin-nrl120-math-third-line", "Prose <!--\nmore\n$$\nHIDDENM\n--> t.", "Prose <!-- more $$ HIDDENM --> t."],
+		// Guards: lines the math tokenizer does NOT accept, so the paragraph goes on
+		// and the inline comment really does hide HIDDENM. Each is a disclosure if
+		// stopped at: the `includes("$$")` arm newly spoke 208,320 math-census cells
+		// and the `trimStart()` arm 140,880.
+		["guard-nrl120-math-tab-lead", "Prose <!--\n\t$$\nHIDDENM --> t.", "Prose t."],
+		["guard-nrl120-math-four-space-lead", "Prose <!--\n    $$\nHIDDENM --> t.", "Prose t."],
+		["guard-nrl120-math-inline-pair", "Prose <!--\n$$y$$\nHIDDENM --> t.", "Prose t."],
+		["guard-nrl120-math-two-pairs", "Prose <!--\n$$ x $$ y\nHIDDENM --> t.", "Prose t."],
+		["guard-nrl120-math-not-at-start", "Prose <!--\nx $$\nHIDDENM --> t.", "Prose t."],
+		["guard-nrl120-math-dollar-later", "Prose <!--\n$$ $\nHIDDENM --> t.", "Prose t."],
+		// The fail-closed residual this ticket does NOT close, pinned so it is not
+		// rediscovered as new: the term-2 pass reads RAW lines, so `> $$` is not a
+		// stop and the quoted paragraph keeps hiding HIDDENM, which the renderer
+		// displays as math. Prose loss, identical on base. Tripwire: when the
+		// term-2 pass learns to peel a quote, this expectation must change on purpose.
+		["pin-nrl120-quoted-math-still-hidden", "> Prose <!--\n> $$\n> HIDDENM\n> --> t.", "Prose t."],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });

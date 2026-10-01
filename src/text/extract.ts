@@ -511,9 +511,20 @@ function wikiTargetClose(raw: string, from: number): number {
  * to ONE paragraph's inline text, so its closer must be in the same paragraph.
  * `closesLater` therefore arrives already bounded - see `endsTerm2Scan` and the
  * `htmlCloserAhead` pass in extractChunks (NRL-95, ADR 0025 decisions 3 and 4).
+ *
+ * `setextContent` is NRL-120's, and it gates BOTH terms rather than either one.
+ * Term 1 needs block position too: a line-start `<!--` reaches module 8776 only
+ * if nothing earlier in `blockMethods` claims the block, and `setextHeading`
+ * (index 10) runs before `html` (index 11), so a `<!--` line followed by an exact
+ * underline is heading text. Measured: `<!--` / `===` / `HIDDENA` renders
+ * `<h1 data-heading="<!--">&#x3C;!--</h1><p>HIDDENA</p>`. Term 2 is gated as well
+ * because the heading is its own block and the inline regex cannot cross it
+ * (decision Q7); in practice term 2 is already false there, since the underline
+ * is a term-2 stop when it is a block's second line. Required, not defaulted, so
+ * no caller keeps the old answer silently.
  */
-function opensHtmlBlock(view: string, at: number, closesLater: boolean): boolean {
-	return view.slice(0, at).trim() === "" || closesLater;
+function opensHtmlBlock(view: string, at: number, closesLater: boolean, setextContent: boolean): boolean {
+	return !setextContent && (view.slice(0, at).trim() === "" || closesLater);
 }
 
 /**
@@ -625,6 +636,14 @@ function opensObsidianBlock(view: string, at: number, dedentedByList: boolean): 
  * and the frontmatter one never consult it and its default is immaterial to them;
  * it is defaulted rather than required because those six sites would otherwise
  * each have to state an answer to a question they do not ask.
+ *
+ * `setextContent` is the same shape once more and is `opensHtmlBlock`'s fourth
+ * argument (NRL-120): this line is the one content line of a setext heading, so
+ * a `<!--` at its start is literal heading text. Like `dedentedByList` it
+ * reaches only the `<!--` branch behind `blockComments`, so its default of false
+ * is immaterial to the recursive call sites; `appendRemainder` passes false
+ * explicitly, because the remainder of a comment's closing line is still inside
+ * that raw HTML block for the renderer.
  */
 function cleanLine(
 	raw: string,
@@ -638,6 +657,7 @@ function cleanLine(
 	htmlClosesLater = false,
 	incomingBracketDepth = 0,
 	dedentedByList = false,
+	setextContent = false,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -1079,7 +1099,7 @@ function cleanLine(
 			// advances past them, mirroring the two-and-two above. Emitting only
 			// `<` would re-enter the loop at `!--` and risk another branch (the
 			// autolink or raw-HTML one) claiming it.
-			if (close === -1 && htmlComment && blockComments && !opensHtmlBlock(raw, i, htmlClosesLater)) {
+			if (close === -1 && htmlComment && blockComments && !opensHtmlBlock(raw, i, htmlClosesLater, setextContent)) {
 				for (let k = 0; k < 4; k++) emit(raw[i + k]!, rawStart + i + k);
 				i += 4;
 				continue;
@@ -2104,7 +2124,14 @@ function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByLi
 	if (pct !== -1 && opensObsidianBlock(line, pct, dedentedByList)) return true;
 	const html = line.indexOf("<!--");
 	if (html === -1 || line.indexOf("-->", html + 4) !== -1) return false;
-	return opensHtmlBlock(line, html, htmlClosesLater);
+	// `false`, deliberately, and not the setext answer cleanLine gets. This
+	// predicate's job is "does this line END the paragraph", and a refused
+	// `<!--` still does: the `interruptParagraph` walk fires `html` on that line
+	// before `setextHeading` claims the new block, so `Intro. \`a` / `<!--` /
+	// `===` / `b\` c` has no code span for the renderer either. Threading the
+	// refusal in here would only make the code-span and label carries reach
+	// further, the disclosure direction, for no fidelity gain (NRL-120).
+	return opensHtmlBlock(line, html, htmlClosesLater, false);
 }
 
 /**
@@ -2171,6 +2198,48 @@ function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByLi
  * than by this pattern.
  */
 const TERM2_LIST = /^ {0,3}(?:[-*+]|1[.)])[ \t]/;
+/**
+ * A display-math opening line, at the EXACT shape Obsidian's own math block
+ * tokenizer accepts in the `interruptParagraph` walk (NRL-120). `math` is in
+ * `u.interruptParagraph` unconditionally, with no `{commonmark}` option to gate
+ * it, so a `$$` line ends the paragraph a mid-line `<!--` belongs to and module
+ * 4839's inline comment regex cannot reach past it. Measured: `Prose <!--` /
+ * `$$` / `HIDDENM --> t.` renders `<p>Prose &#x3C;!--</p>` and then a math block
+ * holding `HIDDENM --> t.`, so `HIDDENM` is DISPLAYED, as math source.
+ *
+ * The shape is the executed parser's, not a reading of it. Two exhaustive runs
+ * put a line between `Prose <!--` and three different tails and ran the real
+ * `WT`/`GT` pair: every non-blank line of length up to six over {space, tab,
+ * `$`, `y`} (5,334 lines, 16,002 cases), and every one up to five with a
+ * backslash, a backtick and a trailing CR added (10,672 lines, 32,016 cases,
+ * fence lines excluded as a separate term). This pattern disagrees with the
+ * renderer in 0 of them. Whitespace-only lines are left out because they are
+ * the blank-line term, and a tab-only line is NRL-111's recorded divergence.
+ * Three things it pins that a guess would get wrong:
+ *
+ * - NO CLOSER IS NEEDED. The block runs to end of input when nothing closes it,
+ *   so this is deliberately not `opensMathBlock`, whose later-closer search is
+ *   right for the question THAT function answers (does extractChunks consume the
+ *   block) and wrong for this one (does the paragraph end here).
+ * - At most THREE spaces of lead, and no tab. A tab or four spaces makes the line
+ *   a lazy paragraph continuation, so the comment regex crosses it and the text
+ *   stays HIDDEN; stopping there would be a disclosure. An arm using
+ *   `trimStart()` instead disagrees with the renderer in 1,173 and 468 cases.
+ * - The rest of the line holds NO `$` at all, after a run of two or more. So
+ *   `$$$` and `$$$$` open a block, while `$$y$$`, `$$ x $$ y` and `$$ $` are
+ *   inline and do not. An arm testing `includes("$$")` disagrees in 2,952 and
+ *   2,040.
+ *
+ * A container prefix is NOT peeled here, as for every other term in this set:
+ * the term-2 pass reads raw lines, so `> $$` is not a stop and a quoted
+ * paragraph keeps hiding across it. That is a fail-CLOSED residual (prose loss),
+ * recorded in ADR 0025, and not a statement that the renderer agrees.
+ *
+ * It is a BLOCK end, so it sits in `endsTerm2Block` and resets the content-line
+ * count, ungated by position: unlike a setext underline, a math line ends the
+ * block it follows wherever it sits.
+ */
+const TERM2_MATH = /^ {0,3}\$\$+[^$]*$/;
 
 /**
  * Does this line end the paragraph a `<!--` on an earlier line belongs to, for
@@ -2246,6 +2315,7 @@ function endsTerm2Block(line: string, paraLinesAbove: number): boolean {
 		HEADING.test(line) ||
 		HR.test(line) ||
 		TERM2_LONE_DASH.test(line) ||
+		TERM2_MATH.test(line) ||
 		(paraLinesAbove === 1 &&
 			(TERM2_SETEXT_EQ.test(line) || TERM2_SETEXT_DASH.test(line))) ||
 		TERM2_LIST.test(line)
@@ -2263,6 +2333,136 @@ function endsTerm2Block(line: string, paraLinesAbove: number): boolean {
  */
 function endsTerm2Scan(line: string, paraLinesAbove: number): boolean {
 	return endsTerm2Block(line, paraLinesAbove) || TERM2_DASH_RUN.test(line);
+}
+
+/**
+ * If `body` opens a raw HTML block that is not a comment, the condition that
+ * closes it: a pattern for CommonMark types 1, 3, 4 and 5, which may span blank
+ * lines, or `"blank"` for everything else, which closes at a blank line. A
+ * comment opener returns undefined because comments are extractChunks' own
+ * `inComment` state and are never reached as a line here.
+ *
+ * Deliberately WIDER than CommonMark: any `<` at the start of the body counts,
+ * with any lead, because the only use is to stop a setext refusal, and an
+ * unneeded stop is the fail-closed direction (NRL-120).
+ */
+function rawHtmlBlockEnd(body: string): RegExp | "blank" | undefined {
+	if (!/^\s*</.test(body) || /^\s*<!--/.test(body)) return undefined;
+	if (/^\s*<(?:script|pre|style|textarea)(?:[\s>]|$)/i.test(body)) return /<\/(?:script|pre|style|textarea)>/i;
+	if (/^\s*<\?/.test(body)) return /\?>/;
+	if (/^\s*<!\[CDATA\[/.test(body)) return /\]\]>/;
+	if (/^\s*<![A-Za-z]/.test(body)) return />/;
+	return "blank";
+}
+
+/**
+ * An underline at the exact shape Obsidian's setextHeading tokenizer (module
+ * 8671) accepts, both halves at once: no leading and no trailing whitespace, a
+ * trailing CR tolerated. The same measurements as `TERM2_SETEXT_EQ` and
+ * `TERM2_SETEXT_DASH`, which are its two halves; one pattern here because this
+ * caller needs no position gate of its own (see `isSetextContentLine`).
+ */
+const SETEXT_UNDERLINE_EXACT = /^(?:=+|-+)\r?$/;
+/**
+ * A `<!--` at the start of the line, with at most three SPACES of lead. A tab
+ * or four columns is either indented code (in a fresh block position) or a lazy
+ * paragraph continuation, and neither is a setext content line, so refusing an
+ * opener there would speak text the renderer hides. An arm using `^\s*` is the
+ * measured disclosure this cap exists to prevent.
+ */
+const HTML_OPENER_AT_START = /^ {0,3}<!--/;
+/**
+ * Any list marker, including a BARE one with nothing after it. `LIST_BULLET`
+ * needs whitespace after the marker, so it misses `-` alone on its line, which
+ * module 745 accepts as an empty item. Measured, and found by NRL-120's fuzz
+ * rather than its census: `-` / `<!--` / `-` / `HIDDENE` is two items, the first
+ * holding the raw `<!--`, so HIDDENE is hidden, and `listDedented` never saw a
+ * list there to veto the refusal.
+ */
+const ANY_LIST_MARKER = /^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
+/**
+ * A list marker followed by exactly one space and then content, so the item's
+ * content column is exactly the marker's width. Two or more spaces after the
+ * marker are left to fail closed rather than modelling the content-indent rule.
+ */
+const ONE_SPACE_MARKER = /^(?:[-*+]|\d{1,9}[.)]) (?=\S)/;
+/**
+ * Is `line` the single content line of a setext heading whose underline is
+ * `next`, with a `<!--` at the start of that content (NRL-120)?
+ *
+ * Three container shapes are recognised and every other one answers false,
+ * which keeps the base behaviour of hiding. That is the failure direction this
+ * function must have: answering true where the renderer opens an HTML block
+ * after all is a disclosure, answering false where it makes a heading is the
+ * prose loss this ticket started from.
+ *
+ * - PLAIN: the line is the `<!--` opener and `next` is an exact underline. No
+ *   block-start test is needed on the line ABOVE, because a `<!--` with at most
+ *   three spaces of lead interrupts any paragraph (`html` is in
+ *   `u.interruptParagraph`), and once the block starts `setextHeading` gets it
+ *   before `html`. Measured: `Intro.` / `<!--` / `===` is `<p>Intro.</p>` and
+ *   then `<h1>`.
+ * - QUOTE: quote levels only, no list marker or callout, and `next` carries the
+ *   SAME number of levels and nothing else before an exact underline.
+ * - LIST: the line IS a column-0 marker line, one space after the marker, `next`
+ *   is indented by exactly the marker's width before an exact underline, and no
+ *   later line of the item is indented by less than that width.
+ *
+ * `lazyInListItem` says the line may be a lazy continuation of a list item
+ * (`listDedented`, or a list marker earlier in its run of non-blank lines) and
+ * it vetoes all three, measured rather than reasoned: `- item` / `<!--` / `-` /
+ * `HIDDEN` is ONE list whose second item is `HIDDEN`, because inside a list a
+ * lone `-` is a new item rather than an underline, so the `<!--` stays raw HTML
+ * in the first item and hides the rest. Without the veto that shape newly spoke
+ * the hidden text in 2,304 census cells. The veto also gives up the `===` and
+ * `--` lazy shapes, which the renderer does make headings; that is a
+ * fail-closed residual.
+ *
+ * The LIST shape is limited to a marker at column 0, and the scan below it is
+ * load-bearing, for the dedent reason given at the scan. A nested marker is
+ * dedented by its outer item first, by the same rule, and is left to fail
+ * closed rather than modelled.
+ */
+function isSetextContentLine(lines: readonly string[], k: number, lazyInListItem: boolean): boolean {
+	if (lazyInListItem) return false;
+	const line = lines[k]!;
+	const next = lines[k + 1]!;
+	const p = containerPrefix(line);
+	if (p.callout || p.blockType === "heading") return false;
+	const q = line.match(BLOCKQUOTE);
+	const quoteChars = q ? q[0].length : 0;
+	if (p.blockType === "quote") {
+		// Quote levels only: a quoted list item or task is left to fail closed.
+		if (p.chars !== quoteChars) return false;
+		if (!HTML_OPENER_AT_START.test(line.slice(p.chars))) return false;
+		const n = containerPrefix(next);
+		if (n.blockType !== "quote" || n.quotes !== p.quotes || n.callout) return false;
+		const nq = next.match(BLOCKQUOTE);
+		if (!nq || n.chars !== nq[0].length) return false;
+		return SETEXT_UNDERLINE_EXACT.test(next.slice(n.chars));
+	}
+	if (p.blockType === "list") {
+		const m = line.match(ONE_SPACE_MARKER);
+		if (!m || m[0].length !== p.chars) return false;
+		if (!HTML_OPENER_AT_START.test(line.slice(p.chars))) return false;
+		const indent = next.match(/^ */)![0].length;
+		if (indent !== p.chars || !SETEXT_UNDERLINE_EXACT.test(next.slice(indent))) return false;
+		// Module 5540 does not strip the marker's width from each continuation
+		// line. It strips the SMALLEST non-zero indent found across the item's
+		// lines, so one later line indented by less than the marker re-indents the
+		// underline and it stops being one. Measured: `- <!--` / `  -` / `HIDDENE` /
+		// `<div>` / ` ===` puts ` -` in the item, the `<!--` stays raw HTML, and
+		// HIDDENE is hidden; found by the fuzz, not the census. So refuse unless no
+		// line up to the next blank one sits strictly between zero and the marker.
+		for (let n = k + 2; n < lines.length; n++) {
+			const l = lines[n]!;
+			if (/^ *\r?$/.test(l)) break;
+			const lead = l.match(/^[ \t]*/)![0];
+			if (lead.length > 0 && lead.length < p.chars) return false;
+		}
+		return true;
+	}
+	return HTML_OPENER_AT_START.test(line) && SETEXT_UNDERLINE_EXACT.test(next);
 }
 
 /**
@@ -2774,6 +2974,67 @@ export function extractChunks(
 			blankBefore = blank;
 		}
 	}
+	// `setextContent[k]` is "line k is the one content line of a setext heading,
+	// so a `<!--` at its start is heading TEXT and not an HTML block opener"
+	// (NRL-120, ADR 0025). `blockMethods` runs `setextHeading` before `html`, so a
+	// line-start `<!--` whose next line is an underline becomes
+	// `<h1 data-heading="<!--">` and everything after it is displayed. It is
+	// cleanLine's answer only: see `opensHiddenComment` for why the lookaheads do
+	// not consult it.
+	//
+	// The forward pass carries two pieces of state, and each is a measured guard
+	// rather than tidiness: each was added after a probe caught the pass without
+	// it NEWLY SPEAKING text the renderer hides. Both only ever stop a refusal, so
+	// an error in either leaves the base behaviour (hide) rather than speaking.
+	//
+	// - `rawHtml`: a raw HTML block that is not a comment (`<div>`,
+	//   `<span>...`, `<script>`, `<?`, `<!X`) swallows the following lines as raw
+	//   HTML until its own end condition, so a `<!--` inside it is still emitted
+	//   raw and still hides what follows in the reading view. Without it, 22,656
+	//   census cells after `<div>` / `</div>`. The end conditions lean toward
+	//   STAYING open: types 6 and 7 close only on a line of spaces, not on any
+	//   whitespace, and every `<` line counts as an opener.
+	// - `listInRun`: a list marker, bare ones included, anywhere in the run of
+	//   non-blank lines above. Inside a list a lone `-` is a new item rather than
+	//   an underline, and `listDedented` misses a bare marker. Without it, the
+	//   fuzz found `-` / `<!--` / `-` / `HIDDENE`. Also gives up the `===` lazy
+	//   shapes the renderer does make headings; fail-closed.
+	const setextContent: boolean[] = new Array<boolean>(lines.length).fill(false);
+	{
+		let rawHtml: RegExp | "blank" | undefined;
+		let listInRun = false;
+		for (let k = 0; k < lines.length; k++) {
+			const raw = lines[k]!;
+			const insideHtml = rawHtml !== undefined;
+			const prefix = containerPrefix(raw);
+			const lazyInList = listDedented[k]! || (listInRun && prefix.blockType !== "list");
+			if (k + 1 < lines.length && !insideHtml) setextContent[k] = isSetextContentLine(lines, k, lazyInList);
+			const quotePeeled = raw.replace(BLOCKQUOTE, "");
+			if (/^ *\r?$/.test(quotePeeled)) listInRun = false;
+			else if (ANY_LIST_MARKER.test(quotePeeled)) listInRun = true;
+			const body = raw.slice(prefix.chars);
+			if (rawHtml === "blank") {
+				if (/^ *\r?$/.test(raw)) rawHtml = undefined;
+			} else if (rawHtml !== undefined) {
+				if (rawHtml.test(raw)) rawHtml = undefined;
+			} else if (/^[ \t]*<!--/.test(body) && !HTML_OPENER_AT_START.test(body) && body.indexOf("-->", body.indexOf("<!--") + 4) === -1) {
+				// A `<!--` led by a tab or four columns is indented code to
+				// extractChunks, but at least the ` \t` lead is an HTML comment BLOCK
+				// to the renderer: measured, ` \t<!--` at document start and after an
+				// indented code block both render as raw HTML, not `<pre>`. That
+				// divergence is NRL-93's and NRL-115's, a pre-existing disclosure,
+				// and it is not fixed here. What this does is stop the refusal
+				// REACHING INTO it: a later `<!-- SECRETX` / `---` inside that block
+				// is raw HTML for the renderer, and on base it happened to open our
+				// own comment and hide the leaked text again. Without this the fuzz
+				// found that mask removed. Stays open until a `-->`, fail-closed.
+				rawHtml = /-->/;
+			} else {
+				rawHtml = rawHtmlBlockEnd(body);
+				if (rawHtml instanceof RegExp && rawHtml.test(body.slice(body.indexOf("<") + 1))) rawHtml = undefined;
+			}
+		}
+	}
 	const segmentCtx: SegmentContext = { locale: opts.locale, src };
 	let chunkSequence = 0;
 
@@ -2898,6 +3159,7 @@ export function extractChunks(
 			htmlCloserAhead[lineNo]!,
 			0,
 			listDedented[lineNo]!,
+			false,
 		);
 		inComment = cleaned.openComment;
 		if (cleaned.text.trim() !== "") appendToParagraph(cleaned, lineStart + from);
@@ -3135,7 +3397,17 @@ export function extractChunks(
 		 */
 		const htmlClosesLater = htmlCloserAhead[lineNo]!;
 		const dedentedByList = listDedented[lineNo]!;
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList);
+		const isSetextContent = setextContent[lineNo]!;
+		// A refused `<!--` line still STARTS a block: `html` fires on it in the
+		// `interruptParagraph` walk before `setextHeading` claims it, so the
+		// paragraph above ends here and only this line is the heading's content.
+		// Without the flush the line joins the paragraph above, the underline then
+		// turns that whole buffer into a heading, and under skipHeadings the earlier
+		// prose is dropped. Found by the fuzz as NEWLY LOST text (34 cells), not by
+		// the census, whose rows never put prose directly above the opener with
+		// skipHeadings on (NRL-120).
+		if (isSetextContent && blockType === "paragraph") flushParagraph();
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
@@ -3143,7 +3415,7 @@ export function extractChunks(
 			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlCloserAhead, listDedented)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -3197,6 +3469,7 @@ export function extractChunks(
 				htmlClosesLater,
 				carriedBracketDepth,
 				dedentedByList,
+				isSetextContent,
 			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the
