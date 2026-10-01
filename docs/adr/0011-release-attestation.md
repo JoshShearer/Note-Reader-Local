@@ -710,12 +710,31 @@ documentation for `jobs.<job_id>.needs` says so: "If a job fails or is skipped, 
 need it are skipped unless the jobs use a conditional expression that causes the job to
 continue." That is **acceptable, and categorically different from what decision 5 forbids.**
 The forbidden shape is a skip on a **green** run: the run reports success and silently ships
-no attestation. This is a skip that **follows a red run** - `release` failed, the overall run
-is already red and visibly so, and there is no Release object for `upload-assets` to attach
-`multiple.intoto.jsonl` to in any case. A skip there loses nothing that could have existed.
-Do **not** "fix" it with `if: always()` or `if: success() || failure()`: that would run the
-generator against a Release that does not exist, turning a clean red into a confusing one,
-and it is an `if:` on `provenance`, which decision 5 bans outright.
+no attestation. This is a skip that **follows a red run** - `release` failed, so the overall
+run is already red and visibly so, and there is no **complete** Release for `upload-assets` to
+attach `multiple.intoto.jsonl` to.
+
+**That wording is deliberately "no complete Release" and not "no Release object", which an
+earlier draft of this section claimed.** NRL-104 replaced `actions/create-release` plus a
+separate upload step with a single `softprops/action-gh-release` step at `draft: false`
+(`.github/workflows/release.yml:317-320`), so a failure part way through that step's asset
+uploads can leave a **public Release carrying only some of its assets**. A failed `release`
+job therefore does **not** guarantee the absence of a Release object. What it does guarantee
+is the half of the argument that is load-bearing here: the run is **visibly RED either way**.
+Verified on this tree by reading the file - there is no `continue-on-error` anywhere in
+`release.yml`, and the `release` job carries no `if:` (nor does any other job or step), so a
+failing `release` fails the run and cannot be laundered into a green one. That is what makes
+this categorically different from decision 5's forbidden skip-on-a-green-run, and the
+distinction does not depend on whether a partial Release exists.
+
+Note also that the **pre-change behaviour was strictly worse**, not merely unordered: with
+`provenance` a sibling of `release`, `upload-assets` could attach an attestation to a Release
+that did not yet carry the subjects that attestation names - provenance pointing at files the
+Release object did not hold. Ordering removes that shape.
+
+Do **not** "fix" the skip with `if: always()` or `if: success() || failure()`: that would run
+the generator against a Release that is absent or incomplete, turning a clean red into a
+confusing one, and it is an `if:` on `provenance`, which decision 5 bans outright.
 
 ### What this does not establish
 
