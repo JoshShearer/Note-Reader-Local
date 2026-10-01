@@ -145,6 +145,14 @@ added only when `shell: bash` is written explicitly) in a sandbox populated at t
    EQUALS the upload step's own `files:` list rather than a hardcoded list, so the two
    cannot drift apart again.
 
+   **Superseded in part by ADR 0028 / NRL-96**: the ONNX runtime now ships packed inside
+   `main.js`, `npm run build` emits no `ort/` directory at all, and the upload step
+   publishes the three files only - so the set is **three** subjects today, not seven. The
+   mechanism in this clause is unchanged and is why nothing had to be edited for it: the
+   assertion reads the upload step's own `files:` list, so the subject set followed the
+   published set down from seven to three on its own. Decision 2 below is the clause ADR
+   0028 actually retired.
+
 2. **The ORT files are in.** They are published on the same tagged Release and R-M01
    clause 3 / ADR 0024 make them the bytes a user downloads at runtime, so attesting 3 of
    7 left the two largest downloadables (21.6 MB and 11.1 MB) with no subject at all.
@@ -186,7 +194,9 @@ against the lane's real built tree: **3 subjects = 308 base64 characters, 7 = 84
 what was true at NRL-76.** Nothing here had run on a GitHub runner. No tag had ever been
 pushed to this repo (`git ls-remote --tags origin` and `gh release list` were both empty),
 so `actions/create-release`, the asset upload and the SLSA generator had still never
-executed once, and no attestation had ever been produced. Every number above is a local
+executed once, and no attestation had ever been produced. (`actions/create-release` was
+deleted by NRL-104; see the amendment at the end of this file. This sentence is correct
+history and is left as written.) Every number above is a local
 bash execution of the extracted step body, which is strong evidence about that shell and
 no evidence at all about the release path. NRL-79 owned the empirical half and has since
 run it.
@@ -313,7 +323,120 @@ Installing an unverified binary was out of scope.
 Two further limits. **One run, one tag, one day**, on `ubuntu-latest`, with three
 `The set-output command is deprecated and will be disabled soon` warnings from
 `actions/create-release@v1`; nothing about recurrence follows, and **2026-10-19** (the
-`ubuntu-latest` migration to Ubuntu 26) is a dated re-verification trigger. And **nothing was
+`ubuntu-latest` migration to Ubuntu 26) is a dated re-verification trigger. (Those three
+warnings are what NRL-104 acted on; the step that emitted them is gone, and that dated
+trigger is now also the trigger for re-running the replacement. See the amendment at the
+end of this file. This paragraph is correct history and is left as written.) And **nothing was
 installed into Obsidian** - the Release existed for about two and a half minutes and was
 digested and deleted, never installed from - so `srs.md`'s headline "MUST install as an
 ordinary Obsidian Community Plugin" remains unobserved and is now the binding gap on R-M01.
+
+## Amendment (NRL-104): one action creates the Release and uploads its assets
+
+The `release` job ran two actions back to back. `Create GitHub Release`
+(`actions/create-release@v1`) cut the Release; `Upload Release Assets`
+(`softprops/action-gh-release@v1`) then attached the three published files to it. The
+second action can do both jobs, so the first step is **deleted** and `softprops` now
+creates the Release as well as uploading to it.
+
+**Nothing was broken.** This is scheduled work on a published deprecation path, not a fix
+for an outage. NRL-79's run `36785920227` succeeded with both steps in place.
+
+### What the deletion removes, and what it does not
+
+Three things go with the step, and only the first is the reason the ticket exists.
+
+1. **The `set-output` deprecation.** All three `The set-output command is deprecated and
+   will be disabled soon` warnings in NRL-79's run log came from
+   `actions/create-release@v1`. It is the one observed thing that will actually break this
+   path when GitHub disables the command. **Credit this to the DELETION and not to the
+   version choice**: both `softprops` dists - `v1`'s commit `de2c0eb8` and `v3.0.3`'s
+   `efb35369` - hold **zero** literal `::set-output`, measured by reading each tree's
+   `dist/index.js` in this session. Upgrading `softprops` fixes nothing here; removing
+   `actions/create-release` is what fixes it.
+2. **The `tag_name: ${{ github.ref }}` shape.** The deleted step passed the full
+   `refs/tags/0.1.1` where its own adjacent `release_name:` used the bare
+   `github.ref_name`. NRL-79 measured it harmless - the Release came out with the bare tag
+   `0.1.1` and `git ls-remote` showed no stray `refs/tags/refs/tags/...` ref - but it
+   survived only on server-side normalisation this repo does not control. **No `tag_name:`
+   is set on the replacement, deliberately.** `softprops/action-gh-release` defaults its
+   tag to `github.ref`, so naming it would put the same shape straight back for no gain.
+3. **A `using: node12` runtime**, the oldest in the file. It ran fine on 2026-09-30 and no
+   deprecation annotation named it.
+
+### The pin
+
+`uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3`.
+
+Pinned by **commit** rather than by tag, because a tag is rewritable by whoever owns it,
+with the trailing `# v3.0.3` comment carrying the human-readable version. Resolved on this
+machine in this session rather than from memory (AGENTS.md rule 14): the ref
+`tags/v3.0.3` is an **annotated tag object** `e598afbe1493e6b1bafb1f389cabb956eab91231`,
+which dereferences to commit `efb35369e0ad2afab669f228072c1b0d510eae64`, tagger date
+2026-08-30. That tree's `action.yml` declares `using: "node24"` and defines every input
+used here. **The annotated-tag indirection is a real trap**: the ref endpoint's
+`.object.sha` is the tag object, not a commit, and pinning it would be wrong.
+
+**`v1` was considered and rejected.** Its tag has not moved since 2022-11-21, corresponds
+to release `v0.1.15`, and declares `using: "node16"` - also deprecated. Pinning it would
+have preserved exactly today's behaviour at the cost of leaving goal 3 above half done.
+The cost of the upgrade is accepted in exchange: two major versions of behaviour change in
+an action nobody here has run at that version.
+
+### `fail_on_unmatched_files: true`
+
+This input is **not optional and not housekeeping**. The action's own `action.yml`
+documents it as *"Fails if any of the `files` globs match nothing. Defaults to false"* and
+sets no `default:` key, so without it a run where `main.js` failed to arrive publishes a
+Release carrying fewer assets than the attestation covers **and still concludes success**.
+That is exactly the NRL-76 silent-truncation shape - a green run shipping provenance whose
+subject set does not describe what the Release holds - which decisions 4 and 5 above
+refuse. It is the same fail-closed reasoning as the non-empty guard in `Generate
+checksums`, applied at the publishing end.
+
+### `files:` stays last, and the prose above the step matters too
+
+`extractUploadedFiles` in `tests/release.test.ts` is the single source of truth tying the
+hashed set to the published set (decision 1). It is a regex over the workflow text, not a
+YAML parse, and its capture ends at the **first blank line**, not at the next YAML key. So
+the replacement's `with:` block puts `files: |` **last**, with the blank line after it, and
+`name:`, `draft:`, `prerelease:` and `fail_on_unmatched_files:` all above it. A key written
+below it would be trimmed into the published-asset list and reported by the NRL-76
+subject-set check as `extra`.
+
+One thing here was **measured during implementation rather than reasoned, and it is new**:
+the regex takes the **first** occurrence of its anchors anywhere in the file, so a *comment*
+above the step quoting `Upload Release Assets` or the `files:` block scalar verbatim also
+hijacks the capture. A first draft of the explanatory comment did exactly that, and the
+NRL-76 equality check went red with comment prose reported as published assets. The comment
+now names neither literally - which is why the pre-existing comment near `Generate
+checksums` splits the step name across two lines - and the two reworded comments at the top
+of the file say "the release-upload step below" rather than the literal name. This is a
+fragility of the extractor, not of the workflow, and it is written down here because the
+failure looks like an attestation defect and is not one.
+
+`name: Release ${{ github.ref_name }}` is carried over so the Release keeps the title
+NRL-79 observed as `Release 0.1.1`. `draft: false` and `prerelease: false` stay explicit:
+the second is the other half of NRL-75's semver-only `on: push: tags` filter. No
+`env: GITHUB_TOKEN` - the job already carries `permissions: contents: write` and the action
+reads the default token.
+
+### What this does not establish
+
+**This path is unexercised on a real runner again.** NRL-79's single successful run
+`36785920227` exercised `actions/create-release@v1` plus `softprops/action-gh-release@v1`;
+that one empirical data point **no longer covers the shipped configuration**. No tag has
+been pushed since, so the Release-creation half of the release path is back to where it
+stood before NRL-79: desk-verified only. The existing **2026-10-19** re-verification
+trigger (the `ubuntu-latest` migration to Ubuntu 26) now covers this as well, and re-running
+the path after that date is the only thing that will close it.
+
+All evidence for this amendment is: the workflow text; `gh api` reads of the action's refs,
+tags and tree on this machine; a replay of the real `extractUploadedFiles` regex against the
+edited file, capturing exactly `main.js`, `manifest.json`, `styles.css`; a PyYAML parse of
+the whole workflow (no `yaml` or `js-yaml` is installed in `node_modules`, so the suite's
+own helpers remain regexes); and eight new checks in `tests/release.test.ts`, five of which
+were measured red against the unedited workflow. `actionlint` is **not installed on this
+machine** and was not run; AGENTS.md records it as having been silent on both halves of the
+compile defect that broke every run in this repo's history, so its absence costs little.
+Nothing about the Release this produces has been seen, because none has been cut.
