@@ -356,25 +356,63 @@ test("release.yml publishes no runtime asset to download", () => {
  * list would let them drift apart silently, which is the whole shape of NRL-76.
  *
  * Defensive in the same way `parseOnPushTags` is: there is no yaml dependency,
- * so this is a regex over the text, and every failure mode throws rather than
- * returning `[]`. An empty list would make the subject-set check vacuously green.
+ * so this is a text scan, and every failure mode throws rather than returning
+ * `[]`. An empty list would make the subject-set check vacuously green.
+ *
+ * SCOPED TO THE STEP since NRL-124. It used to be one regex over the whole file,
+ * `/Upload Release Assets[\s\S]*?files:\s*\|([\s\S]*?)\n\s*\n/`, and that had
+ * two parser artefacts that leaked out as constraints on whoever edited the
+ * workflow. It took the FIRST occurrence of either anchor anywhere, so a comment
+ * merely quoting the step name or a `files: |` block hijacked the capture and
+ * reported comment prose as published assets (hit for real during NRL-104, and
+ * re-measured for NRL-124 at 11 entries of which only three were real). And it
+ * ended the capture at the
+ * first BLANK LINE rather than at the next YAML key, so a `with:` key written
+ * below the scalar became a published asset while a blank line inside the scalar
+ * - legal YAML - truncated the list. It now reads the step slice
+ * `extractUploadStep` returns, which locates the step by an exact `- name:`
+ * match, and ends the block at the next key at or shallower than `files:`.
+ *
+ * NRL-75's oracle rule governs the shape of this: it must stay faithful to what
+ * GitHub actually parses, so it does not throw on anything GitHub treats as
+ * ordinary text.
  */
 function extractUploadedFiles(content: string): string[] {
-	const uploadStepMatch = content.match(
-		/Upload Release Assets[\s\S]*?files:\s*\|([\s\S]*?)\n\s*\n/,
-	);
-	const filesBlock = uploadStepMatch?.[1];
-	if (filesBlock === undefined) {
+	// Forward reference to a function declared further down, which hoists. The
+	// slice is the whole point: the step is located by name, not by the first
+	// match anywhere, which is what a comment used to be able to hijack.
+	const lines = extractUploadStep(content).split("\n");
+	// `|`, `|-` and `|+` are all literal block scalars GitHub accepts. The old
+	// `files:\s*\|` swallowed a chomping indicator into the capture and reported a
+	// bogus `-` entry; matching it here keeps this faithful to what GitHub parses.
+	const filesAt = lines.findIndex((line) => /^\s*files:\s*\|[-+]?\s*$/.test(line));
+	if (filesAt === -1) {
 		throw new Error(
 			"could not locate the `Upload Release Assets` step's `files: |` block in the workflow text; " +
 				"refusing to return an empty published-asset list, which would make the NRL-76 subject-set " +
 				"check vacuously green",
 		);
 	}
+	const keyIndent = (lines[filesAt] ?? "").search(/\S/);
 	const files: string[] = [];
-	for (const raw of filesBlock.split("\n")) {
+	for (let i = filesAt + 1; i < lines.length; i++) {
+		const raw = lines[i] ?? "";
+		// A blank line is legal INSIDE a YAML literal block scalar, so it is skipped
+		// rather than ending the block. The old first-blank-line terminator read one
+		// as the end and silently dropped every entry after it (NRL-124 decision 4).
+		if (raw.trim() === "") continue;
+		// The block ends at the first line indented at or shallower than its own
+		// `files:` key, which is what YAML says and what the old regex did not.
+		if (raw.search(/\S/) <= keyIndent) break;
 		const line = raw.trim();
-		if (line === "" || line.startsWith("#")) continue;
+		// A DELIBERATE DIVERGENCE from GitHub, kept rather than fixed (NRL-124
+		// decision 9): inside a literal block scalar `# x` is a GLOB, not a comment,
+		// so GitHub would treat it as a pattern to publish. Nothing in the real
+		// workflow has such a line, and `fail_on_unmatched_files: true` makes GitHub
+		// fail that run loudly, so this under-report cannot silently ship a short
+		// Release. Removing the skip would be a behaviour change with no defect
+		// behind it.
+		if (line.startsWith("#")) continue;
 		files.push(line);
 	}
 	if (files.length === 0) {
@@ -485,6 +523,13 @@ function extractRunBlock(content: string, stepName: string): string {
 
 /** The step name both the workflow and these checks must spell identically. */
 const TAG_GUARD_STEP = "Verify the tag matches the version files";
+
+/**
+ * The same, for the upload step. Hoisted into one place by NRL-124 so the anchor
+ * literal `extractUploadStep` and `extractUploadedFiles` both depend on exists
+ * exactly once in this file rather than twice.
+ */
+const UPLOAD_STEP_NAME = "Upload Release Assets";
 
 /** The matching triple, as exact file bytes. Each case overrides exactly one. */
 const GOOD_MANIFEST = '{"id":"local-tts-reader","version":"0.1.0","minAppVersion":"1.8.0"}\n';
@@ -1039,24 +1084,35 @@ test("release.yml attests every published release asset and nothing else (NRL-76
 
 /**
  * The `Upload Release Assets` step's own text, from its `- name:` line to the
- * blank line that ends it.
+ * next line at the same or shallower indentation.
  *
  * Defensive in the same way `extractUploadedFiles` and `parseOnPushTags` are:
  * it THROWS rather than returning `""`, because an empty string would make
  * every "is X inside the upload step" check below vacuously green, and a
  * vacuous green on the step that decides what ships is the NRL-76 shape.
+ * `extractUploadedFiles` reads this same slice, so both depend on this one
+ * literal step name - which is why the guard below pins it.
+ *
+ * A WRAPPER OVER `extractStepText` since NRL-124, rather than its own scanner.
+ * It used to be `content.indexOf("- name: Upload Release Assets")`, which takes
+ * the first occurrence anywhere, so a comment quoting the step name moved the
+ * slice's start into that comment: measured at an 11 line slice widening to 12,
+ * with `files:` still present so the fail-closed throw below never fired.
+ * `extractStepText` matches `line.trim() === "- name: X"`, which a `#`-prefixed
+ * line can never satisfy, so comment lines are skipped BY CONSTRUCTION. There is
+ * deliberately no separate comment filter: NRL-75's precedent is that an oracle
+ * must not throw on text the real system treats as ordinary, and a filter that
+ * can never fire would be dead code inside the one thing standing between a
+ * green suite and a release workflow that behaves differently in production.
  */
 function extractUploadStep(content: string): string {
-	const start = content.indexOf("- name: Upload Release Assets");
-	if (start === -1) {
-		throw new Error(
-			"could not locate the `- name: Upload Release Assets` step in the workflow text; " +
-				"refusing to return an empty step body, which would make the NRL-104 scoped checks " +
-				"vacuously green. `extractUploadedFiles` anchors on this same literal name.",
-		);
-	}
-	const end = content.indexOf("\n\n", start);
-	const step = end === -1 ? content.slice(start) : content.slice(start, end);
+	// `extractStepText` pushes a blank line rather than breaking on it, so the
+	// slice carries the blank that separates this step from the next job. Strip it
+	// so the slice stays the step's own lines, which is what every scoped
+	// assertion below is written against.
+	const lines = extractStepText(content, UPLOAD_STEP_NAME).split("\n");
+	while (lines.length > 0 && (lines[lines.length - 1] ?? "").trim() === "") lines.pop();
+	const step = lines.join("\n");
 	if (!step.includes("files:")) {
 		throw new Error(
 			"the `Upload Release Assets` step body was found but holds no `files:` key; " +
@@ -1102,6 +1158,37 @@ test("the release action is pinned to a 40-hex commit with a version comment (NR
 	);
 });
 
+/**
+ * The four NRL-104 scoped assertions' patterns, in one place.
+ *
+ * Hoisted by NRL-124 so the assertions below and the anchoring guard that pins
+ * their behaviour read the SAME regexes and cannot drift apart - the same reason
+ * `extractUploadedFiles` is one source of truth for the published set (NRL-76
+ * decision 1).
+ *
+ * Every one is `/^\s*...$/m` anchored, and that anchoring is the whole reason
+ * NRL-124's hijack is a loud false RED rather than a silent false pass: a `#`
+ * before a key defeats `^\s*`, so a key supplied only inside a comment fails its
+ * assertion instead of satisfying it. `guard: a key supplied only in a comment
+ * satisfies no scoped assertion` below pins that BEHAVIOURALLY, against fixtures,
+ * rather than by reading this file's own source.
+ */
+const UPLOAD_STEP_KEY_PATTERNS: ReadonlyArray<{ key: string; pattern: RegExp }> = [
+	{ key: "fail_on_unmatched_files", pattern: /^\s*fail_on_unmatched_files:\s*true\s*$/m },
+	{ key: "name", pattern: /^\s*name:\s*Release \$\{\{ github\.ref_name \}\}\s*$/m },
+	{ key: "draft", pattern: /^\s*draft:\s*false\s*$/m },
+	{ key: "prerelease", pattern: /^\s*prerelease:\s*false\s*$/m },
+];
+
+/** One of the four by name, so a typo is a throw rather than a vacuous green. */
+function uploadStepKeyPattern(key: string): RegExp {
+	const found = UPLOAD_STEP_KEY_PATTERNS.find((entry) => entry.key === key);
+	if (found === undefined) {
+		throw new Error(`no UPLOAD_STEP_KEY_PATTERNS entry named ${JSON.stringify(key)}`);
+	}
+	return found.pattern;
+}
+
 // RED - the input is absent before this change, and it defaults to FALSE in the
 // action. Without it a missing `main.js` publishes a Release carrying fewer
 // assets than the attestation covers and still concludes success, which is
@@ -1110,7 +1197,7 @@ test("the upload step fails on an unmatched file (NRL-104)", () => {
 	const step = extractUploadStep(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
 	assertMatch(
 		step,
-		/^\s*fail_on_unmatched_files:\s*true\s*$/m,
+		uploadStepKeyPattern("fail_on_unmatched_files"),
 		"`fail_on_unmatched_files: true` must be set on the upload step: it defaults to false, so a " +
 			"missing asset would publish a short Release and still succeed",
 	);
@@ -1144,19 +1231,19 @@ test("the upload step carries the Release title, draft and prerelease flags (NRL
 	const step = extractUploadStep(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
 	assertMatch(
 		step,
-		/^\s*name:\s*Release \$\{\{ github\.ref_name \}\}\s*$/m,
+		uploadStepKeyPattern("name"),
 		"the upload step must carry `name: Release ${{ github.ref_name }}` - the Release title NRL-79 " +
 			"observed as `Release 0.1.1`, which the deleted step's `release_name:` used to set. " +
 			"`github.ref_name` and not `github.ref`.",
 	);
 	assertMatch(
 		step,
-		/^\s*draft:\s*false\s*$/m,
+		uploadStepKeyPattern("draft"),
 		"`draft: false` must stay explicit on the upload step",
 	);
 	assertMatch(
 		step,
-		/^\s*prerelease:\s*false\s*$/m,
+		uploadStepKeyPattern("prerelease"),
 		"`prerelease: false` must stay explicit on the upload step: NRL-75's semver-only `on: push: tags` " +
 			"filter excludes prereleases, and this is the second half of that reasoning",
 	);
@@ -1173,25 +1260,263 @@ test("guard: the upload step is still named literally `Upload Release Assets`", 
 	);
 });
 
-// GUARD (green on both sides), and the direct machine check on the coupling that
-// makes the key ORDER in this step load-bearing. `extractUploadedFiles`'s regex
-// is `/Upload Release Assets[\s\S]*?files:\s*\|([\s\S]*?)\n\s*\n/` - the capture
-// ends at the first BLANK LINE, not at the next YAML key. So any `with:` key
-// written after `files: |` is trimmed into the published-asset list and reported
-// by the NRL-76 subject-set check as `extra`, turning that check red for a
-// reason that has nothing to do with the attestation. `files: |` must be LAST.
-test("guard: no YAML key follows `files: |` inside the upload step", () => {
-	const step = extractUploadStep(fs.readFileSync(WORKFLOW_FILE, "utf-8"));
-	const lines = step.split("\n");
-	const filesAt = lines.findIndex((line) => /^\s*files:\s*\|\s*$/.test(line));
-	assert(filesAt !== -1, "the upload step has no `files: |` block scalar");
-	const trailing = lines.slice(filesAt + 1).filter((line) => line.trim() !== "");
-	const keys = trailing.filter((line) => /^\s+[A-Za-z_][A-Za-z0-9_-]*:(\s|$)/.test(line));
+// --- The extractors are scoped to the step they name (NRL-124)
+//
+// Everything from here to the end of this section is about the EXTRACTORS, not
+// about the workflow. `extractUploadedFiles` is the single source of truth tying
+// the hashed set to the published set (ADR 0011, NRL-76 decision 1), so a case
+// where it silently reports the wrong set is the one that must be impossible.
+//
+// Before NRL-124 both extractors took the FIRST match of a literal anchor
+// anywhere in the file, and `extractUploadedFiles` ended its capture at the first
+// blank line rather than at the next YAML key. Those parser artefacts leaked out
+// as three unenforced constraints on whoever edited the workflow: `files: |` had
+// to be last in `with:`, a blank line had to follow it, and no nearby comment
+// could quote the step name or a `files: |` block. All three are gone, and the
+// cases below are what keeps them gone.
+//
+// The fixtures are built from the REAL workflow text in memory. The file itself is
+// never written to: its operative content is out of scope for NRL-124, and the
+// point is to exercise the extractors against shapes the file deliberately does
+// not have.
+
+/** The upload step's `- name:` line as it appears in the workflow, with indent. */
+const UPLOAD_STEP_ANCHOR = `      - name: ${UPLOAD_STEP_NAME}`;
+
+/**
+ * The real workflow text with one injection applied inside, or immediately above,
+ * the upload step.
+ *
+ * It asserts its own injection applied exactly once and changed the text, because
+ * a silent no-op would make every case built on it vacuously green - the same
+ * non-vacuity rule `extractUploadedFiles` itself follows.
+ *
+ * The needle is searched only in the slice AFTER the step's `- name:` line, and
+ * that is not fussiness. `            styles.css` also appears in the comment
+ * above `Generate checksums`, so a whole-file replace lands there instead and
+ * produces a fixture that looks perfectly clean. That trap was hit while
+ * reproducing NRL-124 and cost a measurement.
+ */
+function hijackedWorkflow(needle: string, replacement: string, base?: string): string {
+	const content = base ?? fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const at = content.indexOf(UPLOAD_STEP_ANCHOR);
+	if (at === -1) {
+		throw new Error(
+			`the workflow text holds no \`${UPLOAD_STEP_ANCHOR.trim()}\` line at the expected indent; ` +
+				"the NRL-124 fixtures cannot be built and would otherwise be vacuous",
+		);
+	}
+	const head = content.slice(0, at);
+	const tail = content.slice(at);
+	const hits = tail.split(needle).length - 1;
+	if (hits !== 1) {
+		throw new Error(
+			`the fixture needle ${JSON.stringify(needle)} matched ${hits} times in the upload step, ` +
+				"expected exactly 1; the fixture would not hold the shape its case names",
+		);
+	}
+	const out = head + tail.replace(needle, replacement);
+	if (out === content) throw new Error("the NRL-124 fixture injection was a no-op");
+	return out;
+}
+
+// DEFECT REPRODUCTION (NRL-124). Measured red against the pre-fix extractor at
+// ELEVEN entries: the step name, the `uses:` line, `with:`, all four `with:` keys,
+// `files: |` itself and only then the three real files. The capture started at the
+// comment's `files: |` and ran into the real step, so the NRL-76 subject-set
+// equality check reported comment prose as published assets. This shape was hit
+// for real by a first-draft comment during NRL-104 and routed around by not
+// naming the step in nearby prose.
+test("a comment quoting the step name and a `files: |` block does not hijack the published set (NRL-124)", () => {
+	const fixture = hijackedWorkflow(
+		UPLOAD_STEP_ANCHOR,
+		[
+			`      # - name: ${UPLOAD_STEP_NAME}`,
+			"      # files: |",
+			"      #   hijack.txt",
+			UPLOAD_STEP_ANCHOR,
+		].join("\n"),
+	);
+	assertEquals(
+		extractUploadedFiles(fixture).join(","),
+		"main.js,manifest.json,styles.css",
+		"a comment quoting the step name or a `files: |` block must not move the capture. " +
+			"`extractUploadedFiles` is the only thing tying the attestation subject set to the " +
+			"published set, so a case where it reports the wrong set is the one to make impossible.",
+	);
+});
+
+// DEFECT REPRODUCTION (NRL-124). Measured red at a 12 line slice against the real
+// step's 11, with nothing thrown: `files:` was still inside the widened slice, so
+// the fail-closed throw covered a rename or a deletion but not a hijack.
+//
+// The oracle is EQUALITY against the real step and deliberately not "the slice's
+// first line is `- name: ...`". `indexOf` landed inside the comment at the `-`, so
+// the hijacked slice's first line already reads `- name: Upload Release Assets`
+// with the `# ` stripped (measured), and a first-line check does not discriminate.
+test("a comment quoting the step name does not widen the upload step slice (NRL-124)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const fixture = hijackedWorkflow(
+		UPLOAD_STEP_ANCHOR,
+		`      # - name: ${UPLOAD_STEP_NAME}\n${UPLOAD_STEP_ANCHOR}`,
+	);
+	assertEquals(
+		extractUploadStep(fixture),
+		extractUploadStep(content),
+		"the step slice must be located by an exact `- name:` match at its own indent, so a comment " +
+			"quoting the name cannot move its start. Every NRL-104 scoped assertion reads this slice.",
+	);
+});
+
+// DEFECT REPRODUCTION (NRL-124), replacing the guard that used to sit in this slot
+// and asserting the OPPOSITE of it (the NRL-66/NRL-67 replace-in-place
+// convention). The old guard asserted that NO YAML key followed `files: |` inside
+// the upload step, because the extractor's capture ended at the first blank line
+// and any key below the scalar was trimmed into the published-asset list and
+// reported by the NRL-76 check as `extra`. That was a constraint on the workflow
+// author enforced by nothing but prose, and it is the artefact NRL-124 removed. A
+// key below the scalar is now simply not a published asset, which is what YAML
+// says. Measured red at FOUR entries, the fourth being `body: ignored`.
+test("a `with:` key after `files: |` is not a published asset (NRL-124)", () => {
+	const fixture = hijackedWorkflow(
+		"            styles.css\n",
+		"            styles.css\n          body: ignored\n",
+	);
+	assertEquals(
+		extractUploadedFiles(fixture).join(","),
+		"main.js,manifest.json,styles.css",
+		"the block scalar must end at the next key at or shallower than `files:`, not at the first " +
+			"blank line, so key ORDER inside `with:` is no longer load-bearing. If this is red, the " +
+			"old first-blank-line terminator is back and `files: |` has to be last again.",
+	);
+});
+
+// DEFECT REPRODUCTION (NRL-124). `|`, `|-` and `|+` are all literal block scalars
+// GitHub accepts. The old `files:\s*\|` swallowed the chomping indicator into the
+// capture, so its first trimmed line was the bare `-`: measured red at FOUR
+// entries, `["-", "main.js", "manifest.json", "styles.css"]`, against the
+// pre-NRL-124 workflow so the new comment's own hijack shape could not confound it.
+// A bogus entry is the dangerous direction here, because the NRL-76 subject-set
+// equality check reads this list as the published set.
+test("a chomping indicator on the block scalar is not a published asset (NRL-124)", () => {
+	const fixture = hijackedWorkflow("          files: |\n", "          files: |-\n");
+	assertEquals(
+		extractUploadedFiles(fixture).join(","),
+		"main.js,manifest.json,styles.css",
+		"`files: |-` and `files: |+` are block scalars GitHub accepts, so the chomping indicator " +
+			"must not be read as a published path",
+	);
+});
+
+// DEFECT REPRODUCTION (NRL-124). A blank line is legal inside a YAML literal block
+// scalar, and the old first-blank-line terminator read one as the end of the
+// block: measured red at TWO entries, silently dropping `styles.css`. That is the
+// dangerous direction for this extractor, because an under-reported published set
+// makes the NRL-76 subject-set equality check compare two short lists.
+test("a blank line inside the `files: |` block does not truncate the published set (NRL-124)", () => {
+	const fixture = hijackedWorkflow("            manifest.json\n", "            manifest.json\n\n");
+	assertEquals(
+		extractUploadedFiles(fixture).join(","),
+		"main.js,manifest.json,styles.css",
+		"a blank line is legal inside a YAML literal block scalar and must be skipped, not treated " +
+			"as the end of the block",
+	);
+});
+
+// The fail-closed throws survive the refactor. Both paths existed before NRL-124
+// and must keep existing, because a `[]` return is what would make the NRL-76
+// subject-set check vacuously green - and a vacuous green on the step that decides
+// what ships is the NRL-76 shape itself.
+//
+// Its label depends on which workflow text it runs against, and both halves were
+// measured. Against the PRE-NRL-124 workflow it is a GUARD, green on both sides of
+// the diff. Against the SHIPPED workflow it is a DEFECT REPRODUCTION: the comment
+// above the step now quotes both literals on purpose (ADR 0011, decision 10), so
+// the old whole-file extractor still finds its anchors in that comment after the
+// step is renamed and returns a list where it must throw.
+test("guard: a renamed step and an emptied block still THROW rather than returning []", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+
+	const renamed = hijackedWorkflow(UPLOAD_STEP_ANCHOR, "      - name: Upload Something Else");
+	let threw = false;
+	try {
+		extractUploadedFiles(renamed);
+	} catch {
+		threw = true;
+	}
+	assert(threw, "a renamed upload step must throw, never return an empty published-asset list");
+
+	threw = false;
+	try {
+		extractUploadStep(renamed);
+	} catch {
+		threw = true;
+	}
+	assert(threw, "a renamed upload step must throw from extractUploadStep too");
+
+	// The block scalar is kept and its three entries removed, which is the shape a
+	// bad edit actually produces. `files:` is still present, so `extractUploadStep`
+	// returns happily and only `extractUploadedFiles` can catch it.
+	const emptied = hijackedWorkflow(
+		"          files: |\n            main.js\n            manifest.json\n            styles.css\n",
+		"          files: |\n",
+		content,
+	);
+	threw = false;
+	try {
+		extractUploadedFiles(emptied);
+	} catch {
+		threw = true;
+	}
+	assert(threw, "a `files: |` block holding no entries must throw, never return []");
+});
+
+// GUARD (green on both sides, and labelled one deliberately), pinning the ONE
+// property that makes NRL-124's hijack survivable: the four scoped assertions are
+// `/^\s*...$/m` anchored, so a key supplied only on a `#` line satisfies NONE of
+// them. That is why the measured failure mode is a loud false RED and not a silent
+// false pass, and it is the reason NRL-124 is a fragility ticket rather than a
+// High-severity correctness one.
+//
+// It asserts BEHAVIOURALLY, against fixtures, and never by reading this file's own
+// source: a reflective check would pass against a pattern that had quietly stopped
+// discriminating. Measured for the `fail_on_unmatched_files` shape during NRL-104's
+// Verify and re-measured for NRL-124 at `[false, true, true, true]` in both hijack
+// shapes, which is why there is one fixture per key rather than one for all four.
+test("guard: a key supplied only in a comment satisfies no scoped assertion (NRL-124)", () => {
+	const content = fs.readFileSync(WORKFLOW_FILE, "utf-8");
+	const offenders: string[] = [];
+	for (const { key, pattern } of UPLOAD_STEP_KEY_PATTERNS) {
+		const line = (content.split("\n").find((l) => pattern.test(l)) ?? "").trimEnd();
+		if (line === "") {
+			offenders.push(`${key}: no line of the real workflow matches its own pattern`);
+			continue;
+		}
+		// Shape 1: the key commented out in place, at its own indentation.
+		const inPlace = hijackedWorkflow(`${line}\n`, `${line.replace(/^(\s*)/, "$1# ")}\n`, content);
+		// Shape 2: the key deleted and supplied on a `#` line in a comment that also
+		// quotes the step name, which is the slice-widening hijack. Built on top of
+		// shape 1's deletion so the real key is genuinely gone.
+		const stripped = hijackedWorkflow(`${line}\n`, "", content);
+		const aboveStep = hijackedWorkflow(
+			UPLOAD_STEP_ANCHOR,
+			[
+				`      # - name: ${UPLOAD_STEP_NAME}`,
+				`      # ${line.trim()}`,
+				UPLOAD_STEP_ANCHOR,
+			].join("\n"),
+			stripped,
+		);
+		for (const [shape, fixture] of [["commented in place", inPlace], ["quoted above the step", aboveStep]] as const) {
+			if (pattern.test(extractUploadStep(fixture))) {
+				offenders.push(`${key} (${shape}): the pattern matched a key present only on a \`#\` line`);
+			}
+		}
+	}
 	assert(
-		keys.length === 0,
-		`a YAML key follows \`files: |\` inside the upload step: ${JSON.stringify(keys)}. ` +
-			`extractUploadedFiles captures up to the first blank line, so this key would be read as a ` +
-			`published asset and break the NRL-76 subject-set equality check.`,
+		offenders.length === 0,
+		`a scoped assertion is satisfied by a commented-out key, which turns a hijack from a loud ` +
+			`false red into a silent false pass: ${offenders.join("; ")}`,
 	);
 });
 
