@@ -1541,8 +1541,9 @@ speaks `x` where it said `- x`.
 **R-M08 and R-M09 each lose a leftover. NEITHER becomes met and the `2 of 16` MUST headline count
 does not move.** What stays open against them: roots 3 and 5 in full, root 4's named residuals,
 roots 1 and 2's three non-container shapes (NRL-109), the two pre-existing image shapes
-`![a [[N|l]] b](dest.png)` and `![alt](dest(1).png)`, NRL-45's `[a]: x.png "%%"` leftover, NRL-93,
-NRL-118 and now **NRL-145**.
+`![a [[N|l]] b](dest.png)` and `![alt](dest(1).png)`, NRL-45's `[a]: x.png "%%"` leftover, NRL-93
+and now **NRL-145**. (NRL-118 was on this list and has since closed; see the NRL-118 paragraph
+after the NRL-116 section.)
 
 **A list marker's LEAD is peeled separately from the marker, as of NRL-116** (PR #200, squash
 `efcf5cc`, `docs/adr/0006` clause 2's NRL-116 amendment, `srs.md:328` amended). `containerPrefix`'s
@@ -1632,7 +1633,43 @@ the renderer side is Obsidian's own parser and renderer EXECUTED in Node, which 
 transcription and is still not the application, and it is the READING-VIEW path only. Rule 11
 applies to every figure above. **R-M08 is NOT met and the `2 of 16` MUST headline count does NOT
 move**: this closed one named residual of `srs.md:328`, not the requirement. What stays open against
-R-M08 is unchanged by it, plus NRL-117 and NRL-118 in this family.
+R-M08 is unchanged by it, plus NRL-117 in this family (NRL-118, also named here when this was
+written, has since closed; next paragraph).
+
+**A `%%` block now ends where the reading view ends it, as of NRL-118** (PR #203, squash
+`50f73f3`, `docs/adr/0006` clause 5's NRL-118 amendment, `srs.md`'s `%%` bullet). Our `%%` state
+was note-scoped and container-blind, so `>> %%` / `%% SECRET` spoke `SECRET`, which the reader
+never sees (1,088 of 1,088 cells with room, base). The fix is a **model, not a patch**: new
+`src/text/obsidianBlocks.ts` transcribes the reading view's block tokenizer (remark-parse 8 as
+Obsidian 1.13.7 configures it, plus Obsidian's frontmatter, `$$`, `%%`, footnote and block-id
+tokenizers and its `[^` definition refusal) and `percentBlockEnds` records where each `%%` comment
+ends. `extractChunks` (+32 lines, 0 removed, every existing body byte-identical) consults it only
+where **both** parsers open a block on the same line, ends ours after the renderer's last covered
+line, and processes the next line fresh. A block only we open keeps base's note scope, and a lone
+CR, a note the bundle would refuse or more than 64 nesting levels gives no answer and base behaviour.
+**The first revision was a column model and Verify FAILED it**: 7 shapes newly spoken (244 cells,
+74 notes) not reducible to any pre-existing root, all from list-item dedent and continuation rules
+the columns approximated. The fix round replaced the model rather than patching shapes, and pinned
+all seven red-first. **The second, independent Verify passed**: 720,000 fuzz notes over two
+generators with new seeds, **0 newly leaking cells not reducible** to a pre-existing root by
+`%%`-neutralisation or minimisation; a structural differential against the real parser, **0
+mismatches over 104,142 notes holding a comment**, while a deliberately wrong transcription
+mismatched; `sourceIndex` clean over 36.6M UTF-16 units; runtime linear; `main.js` **+14,832
+bytes**. A comment-only follow-up added the MIT notices for the transcribed remark-parse,
+remark-math and remark-footnotes code. Four pins were replaced in place, including both
+`pin-nrl116-*-still-silenced` tripwires, whose names now read backwards.
+**Residuals, both pinned.** NRL-117's boolean `dedentedByList` still opens a block on a code-depth
+line (`-    %%` / `    %% PROSE` loses `PROSE`; its `%%`-free control loses it on base too). And an
+**unterminated raw HTML block** such as `<div<TAB>x` / `SECRET`, which the browser hides and we speak
+with or without a comment, is a pre-existing root NRL-118 unmasks; it belongs to **NRL-137**, where
+the shape is now recorded. NRL-159 carries the fence residuals.
+**Two standing costs.** The scanner is tied to **Obsidian 1.13.7's bundle** (`app.js` sha256
+`8efbf581...9898`): an Obsidian update can change any tokenizer, so the differential must be re-run
+against the new bundle. And whether this repo should carry transcriptions of **Obsidian-specific
+tokenizers** at all (the `%%`, block-id, `[^` and frontmatter rules) is an **open owner decision**,
+raised by the second Verify and not settled here. **NOT VERIFIED IN OBSIDIAN**: everything is bare
+Node against the reading-view parser executed out of the bundle, Live Preview was never read, and
+no reload exercised this change. **R-M08 is NOT met and the `2 of 16` count does not move.**
 
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
