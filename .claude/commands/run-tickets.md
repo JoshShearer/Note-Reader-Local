@@ -11,7 +11,7 @@ table before the first run.
 
 | Fact | Consequence |
 |---|---|
-| **The run is fully autonomous.** The owner tests features by using the app and files new tickets for what they find. | No phase waits for a reply. Verify is automated, merge is automatic. Anything that would have needed a human blocks **that ticket only**, and the run moves on to the next one. Everything blocked or decided on the owner's behalf is listed in the end-of-run report. |
+| **The run is fully autonomous.** The owner tests features by using the app and files new tickets for what they find. | No phase waits for a reply. Verify is automated, merge is automatic. Anything that would have needed a human blocks **that ticket only**, and the run moves on to the next one. **A failure the pipeline can fix itself is not a block**: a failed Verify, a `/critique` or `/check-constraints` BLOCK on the diff, and a merge conflict all go back through the Fix loop on the same ticket until it passes. Skipping a fixable ticket only pays for the whole ticket twice, once now and again when it is picked up later. Everything blocked or decided on the owner's behalf is listed in the end-of-run report. |
 | **CI runs the gates on `push` and `pull_request`** (`.github/workflows/ci.yml`), but there is still no hook: `.git/hooks` holds only samples. | Verify still runs the gates and the probes itself; the check is a backstop, not the source of truth. Verify **may** read the conclusion (`gh pr checks <n>` once, or `gh run list`) and report it, and **must not wait on it**. Never write a polling loop. Read it with the one-shot snippet under `Reading a CI conclusion` at the end of this file, not with a selector of your own: `gates` is the **job** name and `gh run list` cannot see a job name at all, so the obvious filter matches nothing, prints nothing and exits 0 (NRL-86). Branch protection is out of scope, so a red check does not block a merge. |
 | **A green suite is not a working feature** (`AGENTS.md` rule 11). The suites run in bare Node against fakes. | Automated Verify also runs the real bundled module against the ticket's acceptance inputs, and drives real Obsidian over CDP when it is reachable. Nothing a human did not observe is ever described as "verified in Obsidian". PRs carry `NOT VERIFIED IN OBSIDIAN`, and Linear comments say so plainly. |
 | **Bugs must be reproduced before they are fixed** (`AGENTS.md` rule 12). | Implement begins by reproducing, not by editing. If the repro fails, the ticket blocks rather than proceeding on a guess. |
@@ -407,6 +407,7 @@ Special cases Phase 0 must handle:
 | 3 | Implement | this file | Reproduce first for bugs, then fix, then run the gates itself |
 | 4 | Ship | `ship.md` | Gates, `check-constraints`, `critique`, commit, push, PR against `main` |
 | 5 | Verify | this file | Automated: gates on the PR head, bundled probes of every acceptance input, CDP smoke if reachable |
+| 5a | Fix | this file | Only after a Verify fail: turn Verify's failing inputs into red tests, fix the root cause, re-ship to the same PR, then a **fresh** Verify. Loops until pass |
 | 6 | Merge | this file | Squash-merge once Verify recorded `pass` (skipped with `--no-merge`) |
 | 7 | Finish | `finish.md` | Linear to Done, lane resynced and deployed, docs corrected if a defect is gone. **Not** the lane's removal, which is Step 8 |
 
@@ -460,6 +461,7 @@ writes it.
       "implementationSummary": null,
       "prNumber": null, "prUrl": null, "commitSha": null,
       "verifyVerdict": null, "verifyNotes": null,
+      "fixRound": 0, "verifyFindings": null,
       "blockedReason": null,
       "history": [{ "phase": "start", "at": "2026-09-28T14:01:00Z", "result": "branch created" }]
     }
@@ -468,7 +470,9 @@ writes it.
 ```
 
 `status`: `pending` | `in_progress` | `blocked` | `done`.
-`phase`: `start` | `plan` | `implement` | `ship` | `verify` | `merge` | `finish`.
+`phase`: `start` | `plan` | `implement` | `ship` | `verify` | `fix` | `merge` | `finish`.
+`fixRound`: `0` until the first Verify fail, then the number of Fix rounds spawned (cap 3).
+`verifyFindings`: the last failing Verify's minimised inputs, expected vs actual, hypothesis and generator path; the Fix round's input.
 `verifyVerdict`: `null` | `pass` | `fail`. It records the **automated** Verify only.
 `clarification.decidedBy`: `null` | `"owner"` (from the ticket's Decisions section) | `"pipeline"`.
 `worktree`, `runBranch`, `primary`: written by Step 0c, read by Step 8 and by `--resume`. `worktree`
@@ -567,8 +571,11 @@ If you do read it, use the one-shot snippet under `Reading a CI conclusion` at t
 list` cannot see a job name at all, so the obvious filter matches nothing, prints nothing and
 exits 0 (NRL-86).
 
-Run `/check-constraints`. A BLOCK is not overridable: set `status: \"blocked\"` with the findings
-and stop without committing. Same for a `/critique` BLOCK verdict. With no human reviewing the
+Run `/check-constraints` and `/critique`. A BLOCK from either is not overridable, which means it is
+**fixed, not waived and not skipped**: fix what it found with a test that fails first, re-run the
+gates, and run the check again. Set `status: \"blocked\"` and stop only when resolving it needs a
+decision only the owner can make (a non-negotiable that conflicts with the ticket's own acceptance
+criteria, or a product-intent question), and say exactly which decision in `blockedReason`. With no human reviewing the
 diff, treat any critique finding where **prose is silently lost, private text is spoken, or
 `sourceIndex` drifts** as must-fix: fix it with a test that fails first, re-run the gates, then
 commit. Lower findings are listed in the PR body as known leftovers.
@@ -607,15 +614,51 @@ edit tracked files.
    not start, stop or restart Obsidian.
 
 Set `verifyVerdict: \"pass\"` only if the gates pass and every probe matches. Otherwise set
-`verifyVerdict: \"fail\"`, `status: \"blocked\"`, and put the failing inputs with actual versus
-expected output in `blockedReason`. Do not attempt a fix. Write a short `verifyNotes`, append
+`verifyVerdict: \"fail\"`, `phase: \"fix\"`, leave `status` at `in_progress`, and put the failing
+inputs with actual versus expected (and renderer, for `extract.ts`) output in `verifyFindings`,
+minimised, with your best root-cause hypothesis and the path of any generator you built so the Fix
+round can re-run it. Do not attempt a fix. Write a short `verifyNotes`, append
 history, and on pass set `phase: \"merge\"`."
 
 On pass, the orchestrator posts a Linear comment with `save_comment` stating, as separate
 points: the suites and gates passed; the automated probes run and their results; whether the CDP
 smoke ran; and the literal line **"Not verified in Obsidian by a human."**
 
-On fail, the ticket is blocked with its PR left open. Continue with the next ticket.
+On fail, the ticket goes to **5a. Fix**. It is not blocked, and the run does not move on to the next
+ticket: every ticket after it branches from a `main` that lacks it, and a skipped fixable ticket
+costs its whole pipeline again when someone picks it up later.
+
+**5a. Fix** - a fresh subagent, which must be neither the one that wrote the fix nor the Verify that
+failed it. Increment `fixRound` before spawning it.
+
+"You are the Fix round `<fixRound>` for `<ID>` in `<run-worktree>`, on branch `<branch>`, PR
+`<prNumber>`. Read `descriptionSnapshot`, `planNote`, `clarification`, `implementationSummary` and
+`verifyFindings` from `<state-file>`. Independent Verify failed this PR with the inputs in
+`verifyFindings`. Fix it; do not argue with the finding unless you can show, with the same oracle
+Verify used, that the expected output is wrong, and then record that evidence.
+
+1. `git fetch origin` and rebase onto `origin/main` if it moved or the PR conflicts, resolving
+   conflicts by keeping `main`'s content plus this branch's change.
+2. Reproduce every failing input on the PR head yourself and add each, plus close siblings, as a
+   test that **fails first**. Confirm red.
+3. Find the root cause and fix the model, not the shape: when a fix round is answering a finding
+   that an earlier round already patched in another shape, a per-shape patch is not acceptable.
+   Re-run Verify's generator (from `verifyFindings`) and the original measurement plan, both
+   directions, with corpus and room stated for every number.
+4. Run the gates, `/check-constraints` and `/critique` as Ship does, commit, and push to the same
+   branch (`--force-with-lease` after a rebase). Update the PR body with `gh api` and read it back,
+   since `gh pr edit` silently fails here. Record `commitSha`, update `implementationSummary`, set
+   `phase: \"verify\"`."
+
+Then run **5. Verify** again, in another fresh subagent, against the new `commitSha`. Fix and Verify
+alternate until Verify records `pass`.
+
+**The cap is three Fix rounds, and hitting it halts the run rather than skipping the ticket.**
+Three rounds that each fail Verify mean the approach is wrong, not unlucky, and that needs the owner.
+Set `status: \"blocked\"` with every round's findings in `blockedReason`, post it to Linear, run
+Step 8 and the end-of-run report, and **stop**: do not start the next ticket. The owner re-launches
+with `--resume` once they have decided. A Fix round may also stop early with `blocked` when, and only
+when, the finding needs an owner decision; it must name that decision.
 
 **6. Merge** - done by the orchestrator. Skipped entirely under `--no-merge`, which leaves the
 ticket `done` at phase `verify` with its PR open.
@@ -659,7 +702,8 @@ branch is the only casualty. The remote ref then goes with `gh api` rather than 
 the human wait this design exists to avoid.
 
 If the PR is already merged, record that and move on. If it is not mergeable (a conflict with
-`main`), block the ticket with the reason; do not resolve conflicts inside this phase. Never merge
+`main`), do not resolve conflicts inside this phase: set `phase: \"fix\"` with the conflict in
+`verifyFindings` and run a Fix round, which rebases, re-ships and goes back through Verify. Never merge
 a ticket whose Verify did not record a pass, and never self-approve. Record the merge commit and
 set `phase: \"finish\"`.
 
@@ -808,12 +852,17 @@ the run continues with the next ticket:
 
 - Phase 0 or Plan finds a question with no defensible default
 - A bug that cannot be reproduced
-- A `check-constraints` BLOCK or a `critique` BLOCK
 - A regression test whose core cases pass against the unfixed code, meaning it proves nothing
-- Automated Verify fails
-- A merge conflict with `main`
+- A `check-constraints` or `critique` BLOCK, or a Verify finding, whose resolution needs an owner
+  decision, named in `blockedReason`
+- Three Fix rounds failed Verify (this one also **halts the run**; see 5a)
 - A ticket needing hardware this machine lacks, most likely an Android device for R-M03
 - A branch or issue collision that `start-issue.md` flags
+
+**Not on this list, deliberately: a failed Verify, a fixable `check-constraints` or `critique`
+BLOCK, and a merge conflict with `main`.** Each goes through the Fix loop. Blocking them and moving on
+was the old rule; on 2026-10-02 it skipped two tickets whose Verify had already handed over exact
+repros, and the owner had to direct the fix by hand.
 
 A blocked ticket keeps its branch and any open PR, so the work is not lost. Its Linear status stays
 In Progress, and the orchestrator posts a comment with the `blockedReason`.
