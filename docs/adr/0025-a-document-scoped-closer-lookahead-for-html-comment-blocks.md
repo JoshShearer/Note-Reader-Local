@@ -2404,3 +2404,136 @@ corpus is identical on base.
 every verdict above is the reading-view parser and renderer executed in Node. Live
 Preview has never been read. Rule 11 applies to every number. R-M08 is still NOT met and
 the `2 of 16` count does not move.
+
+### NRL-119 fix round 2: the bare-marker stop reads the line the renderer reads
+
+**What Verify found.** Round 1's `BARE_LIST_MARKER` newly SPOKE an image or link
+destination (and image alt text) that base kept silent, when the bare marker sat on a
+quote continuation whose `>` is followed by a TAB: `> A ![xx` / `>\t*` /
+`> yy](zdestz.png) B.` spoke `"A [xx * yy](zdestz.png) B."` where base and the renderer
+say `"A B."` (`<blockquote><p>A <span class="internal-embed" src="zdestz.png"
+alt="xx\t*yy"></span> B.</p></blockquote>`). Verify's `tabq.cjs`, 672 shapes x 512 =
+344,064 cells: 53,248 newly leaking, 0 newly lost. Reproduced on 9522c11 before any edit,
+for the image and link forms, `*`, `+`, `1.`, `1)`, nested `> >\t*`, indented ` >\t*` and
+a lazy closer.
+
+**The renderer's rule after `>`**, executed with the harness and read in the blockquote
+tokenizer transcribed in `obsidianBlocks.ts`: leading SPACES AND TABS are skipped, the `>`
+is taken, and then ONE optional U+0020 SPACE is stripped (`if (t.charAt(D) === " ") D++`)
+and nothing else. A tab, a second space, an NBSP or a CR after the `>` stays in the
+content line, and an NBSP before the `>` makes the line plain text. A tab-led
+continuation is never interrupted (`> A` / `>\t* x` is `<p>A<br>* x</p>`), and a lone CR
+is a line ending to it.
+
+**Cause.** `bracketClosesLater` tested every interrupter on `peelQuotes`' output, whose
+`BLOCKQUOTE_LEVEL` (`>\s?`) eats the tab as if it were the optional space, so `>\t*`
+became a bare `*` and round 1's term stopped the carry on a line the renderer keeps as
+lazy prose.
+
+**The change, and it is deliberately the smallest one.** `bracketClosesLater` now tests
+`BARE_LIST_MARKER` on `quoteContent(line, op.quotes)` - the renderer's reading, peeling
+`QUOTE_CONTENT_LEVEL = /^[ \t]{0,3}> ?/` per level - and every other interrupter on the
+legacy `peelQuotes` exactly as base did, through a new `interruptsParagraphExceptBareMarker`
+(`interruptsParagraph` is that plus `BARE_LIST_MARKER`, so its other callers are
+unchanged). Two properties follow by construction. On a line where the two peels agree,
+the lookahead is exactly 9522c11's. On a line where they disagree - a tab, NBSP or CR
+right after a `>`, or an NBSP before one - the bare-marker arm cannot fire (the content
+starts with that character, and `BARE_LIST_MARKER` needs spaces then a marker), so the
+line is exactly base's. `containerPrefix`, `peelQuotes`, `BLOCKQUOTE_LEVEL` and every
+other caller are untouched.
+
+**Why not the renderer's peel for every arm, which the brief preferred.** It was built
+and measured three times this round, and each draft was rejected by measurement:
+
+1. The peel alone (e3684fb's first form) closed base leaks (`>\t-`, `>\t=`, `>\t===`,
+   `>\t<div>`) but newly LOST displayed text in three places where the old peel's
+   accidental stops had masked a missing one: a tab-led code opener (16,640 cells in the
+   extended tab corpus), a mixed-lead lazy marker (83,200 in the generator), and a quoted
+   list item's de-indent (22,016).
+2. e3684fb added a partial-laziness rule, a lazy-line stop, a per-line quoted-list
+   de-indent and a code-opener refusal. /critique ran an independent generator against
+   the renderer: 177 of 24,000 notes NEWLY spoke a destination (the de-indent ignored
+   remark's whole-item minimum and counted a task checkbox; a quote-list-quote chain met
+   the new laziness; an html half of the lazy stop took inline `<em>` for a block start).
+3. 40302f6 removed those and kept an "old reading" for some openers. A second /critique
+   BLOCKED it (score 45): that old reading still carried round 1's `BARE_LIST_MARKER`, so
+   every opener routed to it reopened the tab-marker leak (192 of 3,520 cells per tab
+   prefix, 384 for NBSP); its list-in-quote test missed list-quote-list openers (192 lost
+   per prefix); and a space-then-tab opener escaped it (72 lost). The round's own census
+   then found NBSP and lone-CR shapes on top.
+
+The pattern is NRL-153's: base's answer on a tab-after-`>` line is right by ACCIDENT in
+many shapes (the eaten tab stands in for a quoted list item's whole-item de-indent, for a
+lazy line's uncapped interrupters and for a lone CR's line ending), so the whitespace
+predicates must move together. NRL-114 owns the peel itself.
+
+**Fixtures.** 44 rows in the NRL-38 table, every one but `>    *` (round 1's win) with the
+fix's output EQUAL TO BASE. RED on 9522c11: 13 (the 8 Verify shapes; the two tab-after-`>`
+opener shapes /critique 2 found leaking; two NBSP shapes where round 1 newly leaked and
+that Verify's corpora never generated; and one quoted-list shape where round 1 was right
+and base is not, given up and pinned as a residual). RED on base: 1 (`>    *`, round 1's
+win). Reach of the rejected and ablation arms: e3684fb 23 rows, 40302f6 17, an arm testing
+the term on the legacy peel (= 9522c11's reading) 13, an arm whose content peel strips all
+whitespace after `>` 15, one that strips none 1, one with a `\s` lead 1, one with no
+bare-marker term in the carry 1. Fourteen rows are RESIDUAL tripwires where the renderer
+disagrees with base and the fix alike: eleven that a rejected draft (or 9522c11) closed
+and this round gives up (`>\t-` image and link, `>\t===`, `>\t<div>`, a `>`+NBSP dash, a
+tab code opener, a tab-opener continuation across `>\t=`, a partially lazy indented
+line, a lazy mixed-lead marker, a quoted list item's de-indented marker, a quoted-list
+five-space dash), and three that nothing closed, NRL-161's among them.
+
+**Measurements**, against Obsidian 1.13.7's own `WT`/`GT` (app.js sha256
+`8efbf581...9898`, SELFTEST OK), alt-aware (an image's rendered `alt` counts as spoken
+text under `speakImageAlt`; the plain `visibleText` oracle scores alt text as hidden and
+reports phantom leaks).
+
+Base = `origin/main` `d496646` (this branch was rebased onto it during the round; every
+row below was re-run after the rebase), fix = the shipped tree.
+
+| corpus | cells | room on base (leak / loss) | newly leaking | newly lost | wrong arm reaches |
+|---|---|---|---|---|---|
+| Verify's `tabq.cjs` as shipped | 344,064 | 413,184 / 971,264 | **0** | **0** | 9522c11: 53,248 leak |
+| `tabq` extended: 17 quote prefixes (`>`, `> `, `>\t`, `> \t`, `>  \t`, 2-5 spaces, `>\t\t`, nested, `>\t>\t`, indented, lazy closer, `- >`) x 17 middle lines x 3 kinds x 2 x CRLF, alt-aware | 1,775,616 | 1,899,520 / 5,947,904 | **0** | **0** | 9522c11 86,016 leak; the term on the legacy peel 86,016; a content peel stripping all whitespace 152,576 |
+| `tabq` comment rows (`<!--`, `-->`, `%%`, ...) | 835,584 | 1,461,760 / 1,758,208 | **0** | **0** | none: no arm diverges, this corpus has no room for this change |
+| Verify's `gen.cjs` extended to 21 container prefixes (11 new tab and space leads, `>\t` opener, `- >\t`, `> -` with `>\t  `), alt-aware, full 512 masks on every shape that diverges on 7 quick masks | 979,776 shapes, 29,844 diverging, 15,280,128 cells | 0 / 17,072,128 | **0** | **0** | 9522c11 and the legacy-peel arm 836,608 leak; all-whitespace peel 3,643,648 leak |
+| exhaustive peel census: every prefix of length 5 or less over {space, tab, `>`, NBSP, CR} x 22 tails (85,932 lines) at budgets 1 and 2, as a middle and as a closer line of a quoted image and link label, wherever the legacy and the renderer's peel DIFFER (39,095 lines at budget 1, 42,838 at budget 2; 468,348 shapes), plus every prefix before four opener forms in three contexts | 8 quick masks per shape, 512 where any diverges | - | **0** (no shape's output differs from base at all) | **0** | the legacy-peel arm: 11,944 shapes diverge, 2,703,360 cells newly leaking |
+| /critique 1's generator `gen3.cjs`, 12 seeds x 4,000 notes, alt-aware | 48,000 notes | - | **0** | **0** | e3684fb: 177 notes in 6 of these seeds |
+| /critique 2's generator `gen4.cjs` (list>quote>list, tasks, `> 10.`, callouts, NBSP, CRLF), 6 seeds x 1,500 plus CRLF, `speakImageAlt: false` and `skipInlineCode: false` + `speakUrls` + `stripTags: false` runs | 18,000 notes | - | **0** | **0** | 40302f6 (its finding) |
+| /critique 2's census `census4.cjs`: 13 opener prefixes x 4 pre-lines x 2 kinds x 8 quote leads x 11 middles x 5 closers | 45,760 | - | **0** | **0** | 40302f6: 192 to 384 per prefix |
+| Verify's `fuzz2.cjs` carry fuzz, prefixes widened with 8 tab and space quote leads, 4 seeds x 4,000 notes x 6 masks, alt-aware | 96,000 | 68,834 / 525,753 | **0** | **0** | 9522c11 10 leak; all-whitespace peel 304 leak |
+| Verify 1's `p3.cjs` | 42 shapes x 512 x 4 x 3 | - | **0** | **0** | - |
+| round 1's `p4.cjs` carry corpus | 2,457,600 | 407,552 / 1,486,336 | **0** | **0** | (no tab shapes) |
+| NRL-111 corpus `probe111.cjs` | 691,200 | 301,056 / 390,144 | **0** | **0** | - |
+| NRL-119 bare corpus `bare119.cjs` | 622,080 | 294,912 / 86,016 | **0** | **0** | - |
+| 17 must-not-widen controls | 8,704 | - | 0 moved | 0 moved | - |
+| NRL-111 fuzz `fuzz119.cjs` | 16,000 | - | **0** | **0** | - |
+| NRL-98's container-label templates (87) plus a tab twin of every quoted one (106), alt-aware | 197,632 | 167,168 / 772,480 | **0** | **0** | none: byte-identical on every arm |
+
+**What this gives back against 9522c11, stated rather than buried.** On the census, against
+9522c11 the fix newly LOSES 6,469,632 cells and closes 2,703,360 leaking ones. Every one of
+the lost cells is a cell where base also loses (the census shows no shape where the fix
+differs from base): round 1's term, reading the legacy peel's bare `*`, stopped carries
+the renderer really does end there, right by accident - for example a partially lazy
+`>\t*` under `> > A ![xx`, where the inner quote's `interruptBlockquote` ends at the
+tab-led line, and a quoted list item's de-indented `*`. Keeping those would need the
+partial-laziness and de-indent rules, which the drafts had and /critique showed wrong.
+Against base the census moves nothing.
+
+**`sourceIndex` lockstep** by numeric UTF-16 code-unit index over the extended tab corpus plus the round's fixture
+inputs: base 5,421,056 chunks / 40,387,584 units, fix 5,433,344 / 40,944,640, 0 failures
+on both. Mutators nonzero on both (fix: drop 4,909,824 length; shift 1,778,176 bounds +
+3,655,168 identity; swap 4,643,072 monotonic + 4,542,208 identity; zero 5,429,760
+identity; base 4,893,440; 1,778,176 + 3,642,880; 4,630,784 + 4,529,920; 5,417,472). The
+equation exemption, keyed on the synthetic text, is mandatory on both (512 identity
+failures without it). The space exemption reads 0 without it on this corpus, so this
+corpus does not show it mandatory; round 1's does. No emit or `pushSpace` path changed:
+the diff only decides whether a carry is confirmed.
+
+**Residuals, all identical on base and pinned.** The fourteen above; `>\t* x` (a marker WITH
+content) still speaks its destination through `LIST_BULLET`'s any-indent `^\s*`, filed as
+NRL-161; and the consumption path still reads a tab after `>` as the optional space
+(NRL-114 under NRL-153).
+
+**NOT VERIFIED IN OBSIDIAN.** No deploy happened; every verdict above is the reading-view
+parser and renderer executed in Node, and Live Preview has never been read. Rule 11
+applies to every number. R-M08 is still NOT met and the `2 of 16` count does not move.

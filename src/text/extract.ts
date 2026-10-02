@@ -2143,6 +2143,53 @@ function containerPrefix(line: string): {
  * interruptsParagraph already tolerates, and peeling a marker would accept the
  * new item the renderer starts there.
  */
+/**
+ * One quote level as the RENDERER strips it from a line: spaces and tabs, the
+ * `>`, then ONE optional U+0020 space and nothing else (NRL-119 fix round 2).
+ * Obsidian's blockquote tokenizer, transcribed in obsidianBlocks.ts and measured
+ * out of obsidian.asar 1.13.7's WT/GT, does `if (t.charAt(D) === " ") D++` after
+ * the `>`; a tab, a second space, an NBSP or a CR stays in the content. It skips
+ * only spaces and tabs before the `>` too, so an NBSP there makes the line text.
+ */
+const QUOTE_CONTENT_LEVEL = /^[ \t]{0,3}> ?/;
+
+/**
+ * The renderer's reading of a quoted continuation line, for `BARE_LIST_MARKER`
+ * alone (NRL-119 fix round 2).
+ *
+ * Round 1 tested `BARE_LIST_MARKER` on `peelQuotes`' output, whose `>\s?` eats a
+ * TAB after the `>`. So `> A ![xx` / `>\t*` / `> yy](zdestz.png) B.` stopped the
+ * carry on a bare `*`, although the renderer keeps `\t*` as a tab-led lazy
+ * continuation and forms the image across it: the destination was newly spoken
+ * (Verify, 53,248 cells). Testing the term on THIS string instead means it fires
+ * only where the renderer's content line really is a bare marker, and on a line
+ * where a tab (or NBSP, or CR) follows a `>` it cannot fire at all, so such a
+ * line behaves exactly as on base.
+ *
+ * Deliberately NOT used for the other arms, which keep `peelQuotes`. Applying the
+ * renderer's peel to them was built and measured in this round, three times: it
+ * closes base leaks (`>\t-`, `>\t===`, `>\t<div>`), but each draft newly lost or
+ * newly leaked somewhere else, because base's answer on a tab-after-`>` line is
+ * right by ACCIDENT in many shapes - the eaten tab stands in for a quoted list
+ * item's whole-item de-indent, for a lazy line's uncapped interrupters, and for a
+ * lone CR's line ending. That is NRL-153's lesson (the whitespace predicates
+ * compose and must move together), and NRL-114 owns the peel itself.
+ *
+ * Rebase note: NRL-114 has since narrowed `peelQuotes` to `>[ \r]?`, so it no
+ * longer eats the tab either. The two peels now differ only where `peelQuotes`'
+ * `\s{0,3}` lead accepts a non-tab, non-space whitespace (an NBSP) or where a CR
+ * follows the `>`; this helper still answers the renderer's reading there.
+ */
+function quoteContent(line: string, budget: number): string {
+	let rest = line;
+	for (let n = 0; n < budget; n++) {
+		const level = QUOTE_CONTENT_LEVEL.exec(rest);
+		if (!level) break;
+		rest = rest.slice(level[0].length);
+	}
+	return rest;
+}
+
 function peelQuotes(line: string, budget: number): string {
 	let rest = line;
 	for (let n = 0; n < budget; n++) {
@@ -3111,6 +3158,18 @@ function isSetextContentLine(lines: readonly string[], k: number, lazyInListItem
  * shapes rather than assumed safe.
  */
 function interruptsParagraph(line: string, htmlClosesLater: boolean, dedentedByList: boolean, htmlLeadIndented: boolean): boolean {
+	return interruptsParagraphExceptBareMarker(line, htmlClosesLater, dedentedByList, htmlLeadIndented) || BARE_LIST_MARKER.test(line);
+}
+
+/**
+ * Every arm of `interruptsParagraph` but `BARE_LIST_MARKER`, for the one caller
+ * that must test that arm on a DIFFERENT string: `bracketClosesLater`, which tests
+ * it on the renderer's reading of a quoted line (`quoteContent`) and every other
+ * arm on the legacy peel (NRL-119 fix round 2, see `quoteContent`). Split out
+ * rather than parameterised so `interruptsParagraph`'s other callers keep exactly
+ * the answer they had.
+ */
+function interruptsParagraphExceptBareMarker(line: string, htmlClosesLater: boolean, dedentedByList: boolean, htmlLeadIndented: boolean): boolean {
 	return (
 		line.trim() === "" ||
 		FENCE.test(line) ||
@@ -3119,7 +3178,6 @@ function interruptsParagraph(line: string, htmlClosesLater: boolean, dedentedByL
 		SETEXT.test(line) ||
 		TABLE_ROW.test(line) ||
 		LIST_BULLET.test(line) ||
-		BARE_LIST_MARKER.test(line) ||
 		BLOCKQUOTE.test(line) ||
 		opensHiddenComment(line, htmlClosesLater, dedentedByList, htmlLeadIndented)
 	);
@@ -3352,7 +3410,14 @@ function bracketClosesLater(
 		// critique, the carry crossed a quoted math block where the plain twin
 		// aborts, silencing a line Obsidian displays as math source.
 		const line = peelQuotes(lines[n]!, op.quotes);
-		if (interruptsParagraph(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!) || opensMathBlock(lines, n, op.quotes)) return false;
+		// Every arm on the legacy peel, as base had it; the bare-marker arm (round 1's)
+		// on the renderer's reading of the line. See `quoteContent`.
+		if (
+			interruptsParagraphExceptBareMarker(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!) ||
+			BARE_LIST_MARKER.test(quoteContent(lines[n]!, op.quotes)) ||
+			opensMathBlock(lines, n, op.quotes)
+		)
+			return false;
 		if (containerInPlay && containerCarryStops(line, op.quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!), htmlLeadLazy[n]!)) return false;
 		if (containerInPlay && htmlLeadCode[n]!) return false;
 		const found = labelClose(line, 0, depth);

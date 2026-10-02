@@ -1864,6 +1864,99 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl119-link-label-across-bare-seven-paren", "a [x\n7)\nHIDDENE](dest.png) b", "a x 7) HIDDENE b"],
 		["guard-nrl119-image-label-across-bare-four-space-star", "a ![x\n    *\nHIDDENE](dest.png) b", "a x * HIDDENE b"],
 		["guard-nrl119-image-label-across-bare-tab-star", "a ![x\n\t*\nHIDDENE](dest.png) b", "a x * HIDDENE b"],
+		// NRL-119 FIX ROUND 2. Round 1's `BARE_LIST_MARKER` newly SPOKE an image or
+		// link DESTINATION (and image alt text) that base kept silent, when the bare
+		// marker sat on a quote continuation whose `>` is followed by a TAB: the label
+		// lookahead tested it on `peelQuotes`' output, whose `>\s?` eats the tab, while
+		// Obsidian's blockquote tokenizer strips ONE optional space after `>` and keeps
+		// `\t*` as tab-led lazy prose, so the image forms across it. Measured with
+		// Obsidian 1.13.7's WT/GT out of obsidian.asar (app.js sha256 8efbf581...9898):
+		// `> A ![xx` / `>\t*` / `> yy](zdestz.png) B.` renders `<blockquote><p>A <span
+		// class="internal-embed" src="zdestz.png" alt="xx\t*yy"></span> B.</p>`. On
+		// 9522c11 these spoke `"A [xx * yy](zdestz.png) B."`. The fix tests that ONE
+		// arm on the renderer's reading of the line (`quoteContent`) and leaves every
+		// other arm on the legacy peel, so a line with a tab, NBSP or CR after a `>`
+		// behaves exactly as on base. All eight RED on 9522c11 only.
+		["pin-nrl119-r2-quoted-image-across-tab-star", "> A ![xx\n>\t*\n> yy](zdestz.png) B.", "A xx * yy B."],
+		["pin-nrl119-r2-quoted-link-across-tab-star", "> A [xx\n>\t*\n> yy](zdestz.png) B.", "A xx * yy B."],
+		["pin-nrl119-r2-quoted-image-across-tab-plus", "> A ![xx\n>\t+\n> yy](zdestz.png) B.", "A xx + yy B."],
+		["pin-nrl119-r2-quoted-image-across-tab-one-dot", "> A ![xx\n>\t1.\n> yy](zdestz.png) B.", "A xx 1. yy B."],
+		["pin-nrl119-r2-quoted-link-across-tab-one-paren", "> A [xx\n>\t1)\n> yy](zdestz.png) B.", "A xx 1) yy B."],
+		["pin-nrl119-r2-nested-quote-image-across-tab-star", "> > A ![xx\n> >\t*\n> > yy](zdestz.png) B.", "A xx * yy B."],
+		["pin-nrl119-r2-indented-quote-image-across-tab-star", " > A ![xx\n >\t*\n > yy](zdestz.png) B.", "A xx * yy B."],
+		["pin-nrl119-r2-quoted-link-across-tab-one-dot-lazy-closer", "> A [xx\n>\t1.\nyy](zdestz.png) B.", "A xx 1. yy B."],
+		// Round 1's win that must survive: `>    *` (four spaces) leaves a three-space
+		// bare marker under the renderer's one-space peel, which really does interrupt
+		// (`<blockquote><p>A ![xx</p><ul><li>yy](zdestz.png) B.</li></ul>`). RED on base
+		// and on an arm whose content peel strips no space after `>`.
+		["pin-nrl119-r2-quoted-image-across-four-space-star", "> A ![xx\n>    *\n> yy](zdestz.png) B.", "A [xx * yy](zdestz.png) B."],
+		// GUARDS, every one with the fix's output EQUAL TO BASE, most of them RED on
+		// at least one rejected arm of this round: 9522c11 (r1), the
+		// first draft e3684fb (d1, the renderer's peel applied to every arm plus a
+		// partial-laziness rule, a lazy-line list stop, a per-line quoted-list
+		// de-indent and a code-opener refusal), or the second draft 40302f6 (d2, d1
+		// minus the de-indent, with an "old reading" for some openers). Two /critique
+		// passes and the round's census found the shapes; each draft newly spoke a
+		// destination or newly silenced displayed text in them.
+		// `> \t*`: the space is the optional one under every peel. RED on an arm that
+		// strips all whitespace after `>`.
+		["guard-nrl119-r2-quoted-image-across-space-tab-star", "> A ![xx\n> \t*\n> yy](zdestz.png) B.", "A xx * yy B."],
+		// Tab-after-`>` OPENERS (/critique 2, F1 and F3): RED on r1 and d2, or d1 and d2.
+		["guard-nrl119-r2-tab-after-quote-opener-across-tab-star", "> ZPZ\n>\tZAZ ![ZXZ\n>\t*\n> ZYZ](zdestz.png) ZBZ.", "ZPZ ZAZ ZXZ * ZYZ ZBZ."],
+		["guard-nrl119-r2-tab-nested-opener-across-tab-one-dot", "> ZPZ\n>\t> ZAZ ![ZXZ\n>\t1.\n> > ZYZ](zdestz.png) ZBZ.", "ZPZ ZAZ ZXZ 1. ZYZ ZBZ."],
+		["guard-nrl119-r2-space-tab-opener-across-tab-dash", ">\n> \tZAZ ![ZXZ\n>\t-\n> ZYZ](zdestz.png) ZBZ.", "ZAZ [ZXZ - ZYZ](zdestz.png) ZBZ."],
+		["guard-nrl119-r2-tab-nested-opener-tab-tab-closer", "> ZPZ\n>\t> ZAZ [ZXZ\n>\t\tZYZ](zdestz.png) ZBZ.", "ZPZ ZAZ ZXZ ZYZ ZBZ."],
+		["guard-nrl119-r2-opener-with-lone-cr", ">\t\rA ![xx\n>\t\ryy](zdestz.png) B.", "A xx yy B."],
+		["guard-nrl119-r2-quoted-code-opener-across-tab-dash", ">\tA ![ZXZ\n>\t-\n>\tZYZ](zdestz.png) ZBZ.", "A [ZXZ - ZYZ](zdestz.png) ZBZ."],
+		["guard-nrl119-r2-quoted-tab-continuation-still-carried", "> P\n>\tA ![ZXZ\n> ZYZ](zdestz.png) ZBZ.", "P A ZXZ ZYZ ZBZ."],
+		// A list inside a quote, and a quote inside a list (/critique 1 and 2): RED on
+		// d1, or d1 and d2.
+		["guard-nrl119-r2-quoted-task-item-equals-run-carried", "> - [ ] ZAZ [ZXZ\n>       ===\n>   ZYZ](zdestz.png) ZBZ.", "ZAZ ZXZ === ZYZ ZBZ."],
+		["guard-nrl119-r2-quoted-ordered-item-deep-star-carried", "> 1. ZAZ ![ZXZ\n>       *\n>   ZYZ](zdestz.png) ZBZ.", "ZAZ ZXZ * ZYZ ZBZ."],
+		["guard-nrl119-r2-quoted-item-min-indent-equals-run-carried", ">  - ZAZ ![ZXZ\n>     ===\n>     ZYZ](zdestz.png) ZBZ.", "ZAZ ZXZ === ZYZ ZBZ."],
+		["guard-nrl119-r2-quote-list-quote-chain-carried", "> - > ZAZ [ZXZ\n>   > ZQZ\n>     ZYZ](zdestz.png) ZBZ.", "ZAZ ZXZ ZQZ ZYZ ZBZ."],
+		["guard-nrl119-r2-list-quote-list-opener-across-tab-dash", "- > - ZAZ ![ZXZ\n  >\t-\n  > ZYZ](zdestz.png) ZBZ.", "ZAZ [ZXZ - ZYZ](zdestz.png) ZBZ."],
+		["guard-nrl119-r2-quoted-list-tab-dash", "> - A ![ZXZ\n>\t   -\n>\t  ZYZ](zdestz.png) ZBZ.", "A [ZXZ - ZYZ](zdestz.png) ZBZ."],
+		["guard-nrl119-r2-nbsp-after-quote-in-quoted-ordered-item", "> 10. ZAZ [ZXZ\n   >\u00a0*\n  >      ZYZ](zdestz.png) ZBZ.", "ZAZ ZXZ * ZYZ ZBZ."],
+		// Lazy and partially lazy lines, NBSP and lone CR (/critique 1, the census): RED
+		// on r1, d1 or d2 as recorded in ADR 0025; the NBSP-led lazy line was a
+		// round-1 leak against base that Verify's corpora never generated.
+		["guard-nrl119-r2-partially-lazy-tab-equals", "> > A ![ZXZ\n>\t=\n> > ZYZ](zdestz.png) ZBZ.", "A [ZXZ = ZYZ](zdestz.png) ZBZ."],
+		["guard-nrl119-r2-lazy-space-tab-star-percent-closer", "> A ![ZXZ %%\n \t*\n>\t%% ZYZ](zdestz.png) ZBZ.", "A [ZXZ %% *"],
+		["guard-nrl119-r2-lazy-space-tab-seven-dot-is-text", "> A [ZXZ\n \t7.\n> ZYZ](zdestz.png) ZBZ.", "A ZXZ 7. ZYZ ZBZ."],
+		["guard-nrl119-r2-nbsp-led-lazy-line-is-text", "> > ZPZ A ![xx\n\u00a0>*\n> > yy](zdestz.png) B.", "ZPZ A xx * yy B."],
+		["guard-nrl119-r2-lone-cr-after-quote-is-a-line-ending", "> ZPZ A ![xx\n>\r-\n> yy](zdestz.png) B.", "ZPZ A [xx - yy](zdestz.png) B."],
+		["guard-nrl119-r2-lazy-mixed-lead-inline-tag", "> ZAZ [ZXZ\n \t<em>ZQZ</em>\n> ZYZ](zdestz.png) ZBZ.", "ZAZ ZXZ ZQZ ZYZ ZBZ."],
+		// RESIDUALS, identical on base and the fix, where the renderer disagrees.
+		// Each was CLOSED by d1 or d2 and is given up here, because closing it needs
+		// the renderer's peel on the pre-existing arms and that, measured three times
+		// this round, unmasks other base defects (NRL-153, NRL-114). Change these on
+		// purpose when that work lands.
+		// Destination spoken although the renderer forms the image or link:
+		["pin-nrl119-r2-quoted-image-across-tab-dash-residual", "> A ![xx\n>\t-\n> yy](zdestz.png) B.", "A [xx - yy](zdestz.png) B."],
+		["pin-nrl119-r2-quoted-link-across-tab-dash-residual", "> A [xx\n>\t-\n> yy](zdestz.png) B.", "A [xx - yy](zdestz.png) B."],
+		["pin-nrl119-r2-quoted-link-across-tab-equals-run-residual", "> A [xx\n>\t===\n> yy](zdestz.png) B.", "A [xx === yy](zdestz.png) B."],
+		["pin-nrl119-r2-quoted-link-across-tab-div-residual", "> A [xx\n>\t<div>\n> yy](zdestz.png) B.", "A [xx yy](zdestz.png) B."],
+		["pin-nrl119-r2-quoted-tab-continuation-across-tab-equals-residual", "> P\n>\tA [ZXZ\n>\t=\n> ZYZ](zdestz.png) ZBZ.", "P A [ZXZ = ZYZ](zdestz.png) ZBZ."],
+		["pin-nrl119-r2-nbsp-after-quote-dash-residual", "> ZPZ A ![xx\n>\u00a0-\n> yy](zdestz.png) B.", "ZPZ A [xx - yy](zdestz.png) B."],
+		["pin-nrl119-r2-deep-indented-inner-marker-glyph-residual", "> > A [ZXZ\n>     > foo\n> > ZYZ](zdestz.png) ZBZ.", "A ZXZ > foo ZYZ ZBZ."],
+		// Displayed text silenced (the label is carried where the renderer ends it):
+		// the code opener, the inner quote ended by a lazy tab line, a lazy mixed-lead
+		// marker, and a quoted list item's de-indented marker (the last was right on
+		// 9522c11, whose tab-eating peel stood in for the item's de-indent).
+		["pin-nrl119-r2-quoted-code-opener-residual", ">\tA ![ZXZ\n>\tZYZ](zdestz.png) ZBZ.", "A ZXZ ZYZ ZBZ."],
+		["pin-nrl119-r2-quoted-code-opener-after-blank-quote-line-residual", ">\n>\tA [ZXZ\n>\tZYZ](zdestz.png) ZBZ.", "A ZXZ ZYZ ZBZ."],
+		["pin-nrl119-r2-partially-lazy-indented-line-residual", "> > A [ZXZ\n>\tfoo\n> > ZYZ](zdestz.png) ZBZ.", "A ZXZ foo ZYZ ZBZ."],
+		["pin-nrl119-r2-lazy-space-tab-star-residual", "> A [ZXZ\n \t*\n> ZYZ](zdestz.png) ZBZ.", "A ZXZ * ZYZ ZBZ."],
+		["pin-nrl119-r2-quoted-list-tab-star-residual", "> - A [ZXZ\n>\t*\n>  ZYZ](zdestz.png) ZBZ.", "A ZXZ * ZYZ ZBZ."],
+		["pin-nrl119-r2-quoted-list-five-space-dash-residual", "> - A [ZXZ\n>     -\n>   ZYZ](zdestz.png) ZBZ.", "A ZXZ - ZYZ ZBZ."],
+		// TRIPWIRE, identical on base, 9522c11 and the fix, and a KNOWN LEAK: a quote
+		// continuation `>\t* x` (marker WITH content). `LIST_BULLET`'s any-indent
+		// `^\s*` stops on it where the renderer keeps it as tab-led lazy prose, so the
+		// destination is spoken. That arm is shared with the `listDedented` pass and
+		// NRL-93 measured a regression from touching it, so it is its own ticket,
+		// NRL-161. Change this on purpose when it closes.
+		["pin-nrl119-r2-quoted-image-across-tab-star-with-content-still-leaks", "> A ![xx\n>\t* x\n> yy](zdestz.png) B.", "A [xx x yy](zdestz.png) B."],
 		// TRIPWIRE, green on base, on the pre-round head and on the fix. A quoted
 		// code span whose closer sits on a LAZY continuation line (no `>`) is not
 		// carried, because `codeSpanClosesLater` tests the raw opener line and
