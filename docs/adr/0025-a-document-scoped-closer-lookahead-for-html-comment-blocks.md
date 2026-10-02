@@ -1299,6 +1299,41 @@ each measured rather than argued:
 2. **Lead at most three SPACES.** A tab or four columns is a lazy continuation or
    indented code, never a setext content line. The `^\s*<!--` arm newly leaked
    **8,640** census cells.
+   **Corrected by NRL-155, amended in place rather than deleted: "a tab is never a
+   setext content line" is FALSE for a lead of one to three spaces and then a
+   tab.** Module 134 (indented code) is literal - four spaces or one tab at offset
+   0, with no tab-stop expansion - so ` \t<!--` is not indented code to the
+   renderer and reaches setextHeading: ` \t<!--` / `===` / `HIDDENA` / `more` renders
+   `<h1 data-heading="<!--">\t&#x3C;!--</h1><p>HIDDENA<br>more</p>` (executed
+   parser, app.js sha256 `8efbf581...9898`). The cap was right only for a lone tab
+   and for four or more spaces. On main the error was masked at document start and
+   after a blank line, because our own `INDENTED_CODE` (`/^(?: {4}| {0,3}\t)/`) also
+   wrongly takes ` \t` (NRL-113's defect); it was live directly after an ATX
+   heading, a thematic break or a fence closer, where `INDENTED_CODE` needs
+   `wasBlank`, so `# Head` / ` \t<!--` / `===` / `HIDDENA` / `more` hid to end of note
+   (12 core cells, red on main `faf55a3`). Once NRL-113 narrows `INDENTED_CODE`, the
+   same error loses **20,480 of 99,840** sweep cells (13 leads x 5 underlines x 3
+   positions x 512 masks); with the correction those 20,480 are 0.
+   The plain arm now reads `PLAIN_SETEXT_HTML_OPENER` (`/^[ \t]*<!--/`) and refuses
+   only when `MODULE134_INDENTED_CODE` (`/^(?: {4}|\t)/`, the renderer's literal rule,
+   deliberately not our `INDENTED_CODE`) does not match. A **tab-bearing** lead
+   (`/^ *\t/`) additionally needs BLOCK position, because module 8607 counts the
+   first tab of a lead as four columns and continues the paragraph without walking
+   `interruptParagraph`: `Intro.` / ` \t<!--` / `===` / `HIDDENA` / `-->` is one `<p>`
+   whose inline comment hides HIDDENA. Block position is an option-independent
+   allowlist on the raw previous line (first line, a SPACES-only blank line, or a
+   spaces-capped ATX heading, thematic break or fence line), not extractChunks'
+   `wasPara`, whose skip paths reset paragraph state (the `wasPara` arm newly
+   spoke HIDDEN in 3,584 predecessor-census cells, `| a |` under skipTables among
+   them), and not the shared `HEADING` / `HR` / `FENCE`, which accept a tab-led `# H`
+   or `***` that is a lazy continuation (1,792 cells). A whitespace line holding a
+   tab is not blank to module 8607, so it is not on the list either (1,792 cells on
+   the NRL-113 arm). Spaces-only leads keep the original rule exactly. The QUOTE
+   and LIST arms stay spaces-only, fail-closed: `> \t<!--` is code inside the quote
+   only through module 6234's one-character peel (NRL-114), and `- \t<!--` is code
+   in the item. `TERM2_MATH` was checked for the same lead error and needs no
+   change: ` \t$$` renders a paragraph. Evidence is bare-Node against the executed
+   reading-view parser; **NOT VERIFIED IN OBSIDIAN**.
 3. **Not inside a raw HTML block.** `rawHtml` state in the pass: a `<div>`,
    `<span>`, `<script>`, `<?` or `<!X` block emits the later `<!--` raw. Without it
    **73,536** cells newly leaked (`nohtmlstate` arm); without it and the list veto
