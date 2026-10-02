@@ -3042,13 +3042,178 @@ rediscover them:
   crude text scan that counts a `-->` inside a fence, inside frontmatter or inside another
   comment (measured: neither newly leaks nor newly loses), and a tab-indented `<!--` in a
   fresh-block position never reaches the predicate because indented-code handling eats the line
-  first - NRL-93's shape, not shared. That second one is a **disclosure** rather than prose
-  loss, which is worth saying because every other residual on this list goes the other way:
+  first - NRL-93's shape, not shared. **The second one was recorded as a disclosure and is NOT
+  one; NRL-113 disproved it by RUNNING the parser rather than reading it, and the correction
+  matters more than the claim did.** What this paragraph used to say was that
   `Before x.` / blank / `\t<!--` / `HIDDEN1` / `more` speaks `"Before x. HIDDEN1 more"` on
-  **base and fix alike, 512 of 512 cells each** (measured at ship review), while module 8776's
-  skip loop accepts `\t`, so Obsidian opens a block there and hides `HIDDEN1`. Narrowing the
-  `<!--` predicate would not help - the line never reaches it - so it is NRL-93's
-  indented-code question and not a second one. The oracle also surfaced a **pre-existing `%%`-in-heading
+  **base and fix alike, 512 of 512 cells each** - that part is right and still measures - "while
+  module 8776's skip loop accepts `\t`, so Obsidian opens a block there and hides `HIDDEN1`",
+  which is a true premise with a false conclusion. `blockMethods`, produced by running the real
+  construction out of `obsidian.asar`, puts `indentedCode` at index **2** and `html` at index
+  **11**, so module 134 consumes a fresh-block tab-led line and module 8776 never gets to decide
+  it. The real rendered HTML is `<p>Before x.</p>` + `<pre><code>&#x3C;!--</code></pre>` +
+  `<p>HIDDEN1<br>more</p>` - paragraph, code, paragraph - so `HIDDEN1` and `more` are
+  **DISPLAYED** and speaking them is renderer-faithful in **both** positions of
+  `skipCodeBlocks`. Pinned by `guard-nrl113-fresh-block-tab-html-is-indented-code` and its
+  `-spoken` twin so it is never "fixed" back.
+
+  **The real disclosure was one lead character away, and NRL-113 closed it.** `INDENTED_CODE`
+  was `/^(?: {4}| {0,3}\t)/`, accepting one to three spaces then a tab on CommonMark's tab-stop
+  reasoning; module 134 does **no tab-stop expansion at all** - four literal spaces or one
+  literal tab at offset 0, the same arm for opener and continuation. So a ` \t`, `  \t` or
+  `   \t` lead is not indented code for the renderer, `html` is reached, the comment body is
+  hidden, and we spoke it. The constant is now `/^(?: {4}|\t)/`, narrowed once and read by
+  every site that asks that question - **three at the ticket's own base and SIX at the base it
+  landed on**, which is the single most important thing to know about this change (see the
+  rebase paragraph below). A fourth leaking lead, ` \t `, was found by Verify, and a fifth shape,
+  a whitespace line holding a tab followed by a ` \t<!--`, by the rebase.
+  **EVERY FIGURE BELOW IS RE-MEASURED AGAINST THE BASE THIS LANDED ON, and the superseded set
+  measured against `079cf0c` is deleted rather than averaged in** - the two corpora differ by
+  two positions, so the numbers are not comparable and quoting the old ones is the recorded
+  corpus-blindness failure. Every verdict comes from real rendered HTML out of the executed
+  Obsidian 1.13.7 parser and renderer. On a corpus of 3 constructs x 9 positions x 13 leads x
+  512 content-key masks = **179,712 cells per arm**, class A (text the renderer hides, 75,264
+  cells) fell from **16,384 leaking to 0** with **0 newly leaking**, class B (text it displays,
+  104,448 cells) held at **29,696 lost on both arms with 0 newly lost**, and **26,624 cells
+  changed output with 153,088 byte-identical**. On a container-carry corpus of 2 kinds x 8
+  families x 12 leads x 512 = **98,304 cells**, the same lead made us speak an image or link
+  destination in **28,672 cells on base and 20,480 on the fix - 8,192 closed, 0 newly** - with
+  **90,112 cells byte-identical on both arms** rather than merely equal in leak count, and the
+  renderer confirming `src`/`href` is an ATTRIBUTE and never a text leaf. The 20,480 that remain
+  are the pre-existing NRL-88/NRL-98 roots, identical on both arms. ADR 0019's
+  deliberately-literal pair inside a SPOKEN inline code span is kept as its own bucket and is
+  **6,656 = 6,656 over 15,360 cells with 0 differing**. `containerCarryStops`,
+  `interruptsParagraph`, `codeSpanClosesLater`, `bracketClosesLater`, `labelClose`,
+  `opensMathBlock`, `opensObsidianBlock`, `opensHtmlBlock`, `endsTerm2Scan` and `verbatimLine`
+  are all **byte-identical** across the diff by sha256 of each brace-matched body, as are
+  `containerPrefix`, `isSetextContentLine`, `inSetextBlockPosition`, `rawHtmlBlockEnd`,
+  `flowDepthDelta`, `inlineContainerClose`, `wikiTargetClose` and `extractChunks` itself - 18
+  bodies, with the extractor shown non-vacuous by injecting a change into two of them. So
+  `interruptsParagraph`'s answer set does not move and nothing downstream needs re-measuring on
+  that account. **Two traps in that extractor cost time twice and are worth not re-learning**:
+  it must skip regex literals (`flowDepthDelta`'s 218-byte body holds
+  `/"(?:[^"\\]|\\.)*"|'[^']*'/g` and nearby `"["`/`"{"` literals), and it must skip an object
+  RETURN TYPE annotation, or `labelClose` silently hashes its 32-byte `{ close: number; depth:
+  number }` instead of its 427-byte body and `containerPrefix` hashes a 99-byte one instead of
+  7,124 bytes - every comparison then green for the wrong reason. Disambiguate structurally: a
+  matched `{...}` group whose next non-whitespace character is another `{` was an annotation. `HTML_BLOCK_OPEN`'s own `^ {0,3}<` divergence from module 8776's uncapped
+  space-and-tab loop is **recorded and deliberately not widened** here, being pre-existing and
+  fail-closed. **ONE RESIDUAL IS A NEW DISCLOSURE AND MUST TRAVEL WITH THE NUMBERS ABOVE**: a
+  1-3-space-plus-tab-led **link reference definition** used to be eaten as indented code and now
+  reaches the `LINK_REF_DEF` branch, whose own lead is `^ {0,3}\[` with the same CommonMark
+  assumption, so it declines and the line falls through to prose and speaks its destination -
+  **2,560 of 46,080 cells**, found by the fuzz and invisible to both structured corpora. It is a
+  new member of ADR 0018's decision-Q8 fall-through class and **not a new class**: the same shape
+  already leaks 256 of each row's 512 cells on base at `skipCodeBlocks: false`, and a lead-free
+  two-definition control leaks **512 of 512 on both arms**. Pinned as a tripwire
+  (`pin-nrl113-space-tab-link-ref-def-leaks-destination` plus its control), not fixed, because
+  widening a second predicate in the same diff is what makes a measured result unattributable.
+
+  **SHIP REVIEW FOUND THAT THE CONSTRUCT AXIS WAS THE CORPUS'S REAL BLIND SPOT, and three more
+  residuals came out of widening it.** The measured corpus had three constructs - `<!--`, `%%`
+  and the image/link label - while the branch being narrowed carries the comment "Checked before
+  fences, rules, math and tables", so every construct it preempts was newly reachable with no
+  cell anywhere. Re-measured against the same harness over **20 constructs x 10 leads x 4 option
+  modes = 800 cells**, renderer verdicts from real rendered HTML: **200 cells move**,
+  `sourceIndex` lockstep holds at **0 failures in all four properties on BOTH arms**, and the
+  large majority of the 200 are the narrowing agreeing with the renderer where base did not - a
+  ` \t` lead really does open a **fence** (so its body is code and the code key governs it, where
+  base ate the fence line and then spoke the body as prose with that key ON), a **heading**, a
+  **bullet**, a **blockquote**, a **callout** whose title base silenced whole, and an
+  **unterminated `$$`** whose literal the renderer displays. Twelve of those rows are pinned and
+  each was measured RED on base and green on the fix. **Three move the other way, all in the
+  prose-loss or markup-leak direction, none a disclosure, and each a newly-reachable member of a
+  divergence in a DIFFERENT predicate.** `TABLE_ROW` is `/^\s*\|/`, so a tab-led pipe line is a
+  table row for us and `skipTables` drops it where the renderer makes it a paragraph - reachable
+  only at `skipCodeBlocks: false`, since at the default both arms are silent.
+  `opensMathBlock`'s `trimStart()` accepts a tab where the renderer's `$$` predicate skips
+  charCode 32 only, the divergence recorded below as NRL-93's family, so a ` \t$$` block says
+  "equation" where the renderer displays ` \t$$` and `a+b` as text. And `HEADING`'s and
+  `BLOCKQUOTE`'s `\s{0,3}` caps are exceeded by four whitespace characters, so a `   \t# H` or
+  `   \t> q` line speaks its `#` or `>` aloud. All three are **pinned as tripwires, not fixed**,
+  on the same reasoning as the link-reference definition: `TABLE_ROW` and `opensMathBlock` are
+  read elsewhere and moving either would move `interruptsParagraph`'s answer set, which this diff
+  deliberately leaves byte-identical. Tracked as **NRL-147**. The lesson is the reusable part:
+  **a construct axis is an axis, and the branch's own comment named the constructs it was
+  missing.**
+
+  **THE REBASE IS THE OTHER HALF OF THIS TICKET AND IT TOOK THREE TRIES, each blocked by a
+  DIFFERENT ticket landing on the same predicate. Anyone touching `INDENTED_CODE` should read
+  this before anything else, because the lesson is not about tabs.** NRL-113 was measured,
+  reviewed and verified against `079cf0c`, where the constant had exactly **three** read sites.
+  By the time it merged there were **six**, and two separate attempts to land it produced a
+  measured regression that neither the ticket nor its own 129,024-cell corpus could see.
+
+  **Attempt 1 blocked on NRL-120.** `HTML_OPENER_AT_START = /^ {0,3}<!--/` implemented ADR 0025
+  decision 2's claim that "a tab or four columns is a lazy continuation or indented code, never a
+  setext content line", which is FALSE for exactly this lead class - the executed renderer makes
+  `<h1 data-heading="<!--">\t&#x3C;!--</h1>` out of ` \t<!--` over an exact underline. With
+  NRL-113 narrowing `INDENTED_CODE` the line stopped being code and started opening an
+  unterminated comment block over displayed text: **20,480 cells of NEW PROSE LOSS** on a
+  99,840-cell sweep. **NRL-155 (`b0bed1b`, PR #201) fixed it** by giving the plain arm of
+  `isSetextContentLine` `PLAIN_SETEXT_HTML_OPENER` plus `MODULE134_INDENTED_CODE` - NRL-113's own
+  rule, written as a separate constant on purpose - and by re-keying the setext pre-pass's
+  raw-HTML mask onto `INDENTED_CODE` itself so it follows a narrowing. Re-measured on the same
+  99,840-cell sweep (13 leads x 5 underline forms x 3 positions x 512 masks): **0 newly lost and
+  0 newly leaking**, 18,432 cells moved, 81,408 byte-identical, 40 of 195 rows moving and every
+  control row moving 0. The worked example that was losing a note,
+  `Intro prose.` / blank / ` \t<!--` / `---` / `HIDDENA` / `more`, went from `"Intro prose."` on
+  the blocked arm to `"Intro prose. <!-- HIDDENA more"`, which is what the renderer displays.
+
+  **Attempt 2 blocked on NRL-131, and this one is the warning.** NRL-131 added two read sites
+  inside `containerPrefix` and said so in as many words: "`INDENTED_CODE` is reused deliberately
+  rather than a hand-rolled 'four or more, or a tab': it is this file's one definition of the
+  threshold." But it tested the **list marker's own trailing whitespace** minus one character,
+  which asks a DIFFERENT question from module 134's rule at offset 0 - and the renderer answers
+  the two differently. Narrowing therefore un-fired NRL-131's stop and reproduced the exact
+  inversion its comment warns about: `-  \t> %%` / `PHIDDEN` / `%%` / `PVISIBLE` renders as
+  `<li><pre><code>> %%</code></pre>PHIDDEN</li>`, the base spoke `"> %% PHIDDEN"` faithfully, and
+  the narrowed arm spoke `"PVISIBLE"` - **author-hidden text spoken and displayed text dropped**,
+  measured at **12,288 newly-leaking and 24,576 newly-lost cells** on a 55,296-cell corpus and
+  reproduced on a second, independently built 250,880-cell one. **The repo's own suite was blind
+  to it**: NRL-131's fixtures cover `- \t>`, `-  >`, `-    >` and `-     >` and **no
+  2-to-4-space-then-tab lead at all**, so `npm test` was green on that arm but for three
+  unrelated checks. **NRL-116 (`efcf5cc`, PR #200) closed it** by relocating both tests from the
+  marker's trailing whitespace onto the REMAINING BODY after a bounded `PEEL_LEAD`, which is
+  module 134's own question again. Re-measured there: **0 cells moved** at either site over
+  98,304 + 250,880 + 55,296 cells. The narrowing is correct at all six sites on this base, each
+  checked individually, and the NRL-155 pre-pass mask moves 4,608 of 13,824 cells with **0 newly
+  leaking and 0 newly lost**.
+
+  **The reusable lesson is not "re-measure after a rebase", it is narrower and sharper: a shared
+  constant is only shared while every reader is asking the same question.** Three tickets reused
+  this one inside three weeks; two of them were asking something else, and in both cases the
+  code said "deliberately reused, this file's one definition of the threshold". `MODULE134_INDENTED_CODE`
+  now holds the identical pattern beside it and stays separate for exactly that reason.
+
+  **Three residual classes travel with the figures above and none is prose loss.** The
+  heading-literal sentinel moves **5,120 cells each way** on a 166,400-cell corpus - recovered at
+  `skipHeadings: false`, dropped at `skipHeadings: true` - and the split is **5,120 / 0 and
+  0 / 5,120** by that one key, so it is the user's own content exclusion newly reaching a line the
+  renderer newly (and correctly) makes a heading, the same shape as ADR 0008's `speakImageAlt`
+  class. The fuzz (4,000 notes x 4 masks, with tabs, multi-space leads, 1-3-space-plus-tab leads,
+  container prefixes AND setext underlines in the alphabet - the underline rows being the axis
+  whose absence caused attempt 1's block) reports **0 newly leaking, 0 `sourceIndex` failures, 9
+  newly lost and 41 newly-spoken destinations**, and both of the latter were run down cell by
+  cell: all **9** sit at `skipCodeBlocks: true` with **0** at false and the renderer puts the
+  sentinel inside `<pre><code>` in all three notes (the NRL-147 fence row), and the **41** split
+  **15** renderer-faithful recoveries of literal `](dest)` text against **26** of the declared
+  NRL-146 link-reference-definition class, with **0 undeclared**. The fuzz is shown ABLE TO FAIL
+  in both directions: restoring `{0,3}\t` gives 0 against base, and over-narrowing to `/^ {4}/`
+  gives 24 newly lost and 23 new destinations against the fix. And **three pre-existing fixtures
+  were replaced in place** rather than the "zero replacements" the ticket predicted -
+  `guard-nrl155-doc-start-tab-lead`, `guard-nrl155-after-blank-tab-lead` and
+  `pin-nrl155-tab-whitespace-line-is-not-blank` - each of which NRL-155 had already labelled a
+  TRIPWIRE that "changes on purpose" when NRL-113 lands, two of them to the exact strings NRL-155
+  predicted. The third moves in the CLOSING direction and is a **fifth** leaking lead class shut
+  by this change: a whitespace line holding a tab is not blank to module 8607, so
+  `Intro.` / ` \t ` / ` \t<!--` / `===` / `HIDDENA` / `--> t.` is one paragraph whose inline
+  comment hides HIDDENA, and we used to speak it.
+
+  **NOT VERIFIED IN A LIVE OBSIDIAN** - no deploy and no CDP session - and **reading-view path
+  only**: `WT`/`GT` is the markdown-to-HTML pipeline and Live Preview is separate CM6 code that
+  no ticket in this family has ever read. **R-M08 and R-M09 are NOT met and the `2 of 16` MUST
+  headline count does not move**; this closes one leak in each. The oracle also surfaced a **pre-existing `%%`-in-heading
   divergence** (`# %% off` / `ZHZ` / `%% after ZPZ.`), identical on both sides, pinned as
   `heading-tracking`, **no ticket filed**. **`interruptsParagraph`'s answer set changed, so
   whichever of NRL-74 and NRL-88 merges second must re-measure NRL-88's five roots**; they are

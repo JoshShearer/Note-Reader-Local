@@ -3,7 +3,8 @@
 - Status: accepted
 - Date: 2026-09-29
 - Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44, NRL-64, NRL-74 and
-  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74, NRL-95, NRL-93 and NRL-116
+  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74, NRL-95, NRL-93, NRL-116
+  and NRL-113
 
 ## Context
 
@@ -363,6 +364,41 @@ evidence, not a live Obsidian reading or highlighting observation.
    8776's skip loop is `(C === "\t" || C === " ")`, so Obsidian really does
    accept a tab before `<!--`. The two predicates answer different questions and
    must not be merged (D-73-4, and NRL-66's note about two scans).
+
+   **NRL-113 AMENDMENT (2026-10-01).** The paragraph above is right and gains a
+   corollary, and the `opensHtmlBlock` sentence is right as stated and gains a
+   caveat.
+
+   The corollary. Module 134's rule is **literal**: four literal spaces, or one
+   literal tab, at offset 0, with **no tab-stop expansion anywhere**, and the
+   tokenizer is a single loop so the continuation arm is the opener arm. It
+   follows that a lead of **one to three spaces then a tab** is *not* indented
+   code for Obsidian, where CommonMark's tab-stop rule would make it column
+   four. `INDENTED_CODE` carried CommonMark's rule and was narrowed from
+   `/^(?: {4}| {0,3}\t)/` to `/^(?: {4}|\t)/`, once, read by all three sites.
+   Consequence for **this** predicate: such a line now DOES reach it, and term
+   A's charCode-32-only scan declines it, which is right for the renderer's own
+   reason - the `%%` skip loop is spaces only - so the line is prose carrying a
+   literal `%%`, which is what the renderer displays. Measured as prose recovery
+   rather than assumed: 3,072 of 179,712 corpus cells. **No term of
+   `opensObsidianBlock` changed** and its body is byte-identical across the diff.
+
+   The caveat. Module 8776's tab tolerance is real but it **never decides a
+   fresh-block line**, because `blockMethods` reaches `indentedCode` (index 2)
+   before `html` (index 11). So the sentence "Obsidian really does accept a tab
+   before `<!--`" must not be read as "a fresh-block `\t<!--` opens an HTML
+   comment block": it does not, it is code, rendered
+   `<pre><code>&#x3C;!--</code></pre>` with the following lines DISPLAYED as a
+   paragraph. `AGENTS.md`, `srs.md:328` and `docs/adr/0025` all drew that wrong
+   conclusion from this true premise and are corrected.
+
+   The evidence standing is **stronger** than the paragraph above: NRL-113 did
+   not transcribe module 134, it **executed** Obsidian 1.13.7's own `WT` parser
+   and `GT` HTML renderer out of the same `app.js` (sha256
+   `8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898`) and took
+   every verdict from real rendered HTML. Still **NOT observed live**, and
+   **reading-view path only** - `WT`/`GT` is the markdown-to-HTML pipeline and
+   Live Preview's CM6 code has never been read by any ticket in this family.
 
    All of this was read off the installed parser's own source - `app.js` sha256
    `8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898`,
