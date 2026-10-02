@@ -2921,7 +2921,38 @@ rediscover them:
   line" and omitted the same-line stage; corrected at ship review by re-reading module 8776,
   and it matters - it is what makes `<!--x--> prose <!--` a one-line block with the next line
   displayed.) So the line-start term is the renderer's own rule, and our `.trim()` is
-  **correct** here where it is wrong for `%%` (NRL-93 is not shared). The second term is the
+  **correct** here where it is wrong for `%%` (NRL-93 is not shared). **NRL-115 corrected
+  half of that sentence** (ADR 0025's dated NRL-115 section). `.trim()` is right for an
+  UNINDENTED `<!--`, which is what NRL-74 fixed, but module 8776 is never REACHED for a
+  paragraph continuation led by a tab or four columns (module 8607's lazy branch skips the
+  interrupt check) or for a fresh block inside a quote or list item led by a tab or four
+  spaces (indented code), both judged after the renderer's container dedent. So the `<!--`
+  and `%%` defects are different defects that DO share the module 8607 root.
+  `opensHtmlBlock` takes a fifth argument from a per-line `rendererLeads` pass and refuses
+  term 1 only; NRL-120's `setextContent` still gates both terms, because a setext content
+  line ends the paragraph and a lazy line does not. **Its first version (PR #169) was
+  blocked at Verify for a disclosure** the model made by reading a setext underline as
+  paragraph text, so a ` \t<!--` straight after `PROSEP` / `===` was claimed lazy and its
+  comment body spoken; `=`, `==`, `-` and `--` leak the same way. The rework ends the
+  paragraph at an underline in two ordered tiers (the exact one-content-line heading before
+  the interrupt test, any other underline-shaped line as `unknown` after it), and a broad
+  test placed before the interrupt test was measured to leak 45,056 sentinel-cells through
+  `>    -` list items. Measured on base `2c4e2ca`: the ticket's 6,656 prose-loss cells go to
+  0; 0 newly disclosing and 0 newly lost over a 1,232,896-cell position census and a
+  5,160,960-cell after-setext census; every newly moved cell in NRL-120's structural census
+  (10,640 + 72), a lookahead probe (17,408, all image alt text under `speakImageAlt`) and a
+  fresh-seed fuzz (6 + 22) reproduces on base with the declined `<!--` defused. Known misses:
+  underline-shaped lines that are not the exact one-line heading keep base's hiding, and
+  top-level fresh blocks stay NRL-113's. **Rework r3 (on `9dadbea`) closed the ship
+  critique's three blockers and four more the fuzz found** (ADR 0025's r3 section): F1, the
+  label carry's HTML-tag stop is skipped on a LAZY indented line only; F2, a lazy `<!--`
+  keeps term 1 when a `-->` lies later in the walker's lazy paragraph; F3, the walker is a
+  stack capped at 32 container levels, beyond which it keeps base's answer (fail-closed,
+  prose loss retained); plus tab-free thematic breaks, ambiguous-line setext counting, and
+  an unwalked uncertain list tail. NRL-155's (iv) is closed. The fuzz found four
+  disclosures the plan's corpora did not, so a clean census is still not evidence by itself.
+  **NOT VERIFIED IN OBSIDIAN**, reading-view parser
+  only, Live Preview not examined. The second term is the
   renderer's **inline** path instead (module 4839's `.T`,
   `<!--(?:-?[^>-])(?:-?[^-])*-->`), which requires a closer - and that path is
   **paragraph-scoped** where NRL-74's was document-scoped.
