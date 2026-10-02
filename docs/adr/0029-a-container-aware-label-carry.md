@@ -456,3 +456,21 @@ path being `removeIndentation`; and module 9405's `]` rule requires `(` ONLY, th
 **That execution is still not the application.** It is Obsidian's READING-VIEW
 remark parser; Live Preview uses a separate CodeMirror/Lezer parser nobody read,
 and whether it agrees on any of these shapes is unknown.
+
+## Amendment, NRL-119 fix round 2: one arm reads the renderer's quote content
+
+Decision 2's budget rule and `peelQuotes` are UNCHANGED. One arm is read differently: the
+label lookahead tests round 1's `BARE_LIST_MARKER` on `quoteContent`, the renderer's
+reading of the line (spaces and tabs, the `>`, ONE optional space, per level), and every
+other interrupter on `peelQuotes` as before. `peelQuotes`' `>\s?` eats a tab after the `>`
+that Obsidian's blockquote tokenizer keeps as content, so `>\t*` reached the term as a
+bare `*` and stopped a carry across a line the renderer keeps as lazy prose, speaking the
+destination (Verify, 53,248 cells).
+
+Applying the renderer's peel to every arm, and modelling partial laziness and quoted-list
+de-indent with it, was built and rejected by measurement three times; ADR 0025's "NRL-119
+fix round 2" section has the evidence. "A shallower-but-still-quoted continuation peels
+what it has and is accepted" is therefore still how this lookahead behaves, and is known
+to be wrong for a partially lazy indented line (`> > A [ZXZ` / `>\tfoo`), pinned as a
+residual. **NOT VERIFIED IN OBSIDIAN**; rule 11 applies. R-M09 is NOT met and the `2 of 16`
+count does not move.
