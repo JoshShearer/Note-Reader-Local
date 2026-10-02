@@ -10,6 +10,9 @@ import {
 } from "../src/text/segment.ts";
 import { findWords } from "../src/audio/words.ts";
 import type { SpeechChunk } from "../src/audio/types.ts";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Mirrors DEFAULT_SETTINGS, so a fixture written without overrides asserts what
 // a user with untouched settings actually hears. `locale` is not a setting: it
@@ -2021,12 +2024,16 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl111-ordered-seven-paren-not-an-interrupter", "Prose <!--\n7) HIDDENL\nmore -->", "Prose"],
 		["guard-nrl111-ordered-zero-padded-paren-not-an-interrupter", "Prose <!--\n01) HIDDENL\nmore -->", "Prose"],
 		["guard-nrl95-bullet-needs-a-space", "Prose <!--\n-x HIDDENL\nmore -->", "Prose"],
-		// A bullet INSIDE the quote is still invisible to us, because TERM2_LIST
-		// is anchored and the `>` prefix is never peeled before the scan. Obsidian
-		// peels it and its list DOES interrupt, so it displays HIDDENL and we hide
-		// it. Fail-closed, identical on base, same NRL-88 root-1 class as
-		// pin-nrl95-quote-starting-after-opener-still-hidden above. Tripwire.
-		["pin-nrl95-bullet-inside-quote-still-hidden", "> Prose <!--\n> - HIDDENL\n> more -->", "Prose"],
+		// CLOSED BY NRL-114, replaced in place keeping its name (the NRL-66 / NRL-67
+		// convention), so the name now reads backwards. This tripwire said a bullet
+		// INSIDE the quote was invisible to the term-2 scan because the scan read the
+		// raw line and never peeled the `>`. NRL-114's `term2QuotedStop` hands the
+		// unchanged `endsTerm2Scan` the line with its quote levels peeled, so `> - `
+		// now ends the opener's paragraph exactly as the renderer's peeled list does.
+		// Measured with Obsidian 1.13.7's parser run in Node: `<blockquote><p>Prose
+		// &#x3C;!--</p><ul><li>HIDDENL<br>more --></li></ul></blockquote>`, every word
+		// displayed. RED on base 9132c3b (`Prose`) and on 7cdc7b7 alone.
+		["pin-nrl95-bullet-inside-quote-still-hidden", "> Prose <!--\n> - HIDDENL\n> more -->", "Prose <!-- HIDDENL more -->"],
 		// A single list item whose paragraph continues on indented lines IS one
 		// paragraph, so the closer is reached and the sentinel is correctly hidden.
 		// Green on both sides; it exists so TERM2_LIST is not widened to match a
@@ -2386,13 +2393,187 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl93-deep-indent-in-list-still-silenced", "- item\n        %%\nSECRET", "item %% SECRET"],
 		["pin-nrl93-double-tab-in-list-still-silenced", "- item\n		%%\nSECRET", "item %% SECRET"],
 		["pin-nrl93-quote-inside-list-still-silenced", "- item\n  > Plain\n  > 	%%\n  > SECRET", "item Plain"],
-		// 2. Our `BLOCKQUOTE` is /^(?:\s{0,3}>\s?)+/ and its `\s?` eats a TAB, where
-		// module 6234 consumes `>` plus at most one SPACE (`t.charAt(D)===a&&D++` with
-		// a = " "). So `>` + tab + `%%` keeps its tab for the renderer and loses it for
-		// us, and no `%%` predicate can see the difference. Not opened by this fix. Two
-		// cells of the census, the second being `>` + tab + space + `%%`.
-		["pin-nrl93-quote-tab-eaten-by-prefix-still-silenced", "> Plain prose\n>	%%\n> SECRET", "Plain prose"],
-		["pin-nrl93-quote-tab-space-eaten-by-prefix-still-silenced", "> Plain prose\n>	 %%\n> SECRET", "Plain prose"],
+		// 2. CLOSED BY NRL-114, and these two are the SAME SHAPES with the
+		// expectation flipped on purpose (the NRL-66 / NRL-67 replace-in-place
+		// convention), so the names still resolve from every citation. The sentence
+		// this comment used to carry - "no `%%` predicate can see the difference. Not
+		// opened by this fix. Two cells of the census" - is falsified in both halves.
+		// The divergence was never in a `%%` predicate at all: it was the blockquote
+		// PREFIX PEEL, whose `\s?` ate the tab before any predicate ran, so narrowing
+		// the peel is what fixes it and `opensObsidianBlock` is byte-identical across
+		// NRL-114's diff. And it is far more than two cells: `\s` is the JS class, so
+		// the same divergence covers a tab, a tab-then-space, an NBSP, a vertical tab
+		// and an ideographic space, at every quote depth, inside a callout body, inside
+		// a list item and under a three-space indent. Measured with Obsidian 1.13.7's
+		// own parser run in Node: the renderer DISPLAYS the hidden text in every one of
+		// them, because module 6234 advances over at most one character after the `>`
+		// and that character must be a SPACE, so the tab survives into the quote body
+		// and a tab-led line is never a `%%` opener there.
+		["pin-nrl93-quote-tab-eaten-by-prefix-still-silenced", "> Plain prose\n>	%%\n> SECRET", "Plain prose %% SECRET"],
+		["pin-nrl93-quote-tab-space-eaten-by-prefix-still-silenced", "> Plain prose\n>	 %%\n> SECRET", "Plain prose %% SECRET"],
+		// NRL-114's own rows. FIVE further contexts in the identical character
+		// position, each found by asking the real parser rather than by reading the
+		// ticket, each displayed by the renderer and silenced on base.
+		["pin-nrl114-nested-quote-tab-now-spoken", ">> Plain prose\n>>	%%\n>> SECRET", "Plain prose %% SECRET"],
+		["pin-nrl114-indented-quote-tab-now-spoken", "   > Plain prose\n   >	%%\n   > SECRET", "Plain prose %% SECRET"],
+		["pin-nrl114-callout-body-tab-now-spoken", "> [!note] Title\n>	%%\n> SECRET", "Title %% SECRET"],
+		["pin-nrl114-quote-in-list-tab-now-spoken", "- > Plain prose\n- >	%%\n- > SECRET", "Plain prose %% SECRET"],
+		// The three non-space, non-tab members of `\s` that the narrowing also moves.
+		// They are pinned individually because "a tab" is how the ticket described the
+		// divergence and it is the narrowest possible reading of it.
+		["pin-nrl114-nbsp-after-marker-now-spoken", "> Plain prose\n>\u00a0%%\n> SECRET", "Plain prose %% SECRET"],
+		["pin-nrl114-vtab-after-marker-now-spoken", "> Plain prose\n>\v%%\n> SECRET", "Plain prose %% SECRET"],
+		["pin-nrl114-ideographic-space-after-marker-now-spoken", "> Plain prose\n>\u3000%%\n> SECRET", "Plain prose %% SECRET"],
+		// THE CONTROLS. One space is the renderer's own allowance and two spaces leave
+		// a one-space body, so both really are `%%` openers there; the renderer HIDES
+		// the text in both and so must we. These are what stop the narrowing being
+		// widened into "peel no whitespace at all".
+		["guard-nrl114-one-space-still-hides", "> Plain prose\n> %%\n> SECRET", "Plain prose"],
+		["guard-nrl114-two-spaces-still-hide", "> Plain prose\n>  %%\n> SECRET", "Plain prose"],
+		// THE BUDGET INVARIANT, behaviourally. 7cdc7b7 recorded this shape as the one
+		// that told the CONSISTENT narrowing apart from the half-fix that narrows the
+		// counter and leaves the all-levels gate wide. RE-MEASURED on 9132c3b by
+		// NRL-114's continuation, that is no longer true of THIS row: the half-fix arm
+		// (gate `^(?:\s{0,3}>\s?)+`, counter narrow) speaks it correctly, so it is kept
+		// as a GUARD only. The half-fix is still caught behaviourally, and more widely:
+		// on that arm NINE fixtures in this table go red (both pin-nrl93-quote-tab-*,
+		// pin-nrl114-nested-quote-tab-now-spoken, -indented-quote-tab-, -nbsp-, -vtab-,
+		// -ideographic-space-, pin-nrl114-quoted-tab-hr-is-not-a-stop and
+		// pin-nrl114-quoted-setext-keeps-inline-comment-hidden) plus checks (a) and (d)
+		// of the NRL-114 section, and over the 3,150-shape x 512-mask census
+		// reconstruction it newly loses 98,304 and newly discloses 27,136 of 5,160,960
+		// sentinel-cells against the fix.
+		["pin-nrl114-nested-tab-space-budget-invariant", ">>	 Plain prose\n>>	%%\n>>	 SECRET", "Plain prose %% SECRET"],
+		// THREE RESIDUALS IN THE SAME CHARACTER POSITION that NRL-114 does NOT close,
+		// each measured IDENTICAL on base and on the fix and each pinned as a TRIPWIRE
+		// rather than as evidence of anything. The renderer displays the hidden text in
+		// all three. They are not folded in because each needs a DIFFERENT predicate,
+		// and folding any of them would make the diff unattributable.
+		//
+		// (a) a tab BETWEEN levels. The narrowing cannot reach it: the next level's own
+		// `\s{0,3}` re-absorbs the tab, so the peel is byte-identical on both arms.
+		// That is the indent BEFORE a `>`, which is a recorded NRL-98 decision
+		// (`BLOCKQUOTE`'s `\s{0,3}` cap against `ANY_QUOTE_MARKER`'s unbounded skip)
+		// rather than an open defect.
+		["pin-nrl114-tab-between-levels-still-silenced", "> Plain prose\n>	> %%\n> SECRET", "Plain prose"],
+		// (b) RENAMED from pin-nrl114-quote-tab-html-comment-still-silenced, because its
+		// meaning inverted and the old name was never on `main`. When 7cdc7b7 was
+		// written this shape stayed silenced: the tab-led line is a lazy continuation
+		// of `Plain prose` for the renderer, and `opensHtmlBlock` opened on it. NRL-115
+		// (9cca242) has since made base speak it, and 7cdc7b7 alone speaks it too, so
+		// the old expectation was stale on every arm. Renderer: `<blockquote><p>Plain
+		// prose<br>&#x3C;!--<br>SECRET</p></blockquote>`. A GUARD: green on base, on
+		// 7cdc7b7 alone and on the fix. Not counted as evidence.
+		["guard-nrl114-quote-tab-html-comment-spoken", "> Plain prose\n>	<!--\n> SECRET", "Plain prose <!-- SECRET"],
+		// (c) `opensObsidianBlock`'s `dedentedByList` term C keeps the any-whitespace
+		// rule, so the peel is irrelevant here. Same root as
+		// pin-nrl93-quote-inside-list-still-silenced.
+		["pin-nrl114-quote-tab-in-list-item-still-silenced", "- item\n  > Plain\n  >	%%\n  > SECRET", "item Plain"],
+		// A LONE CR after the marker is still consumed, and that is one measured
+		// character rather than an oversight. The renderer breaks the line AT the CR
+		// (measured: this note renders as `<blockquote><p>Plain prose</p></blockquote>`
+		// with SECRET hidden), so the `%%` after it is at a line start for the renderer
+		// and consuming the CR puts it at offset 0 of our body, which is the same
+		// place. Peeling a space ONLY makes this line a non-opener for us: re-measured
+		// on 9132c3b, that arm newly SPEAKS author-hidden text in 32,256 (and newly
+		// loses 6,144) of the 3,150-shape x 512-mask census reconstruction's 5,160,960
+		// sentinel-cells against the fix - the disclosure direction, which is the one
+		// this change must not move. (7cdc7b7 recorded 17,920 of 1,612,800 CELLS on its
+		// older base, a different unit; replaced, not averaged.) A real CRLF file never
+		// reaches this: its CR sits at the END of the line.
+		["guard-nrl114-lone-cr-after-marker-still-hides", "> Plain prose\n>\r%%\n> SECRET", "Plain prose"],
+		// RENAMED from pin-nrl114-setext-cost-quote-tab-html-opener, because the cost it
+		// pinned no longer exists and the old name was never on `main`. On 7cdc7b7's own
+		// older base, `opensHtmlBlock` opened on this tab-led quote body (which the
+		// renderer makes INDENTED CODE: `indentedCode` is blockMethods index 2, `html`
+		// index 11) and hid `=== SECRET`. On 9132c3b, NRL-115 had already stopped that,
+		// so 7cdc7b7 alone speaks it; NRL-114's `htmlLeadCode` mask now also declines
+		// term 2 on such a line, which is what keeps the shape-A family below spoken.
+		// Renderer: `<p>PROSE0.</p><blockquote><pre><code>&#x3C;!--</code></pre>
+		// <p>===<br>SECRET</p></blockquote>`. The `<!--` is still SPOKEN under
+		// skipCodeBlocks, because the declined line is read as prose rather than as
+		// code - base parity (base speaks the identical string) and a known miss, not a
+		// disclosure. A GUARD, green on base, on 7cdc7b7 alone and on the fix.
+		["guard-nrl114-setext-quote-tab-html-opener-spoken", "PROSE0.\n\n>\t<!--\n> ===\n> SECRET", "PROSE0. <!-- === SECRET"],
+		["guard-nrl114-setext-space-html-opener-unmoved", "PROSE0.\n\n> <!--\n> ===\n> SECRET", "PROSE0. <!-- === SECRET"],
+		// NRL-114's CONTINUATION (run 20261002-190146). 7cdc7b7's narrowed peel cannot
+		// land alone: on 9132c3b it newly lost displayed text in two shapes, because
+		// two predicates downstream of the peel had only ever been fed the wide peel's
+		// output. Every expectation below is the visible text of Obsidian 1.13.7's own
+		// rendered HTML (parser and renderer executed in Node, app.js 8efbf581), never
+		// a reading. "RED on base" is against 9132c3b; "RED on 7cdc7b7" is against
+		// 9132c3b plus 7cdc7b7's src alone.
+		//
+		// SHAPE A: a quote's fresh-block body that module 134 makes INDENTED CODE.
+		// Once the peel leaves the tab, the body `\t<!--` is code for the renderer, but
+		// `opensHtmlBlock`'s term 2 (a later `-->`) still opened on it. Fixed by
+		// masking term 2 ONCE, at the array level (`htmlLeadCode`), so every reader of
+		// that array agrees. skipCodeBlocks is off so the code line's own words count.
+		// Lead tab: RED on 7cdc7b7 only (base's wide peel spoke it by accident).
+		["pin-nrl114-quote-code-body-tab-html-opener", ">\t<!-- ZCZ\n> ===\n> ZAZ -->\nTAIL ZBZ", "<!-- ZCZ === ZAZ --> TAIL ZBZ", { skipCodeBlocks: false }],
+		// Leads space-tab and five spaces: RED on base AND on 7cdc7b7.
+		["pin-nrl114-quote-code-body-space-tab-html-opener", "> \t<!-- ZCZ\n> ===\n> ZAZ -->\nTAIL ZBZ", "<!-- ZCZ === ZAZ --> TAIL ZBZ", { skipCodeBlocks: false }],
+		["pin-nrl114-quote-code-body-five-space-html-opener", ">     <!-- ZCZ\n> ===\n> ZAZ -->\nTAIL ZBZ", "<!-- ZCZ === ZAZ --> TAIL ZBZ", { skipCodeBlocks: false }],
+		// Lead two-spaces-tab: the body ` \t<!--` is NOT code (module 134 is literal:
+		// four spaces or one tab at offset 0), so the renderer makes it SETEXT content,
+		// `<h1>&#x3C;!-- ZCZ</h1>`. RED on base and on 7cdc7b7. KNOWN MISS, pinned: we
+		// speak the `===` underline, which the renderer does not display. That is a
+		// markup glyph, not hidden text; the heading text and every displayed word
+		// are spoken.
+		["pin-nrl114-quote-setext-two-space-tab-html-opener", ">  \t<!-- ZCZ\n> ===\n> ZAZ -->\nTAIL ZBZ", "<!-- ZCZ === ZAZ --> TAIL ZBZ", { skipCodeBlocks: false }],
+		//
+		// SHAPE B: a lazy tab-led continuation in a quote, then a QUOTED paragraph end.
+		// The term-2 bound (`htmlCloserAhead`) read the RAW line, so `> ---` never ended
+		// the opener's paragraph. NRL-114 wraps, and does not edit, `endsTerm2Scan` /
+		// `endsTerm2Block`: `term2QuotedStop` hands them the line with its quote levels
+		// peeled (spaces only). `---` and `-`: RED on 7cdc7b7 only.
+		["pin-nrl114-quoted-hr-ends-term2-paragraph", "> Plain ZPZ prose\n>\t<!-- ZCZ\n> ---\n> ZAZ -->\nTAIL ZBZ", "Plain ZPZ prose <!-- ZCZ ZAZ --> TAIL ZBZ"],
+		// The `-` glyph is spoken: an empty list item spoken as its marker is NRL-154's
+		// pre-existing class (base speaks the identical string).
+		["pin-nrl114-quoted-bare-bullet-ends-term2-paragraph", "> Plain ZPZ prose\n>\t<!-- ZCZ\n> -\n> ZAZ -->\nTAIL ZBZ", "Plain ZPZ prose <!-- ZCZ - ZAZ --> TAIL ZBZ"],
+		// `***` and a bare `>`: RED on base AND on 7cdc7b7.
+		["pin-nrl114-quoted-star-hr-ends-term2-paragraph", "> Plain ZPZ prose\n>\t<!-- ZCZ\n> ***\n> ZAZ -->\nTAIL ZBZ", "Plain ZPZ prose <!-- ZCZ ZAZ --> TAIL ZBZ"],
+		["pin-nrl114-quoted-blank-ends-term2-paragraph", "> Plain ZPZ prose\n>\t<!-- ZCZ\n>\n> ZAZ -->\nTAIL ZBZ", "Plain ZPZ prose <!-- ZCZ ZAZ --> TAIL ZBZ"],
+		// A tab-led whitespace member is NOT a stop (decisions Q4 and Q10): `>\t---` and
+		// `>\t` keep the paragraph open for the renderer, which HIDES ZCZ..ZAZ as one
+		// inline comment. The `---` row is RED on base (base spoke the hidden text) and
+		// green on 7cdc7b7; the bare-tab row is green everywhere and is a GUARD that
+		// stops the stop set being widened into the disclosure direction.
+		["pin-nrl114-quoted-tab-hr-is-not-a-stop", "> Plain ZPZ prose\n> <!-- ZCZ\n>\t---\n> ZAZ -->\nTAIL ZBZ", "Plain ZPZ prose TAIL ZBZ"],
+		["guard-nrl114-quoted-tab-blank-is-not-a-stop", "> Plain ZPZ prose\n> <!-- ZCZ\n>\t\n> ZAZ -->\nTAIL ZBZ", "Plain ZPZ prose TAIL ZBZ"],
+		// MUST STAY: with `> ===` the renderer keeps ONE paragraph holding an inline
+		// comment `<!-- ZCZ === ZAZ -->`, so ZCZ and ZAZ are hidden. Base SPOKE them
+		// (a disclosure); 7cdc7b7 closed it and the continuation keeps it closed.
+		// RED on base, green on 7cdc7b7.
+		["pin-nrl114-quoted-setext-keeps-inline-comment-hidden", "> Plain ZPZ prose\n>\t<!-- ZCZ\n> ===\n> ZAZ -->\nTAIL ZBZ", "Plain ZPZ prose TAIL ZBZ"],
+		// A shallower quote line is a LAZY continuation for the renderer, so it is not
+		// a stop and the inline comment stays hidden. GUARD, green on every arm.
+		["guard-nrl114-shallower-quote-is-lazy-not-a-stop", ">> Plain ZPZ prose <!-- ZCZ\n> ZAZ -->\nTAIL ZBZ", "Plain ZPZ prose TAIL ZBZ"],
+		// TRIPWIRE, identical on every arm: a DEEPER quote line starts a nested quote
+		// and ends the paragraph for the renderer, which displays ZCZ and ZAZ. The plan's
+		// depth-rise stop (decision Q3) was built and REMOVED, because the fuzz showed
+		// it newly disclosing hidden text where remark keeps more lines in one
+		// paragraph than a bare depth test predicts. Fail-closed prose loss, base parity.
+		["pin-nrl114-deeper-quote-still-hides-term2", "> Plain ZPZ prose <!-- ZCZ\n>> ZAZ -->\nTAIL ZBZ", "Plain ZPZ prose TAIL ZBZ"],
+		// TWO UNMASKINGS found by /critique at ship, each ADJUDICATED ON A BASE CONTROL
+		// (decision Q11) rather than waved through. Both are newly lost against base and
+		// both are fail-closed: base spoke ZCZ and ZAZ only because its wide peel ate the
+		// tab after `>`, which this ticket corrects.
+		// (i) A TABLE-SHAPED line right above. `unsureFresh` keeps base's RAW term-2
+		// answer there (see `htmlClosesLaterAt`), and the raw pass never sees `> ---` as
+		// a paragraph end, so the `-->` below it still closes the block: the NRL-95
+		// container residual, unmasked. The renderer displays ZCZ and ZAZ. TRIPWIRE: RED
+		// on base, which spoke them. Its control, the ` \t` twin, is a GUARD that base
+		// already loses the same way, byte-identically.
+		["pin-nrl114-table-line-then-quoted-hr-still-hides-term2", "> | a |\n>\t<!-- ZCZ\n> ---\n> ZAZ -->\nZBZ", "| a | ZBZ"],
+		["guard-nrl114-table-line-space-tab-control", "> | a |\n> \t<!-- ZCZ\n> ---\n> ZAZ -->\nZBZ", "| a | ZBZ"],
+		// (ii) A FOOTNOTE definition right above, in a quote (no reference here). The
+		// renderer puts `<!-- ZCZ` inside the footnote as an html node (hidden) and
+		// displays ZAZ; we drop the `<!--` block and lose ZAZ. Base spoke both, a
+		// disclosure of ZCZ. Control: the unquoted twin, which base already reads the
+		// same way. Footnote fidelity is NRL-163's.
+		["pin-nrl114-quoted-footnote-then-quoted-hr-unmasked", "> [^1]: foot ZFZ\n>\t<!-- ZCZ\n> ---\n> ZAZ -->\nZBZ", "foot ZFZ ZBZ"],
+		["guard-nrl114-unquoted-footnote-control", "[^1]: foot ZFZ\n\t<!-- ZCZ\n---\nZAZ -->\nZBZ", "foot ZFZ ZBZ"],
 		// 3. CLOSED BY NRL-116, and REPLACED IN PLACE keeping its name for the same
 		// citation reason as the three above - the name now reads backwards. Our
 		// `LIST_BULLET` was /^\s*([-*+]|\d+[.)])\s+/ and its `\s+` ate the WHOLE lead
@@ -3157,7 +3338,15 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// displays all four. Found only by the fuzz - the structured census carries one
 		// comment construct per note by construction and reported ZERO cells of it -
 		// which is the same way NRL-93 found its own 157-cell version.
-		["pin-nrl117-scope-cost-contentless-marker", "- item\n		%%\nQARROW after.\n -   \n        %%\n	SECRET\nTAILA", "item %% QARROW after."],
+		// NRL-114 CLOSED THE LOSS HALF OF THIS TRADE, replaced in place keeping the
+		// name. The second `%%` sits on a container fresh-block line that module 134
+		// makes indented code, and NRL-114's `htmlLeadCode` veto keeps a `%%` opener
+		// there from opening, so SECRET and TAILA are spoken again. Renderer:
+		// `<li><pre><code>%%</code></pre>SECRET<br>TAILA</li>`. The `%%` itself is
+		// spoken under skipCodeBlocks for the same declined-line-as-prose reason as
+		// guard-nrl114-setext-quote-tab-html-opener-spoken: a known miss, displayed
+		// text, never hidden text. RED on base 9132c3b and on 7cdc7b7 alone.
+		["pin-nrl117-scope-cost-contentless-marker", "- item\n		%%\nQARROW after.\n -   \n        %%\n	SECRET\nTAILA", "item %% QARROW after. %% SECRET TAILA"],
 		// THE SAME MECHANISM IN THE DISCLOSURE DIRECTION, which is the one figure in this
 		// ticket that must not be buried. ADR 0006 clause 5 used to scope an unterminated
 		// `%%` block to the NOTE, where Obsidian scopes it to the construct holding it, so
@@ -3343,12 +3532,15 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl120-math-two-pairs", "Prose <!--\n$$ x $$ y\nHIDDENM --> t.", "Prose t."],
 		["guard-nrl120-math-not-at-start", "Prose <!--\nx $$\nHIDDENM --> t.", "Prose t."],
 		["guard-nrl120-math-dollar-later", "Prose <!--\n$$ $\nHIDDENM --> t.", "Prose t."],
-		// The fail-closed residual this ticket does NOT close, pinned so it is not
-		// rediscovered as new: the term-2 pass reads RAW lines, so `> $$` is not a
-		// stop and the quoted paragraph keeps hiding HIDDENM, which the renderer
-		// displays as math. Prose loss, identical on base. Tripwire: when the
-		// term-2 pass learns to peel a quote, this expectation must change on purpose.
-		["pin-nrl120-quoted-math-still-hidden", "> Prose <!--\n> $$\n> HIDDENM\n> --> t.", "Prose t."],
+		// CHANGED ON PURPOSE BY NRL-114, exactly as this tripwire asked, and kept under
+		// its name (NRL-66 / NRL-67). The term-2 pass now peels the line's quote levels
+		// before the unchanged `endsTerm2Scan` (`term2QuotedStop`), so `> $$` is a stop
+		// and the `<!--` is no longer an opener. Renderer: `<p>Prose &#x3C;!--</p><div
+		// class="math math-block">HIDDENM--> t.</div>`. The `$$` and the math body are
+		// spoken literally, which is what base already does for an unclosed quoted
+		// math block (`> Prose` / `> $$` / `> HIDDENM` speaks `Prose $$ HIDDENM` on
+		// base 9132c3b), so that half is parity and not this change. RED on base.
+		["pin-nrl120-quoted-math-still-hidden", "> Prose <!--\n> $$\n> HIDDENM\n> --> t.", "Prose <!-- $$ HIDDENM --> t."],
 		// NRL-155. NRL-120's setext refusal capped the `<!--` lead at three SPACES,
 		// on the claim that a tab is never setext content. Module 134 (indented code)
 		// is LITERAL: four spaces or one tab at offset 0, no tab-stop expansion, so a
@@ -3443,14 +3635,19 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// FOURTH leaking lead class closed by NRL-113 beyond the three the ticket
 		// named, after the ` \t ` lead Verify found.
 		["pin-nrl155-tab-whitespace-line-is-not-blank", "Intro.\n \t \n \t<!--\n===\nHIDDENA\n--> t.", "Intro. t."],
-		// (f) The QUOTE and LIST arms stay spaces-only (fail-closed). `> \t<!--` is
-		// code inside the quote only through module 6234's one-character peel
-		// (NRL-114), and `- \t<!--` is code inside the item. The quote row is red on
-		// an arm widening the quote arm's lead; no arm tried moves the list row, so
-		// it is a pin of unchanged behaviour only. Both are TRIPWIRES for a
-		// pre-existing prose loss: the renderer displays `=== HIDDENA --> t.`.
-		["guard-nrl155-quote-arm-unchanged", "> \t<!--\n> ===\n> HIDDENA\n> --> t.", "t."],
-		["guard-nrl155-list-arm-unchanged", "- \t<!--\n  ===\n  HIDDENA\n  --> t.", "t."],
+		// (f) NRL-114 CLOSED THE PROSE LOSS BOTH TRIPWIRES PINNED, and both are
+		// replaced in place keeping their names. The setext arms themselves are still
+		// spaces-only for lists, so what "unchanged" referred to still holds; what moved
+		// is the outcome, through a different mechanism. After the quote peel stops at
+		// `> `, both bodies begin with a tab, which module 134 makes INDENTED CODE at a
+		// container fresh block, and NRL-114's `htmlLeadCode` masks `opensHtmlBlock`'s
+		// term 2 there, so the `<!--` never opens. Renderer, quote row:
+		// `<blockquote><pre><code>&#x3C;!--</code></pre><p>===<br>HIDDENA<br>--> t.
+		// </p></blockquote>`; list row: `<li><pre><code>&#x3C;!--</code></pre>===<br>
+		// HIDDENA<br>--> t.</li>`. The `<!--` is spoken under skipCodeBlocks (the
+		// declined-line-as-prose known miss, displayed text). RED on base and on 7cdc7b7.
+		["guard-nrl155-quote-arm-unchanged", "> \t<!--\n> ===\n> HIDDENA\n> --> t.", "<!-- === HIDDENA --> t."],
+		["guard-nrl155-list-arm-unchanged", "- \t<!--\n  ===\n  HIDDENA\n  --> t.", "<!-- === HIDDENA --> t."],
 		// NRL-115. `opensHtmlBlock`'s term 1 (`<!--` begins its line, any leading
 		// whitespace) is module 8776's own rule, and it is right only where module
 		// 8776 is REACHED. For an indented line it often is not: module 8607 absorbs
@@ -5908,6 +6105,150 @@ console.log("NRL-118 renderer block scan (obsidianBlocks.ts)");
 	check("NRL-118 scan: nesting past the depth bound gives no answer", rendererPercentBlocks(">".repeat(70) + " %%\nx") === null);
 	const closedFlag = rendererPercentBlocks("%%\n%% SECRET")?.[0]?.closed === true && rendererPercentBlocks(">> %%\n%% SECRET")?.[0]?.closed === false;
 	check("NRL-118 scan: `closed` tells a closer from a container end", closedFlag);
+}
+
+/*
+ * NRL-114. THE PEEL'S OWN QUOTE MARKER RULE, AND THE LOOP INVARIANT THAT
+ * LICENSES `quotes` AS A BUDGET.
+ *
+ * Obsidian's blockquote tokenizer (module 6234) consumes the `>` and then
+ * advances over at most one character, and that character must be a SPACE
+ * (`t.charAt(D)===a&&D++` with `a = " "`). Our shared `BLOCKQUOTE` allows any
+ * single whitespace character, so `>` + TAB + `%%` lost its tab for us and kept
+ * it for the renderer, which hid text Obsidian displays. NRL-114 narrows the
+ * PEEL only - `QUOTE_LEVEL_PEEL` and `QUOTE_PREFIX_PEEL` - and leaves
+ * `BLOCKQUOTE` byte-identical for `interruptsParagraph`, the `listDedented`
+ * pass, the `setextContent` listInRun scan and the `inList` end test. That is
+ * the NRL-98 precedent verbatim: feed the UNCHANGED predicate a different
+ * string rather than moving the shared one.
+ *
+ * These checks read `src/text/extract.ts` as TEXT, the way release.test.ts
+ * reads the workflow, because the thing being pinned is a relationship between
+ * two literals and a set of call sites and none of it is reachable through the
+ * module's one export. Every extractor THROWS rather than returning empty, so
+ * a parser that stops matching fails the suite instead of passing vacuously.
+ *
+ * The behavioural half of the same invariant lives in the NRL-38 table above:
+ * a mutation that narrows the counter and leaves the all-levels gate wide turns
+ * nine of its fixtures red (listed beside
+ * pin-nrl114-nested-tab-space-budget-invariant, which itself no longer moves on
+ * that mutation on 9132c3b), which is what stops the textual check being the
+ * only thing standing between a green suite and a half-adopted fix.
+ */
+console.log("NRL-114 the peel's quote marker rule and its loop invariant (R-M08)");
+{
+	const __filename114 = fileURLToPath(import.meta.url);
+	const ROOT114 = path.resolve(path.dirname(__filename114), "../..");
+	const SRC114 = fs.readFileSync(path.join(ROOT114, "src/text/extract.ts"), "utf8");
+
+	/**
+	 * The source text of `const <name> = /<body>/;`, as written. THROWS on a
+	 * miss: a soft return would make every check below pass on a file that no
+	 * longer holds the constant at all.
+	 */
+	function regexLiteral(name: string): string {
+		const m = SRC114.match(new RegExp(`^const ${name} = /(.*)/;$`, "m"));
+		if (!m) throw new Error(`NRL-114: no top-level regex literal named ${name} in src/text/extract.ts`);
+		return m[1]!;
+	}
+
+	const levelBody = regexLiteral("QUOTE_LEVEL_PEEL");
+	const prefixBody = regexLiteral("QUOTE_PREFIX_PEEL");
+	const sharedBody = regexLiteral("BLOCKQUOTE");
+
+	// (a) THE COMPOSITION. The all-levels form must be LITERALLY the one-level
+	// form repeated, or `containerPrefix`'s documented guarantee - "the
+	// iteration consumes exactly q[0]" - stops holding and `quotes` stops being
+	// a sound peel budget. Measured on the half-fix that narrows the counter
+	// only: `>\t>\tx` gives the gate `end = 4` while the walk stops at `at = 3`,
+	// so `chars` advances four characters that no counted level consumed.
+	check(
+		"NRL-114 (a) QUOTE_PREFIX_PEEL is literally one QUOTE_LEVEL_PEEL repeated",
+		levelBody.startsWith("^") && prefixBody === `^(?:${levelBody.slice(1)})+`,
+		`level=${levelBody} prefix=${prefixBody}`,
+	);
+
+	// (b) PEEL-LOCALITY. The shared constant must still be the WIDE CommonMark
+	// one. If it narrows, `interruptsParagraph` moves, which moves
+	// `codeSpanClosesLater` and collides with ADR 0019's F5 guard.
+	check("NRL-114 (b) the shared BLOCKQUOTE is still the wide any-whitespace rule", sharedBody === "^(?:\\s{0,3}>\\s?)+");
+	// A SPACE, and a lone CR, and nothing else. The CR is measured rather than
+	// assumed: it is a line TERMINATOR for the renderer, so consuming it puts the
+	// next construct at offset 0 of our body exactly as the renderer puts it at a
+	// line start, and leaving it in place newly SPEAKS author-hidden text in 32,256
+	// of the census reconstruction's 5,160,960 sentinel-cells (re-measured on 9132c3b).
+	check("NRL-114 (b) the peel's one-level rule allows a space or a lone CR only", levelBody === "^\\s{0,3}>[ \\r]?");
+
+	// (c) THE CALL SITES. Four peel sites must read the peel constants, and the
+	// four deliberate NON-sites must still read the shared one. A mutation that
+	// leaves the constants alone and points one site back at `BLOCKQUOTE` is
+	// invisible to (a) and (b), and it is exactly the half-fix shape.
+	const SITES: ReadonlyArray<readonly [string, string]> = [
+		["containerPrefix all-levels gate", "const q = line.slice(chars).match(QUOTE_PREFIX_PEEL);"],
+		["containerPrefix per-level counter", "const level = QUOTE_LEVEL_PEEL.exec(line.slice(at, end));"],
+		["peelQuotes budget spend", "const level = QUOTE_LEVEL_PEEL.exec(rest);"],
+		["isSetextContentLine line prefix", "const q = line.match(QUOTE_PREFIX_PEEL);"],
+		["isSetextContentLine next prefix", "const nq = next.match(QUOTE_PREFIX_PEEL);"],
+	];
+	for (const [what, text] of SITES) {
+		check(`NRL-114 (c) peel site reads the peel rule: ${what}`, SRC114.includes(text));
+	}
+	const NON_SITES: ReadonlyArray<readonly [string, string]> = [
+		["interruptsParagraph", "BLOCKQUOTE.test(line) ||"],
+		["listDedented quote peel", 'const body = raw.replace(BLOCKQUOTE, "");'],
+		["setextContent listInRun peel", 'const quotePeeled = raw.replace(BLOCKQUOTE, "");'],
+		["inList end test", "BLOCKQUOTE.test(raw))"],
+	];
+	for (const [what, text] of NON_SITES) {
+		check(`NRL-114 (c) non-site still reads the shared BLOCKQUOTE: ${what}`, SRC114.includes(text));
+	}
+	// `BLOCKQUOTE_LEVEL` is renamed rather than duplicated: its only two readers
+	// were the peel. An unused narrow twin beside a live wide one is how two
+	// readings of the same thing start disagreeing again.
+	check(
+		"NRL-114 (c) no BLOCKQUOTE_LEVEL code reference survives the rename",
+		!SRC114.split("\n").some((l) => l.includes("BLOCKQUOTE_LEVEL") && !l.trimStart().startsWith("*")),
+	);
+
+	// (d) THE PROPERTY, run over a constructed corpus of prefix lines rather
+	// than over one hand-picked example. Iterating the one-level rule from
+	// offset 0 must consume exactly what the all-levels rule matched, for every
+	// line. Non-vacuity is asserted: a corpus that matched nothing anywhere
+	// would make this green for the wrong reason.
+	const LEVEL114 = new RegExp(levelBody);
+	const PREFIX114 = new RegExp(prefixBody);
+	const WS114 = ["", " ", "  ", "   ", "    ", "\t", "\t ", " \t", "\t\t", " ", "\r", "\v", "　"];
+	const MARK114 = [">", ">>", "> >", "> > >", "   >", ">\t>", "- >", "> -", "  >"];
+	const lines114: string[] = [];
+	for (const m of MARK114) for (const w of WS114) for (const body of ["%%", "<!--", "x", "![alt](d.png)", ""]) lines114.push(m + w + body);
+	let mismatch114 = 0;
+	let nonEmpty114 = 0;
+	let firstBad114 = "";
+	for (const line of lines114) {
+		const p = line.match(PREFIX114);
+		const want = p ? p[0].length : 0;
+		if (want > 0) nonEmpty114 += 1;
+		let at = 0;
+		for (;;) {
+			const lv = LEVEL114.exec(line.slice(at, want));
+			if (!lv || lv[0].length === 0) break;
+			at += lv[0].length;
+		}
+		if (at !== want) {
+			mismatch114 += 1;
+			if (!firstBad114) firstBad114 = `${JSON.stringify(line)} want ${want} walked ${at}`;
+		}
+	}
+	check(
+		`NRL-114 (d) the per-level walk consumes exactly the all-levels match over ${lines114.length} prefix lines`,
+		mismatch114 === 0,
+		firstBad114,
+	);
+	check(
+		"NRL-114 (d) the property corpus is non-vacuous (most lines carry a real prefix)",
+		nonEmpty114 > lines114.length / 2,
+		`nonEmpty=${nonEmpty114} of ${lines114.length}`,
+	);
 }
 
 console.log("");

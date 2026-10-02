@@ -3,8 +3,8 @@
 - Status: accepted
 - Date: 2026-09-29
 - Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44, NRL-64, NRL-74 and
-  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74, NRL-95, NRL-93, NRL-116, NRL-117
-  and NRL-113
+  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74, NRL-95, NRL-93, NRL-116, NRL-117,
+  NRL-113 and NRL-114
 
 ## Context
 
@@ -434,7 +434,9 @@ evidence, not a live Obsidian reading or highlighting observation.
    **Three divergences in the same census are NOT this predicate's and were not
    opened here.** Our `BLOCKQUOTE` is `/^(?:\s{0,3}>\s?)+/` and its `\s?` eats a
    TAB, where module 6234 consumes `>` plus at most one SPACE
-   (`t.charAt(D)===a&&D++` with `a = " "`), 2 cells. Our `LIST_BULLET` is
+   (`t.charAt(D)===a&&D++` with `a = " "`), 2 cells - **CLOSED by NRL-114 in the
+   quote PEEL, and the 2 was far too small; see the NRL-114 amendment below, and
+   do not quote the 2.** Our `LIST_BULLET` is
    `/^\s*([-*+]|\d+[.)])\s+/` and its `\s+` eats the whole lead after a marker,
    where module 745's third group takes at most four spaces or one tab, 3 cells -
    **CLOSED by NRL-116; see the amendment below, and do not quote the 3.**
@@ -1161,6 +1163,126 @@ evidence, not a live Obsidian reading or highlighting observation.
    **NOTHING WAS OBSERVED IN A RUNNING OBSIDIAN.** Reading view only; Live Preview
    has never been read or run by any ticket in this family, and AGENTS.md rule 11
    applies to every number above.
+
+### Clause 2 amendment, NRL-114: the peel's quote marker rule
+
+The quote PREFIX PEEL, not any `%%` predicate, was the last divergence in this
+census's `>` + whitespace position. Obsidian's blockquote tokenizer (module
+6234) consumes the `>` and then advances over at most one character, and that
+character must be a SPACE (`t.charAt(D)===a&&D++` with `a = " "`). Our shared
+`BLOCKQUOTE` is `/^(?:\s{0,3}>\s?)+/`, and `\s` is the JS class, so the peel ate
+the tab, put `%%` at offset 0 of the quote body and hid text Obsidian displays.
+It was recorded above at **2 cells**; the real member set is the whole of `\s`
+(tab, tab-then-space, NBSP, vertical tab, ideographic space) and the context set
+is every quote depth, the callout body, a quote in a list item and a three-space
+indent.
+
+**The fix is PEEL-LOCAL, which is NRL-98's precedent verbatim: feed the
+UNCHANGED predicate a different string rather than moving the shared one.** Two
+constants, `QUOTE_LEVEL_PEEL = /^\s{0,3}>[ \r]?/` and
+`QUOTE_PREFIX_PEEL = /^(?:\s{0,3}>[ \r]?)+/`, replace `BLOCKQUOTE_LEVEL` (whose
+only two readers were the peel) at the peel sites: `containerPrefix`'s all-levels
+gate and per-level counter, `peelQuotes`'s budget spend, and
+`isSetextContentLine`'s two prefix reads. `BLOCKQUOTE` itself is
+**byte-identical**, because `interruptsParagraph` reads it and narrowing that
+would move `codeSpanClosesLater` and collide with ADR 0019's F5 guard. The
+`listDedented` pass and the `setextContent` listInRun scan deliberately keep the
+WIDE constant: for `>\t%%` the wide peel leaves `indented` false where a narrow
+one would leave it true, and `indented` true keeps the item run alive, i.e. hides.
+Leaving them wide is both the speak direction and unchanged behaviour. Do not
+"align" them without measuring.
+
+**The all-levels form must be LITERALLY `^(?:<one level>)+`.** `containerPrefix`
+gates on it and then walks the one-level form across exactly what it matched, and
+"the iteration consumes exactly `q[0]`" is what licenses `quotes` as a peel
+budget. `tests/extract.test.ts`'s NRL-114 section pins the composition, the two
+literals, every call site, the deliberate non-sites and the walk property over
+585 constructed prefix lines. Re-measured on `9132c3b`: the half-fix that leaves
+the gate wide and narrows the counter newly loses **98,304** and newly discloses
+**27,136** of the census reconstruction's **5,160,960** sentinel-cells (below)
+against the fix, and turns nine fixtures plus checks (a) and (d) red.
+
+**A lone CR is still consumed, and that one character is measured rather than
+assumed.** A CR is a line TERMINATOR for the renderer, not whitespace:
+`> Plain prose` / `>\r%%` / `> SECRET` renders as
+`<blockquote><p>Plain prose</p></blockquote>` with SECRET HIDDEN. Consuming it
+puts that `%%` at offset 0 of our body, the same place. Re-measured on `9132c3b`,
+a space-only peel newly SPEAKS author-hidden text in **32,256** (and newly loses
+**6,144**) of the same 5,160,960 sentinel-cells. A real CRLF file is untouched
+either way. Lone CRs elsewhere on a line are a separate, pre-existing model gap,
+NRL-164 (below).
+
+**Numbers, re-measured on `9132c3b` and REPLACING 7cdc7b7's** (which were taken
+on an older base and in a different unit: cells rather than sentinel-cells; its
+`1,612,800 / 89,600 / 30,720 / 17,920 / 6,144 / 11 red` are not to be quoted or
+averaged). The census is a RECONSTRUCTION built by construction, not an extension
+of NRL-93's 140 cells, which are described but never enumerated: 9 container
+contexts x 14 post-`>` whitespace members x 5 constructs x 5 block positions =
+3,150 shapes, rendered once each with Obsidian's own parser and extracted under
+all 512 content-key masks = **1,612,800 cells, 5,160,960 sentinel-cells** (every
+sentinel token in a shape, in every mask, signed against the rendered HTML; a
+displayed sentinel in a code, heading, table or math context is excused when its
+content key is on). Arms: base = `9132c3b`; 7cdc7b7 alone = base plus 7cdc7b7's
+`src/`; fix = this change.
+
+| arm | displayed but silenced | newly lost vs base | hidden but spoken | newly disclosing vs base |
+|---|---|---|---|---|
+| base | 575,488 | - | 81,408 | - |
+| 7cdc7b7 alone | 471,808 | **46,080** | 53,248 | 0 |
+| fix | 241,408 | **0** | 49,664 | **0** |
+
+So 7cdc7b7 alone still carries a composed loss on this base (46,080
+sentinel-cells), which is why it could not land, and the fix closes 334,080 lost
+and 31,744 disclosing sentinel-cells with 0 newly lost and 0 newly disclosing.
+Destination and image-alt buckets are 0 on every arm in this corpus.
+
+**What the continuation had to fix, because 7cdc7b7 alone newly lost displayed
+text.** Two predicates downstream of the peel had only ever been fed the wide
+peel's output; both fixes live in ADR 0025's NRL-114 amendment, summarised here:
+
+- **A container fresh-block line that module 134 makes indented code** (`>\t<!--`,
+  `> \t<!--`, `>     <!--`) was still an HTML-block opener through
+  `opensHtmlBlock`'s term 2. Masked once, at the array level (`htmlLeadCode`), and
+  the same flag vetoes a `%%` opener on such a line and stops a label carry.
+- **The term-2 bound read the raw line**, so `> ---`, `> -`, `> ***` and a bare
+  `>` never ended the opener's paragraph. `term2QuotedStop` wraps the unchanged
+  `endsTerm2Scan` / `endsTerm2Block` with the line's quote levels peeled.
+- **`isSetextContentLine`'s quote arm** gets the plain arm's lead rule on the
+  quote body (`PLAIN_SETEXT_HTML_OPENER` and not `MODULE134_INDENTED_CODE`, a
+  tab-bearing lead only in block position, `inQuoteSetextBlockPosition`), so
+  `>  \t<!--` / `> ===` is the `<h1>` the renderer makes.
+
+**Residuals in the same character position**, each identical on base and on the
+fix and pinned as a tripwire: (a) `>\t> %%`, a tab BETWEEN levels, which the next
+level's own `\s{0,3}` re-absorbs (`pin-nrl114-tab-between-levels-still-silenced`);
+(c) `- item` / `  > Plain` / `  >\t%%`, where `opensObsidianBlock`'s
+`dedentedByList` term keeps the any-whitespace rule
+(`pin-nrl114-quote-tab-in-list-item-still-silenced`). 7cdc7b7's residual (b),
+`>\t<!--` on a lazy continuation, had already been closed underneath it by NRL-115
+and is now a guard (`guard-nrl114-quote-tab-html-comment-spoken`).
+
+**Unmaskings, accepted only on a defused control.** Three 4,000-note fuzz runs
+were made (seeds 20261002, 7 and 99, masks 221 and 0, 24,000 cells); every newly
+lost or newly disclosing sentinel-cell against base is a place where base was
+right only by ACCIDENT, through the same over-wide peel or opener this change
+corrects. Each is accepted only because the fix's output is byte-identical,
+modulo the one defused token, to what base already produces on a twin with that
+trigger defused. Three pre-existing model gaps account for all of them, each
+filed: an unreferenced footnote definition is spoken where the renderer shows
+nothing (**NRL-163**); a lone CR is a line terminator for the renderer and not
+for our `\n` split (**NRL-164**); and a VT- or tab-bearing `%%` lead inside a
+list-and-quote container is an opener for us and not for the renderer
+(**NRL-165**, NRL-153's family). One fuzz cell is NRL-137 (a raw `<div>` block
+holding a `<!--`). The full table of inputs, twins and outputs is in ADR 0025's
+NRL-114 amendment.
+
+**NOTHING WAS OBSERVED IN OBSIDIAN.** Every renderer verdict comes from
+executing Obsidian 1.13.7's own parser and HTML renderer in bare Node (`app.js`
+sha256 `8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898`),
+which is much stronger than transcribing it and is still not the running app;
+and it is the READING-VIEW path only, Live Preview's CM6 parser having never
+been read or run by any ticket in this family. AGENTS.md rule 11 applies to
+every number above. R-M08 is NOT met and the 2-of-16 MUST count does not move.
 
 ## Consequences and verification
 

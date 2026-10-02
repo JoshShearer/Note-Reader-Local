@@ -9,6 +9,9 @@
   ADR 0023.
 - NOTE ON THE TITLE: "document-scoped" describes term 1 only as of NRL-95. The
   file name is kept so existing references still resolve.
+- Amended by NRL-114 (R-M08), 2026-10-02: the term-2 bound reads a quoted line's
+  quote-peeled body, and term 2 is masked on a container line module 134 makes
+  code. See "AMENDED by NRL-114" at the end.
 - Amended by NRL-115 (R-M08), 2026-10-01: term 1's `.trim()` is right only where
   module 8776 is REACHED, and for an indented paragraph continuation or an indented
   fresh block inside a container it is not. See "AMENDED by NRL-115" at the end; the
@@ -862,7 +865,9 @@ sits outside the opener's paragraph.
   pinned as tripwires and both of the container-prefix class: a quote or a bullet
   that our anchored regexes cannot see because the `>` is never peeled before the
   scan (`pin-nrl95-quote-starting-after-opener-still-hidden`,
-  `pin-nrl95-bullet-inside-quote-still-hidden`).
+  `pin-nrl95-bullet-inside-quote-still-hidden`). **The bullet half CLOSED with
+  NRL-114** (`term2QuotedStop`, see "AMENDED by NRL-114" at the end); that pin was
+  replaced in place and now expects HIDDENL spoken.
 - **The scan is forward-only from the opener line and does not bound the OPENER's
   own block.** An ATX heading's or a table row's mid-line `<!--` therefore still
   reaches a later closer that module 4839's paragraph-scoped path could not.
@@ -1366,7 +1371,10 @@ each measured rather than argued:
    the NRL-113 arm). Spaces-only leads keep the original rule exactly. The QUOTE
    and LIST arms stay spaces-only, fail-closed: `> \t<!--` is code inside the quote
    only through module 6234's one-character peel (NRL-114), and `- \t<!--` is code
-   in the item. `TERM2_MATH` was checked for the same lead error and needs no
+   in the item. (**Amended by NRL-114:** the QUOTE arm now takes this rule on the
+   quote body, and both shapes are now spoken because term 2 is masked on a
+   container line module 134 makes code; the LIST arm's lead is unchanged.)
+   `TERM2_MATH` was checked for the same lead error and needs no
    change: ` \t$$` renders a paragraph. Evidence is bare-Node against the executed
    reading-view parser; **NOT VERIFIED IN OBSIDIAN**.
 3. **Not inside a raw HTML block.** `rawHtml` state in the pass: a `<div>`,
@@ -1408,7 +1416,9 @@ added, between `Prose <!--` and three tails). No closer is needed. `opensMathBlo
 is untouched and is the wrong predicate here: it asks whether extractChunks will
 consume a block, not whether the paragraph ends. The term-2 pass still reads raw
 lines, so `> $$` is not a stop: fail-closed, pinned as
-`pin-nrl120-quoted-math-still-hidden`.
+`pin-nrl120-quoted-math-still-hidden`. **CLOSED by NRL-114**, which reads a quoted
+line on its peeled body; the pin was replaced in place and now expects HIDDENM
+spoken (see "AMENDED by NRL-114" at the end).
 
 **Both directions, signed per cell at each cell's own position, on ONE arm that
 carries both parts.** Room to fail is the Class A cells silent on base.
@@ -1946,3 +1956,209 @@ check (old base, old head, new base, new head) over 720,000 fuzz cells found 110
 the two changes interact, every one closing a loss. The carry and interior corpora give the same
 counts the r3 plan recorded (6,372 / 5,376 unmasked and 648 `skipCodeBlocks` exclusion). NOT
 VERIFIED IN OBSIDIAN.
+
+## AMENDED by NRL-114 (2026-10-02): the term-2 bound reads a quoted line's peeled body, and term 2 is masked on a container code line
+
+NRL-114 narrows the blockquote peel to `>` plus at most one space (ADR 0006,
+clause 2's NRL-114 amendment). Its commit 7cdc7b7 could not land alone: on
+`9132c3b` it newly lost displayed text, because two pieces of this ADR's rule
+had only ever been fed the wide peel's output. The renderer verdicts below come
+from Obsidian 1.13.7's own parser and HTML renderer executed in Node (`app.js`
+sha256 `8efbf581...9898`).
+
+**Shape A, a quote's fresh-block body that module 134 makes indented code.**
+`>\t<!-- ZCZ` / `> ===` / `> ZAZ -->` / `TAIL ZBZ` renders as
+`<blockquote><pre><code>&#x3C;!-- ZCZ</code></pre><p>===<br>ZAZ --><br>TAIL ZBZ</p>`.
+With the tab left in the body, term 1 already declined the line (`leadIndented`),
+but term 2 (the later `-->`) still opened a block and hid `===` and `ZAZ`.
+
+*Decision.* `htmlLeadCode[k] = htmlLeadIndented[k] && !leads.cont[k] &&
+!leads.unsureFresh[k]`, i.e. `leadIndentedForHtml`'s `nested &&
+startsIndentedCode(lead)` fresh-block branch, and term 2 is masked ONCE, at the
+array level: `htmlClosesLaterAt` replaces `htmlCloserAhead` at every reader
+(the `cleanLine` call, `codeSpanClosesLater`, `bracketClosesLater` and through
+them `interruptsParagraph` and `opensHiddenComment`). Masking can only make term
+2 false, so `opensHtmlBlock`'s composed answer still implies its old one, and its
+body is byte-identical. The same flag vetoes a `%%` block opener on that line
+(`cleanLine`'s new `containerCodeLine` argument) and stops a label carry in
+`bracketClosesLater`, because the renderer has a code block there in both cases.
+
+*Where the walker is unsure, base's answer is kept whole.* After a table-shaped,
+definition-shaped, block-id-shaped or underline-shaped line the walker says
+"fresh" as a safe default, while the renderer may continue a paragraph (or, after
+`[^1]:`, a footnote it dedents). Masking term 2 there newly spoke an inline
+comment's body (`> | a |` / `> \t<!-- SECRETH` / `> =` / `> HIDDEN` / `> --> t.`
+is ONE paragraph), so `rendererLeads` records `unsureFresh` and those lines take
+the pre-NRL-114 raw term-2 answer (`htmlCloserAheadRaw`). A lone CR before the
+line's first `<!--` or `%%` drops the term-1 veto, since the renderer starts a
+new physical line there that the walker never saw.
+
+**Shape B, a lazy tab-led continuation, then a QUOTED paragraph end.**
+`> Plain ZPZ prose` / `>\t<!-- ZCZ` / `> ---` / `> ZAZ -->` / `TAIL ZBZ` renders as
+`<blockquote><p>Plain ZPZ prose<br>&#x3C;!-- ZCZ</p><hr><p>ZAZ --><br>TAIL ZBZ</p>`.
+The term-2 pass read the raw line, so `> ---` was never a stop (NRL-95 had pinned
+this as a fail-closed residual; the narrower peel unmasked it).
+
+*Decision.* `term2QuotedStop` WRAPS `endsTerm2Scan` / `endsTerm2Block` rather than
+editing them (both bodies byte-identical, for NRL-119's lane): an unquoted line
+takes exactly the old path; a quoted line is peeled with `TERM2_QUOTE_LEVEL`
+(`/^ {0,3}> ?/`, spaces only on both sides, narrower than the peel's own
+`\s{0,3}` on purpose, since a `>` behind a tab is a lazy continuation for module
+8607, not a nested quote) and then:
+
+- a spaces-only blank body is a stop;
+- a body whose lead is four or more spaces or whose first non-space character is
+  other whitespace (a tab, an NBSP) is NOT a stop, blank or not (decisions Q4 and
+  Q10): module 8607 lazy-continues it, and stopping there is the disclosure
+  direction (`pin-nrl114-quoted-tab-hr-is-not-a-stop`,
+  `guard-nrl114-quoted-tab-blank-is-not-a-stop`);
+- a callout TITLE on a quote's certain first line is a block of its own;
+- anything else is `endsTerm2Scan(body, ...)`, unchanged.
+
+**Deviation from the plan: no depth-rise stop.** Decision Q3 planned a stop where
+quote depth rises. It was built and REMOVED: remark keeps more lines in one
+paragraph than a bare depth test predicts, and that arm newly spoke hidden text
+in this ticket's fuzz. Its cost is the pre-existing one, pinned as
+`pin-nrl114-deeper-quote-still-hides-term2` (`> Plain <!--` / `>> ZAZ -->`, the
+renderer displays ZCZ and ZAZ, identical on every arm, fail-closed).
+
+**`isSetextContentLine`'s quote arm** gets the plain arm's NRL-155 lead rule on
+the quote body (`PLAIN_SETEXT_HTML_OPENER` and not `MODULE134_INDENTED_CODE`, a
+tab-bearing lead only in block position via `inQuoteSetextBlockPosition`), with
+one base-parity case: a non-space, non-tab whitespace character directly after
+`>` keeps the old spaces-only answer. Narrowing term 1's `.trim()` lead for that
+character was built, closed those cells, and unmasked 46 newly disclosing fuzz
+cells of the classes below, so it was reverted.
+
+### Evidence, all bare Node against the executed renderer
+
+Censuses, base `9132c3b` against the fix, units = sentinel-cells (every sentinel
+in a shape x every one of the 512 content-key masks, signed against the rendered
+HTML; a displayed sentinel in a code, heading, table or math context is excused
+when its content key is on). "Reconstructed" means rebuilt by construction from
+the source ticket's description, not replayed.
+
+| corpus | shapes x masks | lost base -> fix (closed / NEWLY) | disclosed base -> fix (closed / NEWLY) |
+|---|---|---|---|
+| NRL-114 amendment census, reconstructed (7 leads x 6 bodies x quoted/lazy x closer/none x 2 positions) | 308 x 512 | 75,264 -> 30,720 (44,544 / **0**) | 4,096 -> 0 (4,096 / **0**) |
+| run 205646 quoted-setext class plus quoted-HR rows, reconstructed | 270 x 512 | 36,864 -> 24,576 (12,288 / **0**) | 0 -> 0 (no room) |
+| run 205646's 638,976-cell census plus augmentation, reconstructed | 1,664 x 512 | 359,680 -> 115,968 (243,712 / **0**) | 88,064 -> 20,480 (67,584 / **0**) |
+| 7cdc7b7's 3,150-shape census plus quoted HR/blank rows | 5,670 x 512 | 986,112 -> 373,504 (612,608 / **0**) | 97,792 -> 66,048 (31,744 / **0**) |
+| NRL-115 Verify census plus augmentation | 5,418 x 512 | 1,261,312 -> 819,456 (441,856 / **0**) | 2,048 -> 0 (2,048 / **0**) |
+| NRL-155 predecessor census plus quoted twins | 20,800 x 512 | 5,448,192 -> 3,427,840 (2,020,352 / **0**) | 48,128 -> 48,128 (0 / **0**) |
+| NRL-131 position census x 512 plus `<!--` rows | 980 x 512 | 314,112 -> 82,176 (231,936 / **0**) | 0 -> 0 (no room) |
+
+Destination: 6,656 -> 6,656 in the 638,976-cell corpus, 0 moved, 0 elsewhere.
+Every corpus carries a quoted-setext row, a quoted thematic-break row (`---`,
+`***`, `-`, bare `>`) and a tab-led `<!--` row. Room to fail is shown by the
+wrong arm: 7cdc7b7 alone newly loses 10,240 sentinel-cells in the amendment census
+and 46,080 in the 3,150-shape one, and the depth-rise and term-1-narrowing arms
+both newly disclosed in the fuzz.
+
+**Fuzz, and every newly moved cell adjudicated on a defused control (decision
+Q11).** Three 4,000-note fuzz runs (per-line unique sentinels; tabs, NBSP, VT,
+U+3000, lone CR and CRLF; quote, nested-quote, tab-between-levels, callout, list
+and quote-in-list prefixes; `<!--`, `-->`, `%%`, setext, quoted HR, tables,
+footnotes, destinations), masks 221 (the suite's `OPTS`) and 0:
+
+| seed | sentinel-cells | lost base -> fix (closed / newly) | disclosed base -> fix (closed / newly) |
+|---|---|---|---|
+| 20261002 | 25,978 | 3,352 -> 2,285 (1,071 / 4) | 615 -> 607 (19 / 11) |
+| 7 | 25,854 | 3,266 -> 2,334 (937 / 5) | 671 -> 654 (25 / 8) |
+| 99 | 26,034 | 3,197 -> 2,283 (914 / 0) | 639 -> 637 (4 / 2) |
+
+All 30 newly moved sentinel-cells sit in 15 notes. In every one, base was right
+only by accident: an over-wide peel or opener that this change corrects had
+hidden or exposed the region, and the fix exposes a pre-existing gap behind it.
+Each is accepted ONLY because the fix's output on the note is byte-identical,
+modulo the one defused token, to base's output on a twin with that trigger
+defused:
+
+| note | moved | class | defused twin (base output = fix output on the original) |
+|---|---|---|---|
+| 20261002 n1670, n1796, n2730; 7 n510, n990, n3011; 99 n1486 | disclose a footnote body | NRL-163 (unreferenced footnote definition) | `>\v%%` -> `>\va%%`; `<!--` -> `<!-`; `>\t> %%` -> `>\t> a%%`; `>　%%` -> `> a%%`; `>>\t%%` -> `>>\ta%%`; `>\t>    %%` -> `>\t>    a%%`; `<!--` -> `<!-` (twins in note order) |
+| 20261002 n193, n2311 | disclose text after a lone CR | NRL-164 (lone CR) | `>　%%` -> `> a%%`; `<!--` -> `<!-` |
+| 20261002 n1334; 7 n1018, n1123 | lose text after a lone CR | NRL-164 | `%% HBAZ` -> `HBAZ`; `>>\t%%` -> `>>\ta%%`; `>\t>    %%` -> `>\t>    a%%` |
+| 20261002 n3524; 7 n1677 | lose text after a VT- or tab-led `%%` in a list/quote | NRL-165 (NRL-153 family) | `[!note]      %% HAAZ` -> `[!note]      HAAZ`; `> \t %%` -> `> \t a%%` |
+| 7 n263 | disclose a `<!--` body inside a raw `<div>` block | NRL-137 | `>     %%` -> `>     a%%` |
+
+NRL-164 and NRL-165 were filed by this ticket with renderer / base / fix rows;
+NRL-163 was filed at the orchestrator's unblock. None is an owner decision for
+NRL-114.
+
+**Found at ship by `/critique`, outside every corpus above, and adjudicated the
+same way.** A hand-built probe set of 60 shapes and a further 4,000-note fuzz (seed 4242,
+quote, list, callout, footnote, table, setext, HR, fence, math, `%%`, `<!--` and
+label populations, 20% CRLF, masks `skipCodeBlocks`/`skipTables` off and on,
+30,064 sentinel-cells, executed renderer) turned up newly moved cells in four
+probe shapes (below) and in 8 fuzz notes (42 sentinel-cells). Every one has a
+twin, one defused token or one `>\t` -> `> \t`, on which base speaks exactly the
+fix's sentinel set (a set comparison, weaker than the byte-identity used for the
+table above), so each is an unmasking under decision Q11 and not a new class:
+the fuzz notes fall into the NRL-163 footnote class, the code-line inline-`%%`
+miss below, and one CRLF `$$` scope note whose `<!--`-defused twin loses the
+same tail on base. But the first probe shape is named nowhere above, which is
+the corpus-blindness lesson again: no structured corpus put a table-shaped line
+above the opener.
+
+| shape | moved | why | base control (base output = fix output) |
+|---|---|---|---|
+| `> \| a \|` / `>\t<!-- ZCZ` / `> ---` / `> ZAZ -->` | lose ZCZ, ZAZ | `unsureFresh` keeps the raw term-2 answer, which never sees `> ---` (the NRL-95 container residual) | the ` \t` twin, `> \| a \|` / `> \t<!-- ZCZ` / ...; also the unquoted `\| a \|` / `\t<!-- ZCZ` / `---` |
+| `> [^1]: foot` / `>\t<!-- ZCZ` / `> ---` / `> ZAZ -->` | lose ZAZ (and stop disclosing ZCZ) | the renderer's footnote holds `<!-- ZCZ` as an html node; NRL-163 | the unquoted `[^1]: foot` / `\t<!-- ZCZ` / `---` / `ZAZ -->` |
+| `>\t%% ZAZ` / `> \tZBZ %% ZCZ %%` | lose ZCZ (and stop losing ZAZ, ZBZ) | a container line declined as code is still cleaned as prose, so its inline `%%` pair is stripped (the known miss above) | the ` \t` twin `> \t%% ZAZ` / ... |
+| `> \t-` / `>\t\tZAZ` / `>\t> ZBZ <!-- ZCZ` / `> \t[^1]: ZDZ` / `[^1]: ZEZ` / `>\tZFZ -->` | disclose ZEZ, ZFZ | an unreferenced footnote definition after a code block; NRL-163 | `<!-- ZCZ` -> `ZCZ` |
+
+The first two are pinned with their controls
+(`pin-nrl114-table-line-then-quoted-hr-still-hides-term2` /
+`guard-nrl114-table-line-space-tab-control`,
+`pin-nrl114-quoted-footnote-then-quoted-hr-unmasked` /
+`guard-nrl114-unquoted-footnote-control`); each pin is RED on base and each
+control is green on base. The same fuzz found 0 `sourceIndex` length or identity
+failures on the fix.
+
+**`sourceIndex`**, by numeric UTF-16 code-unit index on both arms over every corpus
+above and all three fuzz runs: **0 failures** (fix: 28,561,920 chunks / 168,228,352
+units on the largest corpus alone), with all four mutators nonzero on both arms
+in every corpus (drop-one: length; shift-all: identity, plus bounds where a chunk
+ends at the note's end; swap-two: monotonic and identity; negate-one: bounds).
+Both exemptions are pre-existing: without `text[i] === " "` the fuzz reports 535
+identity failures on base and 541 on the fix, and without the synthetic
+`equation` text 208 on each.
+
+**Function bodies** (sha256 prefix of the brace-matched body, by an extractor
+that skips strings, template literals, comments and regex literals and skips an
+object-literal return type; it reproduces AGENTS.md's recorded `labelClose`
+`92023b33` and `flowDepthDelta` `ec178340`): byte-identical on base, 7cdc7b7 alone
+and the fix: `opensHtmlBlock` `fcd96db3`, `opensObsidianBlock` `f3cce67c`,
+`interruptsParagraph` `fb9d300a`, `endsTerm2Block` `6ee6ee43`, `endsTerm2Scan`
+`79a65e08`, `codeSpanClosesLater` `57607b36`, `labelClose` `92023b33`,
+`closerAheadTable` `76967375`, `opensMathBlock` `77f97d0a`, `inlineContainerClose`
+`8da74d5f`, `wikiTargetClose` `18052772`, `flowDepthDelta` `ec178340`,
+`opensHiddenComment` `98f5273f`. Moved, as intended: `peelQuotes` (7cdc7b7),
+`containerPrefix` (7cdc7b7), `isSetextContentLine`, `bracketClosesLater`,
+`cleanLine` (one argument and one term).
+
+**Tests.** Against base `9132c3b`, 22 NRL-38 checks are red (10 are 7cdc7b7's own
+pins, 12 this continuation's, including five pre-existing tripwires replaced in
+place: `pin-nrl95-bullet-inside-quote-still-hidden`,
+`pin-nrl117-scope-cost-contentless-marker`, `pin-nrl120-quoted-math-still-hidden`,
+`guard-nrl155-quote-arm-unchanged`, `guard-nrl155-list-arm-unchanged`) and the
+NRL-114 textual section throws. Against 7cdc7b7 alone, 15 are red: 13 of this
+continuation's and the two `pin-nrl115-f1-code-line-*` pins 7cdc7b7 regressed on
+this base. Four guards are green on all three arms, and two 7cdc7b7 fixtures
+whose expectations were stale on every arm were renamed and replaced
+(`guard-nrl114-quote-tab-html-comment-spoken`,
+`guard-nrl114-setext-quote-tab-html-opener-spoken`).
+
+**Known misses, pinned.** A container line declined as code is spoken as prose,
+so `skipCodeBlocks` does not silence it (displayed text, base parity on the
+shapes base already spoke). `>  \t<!-- ZCZ` / `> ===` speaks the `===` underline
+the renderer does not display (a glyph, not hidden text). A deeper quote after an
+opener still hides (above).
+
+**NOTHING WAS OBSERVED IN OBSIDIAN.** Reading-view parser and renderer executed
+in Node only; Live Preview has never been read or run; AGENTS.md rule 11 applies
+to every number above. Overlap: NRL-119 edits `endsTerm2Block` and `TERM2_LIST`;
+this change wraps them and never edits their bodies, and whichever of the two
+merges second must rebase and re-run both censuses. R-M08 is NOT met and the
+2-of-16 MUST count does not move.

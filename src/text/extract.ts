@@ -702,6 +702,7 @@ function cleanLine(
 	dedentedByList = false,
 	setextContent = false,
 	htmlLeadIndented = false,
+	containerCodeLine = false,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -1123,7 +1124,7 @@ function cleanLine(
 		if ((htmlComment || obsidianComment) && i >= literalCodeEnd) {
 			const closer: CommentCloser = htmlComment ? "-->" : "%%";
 			const close = raw.indexOf(closer, i + (htmlComment ? 4 : 2));
-			if (close === -1 && obsidianComment && !(blockComments && opensObsidianBlock(raw, i, dedentedByList))) {
+			if (close === -1 && obsidianComment && !(blockComments && !containerCodeLine && opensObsidianBlock(raw, i, dedentedByList))) {
 				emit("%", rawStart + i);
 				emit("%", rawStart + i + 1);
 				i += 2;
@@ -1881,8 +1882,62 @@ const PEEL_MARKER = /^\s*([-*+]|\d+[.)])(?=\s)/;
 const PEEL_LEAD = /^(?: {1,4}(?! )| |\t)/;
 /** The old `TASK` with its trailing whitespace run removed; see above. */
 const PEEL_TASK = /^\[[^\]]\](?=\s|$)/;
-/** One quote level, for counting. See containerPrefix. */
-const BLOCKQUOTE_LEVEL = /^\s{0,3}>\s?/;
+/**
+ * THE PEEL'S OWN quote marker rule, one level and all levels: `>` plus at most
+ * one SPACE, where the shared `BLOCKQUOTE` above allows any single whitespace
+ * character. Obsidian's blockquote tokenizer (module 6234) consumes the `>` and
+ * then advances over at most one character, and that character must be a space
+ * (`t.charAt(D)===a&&D++` with `a = " "`). So for `>` + TAB + `%%` the renderer
+ * hands `\t%%` to the block tokenizers, where a tab-led line is never a `%%`
+ * opener and the text is DISPLAYED, while our `\s?` ate the tab, put `%%` at
+ * offset 0 of the body and hid the rest (NRL-114). Measured with the real
+ * parser, the same divergence covered five members of `\s` and not just the tab
+ * the ticket named: a tab, a tab-then-space, an NBSP, a vertical tab and an
+ * ideographic space. A lone CR is the sixth and is the exception, below.
+ *
+ * `\r` IS STILL CONSUMED, and that one character is a measured departure from
+ * "a space only" rather than an oversight. A lone CR is a LINE TERMINATOR for
+ * the renderer, not whitespace: measured, `> Plain prose` / `>\r%%` / `> SECRET`
+ * renders as `<blockquote><p>Plain prose</p></blockquote>` with SECRET HIDDEN,
+ * because the parser breaks the line at the CR and the `%%` that follows is at a
+ * line start. Consuming the CR puts that `%%` at offset 0 of our body, which is
+ * the same place, so the verdict agrees; leaving it in place made the line a
+ * non-opener for us and newly SPOKE author-hidden text in 32,256 of the 5,160,960
+ * sentinel-cells of a 3,150-shape census reconstruction (re-measured on 9132c3b)
+ * - the disclosure direction, which is the one this change must
+ * not move. A real CRLF file is untouched either way, its CR sitting at the end
+ * of the line rather than after the marker; only a classic-Mac CR-only file
+ * reaches this. The remaining non-space members of `\s` - tab, tab-then-space,
+ * NBSP, vertical tab, ideographic space - are NOT line terminators for the
+ * renderer and are left in the body, which is the fix.
+ *
+ * PEEL-LOCAL on purpose, which is the NRL-98 precedent verbatim: feed the
+ * UNCHANGED predicate a different string rather than moving the shared
+ * constant. `BLOCKQUOTE` stays byte-identical because `interruptsParagraph`
+ * reads it, and narrowing that would move `codeSpanClosesLater` and collide
+ * with ADR 0019's F5 guard. `BLOCKQUOTE_LEVEL` is renamed rather than
+ * duplicated: its only two readers were this peel.
+ *
+ * THE ALL-LEVELS FORM MUST BE LITERALLY `^(?:<one level>)+`. `containerPrefix`
+ * gates on it and then walks the one-level form across exactly what it matched,
+ * and the loop's documented guarantee - "the iteration consumes exactly q[0]" -
+ * is what licenses `quotes` as a peel budget. Narrow one and not the other and
+ * it breaks measurably: with a wide gate and a narrow counter, `>\t>\tx` gives
+ * `end = 4` while the walk stops at 3, so `chars` advances four characters that
+ * no counted level consumed and the budget under-reports the prefix. That is
+ * the "half a fix" this function's own comment warns about, and
+ * tests/extract.test.ts pins it as a property rather than asserting it.
+ *
+ * The `listDedented` pass and the `setextContent` listInRun scan deliberately
+ * keep the WIDE `BLOCKQUOTE` (ADR 0006 clause 2, NRL-114 amendment). They are
+ * peels by shape, so the asymmetry is signed rather than overlooked: for
+ * `>\t%%` the wide peel leaves `indented` false where a narrow one would leave
+ * it true, and `indented` true keeps the item run alive, i.e. hides. Leaving
+ * them wide is both the speak direction and unchanged behaviour. Do not
+ * "align" them without measuring.
+ */
+const QUOTE_LEVEL_PEEL = /^\s{0,3}>[ \r]?/;
+const QUOTE_PREFIX_PEEL = /^(?:\s{0,3}>[ \r]?)+/;
 
 /**
  * The container prefix this line carries: how many characters of it there are,
@@ -1952,12 +2007,12 @@ function containerPrefix(line: string): {
 	for (;;) {
 		const before = chars;
 		let levelsHere = 0;
-		const q = line.slice(chars).match(BLOCKQUOTE);
+		const q = line.slice(chars).match(QUOTE_PREFIX_PEEL);
 		if (q) {
 			const end = chars + q[0].length;
 			let at = chars;
 			while (at < end) {
-				const level = BLOCKQUOTE_LEVEL.exec(line.slice(at, end));
+				const level = QUOTE_LEVEL_PEEL.exec(line.slice(at, end));
 				if (!level || level[0].length === 0) break;
 				levelsHere += 1;
 				at += level[0].length;
@@ -2091,7 +2146,7 @@ function containerPrefix(line: string): {
 function peelQuotes(line: string, budget: number): string {
 	let rest = line;
 	for (let n = 0; n < budget; n++) {
-		const level = BLOCKQUOTE_LEVEL.exec(rest);
+		const level = QUOTE_LEVEL_PEEL.exec(rest);
 		if (!level || level[0].length === 0) break;
 		rest = rest.slice(level[0].length);
 	}
@@ -2602,6 +2657,95 @@ function endsTerm2Scan(line: string, paraLinesAbove: number): boolean {
 }
 
 /**
+ * One blockquote level as module 6234 consumes it, for the term-2 bound only
+ * (NRL-114): at most three SPACES, the `>`, then at most one SPACE. Spaces only
+ * on BOTH sides, and that is narrower than the peel's own `QUOTE_LEVEL_PEEL`,
+ * whose `\s{0,3}` also takes a tab BEFORE the marker, on purpose. A `>` behind a
+ * tab is not a nested quote for the renderer: inside a quote paragraph the
+ * tab-led body is a lazy continuation (module 8607 never runs its interrupt
+ * walk on it), so counting it as a deeper level would read a "deeper quote
+ * starts here" stop the renderer does not have, which is the disclosure
+ * direction for term 2.
+ */
+const TERM2_QUOTE_LEVEL = /^ {0,3}> ?/;
+/** A callout title's marker as module 6234 matches it (see `walkLeadQuote`). */
+const TERM2_CALLOUT_TITLE = /^\[![^\]]+\][+-]?(?:\s|$)/;
+
+/**
+ * The quote depth module 6234 would strip from `line` and the body it leaves.
+ */
+function term2QuoteView(line: string): { depth: number; body: string } {
+	let depth = 0;
+	let body = line;
+	for (;;) {
+		const m = TERM2_QUOTE_LEVEL.exec(body);
+		if (!m) break;
+		depth += 1;
+		body = body.slice(m[0].length);
+	}
+	return { depth, body };
+}
+
+/**
+ * The term-2 stop for a QUOTED line, read on its quote-peeled body (NRL-114,
+ * ADR 0025's NRL-114 amendment). It WRAPS `endsTerm2Scan` and `endsTerm2Block`
+ * rather than editing them, so their bodies stay byte-identical for every
+ * unquoted line and for the other lanes that edit them.
+ *
+ * Before this, the term-2 pass read the RAW line, so `> ---` or `> -` was never
+ * a stop and a `<!--` on a quoted line kept looking for its `-->` past a quoted
+ * thematic break or list item that ends the renderer's paragraph. That was a
+ * fail-closed residual (NRL-95 pinned it) until NRL-114's narrower peel left a
+ * tab in the quote body and the hidden span started swallowing text Obsidian
+ * displays: `> Plain` / `>\t<!-- ZCZ` / `> ---` / `> ZAZ -->` renders ZCZ and
+ * ZAZ, and an arm without this wrapper spoke neither.
+ *
+ * Three rules, each measured against the executed renderer:
+ *
+ * - A body that is blank with SPACES only is a stop. A body whose first
+ *   non-space character is any other whitespace (a tab, an NBSP, ...) or whose
+ *   lead is four or more spaces is NOT a stop, blank or not (decisions Q4 and
+ *   Q10): module 8607 reads such a line as a lazy continuation, and stopping
+ *   there is the disclosure direction, since the comment really does cross it.
+ *   It also keeps the shared stop terms, `FENCE`'s `\s*` and `HR`'s `\s{0,3}`,
+ *   from ever seeing a non-space lead here.
+ * - A callout TITLE on a quote's first line is a block of its own; see below.
+ * - Anything else is `endsTerm2Scan(body, ...)`, unchanged.
+ *
+ * A change of quote DEPTH is deliberately NOT a stop, although decision Q3
+ * planned one for a deeper level. It was built and measured: remark's
+ * blockquote tokenizer keeps far more lines in one paragraph than CommonMark's
+ * lazy-continuation rule suggests (`>>-` / `>> ---` / `> [!note]  ---` /
+ * `   >    XDAZ <!-- YDAZ` / `> > CEAZ -->` is ONE list-item paragraph whose
+ * inline comment hides YDAZ and CEAZ), so a depth rise read as "a new quote
+ * starts" newly spoke hidden text in this ticket's fuzz. Not stopping there is
+ * the fail-closed direction, and its cost - a quote STARTING after a `<!--`
+ * keeps hiding, `pin-nrl95-quote-starting-after-opener-still-hidden` - is the
+ * pre-existing one.
+ *
+ * Returns the stop and the content-line count for the NEXT line.
+ */
+function term2QuotedStop(body: string, quoteStart: boolean, paraLinesAbove: number): { stop: boolean; next: number } {
+	if (/^ *\r?$/.test(body)) return { stop: true, next: 0 };
+	// A callout TITLE is tokenized on its own, before the rest of the quote
+	// (module 6234, the same rule `walkLeadQuote` follows), so it is a block of
+	// its own and the content line under it is a block's FIRST line: a `===`
+	// there is an underline under one content line. Counting the title made it
+	// the second and kept the term-2 scan crossing a heading
+	// (`> [!note] Title` / `>` + VT + `<!--` / `> ===` / `> SECRET` / `> -->`
+	// is `<h1>` then a displayed SECRET for the renderer). Only on a quote's
+	// certain first line - the note's first line or the line after a stop - since
+	// anywhere else `[!note]` is paragraph text.
+	if (quoteStart && TERM2_CALLOUT_TITLE.test(body)) return { stop: true, next: 0 };
+	const lead = /^ */.exec(body)![0].length;
+	if (lead >= 4 || /\s/.test(body.charAt(lead))) return { stop: false, next: paraLinesAbove + 1 };
+	return {
+		stop: endsTerm2Scan(body, paraLinesAbove),
+		next: endsTerm2Block(body, paraLinesAbove) ? 0 : paraLinesAbove + 1,
+	};
+}
+
+/**
  * If `body` opens a raw HTML block that is not a comment, the condition that
  * closes it: a pattern for CommonMark types 1, 3, 4 and 5, which may span blank
  * lines, or `"blank"` for everything else, which closes at a blank line. A
@@ -2664,7 +2808,8 @@ const MODULE134_INDENTED_CODE = /^(?: {4}|\t)/;
  * A `<!--` at the start of a PLAIN line after any run of spaces and tabs. The
  * plain arm of `isSetextContentLine` pairs it with `MODULE134_INDENTED_CODE`,
  * so the lead it accepts is exactly the set that reaches module 8671 rather
- * than module 134.
+ * than module 134. NRL-114 gives the QUOTE arm the same rule, read on the quote
+ * body.
  */
 const PLAIN_SETEXT_HTML_OPENER = /^[ \t]*<!--/;
 /**
@@ -2711,6 +2856,46 @@ function inSetextBlockPosition(lines: readonly string[], k: number): boolean {
 	// `HIDDEN` / `-->` is one `<p>` that hides HIDDEN. Measured: accepting it
 	// newly spoke HIDDEN in 1,792 predecessor-census cells on the NRL-113 arm.
 	return /^ *\r?$/.test(prev) || BLOCK_END_ATX.test(prev) || BLOCK_END_HR.test(prev) || BLOCK_END_FENCE.test(prev);
+}
+/**
+ * `inSetextBlockPosition` for a line `depth` quote levels deep (NRL-114): is a
+ * tab-led body there in BLOCK position, so that the quote's content tokenizers
+ * can make it setext content rather than a lazy continuation of a paragraph?
+ *
+ * Fail-closed in every branch it is unsure of, since answering true where the
+ * renderer continues a paragraph refuses a `<!--` the renderer keeps inside an
+ * inline comment, which is a disclosure.
+ *
+ * - The first line of the note, or a previous line at the SAME depth whose body
+ *   is spaces-only blank or an ATX heading, a thematic break or a fence line
+ *   (`inSetextBlockPosition`'s own allowlist, on the peeled body).
+ * - A previous line at the same depth with any other body, or at a DEEPER
+ *   depth, is a paragraph the line may continue: false.
+ * - A SHALLOWER or unquoted previous line means the quote may start here, but
+ *   only if that line does not continue an earlier paragraph at this depth or
+ *   deeper, so the walk goes back until a block end (true) or a line at this
+ *   depth or deeper (false). A callout or a list marker anywhere on the way
+ *   fails closed.
+ */
+function inQuoteSetextBlockPosition(lines: readonly string[], k: number, depth: number): boolean {
+	for (let j = k - 1; j >= 0; j--) {
+		const raw = lines[j]!;
+		const p = containerPrefix(raw);
+		// A callout title right above, at this depth, is a block of its own (module
+		// 6234 tokenizes it first), so the line under it starts the content.
+		if (p.callout) return j === k - 1 && p.quotes === depth;
+		if (p.blockType === "list") return false;
+		const quotes = p.blockType === "quote" ? p.quotes : 0;
+		if (quotes > 0) {
+			const q = raw.match(QUOTE_PREFIX_PEEL);
+			if (!q || q[0].length !== p.chars) return false;
+		}
+		const body = raw.slice(quotes > 0 ? p.chars : 0);
+		const blockEnd = /^ *\r?$/.test(body) || BLOCK_END_ATX.test(body) || BLOCK_END_HR.test(body) || BLOCK_END_FENCE.test(body);
+		if (quotes >= depth) return quotes === depth && j === k - 1 && blockEnd;
+		if (blockEnd) return true;
+	}
+	return true;
 }
 /**
  * Any list marker, including a BARE one with nothing after it. `LIST_BULLET`
@@ -2796,17 +2981,39 @@ function isSetextContentLine(lines: readonly string[], k: number, lazyInListItem
 	const next = lines[k + 1]!;
 	const p = containerPrefix(line);
 	if (p.callout || p.blockType === "heading") return false;
-	const q = line.match(BLOCKQUOTE);
+	const q = line.match(QUOTE_PREFIX_PEEL);
 	const quoteChars = q ? q[0].length : 0;
 	if (p.blockType === "quote") {
 		// Quote levels only: a quoted list item or task is left to fail closed.
 		if (p.chars !== quoteChars) return false;
-		if (!HTML_OPENER_AT_START.test(line.slice(p.chars))) return false;
+		// The quote BODY gets the plain arm's lead rule (NRL-114): any run of
+		// spaces and tabs that module 134 does not take as indented code, a
+		// tab-bearing one only in block position. With the narrower peel the body
+		// keeps the character after `>` + one space, so `>  \t<!--` / `> ===` has
+		// the body ` \t<!--`, which is `<h1>` for the renderer and which the old
+		// spaces-only `HTML_OPENER_AT_START` refused to recognise.
+		const body = line.slice(p.chars);
+		// ONE deliberate base-parity case, in the manner of the peel's lone CR: a
+		// whitespace character other than a space or a tab directly after the `>`
+		// (an NBSP, a vertical tab, a form feed, an ideographic space). The old
+		// wide peel consumed it, so the old spaces-only test saw `<!--` at offset 0
+		// and refused; with the narrower peel it stays in the body. For the
+		// renderer such a line is paragraph text, not an HTML opener at all, and
+		// the right fix is `opensHtmlBlock`'s term 1, whose `.trim()` accepts that
+		// lead. That fix was built and measured: it closed these cells and
+		// UNMASKED renderer behaviour nothing here models (an unreferenced footnote
+		// definition, a raw HTML block, a `%%` inside a quoted list item), which
+		// base had hidden only through the same over-wide term 1, 46 newly
+		// disclosing cells in this ticket's fuzz. So this character position keeps
+		// exactly the old answer, and the term-1 lead stays as it was (NRL-114).
+		const exoticAfterMarker = /^[^\S \t\r\n]/.test(body) && line[p.chars - 1] === ">";
+		if (exoticAfterMarker ? !HTML_OPENER_AT_START.test(body.slice(1)) : !PLAIN_SETEXT_HTML_OPENER.test(body) || MODULE134_INDENTED_CODE.test(body)) return false;
 		const n = containerPrefix(next);
 		if (n.blockType !== "quote" || n.quotes !== p.quotes || n.callout) return false;
-		const nq = next.match(BLOCKQUOTE);
+		const nq = next.match(QUOTE_PREFIX_PEEL);
 		if (!nq || n.chars !== nq[0].length) return false;
-		return SETEXT_UNDERLINE_EXACT.test(next.slice(n.chars));
+		if (!SETEXT_UNDERLINE_EXACT.test(next.slice(n.chars))) return false;
+		return exoticAfterMarker || !TAB_BEARING_LEAD.test(body) || inQuoteSetextBlockPosition(lines, k, p.quotes);
 	}
 	if (p.blockType === "list") {
 		const m = line.match(ONE_SPACE_MARKER);
@@ -3042,6 +3249,7 @@ function bracketClosesLater(
 	listDedented: readonly boolean[],
 	htmlLeadIndented: readonly boolean[],
 	htmlLeadLazy: readonly boolean[],
+	htmlLeadCode: readonly boolean[],
 ): boolean {
 	// `htmlCloserAhead` is indexed by RAW line number and stays so under the peel
 	// (NRL-95 landing under NRL-98). That is sound rather than an oversight: the
@@ -3070,6 +3278,14 @@ function bracketClosesLater(
 	const containerInPlay = op.quotes > 0 || op.blockType === "list";
 	if (interruptsParagraph(lines[from]!.slice(op.chars), htmlCloserAhead[from]!, listDedented[from]!, htmlLeadIndented[from]!) || opensMathBlock(lines, from, op.quotes)) return false;
 	if (containerInPlay && containerCarryStops(lines[from]!.slice(op.chars), false, htmlLeadLazy[from]!)) return false;
+	// A container line whose dedented body is module 134 indented code is a CODE
+	// block for the renderer, so no label can open on it or run across it
+	// (NRL-114). The wide peel used to hide this: it ate the tab in `>\t![alt`,
+	// so the opener looked like a paragraph and the next `>\t<div>` line hit
+	// `HTML_BLOCK_OPEN`. With the tab left in the body neither held, the carry
+	// confirmed, and `[`, `](` and the destination - all displayed as code text
+	// (`<blockquote><pre><code>![alt ZAZ...](ZDZ.png) ZBZ`) - went silent.
+	if (containerInPlay && htmlLeadCode[from]!) return false;
 	// Starts at 0 rather than at a depth read off the opener line, and that is
 	// provable rather than an approximation: the carry is armed only when
 	// `inlineContainerClose(raw, openerAt, "]")` is -1, so there is no `]` after
@@ -3091,6 +3307,7 @@ function bracketClosesLater(
 		const line = peelQuotes(lines[n]!, op.quotes);
 		if (interruptsParagraph(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!) || opensMathBlock(lines, n, op.quotes)) return false;
 		if (containerInPlay && containerCarryStops(line, op.quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!), htmlLeadLazy[n]!)) return false;
+		if (containerInPlay && htmlLeadCode[n]!) return false;
 		const found = labelClose(line, 0, depth);
 		if (found.close === -1) {
 			depth = found.depth;
@@ -3360,6 +3577,15 @@ interface RendererLeads {
 	cont: boolean[];
 	nested: boolean[];
 	closerInPara: boolean[];
+	/**
+	 * A fresh-block line the walker classified as such only because the line
+	 * above it was AMBIGUOUS (table-, definition-, block-id- or underline-shaped,
+	 * which the renderer may have taken as paragraph text instead), or a line of
+	 * an indented-code run that began on one. `nested && startsIndentedCode`
+	 * there may be a lazy continuation for the renderer, so NRL-114's term-2
+	 * code mask must not trust it (`htmlLeadCode` in extractChunks).
+	 */
+	unsureFresh: boolean[];
 	pending: { frame: LeadFrameLine[]; depth: number }[];
 }
 
@@ -3572,9 +3798,12 @@ function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: Rend
 		}
 		record(i, false);
 		if (startsIndentedCode(view)) {
+			const unsure = ambiguousAt === i - 1;
+			if (unsure) out.unsureFresh[frame[i]!.id] = true;
 			let j = i + 1;
 			while (j < frame.length && (frame[j]!.view.trim() === "" || startsIndentedCode(frame[j]!.view))) {
 				record(j, false);
+				if (unsure) out.unsureFresh[frame[j]!.id] = true;
 				j++;
 			}
 			state = "fresh";
@@ -3851,6 +4080,7 @@ function rendererLeads(lines: readonly string[], from: number): RendererLeads {
 		cont: new Array<boolean>(lines.length).fill(false),
 		nested: new Array<boolean>(lines.length).fill(false),
 		closerInPara: new Array<boolean>(lines.length).fill(false),
+		unsureFresh: new Array<boolean>(lines.length).fill(false),
 		pending: [],
 	};
 	const frame: LeadFrameLine[] = [];
@@ -4086,29 +4316,54 @@ export function extractChunks(
 	// which the renderer hides. ON a block's second line the same dash run IS an
 	// `<h2>` and does reset, through `TERM2_SETEXT_DASH`. Both directions measured
 	// against real rendered HTML.
+	//
+	// NRL-114: a QUOTED line is asked on its quote-peeled body, through
+	// `term2QuotedStop`; an unquoted line takes exactly the old path.
+	//
+	// `term2StopRaw` is the pre-NRL-114 pass, every line read raw, kept beside the
+	// quote-aware one for the lines where the walker cannot say what the renderer
+	// does with a quoted line (`unsureFresh`, below); those keep the old answer.
 	const term2Stop: boolean[] = new Array<boolean>(lines.length).fill(false);
+	const term2StopRaw: boolean[] = new Array<boolean>(lines.length).fill(false);
 	{
 		let paraLinesAbove = 0;
+		let rawLinesAbove = 0;
+		let prevDepth = 0;
 		for (let k = 0; k < lines.length; k++) {
 			const line = lines[k]!;
 			// Both predicates are asked with the SAME count, before it is updated.
 			// `endsTerm2Scan` is called rather than its one extra term inlined, so
 			// the scan's stop set keeps exactly one definition.
-			term2Stop[k] = endsTerm2Scan(line, paraLinesAbove);
-			paraLinesAbove = endsTerm2Block(line, paraLinesAbove) ? 0 : paraLinesAbove + 1;
+			term2StopRaw[k] = endsTerm2Scan(line, rawLinesAbove);
+			rawLinesAbove = endsTerm2Block(line, rawLinesAbove) ? 0 : rawLinesAbove + 1;
+			const { depth, body } = term2QuoteView(line);
+			const quoteStart = depth > prevDepth && (k === 0 || term2Stop[k - 1]!);
+			prevDepth = depth;
+			if (depth === 0) {
+				term2Stop[k] = endsTerm2Scan(line, paraLinesAbove);
+				paraLinesAbove = endsTerm2Block(line, paraLinesAbove) ? 0 : paraLinesAbove + 1;
+				continue;
+			}
+			const r = term2QuotedStop(body, quoteStart, paraLinesAbove);
+			term2Stop[k] = r.stop;
+			paraLinesAbove = r.next;
 		}
 	}
-	const htmlCloserAhead: boolean[] = new Array<boolean>(lines.length).fill(false);
-	let ahead = false;
-	for (let k = lines.length - 1; k >= 0; k--) {
-		const line = lines[k]!;
-		htmlCloserAhead[k] = ahead;
-		if (term2Stop[k]!) {
-			ahead = false;
-			continue;
+	const closerAheadOf = (stops: readonly boolean[]): boolean[] => {
+		const out: boolean[] = new Array<boolean>(lines.length).fill(false);
+		let ahead = false;
+		for (let k = lines.length - 1; k >= 0; k--) {
+			out[k] = ahead;
+			if (stops[k]!) {
+				ahead = false;
+				continue;
+			}
+			if (lines[k]!.includes("-->")) ahead = true;
 		}
-		if (line.includes("-->")) ahead = true;
-	}
+		return out;
+	};
+	const htmlCloserAhead = closerAheadOf(term2Stop);
+	const htmlCloserAheadRaw = closerAheadOf(term2StopRaw);
 	// `listDedented[n]` is "line n is the content of a list item AND the dedent
 	// Obsidian applies to that item leaves its lead at the block start a `%%`
 	// opener needs" (NRL-93 for the first half, NRL-117 for the second). It is the
@@ -4430,8 +4685,57 @@ export function extractChunks(
 	// and the first line after it starts a fresh frame, which is the safe default.
 	const leads = rendererLeads(lines, frontmatter ? frontmatter.endLine + 1 : 0);
 	const htmlLeadIndented = leadIndentedForHtml(leads);
+	// A lone CR before the line's first `<!--` (or `%%`, for the code-line veto
+	// below) is a LINE TERMINATOR for the renderer, so that construct starts a
+	// physical line of its own and
+	// `rendererLeads`' verdict - which reads the lead of the line as we split it,
+	// on `\n` only - says nothing about it. Its term-1 veto is dropped there and
+	// `opensHtmlBlock`'s own lead test decides.
+	// Measured, and found by this ticket's census rather than reasoned:
+	// `> Plain prose` / `>\t>` + CR + `<!-- ZCZ` / `> ---` / `> SECRET -->` is
+	// `<blockquote><p>Plain prose<br>></p></blockquote><!-- ZCZ> ---> SECRET -->`
+	// for the renderer, and once the quoted `---` became a term-2 stop the veto
+	// was the only thing deciding the line, which newly spoke ZCZ and SECRET.
+	for (let k = 0; k < lines.length; k++) {
+		if (!htmlLeadIndented[k]) continue;
+		const line = lines[k]!;
+		const html = line.indexOf("<!--");
+		const pct = line.indexOf("%%");
+		const at = html === -1 ? pct : pct === -1 ? html : Math.min(html, pct);
+		if (at !== -1 && line.slice(0, at).includes("\r")) htmlLeadIndented[k] = false;
+	}
 	// Its lazy-continuation half, for containerCarryStops only (F1).
 	const htmlLeadLazy = htmlLeadIndented.map((v, k) => v && leads.cont[k]!);
+	// Its FRESH-BLOCK half: a line inside a quote or a list item whose dedented
+	// body is module 134 indented code (`leadIndentedForHtml`'s `nested &&
+	// startsIndentedCode(lead)` branch). Such a line is CODE for the renderer
+	// (`indentedCode` is blockMethods index 2, `html` index 11), so its `<!--` is
+	// neither a block opener nor an inline comment: term 1 already declines it
+	// through `leadIndented`, and NRL-114 masks term 2 here, ONCE, so every reader
+	// of the term-2 answer - cleanLine, opensHiddenComment through
+	// interruptsParagraph, codeSpanClosesLater and bracketClosesLater - gets the
+	// same masked value. Masking can only make term 2 false, so `opensHtmlBlock`'s
+	// composed answer still implies its old one.
+	//
+	// It became reachable with NRL-114's narrower peel: `>\t<!-- ZCZ` / `> ===` /
+	// `> ZAZ -->` keeps its tab in the quote body, the body is indented code, and
+	// the term-2 `-->` two lines down hid `===` and `ZAZ`, which Obsidian displays
+	// (`<blockquote><pre><code>&#x3C;!-- ZCZ</code></pre><p>===<br>ZAZ -->`).
+	//
+	// Only where the walker is SURE the line starts a block (`unsureFresh`): after
+	// a table-shaped or definition-shaped line the walker says "fresh" as a safe
+	// default for term 1, while the renderer may continue the paragraph, and
+	// masking term 2 there newly spoke an inline comment's body
+	// (`> | a |` / `> \t<!-- SECRETH` / `> =` / `> HIDDEN` / `> --> t.` is ONE
+	// paragraph whose comment hides SECRETH and HIDDEN).
+	const htmlLeadCode = htmlLeadIndented.map((v, k) => v && !leads.cont[k]! && !leads.unsureFresh[k]!);
+	// A line the walker is unsure of keeps the pre-NRL-114 term-2 answer whole:
+	// after a definition-shaped line the renderer may have a FOOTNOTE whose
+	// continuation it dedents (`> [^1]: foot` / `> \t<!-- SECRETH` / `> ---`
+	// holds an html node `<!-- SECRETH` inside the footnote), after a
+	// table-shaped one a plain paragraph, and the walker models neither, so
+	// neither the quoted stop nor the code mask may decide such a line.
+	const htmlClosesLaterAt = htmlCloserAhead.map((v, k) => (leads.unsureFresh[k]! ? htmlCloserAheadRaw[k]! : v && !htmlLeadCode[k]!));
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,
@@ -4512,7 +4816,7 @@ export function extractChunks(
 			undefined,
 			undefined,
 			undefined,
-			htmlCloserAhead[lineNo]!,
+			htmlClosesLaterAt[lineNo]!,
 			0,
 			listDedented[lineNo]!,
 			false,
@@ -4780,7 +5084,7 @@ export function extractChunks(
 		 * confirmed unmatched run, which is rare, and provably a no-op on a line
 		 * wholly inside an already-carried span.
 		 */
-		const htmlClosesLater = htmlCloserAhead[lineNo]!;
+		const htmlClosesLater = htmlClosesLaterAt[lineNo]!;
 		const dedentedByList = listDedented[lineNo]!;
 		const isSetextContent = setextContent[lineNo]!;
 		// A refused `<!--` line still STARTS a block: `html` fires on it in the
@@ -4793,15 +5097,23 @@ export function extractChunks(
 		// skipHeadings on (NRL-120).
 		if (isSetextContent && blockType === "paragraph") flushParagraph();
 		const leadIndented = htmlLeadIndented[lineNo]!;
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented);
+		// A container line whose dedented body is module 134 indented code opens
+		// no `%%` block either (NRL-114), for the same reason its `<!--` opens
+		// none: the renderer has a code block there. Found by this ticket's census:
+		// in `>\t> Plain prose` / `>\t> \t<!--` / ... / `>\t> %% TAILAFTERZ`
+		// every line is code inside the quote, and once the `<!--` was correctly
+		// declined the `%%` - put at offset 0 by the peel's between-levels tab
+		// (NRL-114's residual (a)) - opened a block that silenced the rest.
+		const codeLine = htmlLeadCode[lineNo]!;
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
 			cleaned.openCode !== undefined &&
-			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlCloserAhead, listDedented, htmlLeadIndented)
+			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlClosesLaterAt, listDedented, htmlLeadIndented)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -4840,7 +5152,7 @@ export function extractChunks(
 			(blockType === "paragraph" || blockType === "quote" || blockType === "list") &&
 			confirmed === undefined &&
 			cleaned.unclosedBracket !== undefined &&
-			bracketClosesLater(lines, lineNo, htmlCloserAhead, listDedented, htmlLeadIndented, htmlLeadLazy)
+			bracketClosesLater(lines, lineNo, htmlClosesLaterAt, listDedented, htmlLeadIndented, htmlLeadLazy, htmlLeadCode)
 		) {
 			confirmedBracket = cleaned.unclosedBracket;
 			cleaned = cleanLine(
@@ -4857,6 +5169,7 @@ export function extractChunks(
 				dedentedByList,
 				isSetextContent,
 				leadIndented,
+				codeLine,
 			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the

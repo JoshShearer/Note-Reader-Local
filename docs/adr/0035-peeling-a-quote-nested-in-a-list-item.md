@@ -582,3 +582,42 @@ deliberately NOT done here; it belongs to Finish or to its own ticket.
 No deploy, no CDP session, no Live Preview. Every verdict here comes from
 executing Obsidian 1.13.7's shipped reading-view parser and HTML renderer in bare
 Node, which is much stronger than reading them and is still not the running app.
+
+## NRL-114 re-measurement, appended rather than rewritten (2026-10-02)
+
+NRL-114 narrows the quote peel's post-marker whitespace from any single `\s` to a
+space or a lone CR. Two rows above sit in or beside that character position and
+were required to be re-derived rather than inherited. Both are new measurements
+on `main` at `9132c3b` (base) against NRL-114's final tree (fix), with the same
+harness (Obsidian 1.13.7's shipped parser and renderer executed in Node). 7cdc7b7
+first took them on an older base (`2c4e2ca`); these REPLACE those. They are
+**reconstructions by construction**: this ADR's 239-shape corpus is not
+enumerated, so only the shape COUNT is matched (nine nested quote-in-list
+prefixes: `- >`, `* >`, `+ >`, `1. >`, `1) >`, `- - >`, `> - >`, `- [ ] >`,
+`- [x] >`), and the cell figures are not comparable to the rows above one for one.
+
+**The `nested tab %% | 4,608 | 0 | 0` row reproduces, and it was blind to the
+ADJACENT position, not to this one.** "The lead after the `>`" is ambiguous, and
+the two readings give opposite answers:
+
+| reading | shapes | cells | prose loss, base | prose loss, NRL-114 |
+|---|---|---|---|---|
+| lead after the marker AND its space, `- > \t%%` | 9 | 4,608 | **0** | 0 |
+| lead IMMEDIATELY after the marker, `- >\t%%` | 9 | 4,608 | **4,608** | **0** |
+
+So the recorded `0 | 0` is CORRECT for the shapes this ADR measured, and the
+blind spot is one character to the left. NRL-114 closes all 4,608 cells of that
+adjacent position. Disclosure is 0 on both arms in both readings.
+
+**The live 3,584-cell `- >     - x` regression is UNMOVED.** Both `\s?` and
+`[ \r]?` consume exactly one of those five spaces, so `q[0]` is `> ` on both arms:
+over 7 nested shapes x 512 masks = 3,584 cells, base and fix are byte-identical
+in every cell (0 differing), and so is the un-nested control `>     - x` over its
+512. The renderer shows `- x` as indented code; both arms speak `x` and drop the
+displayed `-`, exactly as this ADR signed off.
+
+`pin-nrl131-nested-tab-comment-overhides` and
+`pin-nrl131-nested-percent-note-scope` are cited by name above and in `srs.md`
+and **neither exists under `tests/`** - a documentation-to-test integrity gap
+tracked as NRL-150 and deliberately not fixed here. NRL-114 built its own
+tripwires for the tab-after-`>` shapes rather than relying on them.
