@@ -420,6 +420,17 @@ it in 512 of 512 on BOTH arms. So the nested forms join that already-wrong path;
 third tripwire. The fuzz numbers below are a floor on a corpus with no renderer
 oracle, not the class size.
 
+**NRL-118 closed this class, and moved the tripwire on purpose.** A `%%` block
+now ends with the container holding its opener (ADR 0006, the NRL-118 amendment
+under clause 5), so the next item is spoken: the per-item fixture expects
+`["ZHIDEZ", "ZPROSEZ tail."]` and is relabelled
+`pin-nrl118-per-item-opener-nested`, with its un-nested `- ` twin pinned beside
+it. Measured on the shape above over all 512 combinations, `ZHIDEZ` is lost in
+0 of 512 for each of `- `, `- > `, `- - > `, `> - > ` and `- - ` on the fix,
+against 512 of 512 on base, while `> ` stays at 0 on both arms because one quote
+holds all four lines and the renderer keeps that block open. The `> ` twin is
+pinned as `guard-nrl118-same-quote-per-line-opener`.
+
 **4 cells newly leak, and they are ONE distinct note**, run down rather than
 waved at. Minimally reduced to `- > %%` / `ZHIDEZ a %% ZHIDEZ b`: the peel makes
 `%%` line-start, `opensObsidianBlock` recognises it, and a later `%%` at a
@@ -427,6 +438,15 @@ different container depth closes a block Obsidian keeps open. That is **NRL-118*
 whose note-scope is container-blind for us, and the three un-nested twins `%%`,
 `- %%` and `> %%` all already speak exactly `ZHIDEZ b` on BASE. Pinned as
 `pin-nrl131-nested-percent-note-scope`.
+
+**Corrected by NRL-118: that reduced shape is NOT a leak, and the fixture did not
+move.** Run through the renderer, `- > %%` / `ZHIDEZ a %% ZHIDEZ b` displays
+exactly `ZHIDEZ b`: the unprefixed second line is a LAZY continuation that stays
+inside both the item and its blockquote, so the block really does close at the
+mid-line `%%`. The expectation was right and only its label was wrong; it is
+relabelled `guard-nrl118-lazy-line-closes-in-nested-quote`, and a container rule
+that ended the quote on that line would speak `ZHIDEZ a`, which the renderer
+hides. Which of the 4 fuzz cells were truly NRL-118's was not re-derived.
 
 52 cells newly lose prose, 13 distinct notes, **0 unclassified**: 4 are the
 tab-or-four-space row above, 9 are NRL-118's note scope.

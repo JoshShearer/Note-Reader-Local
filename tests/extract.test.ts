@@ -1,4 +1,5 @@
 import { extractChunks } from "../src/text/extract.ts";
+import { rendererPercentBlocks } from "../src/text/obsidianBlocks.ts";
 import {
 	graphemeBoundaries,
 	legacySentenceBoundaries,
@@ -949,12 +950,13 @@ console.log("block markup (NRL-8)");
 	//    `xx ZHIDEZ` on base under the same options, because no branch of ours
 	//    treats indented code inside a container as code.
 	add("- > \t<!-- ZHIDEZ\nmore ZPROSEZ", ["<!-- ZHIDEZ", "more ZPROSEZ"], OPTS, " (nrl115-replaces-tripwire: a nested tab-indented <!-- is displayed code)");
-	// 2. An unterminated `%%` is note-scoped and container-blind for us where
-	//    Obsidian scopes it to the construct holding it, so a later `%%` at a
-	//    different depth closes a block the renderer keeps open. That is NRL-118,
-	//    and the three un-nested twins `%%`, `- %%` and `> %%` all already speak
-	//    exactly this on base.
-	add("- > %%\nZHIDEZ a %% ZHIDEZ b", ["ZHIDEZ b"], OPTS, " (TRIPWIRE: NRL-118 note-scope closes at another depth)");
+	// 2. Was a second TRIPWIRE, filed against NRL-118. NRL-118 relabels it a GUARD
+	//    rather than moving it, because the renderer agrees with it: the
+	//    unprefixed line is a LAZY continuation that stays inside both the item
+	//    and its blockquote, so the block really does close at the mid-line `%%`
+	//    and `ZHIDEZ b` is displayed. A container-scoped rule that ended the
+	//    quote here would speak `ZHIDEZ a`, which the renderer hides.
+	add("- > %%\nZHIDEZ a %% ZHIDEZ b", ["ZHIDEZ b"], OPTS, " (guard-nrl118-lazy-line-closes-in-nested-quote)");
 
 	// NRL-131, found at Ship review: the peel must STOP where the list marker's
 	// own trailing whitespace has already put the item's content into an
@@ -995,19 +997,26 @@ console.log("block markup (NRL-8)");
 	// still happen. Measured: `-    > x` renders `<li><blockquote><p>x`.
 	add("-    > ZMARKZ x", ["ZMARKZ x"], OPTS, " (nrl131-four-space-lead-is-still-a-quote)");
 	add("-  > ZMARKZ x", ["ZMARKZ x"], OPTS, " (nrl131-two-space-lead-is-still-a-quote)");
-	// 3. A THIRD signed tripwire, also NRL-118's and also pre-existing. A `%%`
-	//    opener repeated per list item at a nested prefix: Obsidian scopes the
-	//    block to the FIRST item's blockquote and DISPLAYS the lines after it,
-	//    while our comment state is note-scoped and container-blind, so a later
-	//    `%%` at another depth closes a block the renderer keeps open. Measured:
-	//    the un-nested twins `- %%` / `- ZHIDEZ` and `> %%` / `> ZHIDEZ` already
-	//    speak exactly this on base, 512 of 512 cells identical on both arms, so
-	//    the nested form is joining that path rather than opening a new one.
+	// 3. Was a THIRD signed tripwire, also NRL-118's, and NRL-118 moves it ON
+	//    PURPOSE. A `%%` opener repeated per list item: Obsidian scopes the block
+	//    to the FIRST item and DISPLAYS the next item, which base hid because its
+	//    comment state was note-scoped. The new item ends the scope (ADR 0006
+	//    clause 5, NRL-118 amendment), so ZHIDEZ is now spoken, matching the
+	//    reading view. The un-nested twin moves with it and is pinned beside it.
+	//    The `> %%` twin does NOT move: one blockquote holds all four lines, so
+	//    the block really does run to the third line's `%%`, and
+	//    guard-nrl118-same-quote-per-line-opener pins that.
 	add(
 		"- > %%\n- > ZHIDEZ\n- > %%\n- > ZPROSEZ tail.",
-		["ZPROSEZ tail."],
+		["ZHIDEZ", "ZPROSEZ tail."],
 		OPTS,
-		" (TRIPWIRE: NRL-118 per-item %% opener, un-nested twin already identical)",
+		" (pin-nrl118-per-item-opener-nested, was TRIPWIRE: NRL-118 per-item %% opener)",
+	);
+	add(
+		"- %%\n- ZHIDEZ\n- %%\n- ZPROSEZ tail.",
+		["ZHIDEZ", "ZPROSEZ tail."],
+		OPTS,
+		" (pin-nrl118-per-item-opener-plain)",
 	);
 
 	// Offsets: the first spoken word maps to its raw offset.
@@ -2320,8 +2329,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// value on its own where our block state is note-scoped and container-blind.
 		// That root is NRL-118, not this one, and NRL-116's peel deliberately omits
 		// group 3's `$` and `(?=\n)` alternatives so the bare form behaves exactly as
-		// it did. WHEN NRL-118 CLOSES THIS EXPECTATION MUST CHANGE ON PURPOSE.
-		["pin-nrl93-bare-marker-opener-still-silenced", "- Plain prose\n- %%\n- SECRET", "Plain prose"],
+		// it did. NRL-118 MOVED IT ON PURPOSE, in place: the renderer ends a `%%`
+		// comment at the end of the item that holds it, so the next item's SECRET is
+		// DISPLAYED and is now spoken. Was "Plain prose".
+		["pin-nrl93-bare-marker-opener-still-silenced", "- Plain prose\n- %%\n- SECRET", "Plain prose SECRET"],
 		// A tab, or any other indent, used as a list item's CONTINUATION indentation.
 		// Term 3 is the whole reason the predicate takes a third argument: the renderer
 		// dedents these away and opens a comment, so hiding SECRET is CORRECT and a
@@ -2398,9 +2409,15 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// (117) or a blockquote (40). The structured corpora found none of this, which
 		// is why the fuzz carries tabs, multi-space leads and a list-bearing
 		// population.
-		["pin-nrl93-scope-cost-four-space-then-bullet", "Para.\n    %%\n- %%\n\nVISIBLE", "Para. %%"],
-		["pin-nrl93-scope-cost-tab-then-bullet", "Para.\n	%%\n- %%\n\nVISIBLE", "Para. %%"],
-		["pin-nrl93-scope-cost-tab-then-quote", "Para.\n	%%\n> %%\n\nVISIBLE", "Para. %%"],
+		//
+		// NRL-118 CLOSED THIS COST, and these three moved ON PURPOSE, in place with
+		// their names kept as a record of the cost they pinned: the surviving opener
+		// sits in a list item or a blockquote, its block now ends with that container
+		// at the blank line, and VISIBLE is spoken as the reading view displays it.
+		// All three were "Para. %%" on base.
+		["pin-nrl93-scope-cost-four-space-then-bullet", "Para.\n    %%\n- %%\n\nVISIBLE", "Para. %% VISIBLE"],
+		["pin-nrl93-scope-cost-tab-then-bullet", "Para.\n	%%\n- %%\n\nVISIBLE", "Para. %% VISIBLE"],
+		["pin-nrl93-scope-cost-tab-then-quote", "Para.\n	%%\n> %%\n\nVISIBLE", "Para. %% VISIBLE"],
 		// 5. ADR 0019's designed literal, in its own bucket and NOT a disclosure. A
 		// tab-led `%%` line inside a soft-wrapped code span is now part of a CONFIRMED
 		// span, so the span is silenced whole when inline code is skipped and spoken
@@ -2477,36 +2494,30 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// purpose; the control's must not move at all.
 		["pin-nrl93-unmasked-label-destination", "Before ![alt\n	%% x\n%%\nZHIDEZ\n%%\nmore](zdestz.png) after.", "Before [alt %% x more](zdestz.png) after."],
 		["guard-nrl93-unmasked-label-destination-control", "Before ![alt\n	plain x\n%%\nZHIDEZ\n%%\nmore](zdestz.png) after.", "Before [alt plain x more](zdestz.png) after."],
-		// NRL-118, A TRIPWIRE AND NOT EVIDENCE OF A FIX, in the style of
-		// pin-nrl74-container-label-still-leaks-destination. This is a DISCLOSURE: we
-		// SPEAK text Obsidian HIDES, which is the direction this family treats as
-		// forbidden. It is PRE-EXISTING and was NOT introduced by NRL-93.
+		// NRL-118. These rows began life as a TRIPWIRE, pinning a pre-existing
+		// DISCLOSURE (we spoke text Obsidian hides) so it could only change on
+		// purpose. NRL-118 is that purpose, so the first row is RETARGETED IN PLACE
+		// and renamed from `pin-nrl118-note-scope-closes-at-another-depth`, which
+		// expected "SECRET".
 		//
-		// Our `%%` block state is note-scoped AND container-blind, where Obsidian
-		// scopes a block to the construct holding it. So a later `%%` sitting at a
-		// DIFFERENT container depth closes for us a block the renderer keeps open, and
-		// the rest of that line is spoken: `>> %%` / `%% SECRET` says SECRET, which
-		// the renderer hides.
-		//
-		// THE CONTROL IS WHAT MAKES IT A TRIPWIRE RATHER THAN A MYSTERY, and it is the
-		// second fixture: the same class with no container and no lead at all answers
-		// identically, so the leak is the scope rule and not the three-term line-start
-		// rule NRL-93 shipped. Both rows were measured on BOTH ARMS before being
-		// written, by bundling this tree's extractor and base 1ed6f1c's side by side:
-		// base says SECRET and the fix says SECRET in each, so base = fix.
-		//
-		// The pure class, measured by the second independent Verify with real rendered
-		// HTML from Obsidian 1.13.7's own parser as the oracle: 1,088 of the 1,088
-		// cells with room on a 1,728-cell corpus leak on BASE and 1,088 on the fix, 0
-		// newly leaking, on a corpus carrying NO TAB and NO FOUR-PLUS-SPACE LEAD
-		// anywhere - so NRL-93's change provably cannot reach it. Re-measured here
-		// over 8 container prefixes x all 512 content-key combinations: 4,096 of 4,096
-		// cells leak on base and 4,096 on the fix, 0 newly leaking, and 0 cells differ
-		// between the arms in any respect.
-		//
-		// Tracked as NRL-118. WHEN NRL-118 CLOSES, BOTH EXPECTATIONS MUST CHANGE ON
-		// PURPOSE: SECRET stops being spoken in each.
-		["pin-nrl118-note-scope-closes-at-another-depth", ">> %%\n%% SECRET", "SECRET"],
+		// The defect: our `%%` block state was note-scoped AND container-blind, where
+		// Obsidian scopes a block to the construct holding it. So a later `%%` at a
+		// DIFFERENT container depth closed for us a block the renderer keeps open,
+		// and the rest of that line was spoken. The rule now (ADR 0006 clause 5, NRL-118
+		// amendment): a `%%` block opened inside a container closes when that
+		// container ends, and the line that ends it is processed FRESH at its own
+		// depth, where a line-start `%%` opens a new block. For `>> %%` / `%% SECRET`
+		// the bare `%%` line interrupts both quotes (`comment` is in
+		// `interruptBlockquote`) and opens a new top-level block, so SECRET is hidden.
+		// Every expectation below is the visible text of real rendered HTML from
+		// Obsidian 1.13.7's own parser and renderer run out of the installed bundle.
+		// NOT OBSERVED IN A RUNNING OBSIDIAN; reading view only.
+		["pin-nrl118-different-depth-percent-opens-new-block", ">> %%\n%% SECRET", ""],
+		// The control. It was labelled a guard and stays one: with no container at
+		// all the block is note-scoped exactly as before, and the renderer DISPLAYS
+		// SECRET here, because the second `%%` is the first block's closer and the
+		// rest of a closer line is shown. So this row must NOT move with the fix,
+		// and that is what stops the fix being "never close at a later `%%`".
 		["guard-nrl118-note-scope-control-no-container", "%%\n%% SECRET", "SECRET"],
 		// NRL-113. `INDENTED_CODE` used to accept one to three SPACES followed by a
 		// TAB, on CommonMark's tab-stop reasoning. Obsidian's indented-code tokenizer,
@@ -2738,14 +2749,18 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		//
 		// 1. `-` + TAB with NO space (Q40) and the bare `- %%` above are the same root:
 		// the item's content really is `%%` at a block start, so the opener is right and
-		// only the SCOPE is wrong. NRL-118.
-		["pin-nrl116-tab-no-space-after-marker-still-silenced", "- Plain prose\n-	%%\n- SECRET", "Plain prose"],
+		// only the SCOPE is wrong. NRL-118 CLOSED THAT ROOT and moved this ON PURPOSE,
+		// in place, name kept for its citations: the renderer ends the comment with the
+		// item, so the next item's SECRET is displayed and now spoken. Was "Plain prose".
+		["pin-nrl116-tab-no-space-after-marker-still-silenced", "- Plain prose\n-	%%\n- SECRET", "Plain prose SECRET"],
 		// 2. EXACTLY FOUR spaces, where ` {1,4}(?! )` consumes the whole lead and the
 		// body really is `%%` at offset 0 - so, again, a correct opener with the wrong
 		// scope. This one is worth its own fixture because it is the cell that separates
 		// "the lead was mis-peeled" (fixed here) from "the block's scope is note-wide"
-		// (NRL-118): the renderer hides the `%%` and DISPLAYS SECRET.
-		["pin-nrl116-four-space-lead-still-silenced", "- Plain prose\n-    %%\n- SECRET", "Plain prose"],
+		// (NRL-118): the renderer hides the `%%` and DISPLAYS SECRET. NRL-118 moved it
+		// ON PURPOSE, in place and with its name kept, for the same reason as row 1.
+		// Was "Plain prose".
+		["pin-nrl116-four-space-lead-still-silenced", "- Plain prose\n-    %%\n- SECRET", "Plain prose SECRET"],
 		// 3. THE `<!--` TWIN IS NOT FIXED, and that is the one place a reader is most
 		// likely to assume otherwise. `opensHtmlBlock` accepts a tab deliberately -
 		// module 8776's skip loop takes spaces AND tabs, so that is right for a `<!--`
@@ -2780,6 +2795,216 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl116-q38-nested-quote-comment-tab-lead", "- Plain prose\n- 	> %%\n- SECRET", "Plain prose > %% SECRET"],
 		["guard-nrl116-q38-nested-quote-comment-five-space-lead", "- Plain prose\n-     > %%\n- SECRET", "Plain prose > %% SECRET"],
 		["guard-nrl116-q38-task-nested-quote-tab-lead", "- [x] Plain prose\n- [x] 	> ZMARKZ x\n- [x] after", "Plain prose > ZMARKZ x after"],
+		// The rest of the family, each RED on base faf55a3. Disclosure direction
+		// first: a blank line ends a quote, a lazy line stays in a list item, and a
+		// shallower quote ends the inner one, so each closing `%%` is really a new
+		// opener for the renderer.
+		["pin-nrl118-blank-ends-quote-then-new-block", "> %%\n\n%% SECRET", ""],
+		["pin-nrl118-lazy-line-stays-in-item-then-new-block", "- %%\nlazy\n%% after", ""],
+		["pin-nrl118-shallower-quote-opens-new-block", ">> %%\n> %% after", ""],
+		// Prose-loss direction: the container ends at a line the renderer displays,
+		// so base hid displayed text up to a mid-line `%%` and spoke only the tail.
+		["pin-nrl118-heading-ends-quote", "> %%\n# head\nx %% y", "head x %% y"],
+		["pin-nrl118-new-ordered-item-ends-block", "1. %%\n2. x %% y", "x %% y"],
+		["pin-nrl118-blank-then-unindented-ends-item", "- %%\n\nmore\n%% after", "more"],
+		["pin-nrl118-empty-inner-quote-line-ends-inner", ">> %%\n>\n> x %% y", "x %% y"],
+		["pin-nrl118-blank-ends-quote-inside-item", "- > %%\n\n  > x %% y", "x %% y"],
+		// Guards, green on base and on the fix and NOT counted as evidence. Each is a
+		// shape where the renderer keeps the block OPEN across the line, so a scope
+		// rule that ends too eagerly would newly speak hidden text in it.
+		["guard-nrl118-empty-quote-line-keeps-block", "> %%\n>\n> x %% y", "y"],
+		["guard-nrl118-nested-item-keeps-block", "- %%\n  - x %% y", "y"],
+		["guard-nrl118-deeper-quote-keeps-block", "> > %%\n> > > x %% after", "after"],
+		["guard-nrl118-indented-line-keeps-quote-in-item", "- > %%\n  x %% y", "y"],
+		["guard-nrl118-blank-then-indented-keeps-item", "- %%\n\n  x %% y", "y"],
+		["guard-nrl118-lazy-quote-line-keeps-block", "> %%\nlazy x %% y", "y"],
+		["guard-nrl118-same-quote-per-line-opener", "> %%\n> ZHIDEZ\n> %%\n> ZPROSEZ tail.", "ZPROSEZ tail."],
+		// The container a block belongs to is not always on the opener's own line,
+		// and each of these was a disclosure on base. A lazy `> ...` line inside a
+		// list item opens a quote INSIDE the item (blockquote interrupts the
+		// paragraph it is folded into), and `- - %%` / `  - A` / `   %% Q2` opens in
+		// the OUTER item, which no reading of the `   %%` line alone can tell. The
+		// renderer's own tokenizer, re-run by obsidianBlocks.ts, settles both.
+		// RED on base.
+		["pin-nrl118-lazy-quote-opens-inside-item", "- item0\n> %%\n  %% SECX\nTAILX", "item0"],
+		["pin-nrl118-lazy-quoted-list-inside-item", "- item0\n> - %%\n> %% SECX\nTAILX", "item0"],
+		["pin-nrl118-opener-in-outer-item", "- - %%\n  - A\n   %% Q2\n- Q3 tail\n\n> - %%\nQend", "A Q3 tail"],
+		// The renderer dedents an item's content by whole characters, so a tab that
+		// starts exactly at the content column survives and is indented code that
+		// ENDS the quote, while one that overshoots is removed. RED on base.
+		["pin-nrl118-tab-kept-after-item-dedent-ends-quote", "- > %%\n  \tX %% Y", "X %% Y"],
+		// A marker whose own lead reaches indented-code depth makes the item CODE, so
+		// its `%%` is literal and opens nothing (NRL-116's peel). Both rows: the
+		// renderer shows only "%%". The first was "" on base and the second "w",
+		// which the renderer hides - a disclosure on base, closed here because the
+		// quoted `%%` blocks around them now end with their quotes.
+		["pin-nrl118-code-lead-marker-keeps-percent-literal", "> %% w\n* \t%%\n> - %%\n> \tprose ZS", "%%"],
+		["pin-nrl118-code-lead-ordered-marker-keeps-percent-literal", "-  %%\n* %% w\n> - %%\n2.  \t%%\n>> %% ZS", "%%"],
+		// A line that ends an indented code block is read normally, markers
+		// included, so the `> - %% ZM` block is scoped to its own item. Base spoke
+		// ZM, which the renderer hides. RED on base. REPLACED IN PLACE by the NRL-118
+		// fix pass: the expectation was "b after ZT. ZQ tail.", which dropped
+		// `Before a ZA`. The reading view DISPLAYS that line (the four-space lazy line
+		// ends the quote as indented code, so the first `%%` comment ends on line 1),
+		// and the renderer-transcribed scope now speaks it. The backticks go because
+		// our code-span carry pairs them across the lines; the renderer shows them as
+		// code text, a pre-existing difference in how the text is spoken, not in
+		// whether it is.
+		["pin-nrl118-block-after-indented-code-is-scoped", "> - %%\n    Before `a ZA\n> - %% ZM\n> - b` after ZT.\nZQ tail.", "Before a ZA b after ZT. ZQ tail."],
+		// GUARDS, each green on base and on the fix. `interruptBlockquote`'s
+		// indentedCode is module 134's literal test, four spaces or a tab at offset 0
+		// ONLY: one to three spaces then a tab is lazy text inside the quote (a
+		// column-model arm reusing INDENTED_CODE's ` {0,3}\t` spoke X here). And a tab
+		// that overshoots the item's dedent is removed whole by remove-indentation.
+		["guard-nrl118-spaces-then-tab-is-lazy-in-quote", "> %%\n   \tX %% Y", "Y"],
+		["guard-nrl118-overshooting-tab-removed-by-dedent", "- > %%\n   \tX %% Y", "Y"],
+		// NRL-118 SHIP REVIEW. Four NEW disclosures the first (column-model) revision
+		// of this fix opened, each found by an independent fuzz and a column census
+		// against real rendered HTML, each "" on base (base's note-scoped block hid
+		// it) and each speaking SECRET on that revision. Every expectation is the
+		// reading view's visible text, which is empty in all of them. The rows stay
+		// as regression pins; the transcribed tokenizer gets each right by
+		// construction rather than by a rule written for it.
+		//
+		// A thematic break is no list item: `- ---` and `* * *` render `<hr>`, so
+		// the `  %%` below opens a top-level block. Reading the HR as a list
+		// container scoped that block to a list that does not exist.
+		["pin-nrl118-ship-hr-line-is-no-list-container", "- ---\n  %%\n1) --> SECRET", ""],
+		["pin-nrl118-ship-spaced-hr-line-is-no-list-container", "* * *\n  %%\n- SECRET", ""],
+		// A `-` or `*` break indented EXACTLY one column short of the item's content
+		// column stays in the item (`- a` / ` ---` renders `<li><h2>a</h2>`, a setext
+		// heading inside the item), measured for content columns 2 to 5.
+		["pin-nrl118-ship-hr-one-column-short-stays-in-item", "- %%\n ---\nSECRET", ""],
+		["pin-nrl118-ship-star-hr-one-column-short-stays-in-ordered-item", "1. %%\n  ***\nSECRET", ""],
+		// A tab after a break: module 6968 allows only spaces between and after the
+		// markers, so `---\t` is no break and the line is lazy text inside the open
+		// block.
+		["pin-nrl118-ship-hr-trailing-tab-not-an-interrupter", "- %%\n---\t\nSECRET", ""],
+		["pin-nrl118-ship-hr-trailing-tab-in-quote", "> %%\n---\t\nSECRET", ""],
+		// A TRIPWIRE, REPLACED IN PLACE by the NRL-118 fix pass, and the old comment
+		// here was WRONG: it said a tab after a block tag name is no interrupter. It
+		// is one. Module 8776's type-6 test is `(?=(\s|/?>|$))` and `\s` takes the
+		// tab, so `<div\tx` ENDS the quote (and the comment with it), exactly like
+		// `<div x`; the parser itself agrees (its comment node ends on line 1). What
+		// keeps SECRET off the screen is something else: `<div\tx` / `SECRET` becomes
+		// a raw HTML block, passed through unterminated, and the browser swallows it
+		// as a tag. We speak raw HTML block text, comment or no comment - the control
+		// below, with no `%%` at all, speaks SECRET on base and on the fix alike - so
+		// this is that PRE-EXISTING root unmasked, not a scope error. Was "" (base's
+		// note-scoped block hid it). MUST CHANGE ON PURPOSE when raw HTML blocks are
+		// modelled.
+		["pin-nrl118-ship-tab-after-tag-not-html", "> %%\n<div\tx\nSECRET", "<div x SECRET"],
+		["guard-nrl118-unterminated-tag-control-no-comment", "> x\n<div\tx\nSECRET", "x <div x SECRET"],
+		// Found by the same fuzz once the rows above were fixed, reduced by line
+		// deletion. Each was "" or hid SECRET on base and spoke it on the first
+		// revision. `-\t---` is a list item HOLDING a break (the renderer refuses a
+		// tab in a break), and dropping that outer layer is NOT fail-closed: the
+		// layer is what strips the indent the inner quote then sees.
+		["pin-nrl118-ship-tab-hr-item-keeps-list-layer", "-\t---\n> %%\n    A SECRET", "", { skipCodeBlocks: false }],
+		// A setext underline must sit inside every item enclosing the quote: the
+		// col-0 `---` here ends the item, so it underlines nothing in the quote.
+		["pin-nrl118-ship-setext-lookahead-respects-item", "- a\n> %%\n\tSECRET\n---", "a"],
+		// And inside every enclosing QUOTE, non-lazily: a col-0 `---` has no `>`, so
+		// it is a break outside the outer quote, not an underline inside it.
+		["pin-nrl118-ship-setext-lookahead-respects-outer-quote", ">> %%\n>| SECRET |\n---", ""],
+		// Only `1.` (or a bullet) interrupts a paragraph, so `2. Two.` is paragraph
+		// text and opens no container; the `   %%` block below is top-level.
+		["pin-nrl118-ship-ordered-continuation-opens-no-item", "   Prose one.\n2. Two.\n   %%\n- SECRET", "Prose one. Two."],
+		// A TRIPWIRE and not evidence. A `%%` after such a marker is mid-line text
+		// for the renderer, which shows `2. %%` and SECRET; we still open a block
+		// there and hide SECRET, exactly as base does (pre-existing, fail-closed).
+		// Keeping it literal was tried at ship review and REVERTED: the only
+		// signals for "a paragraph is open" (prevPara, prevContainer) also fire
+		// after `>---` and inside an HTML comment, and trusting them newly spoke
+		// hidden text in 32 reduced fuzz notes. MUST CHANGE ON PURPOSE when a
+		// reliable open-paragraph signal exists.
+		["pin-nrl118-ship-percent-after-continuation-marker-still-hidden", "Prose.\n2. %%\nSECRET", "Prose."],
+		// A marker indented four or more columns is indented CODE, not an item, so
+		// it opens no container: the `>  %%` block below is a top-level quote's,
+		// and the lazy `2. > SECRET` stays inside it.
+		["pin-nrl118-ship-code-indented-marker-opens-no-item", "    - a\n>  %%\n2. > SECRET", ""],
+		// Inside `- <!--` ... `-->` the renderer stays in the item across `2. Q1`, so
+		// the lazy `>> %%` block is inside the item and the tab-led line is item
+		// content, hidden. A column model that read the hidden `2. Q1` as ending the
+		// item scoped the block too narrowly; the transcribed tokenizer never sees a
+		// hidden line as anything but the HTML it is.
+		["pin-nrl118-ship-container-ended-under-comment-taints-scope", "- <!--\n2. Q1\n--> Q2\n>> %% Q3\n\tSECRET` B", "Q2", { skipCodeBlocks: false, skipInlineCode: false }],
+		// The renderer has NO `%%` comment here: `  - %% shown` is content of the HTML
+		// block `* <div>` opens inside the item. Our block on that line is therefore
+		// one the renderer does not have, and the scope rule never touches such a
+		// block (it is consulted only where both parsers open one), so it stays
+		// note-scoped, which is base's answer. The renderer DISPLAYS `- %% shown` as
+		// raw HTML text; losing it is the pre-existing HTML-in-item gap, unchanged.
+		["pin-nrl118-ship-hidden-html-opener-keeps-block", "* <div>\n  - %% shown\n<!--\n- > SECRET", ""],
+		// GUARDS, green before and after the ship-review change and not counted:
+		// each is a break the renderer DOES end the container on, so SECRET is
+		// displayed. They stop the narrowing becoming "an HR never ends a scope".
+		["guard-nrl118-ship-unindented-hr-ends-item", "- %%\n---\nSECRET", "SECRET"],
+		["guard-nrl118-ship-underscore-hr-one-short-ends-item", "- %%\n ___\nSECRET", "SECRET"],
+		["guard-nrl118-ship-hr-ends-quote", "> %%\n---\nSECRET", "SECRET"],
+		// A TRIPWIRE and not evidence: a RESIDUAL this ticket leaves, fail-closed and
+		// pre-existing, IDENTICAL ON BASE since NRL-116. A line of item content whose
+		// `%%` is indented past code depth still opens a block for us, because
+		// `dedentedByList` is a boolean and not the indent itself (NRL-93 tripwire 1,
+		// `pin-nrl93-deep-indent-in-list-still-silenced`). The renderer shows `%% S`
+		// as code, so it has no comment there and the scope rule leaves our block
+		// note-scoped. MUST CHANGE ON PURPOSE when that boolean becomes an indent.
+		// Tracked: the boolean is NRL-117, the `> >` + tab sibling residual is
+		// NRL-114, and a fence on a list marker line plus fences not ending with
+		// their container is NRL-159.
+		["pin-nrl118-residual-deep-item-content-opener", "2. \t%%\n        %% S", "%%"],
+		// NRL-118 FIX PASS. An independent Verify FAILED the column-model revision of
+		// this fix (26cd7ed) for seven shapes it newly SPOKE that the reading view
+		// hides, none reducible to a pre-existing root. These are those seven, as
+		// Verify reduced them, plus siblings varying the marker, the lead and the
+		// tab. Every row was RED against 26cd7ed and every expectation is checked
+		// against real rendered HTML: the reading view hides SECRET in all of them
+		// (the `*` the last three speak is a pre-existing, unrelated `* * *` item
+		// reading, identical on base). Each one is a place where the renderer's
+		// rules are not column rules: a list item's content is dedented by the
+		// SMALLEST indent of its lines (module 5540) with `1.` counting one column
+		// wider than `1)` (module 745's odd-length rule), a lazy line is judged by
+		// the PARENT's text, a blank line ends an item before any break can, and a
+		// quote's indented-code interrupter is module 134's literal test on the text
+		// the quote actually receives. obsidianBlocks.ts re-runs those modules
+		// rather than approximating them.
+		["pin-nrl118-v1-quote-in-ordered-item-spaces-tab", "1. > %%\n   \tSECRET", ""],
+		["pin-nrl118-v1-indented-ordered-tab", "  1. > %%\n\tSECRET", ""],
+		["pin-nrl118-v4-lazy-quote-after-first-item", "1. x\n> %%\n   \tSECRET", "x"],
+		["pin-nrl118-v2-indented-ordered-four-spaces", "  1. > %%\n    SECRET", ""],
+		["pin-nrl118-v3-three-space-bullet-tab", "   - > %%\n\tSECRET", ""],
+		["pin-nrl118-v3-three-space-bullet-four-spaces", "   - > %%\n    SECRET", ""],
+		["pin-nrl118-v3-three-space-star-tab", "   * > %%\n\tSECRET", ""],
+		["pin-nrl118-v3-three-space-ordered-tab", "   1. > %%\n\tSECRET", ""],
+		["pin-nrl118-v4-lazy-quote-after-ordered-item", "2. x\n> %%\n   \tSECRET", "x"],
+		["pin-nrl118-v5-blank-then-one-short-dash-break", "-   %% x\n\n   ---\nSECRET", ""],
+		["pin-nrl118-v5-blank-then-one-short-bare", "- %%\n\n ---\nSECRET", ""],
+		["pin-nrl118-v5-blank-then-one-short-star", "-  %% x\n\n  ***\nSECRET", ""],
+		["pin-nrl118-v5-blank-then-one-short-ordered", "1.  %% x\n\n   ---\nSECRET", ""],
+		["pin-nrl118-v6-tab-nested-item-in-quote", "> - \n  \t- %%\n     # SECRET", ""],
+		["pin-nrl118-v6-space-tab-nested-item-in-quote", "> - \n \t- %%\n     # SECRET", ""],
+		["pin-nrl118-v7-break-item-then-nested-quote", "-    * * *\n>> %% x\n    SECRET", "*"],
+		["pin-nrl118-v7-break-item-then-quote", "-    * * *\n> %% x\n    SECRET", "*"],
+		["pin-nrl118-v7-break-item-then-nested-quote-tab", "-    * * *\n>> %% x\n\tSECRET", "*"],
+		// And the other direction, so the fix cannot be "keep the block open":
+		// siblings of the same shapes where the reading view DISPLAYS SECRET. All
+		// five hid it on base (prose loss closed here).
+		["pin-nrl118-v1-paren-ordered-is-no-quote-interrupter", "1) > %%\n   \tSECRET", "SECRET"],
+		["pin-nrl118-v1-bullet-two-spaces-tab", "- > %%\n  \tSECRET", "SECRET"],
+		["pin-nrl118-v5-underscore-break-ends-item", "-   %% x\n\n   ___\nSECRET", "SECRET"],
+		["pin-nrl118-v6-four-space-heading-is-in-quote", "> - \n  \t- %%\n    # SECRET", "# SECRET"],
+		["pin-nrl118-v7-dash-break-is-no-list", "-    - - -\n>> %% x\n    SECRET", "SECRET"],
+		// A TRIPWIRE and not evidence: the one shape behind the only newly-lost cells
+		// in the fix pass's 600,000-note fuzz that subset control did not attribute
+		// (3 cells). `-    %%` opens a comment that the renderer ends with the item, so
+		// `    %% PROSE` is read afresh, and the reading view shows it as indented
+		// code. We open a block on it - NRL-117's boolean `dedentedByList` root - so
+		// PROSE goes quiet, where base happened to close its note-scoped block there
+		// and speak it. Pre-existing and fail-closed: the control below, with the
+		// first `%%` neutralised, loses PROSE on base and on the fix alike. MUST
+		// CHANGE ON PURPOSE when NRL-117 closes.
+		["pin-nrl118-residual-code-depth-line-after-item", "-    %%\n    %% PROSE", ""],
+		["guard-nrl118-residual-code-depth-line-after-item-control", "-    xx\n    %% PROSE", "xx"],
 		// NRL-120 PART 1. Term 1 of the HTML-comment rule needs block position: a
 		// line-start `<!--` whose NEXT line is an exact setext underline is not an
 		// HTML block at all, because `blockMethods` runs `setextHeading` (index 10)
@@ -5456,6 +5681,35 @@ console.log("NRL-47 CJK word spans");
 			chunks.every((c) => c.wordSpans === undefined),
 		);
 	}
+}
+
+// NRL-118: the renderer block scan itself. Each expectation is [start line,
+// last covered line] of every `%%` block comment, read off Obsidian 1.13.7's
+// own parser executed out of the installed bundle (the mdast comment node's
+// start line, and the line of its last character by source offset). These pin
+// the three rules a column model got wrong, plus the bundle's own wrapper that
+// refuses a `[^` definition label and remark's per-line offset table.
+console.log("NRL-118 renderer block scan (obsidianBlocks.ts)");
+{
+	const scan = (src: string): string => JSON.stringify((rendererPercentBlocks(src) ?? []).map((b) => [b.startLine, b.lastLine]));
+	const cases: Array<[string, string, Array<[number, number]>]> = [
+		["different depth opens a new block", ">> %%\n%% SECRET", [[0, 0], [1, 1]]],
+		["min-indent dedent with the `1.` phantom column keeps the tab line lazy", "1. > %%\n   \tSECRET", [[0, 1]]],
+		["`1)` has no phantom column, so the tab line is code and ends the quote", "1) > %%\n   \tSECRET", [[0, 0]]],
+		["a refused marker still counts its column, so the item continues", "-   %% x\n\n   ---\nSECRET", [[0, 3]]],
+		["more than four columns continues an item whatever its content column", "> - \n  \t- %%\n     # SECRET", [[1, 2]]],
+		["a `[^` label is never a definition", "[^id\n***\n%%\n+  \n***]:$$\n------(1.", [[2, 5]]],
+		["a plain label is, and swallows the `%%` line", "[id\n***\n%%\n+  \n***]:$$\n------(1.", []],
+		["a whitespace line the item stripped belongs to the comment", "  - %% QaQ\n    ", [[0, 1]]],
+		["a callout title line is tokenized on its own", "> [!note] %%\n> x", [[0, 0]]],
+		["no container: closed by the next `%%`", "%%\n%% SECRET", [[0, 1]]],
+		["CRLF keeps line numbers", "a\r\n> %%\r\nb", [[1, 2]]],
+	];
+	for (const [name, src, want] of cases) check(`NRL-118 scan: ${name}`, scan(src) === JSON.stringify(want), scan(src));
+	check("NRL-118 scan: a lone carriage return gives no answer", rendererPercentBlocks("a\rb") === null);
+	check("NRL-118 scan: nesting past the depth bound gives no answer", rendererPercentBlocks(">".repeat(70) + " %%\nx") === null);
+	const closedFlag = rendererPercentBlocks("%%\n%% SECRET")?.[0]?.closed === true && rendererPercentBlocks(">> %%\n%% SECRET")?.[0]?.closed === false;
+	check("NRL-118 scan: `closed` tells a closer from a container end", closedFlag);
 }
 
 console.log("");

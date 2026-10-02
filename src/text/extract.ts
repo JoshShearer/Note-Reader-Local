@@ -2,6 +2,7 @@ import type { BlockType, SpeechChunk } from "../audio/types";
 // words.ts imports nothing but its own types, so this edge adds no node builtin
 // and no new entry to main.js's require() list (non-negotiable 7).
 import { findWords, hasCjkScript } from "../audio/words";
+import { percentBlockEnds } from "./obsidianBlocks";
 import {
 	type SegmenterSource,
 	graphemeBoundaries,
@@ -4135,6 +4136,26 @@ export function extractChunks(
 
 	let inFence = false;
 	let inComment: CommentCloser | undefined;
+	// A `%%` block ends where Obsidian's own parser ends it (NRL-118, ADR 0006
+	// clause 5). The reading view tokenizes a blockquote, a list item or a
+	// footnote definition as a fresh run of blocks over its own rewritten lines,
+	// so a `%%` comment opened inside one stops at the container's last line,
+	// closed or not; ours used to run on through the note to the next `%%` at
+	// any depth, so `>> %%` / `%% SECRET` spoke SECRET, which the reader never
+	// sees. `percentEnds` maps a line on which the RENDERER opens a `%%` comment
+	// that runs out of container to the last line that comment covers, from a
+	// transcription of the renderer's block tokenizer (obsidianBlocks.ts). It is
+	// consulted only when WE open a block on that same line, which is the same
+	// `%%` by construction (the opener is the last `%%` on its line, with no `%`
+	// after it, in both); everywhere else, including every opener the renderer
+	// does not have, the block stays note-scoped exactly as before. That keeps
+	// the change to one direction it can be argued in: a block both parsers
+	// agree on ends where the renderer ends it, and nothing else moves.
+	const percentEnds = percentBlockEnds(source, lines.length);
+	let commentLastLine = -1;
+	const scopeComment = (lineNo: number): void => {
+		commentLastLine = inComment === "%%" ? (percentEnds.get(lineNo) ?? -1) : -1;
+	};
 	// Length of a confirmed inline code span left open by the previous line.
 	// Armed only on the plain-paragraph path and only once codeSpanClosesLater
 	// has found the closing run, so every other path clears it.
@@ -4258,6 +4279,7 @@ export function extractChunks(
 			false,
 		);
 		inComment = cleaned.openComment;
+		scopeComment(lineNo);
 		if (cleaned.text.trim() !== "") appendToParagraph(cleaned, lineStart + from);
 	};
 
@@ -4317,6 +4339,15 @@ export function extractChunks(
 			const meta = cleanLine(raw, lineStart, frontmatterOpts);
 			if (meta.text.trim() !== "") appendToParagraph(meta, lineStart);
 			continue;
+		}
+
+		// The renderer's comment ran out of container on an earlier line, so this
+		// one is not hidden. It is processed FRESH, as if no block had been open,
+		// which is what the reading view does with it: the container's parent
+		// tokenizes it, and a line-start `%%` here opens a new block.
+		if (inComment === "%%" && commentLastLine !== -1 && lineNo > commentLastLine) {
+			inComment = undefined;
+			commentLastLine = -1;
 		}
 
 		// Hidden lines must not change blank, paragraph, list, code or math state.
@@ -4596,6 +4627,7 @@ export function extractChunks(
 		// comment open is an opensHiddenComment line, and codeSpanClosesLater
 		// rejects those at both ends, so no confirmation exists on such a line.
 		inComment = cleaned.openComment;
+		scopeComment(lineNo);
 		// A link reference definition renders as nothing, so the whole line goes
 		// (docs/adr/0018). Deliberately AFTER cleanLine and after `inComment` is
 		// assigned, for the same reason the skipTables branch below is: a title
