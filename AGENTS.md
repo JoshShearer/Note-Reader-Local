@@ -3142,6 +3142,16 @@ rediscover them:
   the Node harness), but the deployed build was not loaded because Obsidian was not restarted.
   Live Preview unread, rule 11 applies. R-M08 is still **NOT** met and the `2 of 16` count
   does not move.
+  **NRL-155 corrected the refusal's lead rule** (PR #201, `b0bed1b`, ADR 0025 decision 2's
+  in-place amendment, `srs.md`'s `<!--` bullet). "At most three spaces, a tab is never setext
+  content" was false for one to three spaces then a tab: module 134 is literal (four spaces or
+  one tab at offset 0), so ` \t<!--` over `===` is a heading, and after an ATX heading, a
+  thematic break or a fence line `# Head` / ` \t<!--` / `===` / `HIDDENA` / `more` spoke only
+  `Head`. The plain arm now refuses for any lead `MODULE134_INDENTED_CODE` does not take, a
+  tab-bearing lead only in block position (an allowlist on the raw previous line, not
+  `wasPara`). Quote and list arms stay spaces-only, fail-closed. 12 core pins red on `faf55a3`,
+  green after; bare Node against the executed parser, **NOT VERIFIED IN OBSIDIAN**. R-M08 not
+  met, `2 of 16` unchanged.
 - R-C02's Context table named three gaps: three of five install-time fields missing (language,
   installed size, license), and no remove action at all, so up to 573 MB across three Kokoro
   builds plus the ~31 MB ORT runtime could accumulate in a directory deliberately hidden from
