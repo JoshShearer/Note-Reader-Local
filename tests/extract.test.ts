@@ -2276,23 +2276,39 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl93-fresh-block-tab-is-indented-code", "	%%\nSECRET_TAB\nVISIBLE", "SECRET_TAB VISIBLE"],
 		["guard-nrl93-fresh-block-4sp-is-indented-code", "    %% secret\nVISIBLE AFTER 4SP", "VISIBLE AFTER 4SP"],
 		["guard-nrl93-fresh-block-tab-code-spoken", "	%%\nSECRET_TAB\nVISIBLE", "%% SECRET_TAB VISIBLE", { skipCodeBlocks: false }],
-		// A `%%` on a list MARKER line, unmoved by this fix and divergent for reasons
-		// that are NOT the line-start rule. The prior pass recorded these three as
-		// guards whose comment said "opening the block there is RIGHT"; that is
-		// CORRECTED here, because running the transcribed module 745 says the renderer
-		// DISPLAYS SECRET in all three, and in the bare `- %%` form too. Two separate
-		// roots, both pre-existing and neither opened here. An unterminated `%%` is
-		// ITEM-SCOPED for the renderer - module 745 tokenizes each item's value on its
-		// own, so the comment cannot reach the next item - and note-scoped for our
-		// per-line scanner. And module 745's third group,
-		// /^([ \t]*)([*+-]|\d+[.)])( {1,4}(?! )| |\t|$|(?=\n))([^\n]*)/, takes the
-		// SINGLE SPACE here and leaves the tab as the item's content indent, so
-		// `- ` + tab + `%%` is indented CODE inside the item, while our `LIST_BULLET`
-		// ends in `\s+` and eats both. Only the no-space form `-` + tab + `%%` really
-		// does reduce to `%%` at a block start.
-		["pin-nrl93-tab-after-bullet-marker-still-silenced", "- Plain prose\n- 	%%\n- SECRET", "Plain prose"],
-		["pin-nrl93-tab-after-ordered-marker-still-silenced", "1. Plain prose\n1. 	%%\n1. SECRET", "Plain prose"],
-		["pin-nrl93-tab-after-task-marker-still-silenced", "- [ ] Plain prose\n- [ ] 	%%\n- [ ] SECRET", "Plain prose"],
+		// A `%%` on a list MARKER line. THREE OF THESE FOUR MOVED WITH NRL-116, and the
+		// three that moved are REPLACED IN PLACE keeping their NRL-93 names so every
+		// citation of them in `srs.md`, `docs/adr/0006` and `AGENTS.md` still resolves
+		// (the NRL-66 / NRL-67 convention). THE NAMES NOW READ BACKWARDS - nothing is
+		// "still silenced" in the first three - and that wart is deliberate and
+		// preferred to a rename that would orphan those citations.
+		//
+		// What NRL-93 recorded, and which still stands as the DIAGNOSIS: module 745's
+		// third group, /^([ \t]*)([*+-]|\d+[.)])( {1,4}(?! )| |\t|$|(?=\n))([^\n]*)/,
+		// takes at most four spaces not followed by a fifth, or one space, or one tab,
+		// and leaves the rest as the item's CONTENT INDENT - so `- ` + tab + `%%` is
+		// indented CODE inside the item and the next item is DISPLAYED, while our
+		// `LIST_BULLET` ended in `\s+` and ate both. (NRL-93's own comment said group 3
+		// "takes the SINGLE SPACE"; that wording is the outlier and `srs.md`'s "at most
+		// four spaces or one tab" is right. Corrected by NRL-116, Q10, re-read out of
+		// the same `app.js`.) `containerPrefix` now peels the marker and that lead
+		// SEPARATELY, so the tab stays in the body where `opensObsidianBlock`'s
+		// charCode-32-only rule correctly refuses it.
+		//
+		// The `%%` ITSELF is still spoken, which the renderer shows as code rather than
+		// as prose. Our extractor does not model an item's content indent as indented
+		// code, so `skipCodeBlocks` cannot reach it; that is NRL-117's row, named here
+		// so the expectation is not read as a claim that we classify it correctly.
+		["pin-nrl93-tab-after-bullet-marker-still-silenced", "- Plain prose\n- 	%%\n- SECRET", "Plain prose %% SECRET"],
+		["pin-nrl93-tab-after-ordered-marker-still-silenced", "1. Plain prose\n1. 	%%\n1. SECRET", "Plain prose %% SECRET"],
+		["pin-nrl93-tab-after-task-marker-still-silenced", "- [ ] Plain prose\n- [ ] 	%%\n- [ ] SECRET", "Plain prose %% SECRET"],
+		// THE FOURTH DID NOT MOVE, deliberately (NRL-116 Q12). A BARE `- %%` really does
+		// reduce to `%%` at the item's block start, so the opener is correctly
+		// recognised; what diverges is the SCOPE, module 745 tokenizing each item's
+		// value on its own where our block state is note-scoped and container-blind.
+		// That root is NRL-118, not this one, and NRL-116's peel deliberately omits
+		// group 3's `$` and `(?=\n)` alternatives so the bare form behaves exactly as
+		// it did. WHEN NRL-118 CLOSES THIS EXPECTATION MUST CHANGE ON PURPOSE.
 		["pin-nrl93-bare-marker-opener-still-silenced", "- Plain prose\n- %%\n- SECRET", "Plain prose"],
 		// A tab, or any other indent, used as a list item's CONTINUATION indentation.
 		// Term 3 is the whole reason the predicate takes a third argument: the renderer
@@ -2347,12 +2363,16 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// cells of the census, the second being `>` + tab + space + `%%`.
 		["pin-nrl93-quote-tab-eaten-by-prefix-still-silenced", "> Plain prose\n>	%%\n> SECRET", "Plain prose"],
 		["pin-nrl93-quote-tab-space-eaten-by-prefix-still-silenced", "> Plain prose\n>	 %%\n> SECRET", "Plain prose"],
-		// 3. Our `LIST_BULLET` is /^\s*([-*+]|\d+[.)])\s+/ and its `\s+` eats the WHOLE
-		// lead after a marker, where module 745's third group takes at most four spaces
-		// or one tab. So `-` plus eight spaces plus `%%` reaches the renderer as seven
-		// spaces and `%%`, which is indented code, and reaches us as `%%` at offset 0.
-		// Three cells of the census, the other two being `- ` + tab and two tabs.
-		["pin-nrl93-list-marker-lead-eaten-still-silenced", "- Plain prose\n-        %%\n- SECRET", "Plain prose"],
+		// 3. CLOSED BY NRL-116, and REPLACED IN PLACE keeping its name for the same
+		// citation reason as the three above - the name now reads backwards. Our
+		// `LIST_BULLET` was /^\s*([-*+]|\d+[.)])\s+/ and its `\s+` ate the WHOLE lead
+		// after a marker, where module 745's third group takes at most four spaces or
+		// one tab. So `-` plus eight spaces plus `%%` reached the renderer as seven
+		// spaces and `%%`, which is indented code, and reached us as `%%` at offset 0.
+		// NRL-93 recorded this as "three cells of the census"; measured against the real
+		// renderer over NRL-116's own corpus it is far larger than three, and the figure
+		// is corrected in `srs.md` rather than here.
+		["pin-nrl93-list-marker-lead-eaten-still-silenced", "- Plain prose\n-        %%\n- SECRET", "Plain prose %% SECRET"],
 		// 4. A COST this fix carries, measured and pinned rather than hidden. Our `%%`
 		// block is NOTE-scoped (ADR 0006 clause 5) where Obsidian scopes an
 		// unterminated one to the construct that holds it - module 745 tokenizes each
@@ -2476,6 +2496,73 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// PURPOSE: SECRET stops being spoken in each.
 		["pin-nrl118-note-scope-closes-at-another-depth", ">> %%\n%% SECRET", "SECRET"],
 		["guard-nrl118-note-scope-control-no-container", "%%\n%% SECRET", "SECRET"],
+		// NRL-116. `containerPrefix`'s list arm peeled with the SHARED `LIST_BULLET`,
+		// whose trailing `\s+` ate a marker's whole lead, and with the SHARED `TASK`,
+		// whose trailing `\s*` did the same after a checkbox. Module 745 takes at most
+		// four spaces not followed by a fifth, or one space, or one tab, and leaves the
+		// rest as the item's content indent. The peel is now THREE peel-local constants
+		// - `PEEL_MARKER`, `PEEL_LEAD`, `PEEL_TASK` - and `LIST_BULLET` and `TASK` are
+		// BYTE-IDENTICAL for their three other readers (`interruptsParagraph`, the
+		// `listDedented` pass, and that pass's `inList` end test), which is the whole
+		// reason this is safe: NRL-93's planned one-term change to a shared predicate
+		// measured a 6,144-cell regression.
+		//
+		// CORE CASES. Each was measured RED against the unfixed tree. The oracle is
+		// real rendered HTML from Obsidian 1.13.7's own parser and renderer run in
+		// Node, which displays the sentinel in every one.
+		["pin-nrl116-star-marker-tab-lead", "* Plain prose\n* 	%%\n* SECRET", "Plain prose %% SECRET"],
+		["pin-nrl116-paren-ordered-tab-lead", "1) Plain prose\n1) 	%%\n1) SECRET", "Plain prose %% SECRET"],
+		// FIVE spaces, which is the branch that proves the lead is a BOUNDED alternation
+		// and not `\s+`: ` {1,4}(?! )` cannot match here (a fifth space follows every
+		// prefix of it), so the single-space alternative fires and four spaces are left
+		// in the body, where `INDENTED_CODE` sees them.
+		["pin-nrl116-five-space-lead", "- Plain prose\n-     %%\n- SECRET", "Plain prose %% SECRET"],
+		// THE `TASK` HALF, which is a SECOND constant and not covered by the bullet
+		// cases: without narrowing `TASK`'s own trailing `\s*` the checkbox arm eats the
+		// lead exactly as `LIST_BULLET`'s did and these stay silenced.
+		["pin-nrl116-task-eight-space-lead", "- [ ] Plain prose\n- [ ]        %%\n- [ ] SECRET", "Plain prose %% SECRET"],
+		["pin-nrl116-task-five-space-lead", "- [x] Plain prose\n- [x]     %%\n- [x] SECRET", "Plain prose %% SECRET"],
+		//
+		// TRIPWIRES ON WHAT THIS DOES NOT CLOSE. Each is measured IDENTICAL on both
+		// sides of NRL-116 and each must change on purpose when its own root closes.
+		//
+		// 1. `-` + TAB with NO space (Q40) and the bare `- %%` above are the same root:
+		// the item's content really is `%%` at a block start, so the opener is right and
+		// only the SCOPE is wrong. NRL-118.
+		["pin-nrl116-tab-no-space-after-marker-still-silenced", "- Plain prose\n-	%%\n- SECRET", "Plain prose"],
+		// 2. EXACTLY FOUR spaces, where ` {1,4}(?! )` consumes the whole lead and the
+		// body really is `%%` at offset 0 - so, again, a correct opener with the wrong
+		// scope. This one is worth its own fixture because it is the cell that separates
+		// "the lead was mis-peeled" (fixed here) from "the block's scope is note-wide"
+		// (NRL-118): the renderer hides the `%%` and DISPLAYS SECRET.
+		["pin-nrl116-four-space-lead-still-silenced", "- Plain prose\n-    %%\n- SECRET", "Plain prose"],
+		// 3. THE `<!--` TWIN IS NOT FIXED, and that is the one place a reader is most
+		// likely to assume otherwise. `opensHtmlBlock` accepts a tab deliberately -
+		// module 8776's skip loop takes spaces AND tabs, so that is right for a `<!--`
+		// in a FRESH block - but on a list marker line the item's content indent makes
+		// it indented code before the HTML tokenizer is reached, and we do not model the
+		// indent AMOUNT. Same root as NRL-93's boolean-`dedentedByList` residual, which
+		// is NRL-117's, not this ticket's.
+		["pin-nrl116-html-twin-tab-lead-still-silenced", "- Plain prose\n- 	<!--\n- SECRET", "Plain prose"],
+		//
+		// GUARDS FOR Q38, THE SINGLE LARGEST RISK IN THIS CHANGE. NRL-131's
+		// indented-code stop used to read the PEELED string's trailing whitespace run;
+		// under a narrowed lead that run is at most four spaces or one tab, so the stop
+		// stops firing and NRL-131 regresses. It is RELOCATED onto the REMAINING BODY.
+		// These are green on BOTH sides of the shipped change and so are not evidence of
+		// it - they are the mutation target: with the stop left where it was, every one
+		// of them goes red, measured at 72,704 newly-lost cells of 98,304 on a
+		// nested-quote corpus.
+		["guard-nrl116-q38-nested-quote-tab-lead", "- Plain prose\n- 	> ZMARKZ x\n- after", "Plain prose > ZMARKZ x after"],
+		["guard-nrl116-q38-nested-quote-five-space-lead", "- Plain prose\n-     > ZMARKZ x\n- after", "Plain prose > ZMARKZ x after"],
+		["guard-nrl116-q38-nested-quote-four-space-lead", "- Plain prose\n-    > ZMARKZ x\n- after", "Plain prose ZMARKZ x after"],
+		// The `marker + lead + > %%` shape the probe's own corpus was BLIND to (Q41):
+		// the `>` is displayed as code content, so it is spoken, and the real opener is
+		// never reached. Base and fix agree; without the relocation the body loses its
+		// `>` and the following item goes quiet.
+		["guard-nrl116-q38-nested-quote-comment-tab-lead", "- Plain prose\n- 	> %%\n- SECRET", "Plain prose > %% SECRET"],
+		["guard-nrl116-q38-nested-quote-comment-five-space-lead", "- Plain prose\n-     > %%\n- SECRET", "Plain prose > %% SECRET"],
+		["guard-nrl116-q38-task-nested-quote-tab-lead", "- [x] Plain prose\n- [x] 	> ZMARKZ x\n- [x] after", "Plain prose > ZMARKZ x after"],
 		// NRL-120 PART 1. Term 1 of the HTML-comment rule needs block position: a
 		// line-start `<!--` whose NEXT line is an exact setext underline is not an
 		// HTML block at all, because `blockMethods` runs `setextHeading` (index 10)
@@ -2769,6 +2856,28 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		"# H\u00e9ad \ud83d\ude00\n  \t<!-- \ud83d\ude00\n=\nHIDDENA \u00e9\nmore",
 	]) {
 		check(`NRL-155 sourceIndex lockstep by UTF-16 unit: ${JSON.stringify(src.slice(0, 12))}`, extractChunks(src, { ...OPTS, skipCodeBlocks: false }).every(
+			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
+		));
+	}
+	// NRL-116. The narrowed peel changes HOW MANY raw characters `containerPrefix`
+	// reports, which is the number `cleanLine` adds to every offset it emits, so an
+	// off-by-one there would be invisible to a text-only expectation and is exactly
+	// what non-negotiable 8 forbids. Checked numerically by UTF-16 code-unit index
+	// through the same `unitsMatch` helper, over the shapes whose peel actually moved.
+	const nrl116Lockstep: Array<[string, string, Partial<typeof OPTS>?]> = [
+		["bullet-tab-lead", "- Plain prose\n- 	%%\n- SECRET"],
+		["ordered-tab-lead", "1. Plain prose\n1. 	%%\n1. SECRET"],
+		["task-tab-lead", "- [ ] Plain prose\n- [ ] 	%%\n- [ ] SECRET"],
+		["bullet-eight-space-lead", "- Plain prose\n-        %%\n- SECRET"],
+		["task-eight-space-lead", "- [ ] Plain prose\n- [ ]        %%\n- [ ] SECRET"],
+		["nested-quote-tab-lead", "- Plain prose\n- 	> ZMARKZ x\n- after"],
+		["nested-quote-comment-tab-lead", "- Plain prose\n- 	> %%\n- SECRET"],
+		["four-space-lead", "- Plain prose\n-    %%\n- SECRET"],
+		["two-space-lead-quote", "- Plain prose\n-  > ZMARKZ x\n- after"],
+		["code-spoken-tab-lead", "- Plain prose\n- 	%%\n- SECRET", { skipCodeBlocks: false, skipInlineCode: false }],
+	];
+	for (const [id, src, overrides] of nrl116Lockstep) {
+		check(`NRL-116 ${id}: sourceIndex lockstep by UTF-16 unit`, extractChunks(src, { ...OPTS, ...overrides }).every(
 			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
 		));
 	}

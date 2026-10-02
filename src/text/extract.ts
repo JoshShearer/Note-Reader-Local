@@ -1781,16 +1781,62 @@ const BLOCKQUOTE = /^(?:\s{0,3}>\s?)+/;
  */
 const CALLOUT = /^\[![A-Za-z][\w-]*\][+-]?\s*/;
 /**
- * Task checkbox after a list marker. Any single status char, since Obsidian
- * renders `[ ]`, `[x]`, `[/]`, `[-]`, `[>]`, `[?]` and friends all as
- * checkboxes. The trailing space-or-end keeps "- [x]text" and "- [ab]" as
- * text.
+ * NRL-116's PEEL-LOCAL list marker, lead and task checkbox. The first two exist
+ * because `containerPrefix` has to ask a DIFFERENT question from the one
+ * `LIST_BULLET` answers for its other readers, and that one must stay
+ * byte-identical for them: it is read by `interruptsParagraph`, by the
+ * `listDedented` pass and by that pass's `inList` end test, all three as "is this
+ * a list line at all". NRL-93's planned one-term change to a shared predicate
+ * here measured a 6,144-cell regression, which is why this is a second set rather
+ * than an edit.
  *
- * Checked state is not spoken (NRL-8 Decisions, 2026-09-28). A listener cannot
- * tell done from open; that is the accepted trade, because a reader who needs
- * task state is looking at the screen. If it proves wrong, add a setting.
+ * `PEEL_TASK` is the exception and the reason is worth stating rather than
+ * inferring from the name: the old shared `TASK`, which was this pattern with a
+ * trailing `\s*` run on the end, had
+ * NO other reader once `containerPrefix` stopped using it, so it was DELETED
+ * instead of being kept as dead code with a comment saying nothing reads it.
+ * What it documented survives here. Any single status char, since Obsidian
+ * renders `[ ]`, `[x]`, `[/]`, `[-]`, `[>]`, `[?]` and friends all as checkboxes;
+ * the space-or-end lookahead keeps "- [x]text" and "- [ab]" as text; and checked
+ * state is not spoken (NRL-8 Decisions, 2026-09-28), because a listener cannot
+ * tell done from open and a reader who needs task state is looking at the screen.
+ * If that proves wrong, add a setting.
+ *
+ * The question the PEEL asks is "how much of this line is container SYNTAX", and
+ * the authority is Obsidian's own list tokenizer, module 745, read out of the
+ * installed `obsidian.asar`:
+ *
+ *   /^([ \t]*)([*+-]|\d+[.)])( {1,4}(?! )| |\t|$|(?=\n))([^\n]*)/
+ *
+ * Group 3 is the whole point. It takes AT MOST FOUR SPACES NOT FOLLOWED BY A
+ * FIFTH, or one space, or one tab - and everything past it is the item's CONTENT
+ * INDENT, which the renderer then runs its block tokenizers over. So `- ` + tab
+ * + `%%` leaves `\t%%` as content, a tab of content indent is indented code
+ * inside the item, the `%%` is code text rather than a comment opener, and the
+ * following item is DISPLAYED. `LIST_BULLET`'s trailing `\s+` ate the tab as
+ * syntax and `TASK`'s trailing `\s*` did the same after a checkbox, so we handed
+ * a bare `%%` to `opensObsidianBlock`, opened a note-scoped block and hid text
+ * the reader can see. That was R-M08 prose loss, named by NRL-93 and measured
+ * identical on both of its arms, so pre-existing rather than opened by it.
+ *
+ * TWO OMISSIONS ARE DELIBERATE. Group 3's `$` and `(?=\n)` alternatives are NOT
+ * here, so a BARE marker (`- %%`, or `-` + tab with no space) peels exactly as it
+ * did before. Those forms really do reduce to `%%` at the item's block start, so
+ * the opener is already right and what diverges is the block's SCOPE - ours is
+ * note-wide and container-blind where module 745 scopes an unterminated comment
+ * to the item holding it. That is NRL-118, and widening the peel to cover them
+ * would change nothing about it while enlarging this diff.
+ *
+ * `PEEL_MARKER` keeps `LIST_BULLET`'s leading `\s*` (any indent, because a nested
+ * item's marker must be stripped rather than spoken) and replaces the trailing
+ * `\s+` with a LOOKAHEAD, so the marker and its lead are consumed in two steps
+ * and the lead can be bounded without changing what counts as a marker.
  */
-const TASK = /^\[[^\]]\](?=\s|$)\s*/;
+const PEEL_MARKER = /^\s*([-*+]|\d+[.)])(?=\s)/;
+/** Module 745's group 3; see PEEL_MARKER for why the `$` branch is omitted. */
+const PEEL_LEAD = /^(?: {1,4}(?! )| |\t)/;
+/** The old `TASK` with its trailing whitespace run removed; see above. */
+const PEEL_TASK = /^\[[^\]]\](?=\s|$)/;
 /** One quote level, for counting. See containerPrefix. */
 const BLOCKQUOTE_LEVEL = /^\s{0,3}>\s?/;
 
@@ -1888,14 +1934,13 @@ function containerPrefix(line: string): {
 			chars += line.slice(chars).match(CALLOUT)![0].length;
 			return { chars, quotes, blockType, callout: true, outerList };
 		}
-		// A list marker whose own trailing whitespace reaches indented-code depth
-		// ENDS the peel, and that is load-bearing in both directions (NRL-131,
-		// found at Ship review). `LIST_BULLET`'s `\s+` is greedy, so it swallows
-		// the whole lead; the renderer instead puts the item's content into a
-		// `<pre><code>` block once that lead passes the threshold, which makes a
-		// `>` or a second `-` after it ORDINARY TEXT THE READER SEES rather than
-		// a container. Measured out of Obsidian 1.13.7's real renderer, for
-		// `-`, `*` and `1.` alike: `-    > x` is `<li><blockquote><p>x` while
+		// A list item whose CONTENT INDENT reaches indented-code depth ENDS the
+		// peel, and that is load-bearing in both directions (NRL-131, found at
+		// Ship review). The renderer puts the item's content into a `<pre><code>`
+		// block once that indent passes the threshold, which makes a `>` or a
+		// second `-` after it ORDINARY TEXT THE READER SEES rather than a
+		// container. Measured out of Obsidian 1.13.7's real renderer, for `-`,
+		// `*` and `1.` alike: `-    > x` is `<li><blockquote><p>x` while
 		// `-     > x` and `- \t> x` are `<li><pre><code>> x`. Peeling there drops
 		// a visible marker, and worse, it leaves a following `%%` at offset 0 of
 		// the body, where `opensObsidianBlock`'s plain line-start rule fires and
@@ -1903,30 +1948,59 @@ function containerPrefix(line: string): {
 		// AND spoke the author-hidden text after the real opener, the exact
 		// inversion.
 		//
+		// WHERE THAT TEST LOOKS IS NOT COSMETIC, and NRL-116 had to MOVE IT.
+		// It used to read the PEELED string's own trailing whitespace run,
+		// `INDENTED_CODE.test(b[0].match(/\s*$/)![0].slice(1))`, which worked only
+		// because `LIST_BULLET`'s `\s+` had swallowed the entire lead into `b[0]`.
+		// With the lead bounded to module 745's group 3 that run is at most four
+		// spaces or one tab, `.slice(1)` leaves at most three spaces or nothing,
+		// and the stop NEVER FIRES. Measured against real rendered HTML from
+		// Obsidian's own renderer run in Node: leaving it in place newly loses
+		// 314,880 cells of 3,096,576, every one of them an NRL-131 case
+		// regressing, where the shipped form loses 0 and leaves the whole
+		// nested-quote family BYTE-IDENTICAL to base. The corpus that found it had
+		// to be corrected first - an earlier one reported the same arm clean
+		// because it tracked a sentinel AFTER the `>` while the displayed `>`
+		// itself was what got dropped. It now asks the same question of the place
+		// the indent lives after the narrowing - the REMAINING BODY - and
+		// `.slice(1)`'s job of discounting the marker's own required space is done
+		// instead by `PEEL_LEAD` having consumed it.
+		//
 		// `INDENTED_CODE` is reused deliberately rather than a hand-rolled
-		// "five or more, or a tab": it is this file's one definition of the
-		// threshold, and `.slice(1)` discounts the single space the marker itself
-		// requires. Stopping is FAIL-CLOSED - it leaves the line exactly as the
-		// pre-NRL-131 tree had it - which is why the residual it leaves on the
-		// wider task marker is a leftover rather than a regression.
+		// "four or more, or a tab": it is this file's one definition of the
+		// threshold. Stopping is FAIL-CLOSED - it leaves the line exactly as the
+		// pre-NRL-131 tree had it.
 		let stop = false;
-		const b = line.slice(chars).match(LIST_BULLET);
+		const b = line.slice(chars).match(PEEL_MARKER);
 		if (b) {
 			// Read before `chars` moves, so it records whether this marker is
 			// the outermost container or one nested inside a quote.
 			if (!sawQuote) outerList = true;
 			chars += b[0].length;
 			sawList = true;
-			if (INDENTED_CODE.test(b[0].match(/\s*$/)![0].slice(1))) stop = true;
-			const task = line.slice(chars).match(TASK);
+			// The lead is a SEPARATE step from the marker, which is the whole of
+			// NRL-116: `PEEL_MARKER` ends in a lookahead, so whatever `PEEL_LEAD`
+			// declines to take stays in the body as the item's content indent.
+			const lead = line.slice(chars).match(PEEL_LEAD);
+			if (lead) chars += lead[0].length;
+			if (INDENTED_CODE.test(line.slice(chars))) stop = true;
+			const task = line.slice(chars).match(PEEL_TASK);
 			if (task) {
 				chars += task[0].length;
-				if (INDENTED_CODE.test(task[0].match(/\s*$/)![0].slice(1))) stop = true;
+				// The old shared `TASK`'s trailing `\s*` ate the lead after a
+				// checkbox exactly as `LIST_BULLET`'s `\s+` did after a marker, so
+				// this is the second half of the same fix and not a repetition of
+				// it: reverting only this half re-breaks every task shape and
+				// loses a displayed `>` as well, measured.
+				const taskLead = line.slice(chars).match(PEEL_LEAD);
+				if (taskLead) chars += taskLead[0].length;
+				if (INDENTED_CODE.test(line.slice(chars))) stop = true;
 			}
 		}
 		if (stop) break;
 		// Every matcher that can fire consumes a non-empty string - BLOCKQUOTE
-		// needs a `>`, LIST_BULLET a marker plus whitespace, TASK a bracketed
+		// needs a `>`, PEEL_MARKER a marker (its whitespace requirement is a
+		// lookahead, but the marker itself is a character), PEEL_TASK a bracketed
 		// status char, and CALLOUT returns - so an iteration that moves nothing
 		// has nothing left to peel. That is the termination proof, and it is why
 		// there is deliberately NO iteration cap: a cap would silently truncate
@@ -1934,7 +2008,8 @@ function containerPrefix(line: string): {
 		// function exists to prevent. The shared regexes stay non-sticky for the
 		// same reason the slice is paid for: `BLOCKQUOTE` and `LIST_BULLET` are
 		// read by `interruptsParagraph` and by the `listDedented` pass too, so a
-		// `lastIndex` on either would be a live bug there.
+		// `lastIndex` on either would be a live bug there, and the same holds for
+		// the three PEEL_* patterns, which this function reads twice per round.
 		if (chars === before) break;
 	}
 	// Only a line that is not already a quote is a list. A quoted list item
