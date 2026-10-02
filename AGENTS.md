@@ -1623,18 +1623,23 @@ so every citation of them here, in ADR 0006 and in `srs.md` still resolves:
 "still silenced" in any of them, and that wart is deliberate and preferred to a rename that orphans
 the citations. **Three divergences survive on the same marker line and each is pinned rather than
 closed**: the bare `- %%` and no-space `-` + tab forms and the exactly-four-space form, all three
-NRL-118's note scope with a correctly recognised opener, and the `<!--` TWIN, which is NOT fixed
-and is NRL-117's, `opensHtmlBlock` accepting a tab being correct for a fresh-block `<!--` while on a
-marker line the item's content indent makes it indented code first and we model that indent as a
-boolean rather than an amount.
+NRL-118's note scope with a correctly recognised opener, and the `<!--` TWIN, which is NOT fixed:
+`opensHtmlBlock` accepting a tab is correct for a fresh-block `<!--`, while on a marker line the
+item's content indent makes it indented code first. **This sentence used to end "and we model that
+indent as a boolean rather than an amount", attributing the twin to NRL-117; that half is now wrong
+and is corrected rather than left standing.** NRL-117 has since made the `%%` side an AMOUNT, and
+`opensHtmlBlock` had **no dedent term at all** - so the twin stayed open, but not for the reason
+recorded here. `srs.md:328` carries the same correction. **NRL-115 then closed the twin's prose loss**
+with its own container model (`rendererLeads`, feeding `opensHtmlBlock` only and kept separate from
+NRL-117's `listDedented`), and the NRL-116 and two NRL-117 `html-twin` pins were replaced in place.
 
 **NOTHING WAS OBSERVED IN A LIVE OBSIDIAN.** No deploy and no CDP session happened for this ticket;
 the renderer side is Obsidian's own parser and renderer EXECUTED in Node, which is stronger than a
 transcription and is still not the application, and it is the READING-VIEW path only. Rule 11
 applies to every figure above. **R-M08 is NOT met and the `2 of 16` MUST headline count does NOT
 move**: this closed one named residual of `srs.md:328`, not the requirement. What stays open against
-R-M08 is unchanged by it, plus NRL-117 in this family (NRL-118, also named here when this was
-written, has since closed; next paragraph).
+R-M08 is unchanged by it (NRL-118 and NRL-117, both named here when this was written, have since
+closed; the next two paragraphs).
 
 **A `%%` block now ends where the reading view ends it, as of NRL-118** (PR #203, squash
 `50f73f3`, `docs/adr/0006` clause 5's NRL-118 amendment, `srs.md`'s `%%` bullet). Our `%%` state
@@ -1658,8 +1663,20 @@ mismatched; `sourceIndex` clean over 36.6M UTF-16 units; runtime linear; `main.j
 bytes**. A comment-only follow-up added the MIT notices for the transcribed remark-parse,
 remark-math and remark-footnotes code. Four pins were replaced in place, including both
 `pin-nrl116-*-still-silenced` tripwires, whose names now read backwards.
-**Residuals, both pinned.** NRL-117's boolean `dedentedByList` still opens a block on a code-depth
-line (`-    %%` / `    %% PROSE` loses `PROSE`; its `%%`-free control loses it on base too). And an
+**Residuals, both pinned.** A code-depth line after a marker-line opener still loses its prose
+(`-    %%` / `    %% PROSE` loses `PROSE`; its `%%`-free control loses it on base too). **That
+residual was recorded as "NRL-117's boolean `dedentedByList`" and the attribution is now
+superseded**, the boolean having become an amount: re-measured at the NRL-117 merge `d53aa1d` and at
+its parent `dad8de2` by bundling the real extractor, the shape speaks `""` on **both** arms, and so
+do its 3-space sibling and the `%%`-free control, so NRL-117 did not move it. A 5-space lead speaks
+`PROSE` on **both** arms too, which is why "the boolean could not tell leads apart" is **not** the
+explanation and was discarded on measurement rather than written down.
+`pin-nrl118-residual-code-depth-line-after-item`'s own comment still predicted it "MUST CHANGE ON
+PURPOSE when NRL-117 closes"; the prediction did not come true, and that comment is corrected in
+place rather than left standing. The live root is the one the
+sibling pin `pin-nrl118-residual-deep-item-content-opener` records: the dedent term correctly reports
+a block start while the renderer reads the line as indented CODE, and nothing routes it to the code
+exclusion, so `skipCodeBlocks` cannot reach it. That is not the indent. And an
 **unterminated raw HTML block** such as `<div<TAB>x` / `SECRET`, which the browser hides and we speak
 with or without a comment, is a pre-existing root NRL-118 unmasks; it belongs to **NRL-137**, where
 the shape is now recorded. NRL-159 carries the fence residuals.
@@ -1670,6 +1687,97 @@ tokenizers** at all (the `%%`, block-id, `[^` and frontmatter rules) is an **ope
 raised by the second Verify and not settled here. **NOT VERIFIED IN OBSIDIAN**: everything is bare
 Node against the reading-view parser executed out of the bundle, Live Preview was never read, and
 no reload exercised this change. **R-M08 is NOT met and the `2 of 16` count does not move.**
+
+**The list dedent is an AMOUNT rather than a boolean, as of NRL-117** (PR #209, squash `d53aa1d`,
+`docs/adr/0006` clause 2 term C's NRL-117 amendment, `srs.md:328` rewritten; no new ADR, per the
+ADR-number race NRL-113 recorded). NRL-93 gave term C a boolean - "this line is a list item's
+content, so keep the old any-whitespace line-start test" - which is right for one level of nesting
+and too coarse beyond it, and NRL-93 took it deliberately because under-estimating the dedent
+DISCLOSES where declining to narrow only keeps a prose loss.
+
+**The predicate did not change.** `opensObsidianBlock`'s brace-matched body is byte-identical across
+the commit (sha256 prefix `f3cce67c`, 233 B), so its 263,672-triple structural proof stands as
+written; 14 of 15 neighbouring predicate bodies are byte-identical too, `extractChunks` the only one
+that moved. What changed is the **meaning of `true`** and the pass that computes it: a **STACK** of
+per-level budgets built from modules 745, 5540 and 6058, read out of the Obsidian parser harness and
+validated by **EXECUTING** it rather than by transcription - `leadStops` (module 6058's
+`indentation()`, a tab to the next multiple of four), `listDedentCut` (module 5540's stop-based
+slice, a budget in COLUMNS spent by removing whole CHARACTERS, so a tab goes entirely or not at all)
+and `itemHeadCols` (module 745's `M`, including its odd-prefix pad). **The pass emits TWO arrays and
+the split is deliberate**: `listItemContent` is the pre-NRL-117 array bit for bit, which is what
+NRL-120's setext pass reads, and `listDedented` is that array conjoined with
+`leadReachesBlockStart(residual)`, so the narrowing is refusal-only by construction.
+
+**Q43's counter-example is the most reusable thing in this ticket, and it disqualifies the obvious
+implementation by MEASUREMENT.** A single absolute-column subtraction (`armColsOf(view, at) -
+dedentCols <= 3`) **discloses 23,040 of 2,957,312 census cells where the shipped fix discloses 0**,
+all of them nested-list plus tab leads, because **module 745 NESTS and module 5540 SPLITS A TAB**:
+for `- outer` / `  - inner` / tab-tab + `%%` the two two-column budgets take **both** tabs and land
+on column 0, where `8 - 4 = 4` says four columns survive.
+`guard-nrl117-nested-double-tab-correctly-hides` keeps it, and that row is RED against the rebuilt
+subtraction arm. Do not re-derive term C as column arithmetic.
+
+**The accepted cost, and what NRL-118 did to it.** Declining a wrongly-recognised opener shifts the
+parity of every later one under ADR 0006 clause 5's `%%` pairing, which is **NRL-118's mechanism and
+not the indent model**. Measured on one instrument with the base as the only variable, 12,000
+distinct notes / 388,944 graded cells: at `9bdc74c` (note-scoped) **146 newly disclosed in 11 notes**
+against 1,199 closed; at `dad8de2`, after NRL-118's container scope landed first, **40 newly
+disclosed in 3 notes** against 1,255 closed - a **73% shrink**, the net disclosure direction moving
+from 8.2:1 in favour to **31:1**, with **nothing growing in either direction**. The class is **not
+empty**: inside one container the openers still pair in sequence. Attribution is a **controlled
+switch and not an argument**, and it holds on both bases: capping the corpus at one `%%` construct
+per note gives **0 newly disclosed and 0 newly lost on both**, while an arbitrary refusal-only arm
+scores **1,424** under that same cap and Q43's subtraction arm **24**, against this model's 0 - which
+is why "refusal-only" is necessary and not sufficient. Pinned by
+`pin-nrl117-note-scope-parity-discloses` and `pin-nrl117-scope-cost-contentless-marker`.
+
+**One honest correction, which must not be dropped or restated the stronger way.** The claim that the
+two-array split is the ONLY thing preventing a disclosure was **NOT confirmed**: pointing
+`lazyInList` at the narrowed array is **byte-identical over 103,776 cells**, because the two arrays
+differ only where the lead is four or more columns or carries a tab and `isSetextContentLine` already
+refuses exactly those. **The split is DEFENCE IN DEPTH, not the sole guard.** It was corrected in the
+source comment, the commit message and the PR; do not write the stronger claim back.
+
+**Scope, each figure with its denominator.** 2,816 newly-lost cells are 11 classes of 256, every one
+codespan-wrap plus `SPANA` with `skipInlineCode` **true in every loss cell** - NRL-73's documented
+class, not a new one - against **155,392 losses closed**. **8 quote-in-list cells are scoped out to
+NRL-114** with 4 closing here, because `BLOCKQUOTE` is peeled before the budget is applied so `at` is
+0 and no indent model can see the tab; 4 further q4 cells that read as disclosures are byte-identical
+on both arms and so pre-existing. The **`<!--` twin was NOT fixed here** - `opensHtmlBlock` had no dedent
+term at all; NRL-115 closed it later with a separate model, and both `pin-nrl117-html-twin-*` rows moved. And **three deliberate over-dedenting approximations**, all failing toward HIDING:
+module 5540's `maximum` standing in for the real `p`, `interruptList` unmodelled, and an unparseable
+item head taking a whole-lead budget - 22 cells of a 667-cell renderer-keyed sweep, identical on both
+sides. The refusal-only property is exhaustive rather than sampled: **0 violations over 11,438,076
+line cells**, with the pre-NRL-117 array recomputed from the base tree rather than re-implemented.
+
+**One NRL-118 pin became a closure rather than a tripwire.**
+`pin-nrl118-residual-deep-item-content-opener`'s own comment instructed it: it "MUST CHANGE ON
+PURPOSE when that boolean becomes an indent. Tracked: the boolean is NRL-117". It was the **only red
+check across all 24 suites** at the rebase, and its new value - `"%% %% S"` for `2. \t%%` /
+eight spaces + `%% S` - is **oracle-derived from the real rendered HTML**, not edited until green. Its
+sibling `pin-nrl118-residual-code-depth-line-after-item` carried the same instruction and **did not
+move**; see the NRL-118 residual paragraph above for the measurement and the corrected attribution.
+
+**Two instrument traps from this ticket, both of which produced a CLEAN result from a BROKEN
+instrument and both of which will bite the next ticket in this family.** A fuzz PRNG stepping
+`seed * 1103515245 + 12345` in IEEE doubles **overflows 2^53 and has a short period**, so a run that
+*reported* 12,000 notes produced a few hundred and found 0 disclosures **for that reason**; use
+mulberry32 and **print the DISTINCT note count**, which is the check that catches it. And **a
+sentinel's name is not evidence of where it landed** - a probe asserted `SPANB` sits inside an
+`alt="..."` attribute when it is displayed text, so attribute membership must be decided **per cell
+from the rendered HTML** and never from the corpus generator's intent. That is the third probe in
+this family to hit the attribute-class blindness that let NRL-74's 5,120-cell class through.
+
+**NOTHING WAS OBSERVED IN A LIVE OBSIDIAN.** No deploy and no CDP session happened for this ticket;
+the oracle is Obsidian's own parser and HTML renderer EXECUTED in Node out of the 1.13.7 bundle,
+which is stronger than a transcription and is still not the application, and it is the
+**READING-VIEW path only** - Live Preview's CodeMirror/Lezer parser was neither read nor run. Rule 11
+applies to every figure above. **No requirement moves. R-M08 is NOT met and the `2 of 16` MUST
+headline count does NOT move**: this closed one named residual of `srs.md:328`, not the requirement.
+What stays open against R-M08 is otherwise unchanged - NRL-63's roots 3 and 5, root 4's named
+residuals, roots 1 and 2's three non-container shapes (NRL-109), NRL-45's `[a]: x.png "%%"` leftover,
+NRL-114's 8 quote-in-list cells, and NRL-137 and NRL-159 on the NRL-118
+residuals.
 
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the

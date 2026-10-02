@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-09-29
 - Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44, NRL-64, NRL-74 and
-  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74, NRL-95, NRL-93, NRL-116
+  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74, NRL-95, NRL-93, NRL-116, NRL-117
   and NRL-113
 
 ## Context
@@ -245,6 +245,141 @@ evidence, not a live Obsidian reading or highlighting observation.
    the condition the per-line loop uses for `inList`, minus that condition's
    BLOCKQUOTE arm, which the peel makes wrong here because `interruptList` holds
    no blockquote entry.
+
+   **NRL-117 amendment: term C is an AMOUNT, not a boolean, and the amount is a
+   stack of character cuts.** NRL-93 shipped term C as `dedentedByList: boolean`
+   and named this as its own residual. The boolean is right for one level of list
+   nesting and too coarse beyond it: `- item` dedents by two columns, so eight
+   spaces leaves six and two tabs leave one, both of which the renderer absorbs as
+   lazy prose while we opened a comment block.
+
+   **`opensObsidianBlock` did not change and must not.** Its body is byte-identical
+   across NRL-117 and so is its 263,672-triple structural proof; the third argument
+   keeps its name and its two values. What changed is the MEANING of `true` - from
+   "this line is list content" to that conjoined with "and the item's dedent really
+   does leave the lead at the block start a `%%` opener needs" - and the pass that
+   computes it. The pass now produces TWO arrays: `listItemContent`, which is the
+   pre-NRL-117 array bit for bit and is what NRL-120's setext pass reads, and
+   `listDedented`, which is `listItemContent && leadReachesBlockStart(residual)`.
+   Keeping them apart is load-bearing rather than tidy: `lazyInList` reading the
+   narrowed array would make `setextContent` true on a deeply indented item line,
+   which makes a `<!--` literal and SPOKEN - a disclosure out of a change whose
+   whole purpose is to refuse.
+
+   **The amount is not a subtraction, and that is measured rather than reasoned.**
+   The obvious rule, `columnsOfLead - itemContentIndent <= 3`, was built and
+   measured: it DISCLOSED **7,168 cells of a 3,021,824-cell census** in one shape,
+   `- outer` / `  - inner` / two tabs + `%%`. Two reasons, both module 745's and
+   module 5540's. Module 745 NESTS - the inner list is tokenized out of the outer
+   item's already-dedented content, so the dedent runs once per enclosing level -
+   and module 5540 spends a budget measured in COLUMNS by removing whole
+   CHARACTERS (`while (s && !(s in c)) s--` then `slice(c[s] + 1)`), so a tab goes
+   entirely or not at all. Two two-column budgets therefore take both tabs and land
+   on column 0, where the subtraction says four columns survive. `leadStops`,
+   `listDedentCut` and `itemHeadCols` implement modules 6058, 5540 and 745's `M`
+   respectively, including `M`'s odd-prefix pad for a one-digit ordered marker,
+   which is why `1. x` budgets five columns where `- x` budgets two.
+
+   **The walk pushes one level per item HEAD, not one per line.** `- - x` is two
+   items on one line, module 745 reaching the inner one by tokenizing the outer
+   item's first-line content, which `M` restores undedented. Measured before that
+   was handled: pushing one level there under-dedents every line below it and the
+   predicate then declines an opener the renderer honours - **2,342 cells of newly
+   SPOKEN hidden text in a 219,300-cell exhaustive sweep**, which is the one
+   direction this change must not move. Bare markers are the other half of that
+   class, which is why `ITEM_HEAD`'s gap alternation ends in `$`.
+
+   **Three approximations are kept and every one of them fails toward HIDING**,
+   which is the asymmetry NRL-93 named: an under-estimate of the dedent speaks
+   hidden text, while declining to narrow only keeps a prose loss that was already
+   there. The budget is module 5540's `maximum` rather than the lower `p` it really
+   uses, which is the minimum indent over the item's own non-blank lines.
+   `interruptList` is not modelled, so a `%%` line indented LESS than the item's
+   content indent is taken as item content where Obsidian - which puts `comment` in
+   that list - ends the list and makes the line indented code at document level.
+   And an item head this file cannot parse pushes a whole-lead budget rather than
+   nothing, because a level left off the stack would under-dedent everything below
+   it. Measured cost of the first two together: **22 cells of a 667-cell
+   renderer-keyed sweep, every one identical on both sides.**
+
+   **Refusal-only is proved exhaustively rather than sampled**, in the shape of
+   term A and B's own triple proof and discharging the ticket's requirement that an
+   under-estimate be shown impossible rather than merely unobserved: **0 violations
+   over 11,438,076 line cells**, spanning every document of up to three lines over
+   every string over {space, tab, `-`, `%`, `x`} of length up to three, with the
+   pre-NRL-117 array recomputed from the base tree rather than from a
+   re-implementation, and with `listItemContent` asserted equal to it in all
+   11,438,076. A COMPUTED direction was taken on the disagreements too, over a
+   second exhaustive family in which the construct line always carries the `%%` in
+   question - 219,300 graded cells, **0 newly lost and 0 newly disclosed**, against
+   **5,280** newly disclosed for the disqualified subtraction on the identical
+   family, which is what makes the sweep non-vacuous.
+
+   **A blockquote nested INSIDE a list item is out of scope and still divergent.**
+   The pass peels `BLOCKQUOTE` before applying any budget, where the renderer
+   dedents the item first and peels the quote second, so for `- item` / `  > \t%%`
+   the tab is gone before the budget is applied and no indent model can see it.
+   That is NRL-114's quote-peel narrowing; 8 such cells stay divergent and 4 close
+   here. Four further cells at a four-column quote indent read as disclosures and
+   are byte-identical on both sides - pre-existing, not opened here.
+
+   **One cost is in the DISCLOSURE direction and must not be separated from the
+   figures above.** Clause 5 used to scope an unterminated `%%` block to the NOTE
+   where Obsidian scopes it to the construct holding it, so our openers paired up
+   in sequence and DECLINING one shifted the parity of every later one: a block
+   that covered lines X..Y covered something else instead, and text the renderer
+   hides could become spoken. NRL-93, NRL-116 and NRL-120 each narrowed this
+   predicate and are each exposed to it, and each reported 0 cells newly leaking.
+   NRL-117 measured the other direction for the first time, and it found a real
+   cost: **146 newly disclosed cells in 11 notes of a 12,000-distinct-note fuzz
+   x 8 option sets = 388,944 graded cells, against 1,199 disclosures closed**, plus
+   491 newly lost against 8,475 closed. (Implement recorded 144 / 1,204 / 512 /
+   8,530 on the same instrument and the same seeded corpus; the small differences
+   are the four extra option-set masks the re-measure had to choose, the Implement
+   run's own four not being recorded. Read the two as the same measurement, not as
+   a disagreement.)
+
+   **NRL-118 shipped the container rule in clause 5 before this change merged, and
+   that SHRANK this cost rather than leaving it.** Re-measured on the identical
+   instrument and identical seeded corpus with the base as the only variable -
+   12,000 distinct notes, 388,944 graded cells, 5,856 attribute-bucket cells held
+   separately in both arms - the class falls from **146 newly disclosed cells in 11
+   notes at base `9bdc74c` to 40 cells in 3 notes at base `dad8de2`**, a 73%
+   reduction, while disclosures closed rises from 1,199 to 1,255. Newly lost falls
+   with it, 491 to 301, against 8,483 closed. So the net disclosure direction moves
+   from 8.2:1 in favour to **31:1 in favour**. Nothing grew in either direction.
+   The class is not empty, and the residue is the same mechanism: clause 5's scope
+   is now the container, but inside one container our openers still pair up in
+   sequence, so declining one still shifts the parity of the later ones in that
+   same container.
+
+   It is **attributed by a controlled switch** rather than argued, and the switch
+   holds on both bases: capping the corpus at ONE `%%` construct per note gives
+   193,904 graded cells with **0 newly disclosed and 0 newly lost at `dad8de2`**
+   (0 and 0 at `9bdc74c` too), so none of it comes from the indent model and all of
+   it from the pairing. The 1,170 x 512 census, which carries one comment construct
+   per note by construction, is **byte-identical across the rebase** - 2,957,312
+   graded text cells, 0 newly disclosed, 2,816 newly lost, 155,392 losses closed and
+   9,728 of 64,512 attribute cells moved, on both bases - which is the same
+   attribution reached a second way. The model's own per-line faithfulness is the
+   other half of the control: an ARBITRARY refusal-only narrowing of the same
+   boolean discloses **1,424** cells under the identical one-construct cap where
+   this one discloses 0, and the disqualified single-subtraction arm of Q43
+   discloses **24** there, so refusal-only is necessary without being sufficient.
+   Pinned by `pin-nrl117-note-scope-parity-discloses`, which carries both directions
+   in one note and whose per-sentinel directions are unchanged across the rebase
+   (PROSEB newly disclosed, TAILA newly lost, on both bases), and
+   `pin-nrl117-scope-cost-contentless-marker`. One method note worth keeping: the
+   first version of that fuzz used `seed * 1103515245 + 12345` in doubles, which
+   overflows 2^53 and has a short period - it reported 12,000 notes and generated a
+   few hundred distinct ones, and found 0 disclosures for that reason. The
+   distinct-note count is now printed so a degenerate generator cannot be mistaken
+   for a clean result.
+
+   **NOTHING WAS OBSERVED IN A RUNNING OBSIDIAN.** Every figure above is bare Node
+   against the reading-view parser and renderer executed in-process out of the
+   installed `app.js` (sha256 `8efbf581...9898`); Live Preview's CodeMirror parser
+   is unread, as it is for every ticket in this family, and rule 11 applies.
 
    **"Every approximation in it errs toward TRUE, which is the old behaviour and
    therefore cannot regress" was written here and in `extract.ts`, and NRL-93's own
@@ -602,6 +737,16 @@ evidence, not a live Obsidian reading or highlighting observation.
    the row above (`pin-nrl116-html-twin-tab-lead-still-silenced`). For the same
    boolean reason the `%%` on the newly-fixed lines is itself SPOKEN where the
    renderer shows it as code, so `skipCodeBlocks` cannot reach it.
+
+   (NRL-115, at its merge with NRL-117: the `<!--` twin is now CLOSED for prose
+   loss. NRL-115 gives `opensHtmlBlock` a container model of its own,
+   `rendererLeads`, which dedents a list item by the renderer's rule and refuses
+   the opener on a line module 8776 is never offered. It is deliberately a
+   separate model from NRL-117's `listDedented`, which feeds the `%%` predicate
+   only (D-73-4). `pin-nrl116-html-twin-tab-lead-still-silenced` and both
+   `pin-nrl117-html-twin-*` rows were replaced in place, each re-checked against
+   real rendered HTML from the executed reading-view parser; see ADR 0025's
+   NRL-115 section. NOT VERIFIED IN OBSIDIAN.)
 
    Four NRL-93 fixtures MOVED and are **REPLACED IN PLACE keeping their names**,
    per the NRL-66/NRL-67 convention, so every citation of them here and in

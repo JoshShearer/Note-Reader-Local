@@ -2368,16 +2368,23 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// disclosure. They must change on purpose if any of the three roots is ever
 		// picked up.
 		//
-		// 1. `listDedented` is a BOOLEAN, so a list item's content keeps the old
-		// any-whitespace rule rather than having the item's content indent SUBTRACTED.
-		// `- item` dedents by two columns, so eight spaces leaves six and two tabs
-		// leave one - both four or more columns, both absorbed as lazy prose by the
-		// renderer, both still hidden here. Measured at 11 cells of the 140-cell
-		// position census, plus 6 more for a blockquote nested INSIDE a list item,
-		// where the item dedent runs first and the surviving indent lands in the
-		// quote's own content.
-		["pin-nrl93-deep-indent-in-list-still-silenced", "- item\n        %%\nSECRET", "item"],
-		["pin-nrl93-double-tab-in-list-still-silenced", "- item\n		%%\nSECRET", "item"],
+		// 1. CLOSED BY NRL-117 for the deep-indent half, and the first two are
+		// REPLACED IN PLACE keeping their names, which now read BACKWARDS - they say
+		// "still-silenced" and assert the opposite. The NRL-66/NRL-67 convention keeps
+		// the name so every citation of it still resolves; read the expectation, not
+		// the name. NRL-93's own wording is kept below as the history that explains
+		// what moved: `listDedented` was a BOOLEAN, so a list item's content kept the
+		// old any-whitespace rule rather than having the item's dedent applied. `- item`
+		// dedents by two columns, so eight spaces leaves six and two tabs leave one -
+		// both four or more columns, both absorbed as lazy prose by the renderer, both
+		// hidden here until NRL-117 built the indent-amount stack. The third stays
+		// EXACTLY as it was: a blockquote nested inside a list item needs NRL-114's
+		// quote-peel narrowing, because `BLOCKQUOTE` eats the tab before any dedent
+		// model can see it, and NRL-117 scoped it out rather than duplicating blocked
+		// work (Q42). 4 cells of that class closed anyway, as the 8sp twin below shows,
+		// and 8 stay divergent.
+		["pin-nrl93-deep-indent-in-list-still-silenced", "- item\n        %%\nSECRET", "item %% SECRET"],
+		["pin-nrl93-double-tab-in-list-still-silenced", "- item\n		%%\nSECRET", "item %% SECRET"],
 		["pin-nrl93-quote-inside-list-still-silenced", "- item\n  > Plain\n  > 	%%\n  > SECRET", "item Plain"],
 		// 2. Our `BLOCKQUOTE` is /^(?:\s{0,3}>\s?)+/ and its `\s?` eats a TAB, where
 		// module 6234 consumes `>` plus at most one SPACE (`t.charAt(D)===a&&D++` with
@@ -2942,17 +2949,26 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl118-ship-unindented-hr-ends-item", "- %%\n---\nSECRET", "SECRET"],
 		["guard-nrl118-ship-underscore-hr-one-short-ends-item", "- %%\n ___\nSECRET", "SECRET"],
 		["guard-nrl118-ship-hr-ends-quote", "> %%\n---\nSECRET", "SECRET"],
-		// A TRIPWIRE and not evidence: a RESIDUAL this ticket leaves, fail-closed and
-		// pre-existing, IDENTICAL ON BASE since NRL-116. A line of item content whose
-		// `%%` is indented past code depth still opens a block for us, because
-		// `dedentedByList` is a boolean and not the indent itself (NRL-93 tripwire 1,
-		// `pin-nrl93-deep-indent-in-list-still-silenced`). The renderer shows `%% S`
-		// as code, so it has no comment there and the scope rule leaves our block
-		// note-scoped. MUST CHANGE ON PURPOSE when that boolean becomes an indent.
-		// Tracked: the boolean is NRL-117, the `> >` + tab sibling residual is
-		// NRL-114, and a fence on a list marker line plus fences not ending with
-		// their container is NRL-159.
-		["pin-nrl118-residual-deep-item-content-opener", "2. \t%%\n        %% S", "%%"],
+		// NRL-118 wrote this as a TRIPWIRE whose expectation "MUST CHANGE ON PURPOSE
+		// when that boolean becomes an indent", and NRL-117 is the ticket that made it
+		// an indent, so it changed here - on purpose, and to an oracle-derived value
+		// rather than to whatever turned it green. NRL-118's reading of the renderer
+		// was right: `2. \t%%` / 8 spaces + `%% S` renders to
+		// `<ol start="2"><li><pre><code>%%\n%% S\n</code></pre></li></ol>`, so the
+		// renderer has NO comment on either line and shows BOTH as code. Base spoke
+		// only `%%`, losing the displayed `%% S`, because `dedentedByList` was a
+		// boolean and our block opened on the second line. With the dedent an amount,
+		// the 8-space lead no longer reaches a block start and no block opens, so the
+		// displayed text comes back: the new expectation EQUALS the renderer's own
+		// visible text, measured. So this row stops being a residual and becomes a
+		// prose-loss CLOSURE - and the residual that remains on it is a different and
+		// narrower one, namely that we speak as prose what the renderer shows as CODE,
+		// which is `skipCodeBlocks` being unreachable here for the reason srs.md's
+		// `%%` bullet records, not the indent. Still tracked: the `> >` + tab sibling
+		// is NRL-114 (its 8 quote-in-list cells are scoped out of NRL-117), and a
+		// fence on a list marker line plus fences not ending with their container is
+		// NRL-159.
+		["pin-nrl118-residual-deep-item-content-opener", "2. \t%%\n        %% S", "%% %% S"],
 		// NRL-118 FIX PASS. An independent Verify FAILED the column-model revision of
 		// this fix (26cd7ed) for seven shapes it newly SPOKE that the reading view
 		// hides, none reducible to a pre-existing root. These are those seven, as
@@ -2998,13 +3014,195 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// in the fix pass's 600,000-note fuzz that subset control did not attribute
 		// (3 cells). `-    %%` opens a comment that the renderer ends with the item, so
 		// `    %% PROSE` is read afresh, and the reading view shows it as indented
-		// code. We open a block on it - NRL-117's boolean `dedentedByList` root - so
-		// PROSE goes quiet, where base happened to close its note-scoped block there
-		// and speak it. Pre-existing and fail-closed: the control below, with the
-		// first `%%` neutralised, loses PROSE on base and on the fix alike. MUST
-		// CHANGE ON PURPOSE when NRL-117 closes.
+		// code. We open a block on it, so PROSE goes quiet, where base happened to
+		// close its note-scoped block there and speak it. Pre-existing and
+		// fail-closed: the control below, with the first `%%` neutralised, loses
+		// PROSE on base and on the fix alike.
+		//
+		// This comment used to attribute the root to "NRL-117's boolean
+		// `dedentedByList`" and to predict that the expectation "MUST CHANGE ON
+		// PURPOSE when NRL-117 closes". NRL-117 has closed (`d53aa1d`) and the
+		// prediction DID NOT COME TRUE, so both halves are corrected rather than
+		// left standing. Measured by bundling the real extractor at `d53aa1d` and at
+		// its parent `dad8de2`: this row, its 3-space sibling and the control below
+		// all speak the same on BOTH arms, and a 5-space lead speaks PROSE on both
+		// too - so "the boolean could not tell leads apart" is not the explanation
+		// either. The live root is the one the deep-item-content pin above records:
+		// the dedent term correctly reports a block start while the renderer reads
+		// the line as indented CODE, and nothing routes it to the code exclusion, so
+		// `skipCodeBlocks` cannot reach it. That is not the indent.
 		["pin-nrl118-residual-code-depth-line-after-item", "-    %%\n    %% PROSE", ""],
 		["guard-nrl118-residual-code-depth-line-after-item-control", "-    xx\n    %% PROSE", "xx"],
+		// NRL-117. `listDedented` stopped being "this line is list content, so keep
+		// the old any-whitespace rule" and became that CONJOINED with "and the item's
+		// own dedent really does leave the lead at the block start a `%%` opener
+		// needs". The predicate `opensObsidianBlock` is UNTOUCHED - its body is
+		// byte-identical and its 263,672-triple structural proof still holds - and the
+		// whole change is one extra term on the pass's boolean plus the three helpers
+		// that compute it (`leadStops`, `listDedentCut`, `itemHeadCols`).
+		//
+		// THE MODEL, and why it is a STACK of character cuts rather than a column
+		// subtraction. NRL-93 named the faithful rule and declined to approximate it;
+		// an early arm for this ticket shipped the obvious approximation,
+		// `columnsOf(lead) - itemContentIndent <= 3`, and a 3,021,824-cell census
+		// DISCLOSED 7,168 cells in one shape - `- outer` / `  - inner` / `\t\t%%`,
+		// where module 745 nests so the dedent runs TWICE, and module 5540's budget is
+		// in columns while its cut is in CHARACTERS so each pass removes a whole tab.
+		// Two two-column budgets therefore take both tabs and land on column 0: the
+		// block really does open, the renderer really does hide the rest, and
+		// `8 - 4 = 4` says the opposite. `guard-nrl117-nested-double-tab-correctly-hides`
+		// is that counter-example, kept as a guard rather than as a fix.
+		//
+		// Every `pin-nrl117-` row below was RED against base 9bdc74c and every
+		// `guard-nrl117-` row was green on both sides. The oracle is real rendered
+		// HTML from Obsidian 1.13.7's own parser and renderer executed in Node
+		// (app.js sha256 8efbf581...9898), not a transcription. NOT OBSERVED IN A
+		// RUNNING OBSIDIAN - rule 11 applies to all of it.
+		["pin-nrl117-six-space-in-list", "- item\n      %%\nSECRET", "item %% SECRET"],
+		["pin-nrl117-two-space-tab-in-list", "- item\n  	%%\nSECRET", "item %% SECRET"],
+		["pin-nrl117-triple-tab-in-list", "- item\n			%%\nSECRET", "item %% SECRET"],
+		["pin-nrl117-tab-then-four-spaces-in-list", "- item\n	    %%\nSECRET", "item %% SECRET"],
+		["pin-nrl117-ordered-deep-indent", "1. item\n        %%\nSECRET", "item %% SECRET"],
+		["pin-nrl117-task-deep-indent", "- [ ] item\n        %%\nSECRET", "item %% SECRET"],
+		// Nesting, which is the half a single subtraction cannot express. The budget
+		// at each level is measured in the coordinate space the levels above it leave.
+		["pin-nrl117-nested-deep-indent", "- outer\n  - inner\n        %%\nSECRET", "outer inner %% SECRET"],
+		["pin-nrl117-nested-triple-tab", "- outer\n  - inner\n			%%\nSECRET", "outer inner %% SECRET"],
+		["pin-nrl117-three-levels-deep-indent", "- outer\n  - mid\n    - inner\n            %%\nSECRET", "outer mid inner %% SECRET"],
+		// A list inside a blockquote, where the quote peel runs FIRST and is the right
+		// order - the one shape where our peel and the renderer agree about it.
+		["pin-nrl117-list-in-quote-deep-indent", "> - item\n>         %%\n> SECRET", "item %% SECRET"],
+		["pin-nrl117-item-after-blank-deep-indent", "- item\n\n        %%\nSECRET", "item %% SECRET"],
+		["pin-nrl117-lazy-continuation-deep-indent", "- item\nlazy\n        %%\nSECRET", "item lazy %% SECRET"],
+		// FOUR of Q15's six "blockquote nested in a list item" cells DO close here,
+		// and these are them: a SPACE lead survives our `BLOCKQUOTE` peel, so the
+		// dedent still has something to measure. The tab form does not and is
+		// `pin-nrl93-quote-inside-list-still-silenced`, which NRL-114 owns.
+		["pin-nrl117-quote-in-list-deep-indent-closes", "- item\n  > Plain\n  >         %%\n  > SECRET", "item Plain %% SECRET"],
+		// A setext underline AFTER a declined opener. The refusal makes the `%%` line
+		// literal prose, so the `===` really is that paragraph's second line and the
+		// renderer shows the lot.
+		["pin-nrl117-setext-after-declined-opener", "- item\n        %%\n===\nSECRET\nTAILA", "item %% === SECRET TAILA"],
+		// THE COUNTER-EXAMPLE THAT DISQUALIFIED THE SUBTRACTION. Green on both sides,
+		// so it is evidence of nothing being broken rather than of anything being
+		// fixed - but it is the one row in the suite that catches a regression to
+		// column arithmetic, because that is the only shape where the two models
+		// disagree in the DISCLOSURE direction.
+		["guard-nrl117-nested-double-tab-correctly-hides", "- outer\n  - inner\n		%%\nSECRET", "outer inner"],
+		["guard-nrl117-four-space-in-list-correctly-hides", "- item\n    %%\nSECRET", "item"],
+		["guard-nrl117-five-space-in-list-correctly-hides", "- item\n     %%\nSECRET", "item"],
+		["guard-nrl117-single-tab-in-list-correctly-hides", "- item\n	%%\nSECRET", "item"],
+		// The five shapes the NRL-113 and NRL-114 blocks were caused by, carried here
+		// because this pass feeds `interruptsParagraph` and therefore both lookaheads.
+		["guard-nrl117-setext-underline-in-item", "- item\nHead text SECRET\n        ===\nTAILA", "item Head text SECRET === TAILA"],
+		["guard-nrl117-quoted-setext-in-item", "- item\n  > Head SECRET\n  >         ===\n  > TAILA", "item Head SECRET === TAILA"],
+		["guard-nrl117-marker-lead-quote-opener", "- 	> %%\nSECRET", "> %% SECRET"],
+		["guard-nrl117-nested-quote-arrow-is-the-sentinel", "> > QARROW SECRET\n        %%\nTAILA", "QARROW SECRET %% TAILA"],
+		["guard-nrl117-lone-percent-still-disqualifies", "- item\n        %% 50% off\nSECRET", "item %% 50% off SECRET"],
+		["guard-nrl117-after-list-ends", "- item\n\npara\n\nother\n        %%\nSECRET", "item para other %% SECRET"],
+		// THREE TRIPWIRES on divergences NRL-117 does NOT close. Each is identical on
+		// both sides, each is prose loss and never disclosure, and each must change on
+		// purpose.
+		//
+		// 1. The `<!--` TWIN. `opensHtmlBlock` has no dedent term of any kind, so the
+		// HTML-comment half of this family is untouched: the renderer displays
+		// `<!--`, SECRET and TAILA here and we hide all three. Same mechanism, a
+		// different predicate, and deliberately not merged into one (D-73-4).
+		// NRL-115 moved both in place, as this tripwire asked: its container model
+		// (`rendererLeads`, a separate model from NRL-117's `listDedented`, feeding
+		// `opensHtmlBlock` only) dedents the item and sees a lazy continuation still
+		// led by four columns, which module 8607 absorbs without offering it to module
+		// 8776. Re-checked against real rendered HTML from the executed reading-view
+		// parser at the merge of the two tickets: `<li>item\n&#x3C;!--\nSECRET\nTAILA</li>`
+		// for both leads, so all three lines are displayed and now spoken.
+		["pin-nrl117-html-twin-deep-indent-still-silenced", "- item\n        <!--\nSECRET\nTAILA", "item <!-- SECRET TAILA"],
+		["pin-nrl117-html-twin-double-tab-still-silenced", "- item\n		<!--\nSECRET\nTAILA", "item <!-- SECRET TAILA"],
+		// 2. `interruptList` is not modelled. Obsidian puts `comment` in it, so a `%%`
+		// line indented LESS than the item's content indent ENDS the list instead of
+		// joining it, and is then indented code at document level - displayed. We take
+		// it as item content and dedent it away. `-    item` budgets five columns, so a
+		// four-space `%%` is shallower; so is a four-space one under `100. item` or
+		// `   - item`. Measured at 22 cells of a 667-cell renderer-keyed sweep.
+		["pin-nrl117-shallower-than-content-indent-still-silenced", "-    item\n    %%\nSECRET", "item"],
+		["pin-nrl117-wide-ordered-marker-still-silenced", "100. item\n    %%\nSECRET", "item"],
+		// 3. The budget is module 5540's `maximum`, not the `p` it really uses, which
+		// is the MINIMUM indent over the item's own non-blank lines. Over-estimating
+		// the dedent leaves a smaller residual and so keeps the pre-NRL-117 answer,
+		// which is the fail-toward-hiding direction the ticket's asymmetry argument
+		// asks for. ` x` drops the real budget to one column, so the renderer keeps
+		// four columns of lead on the next line and displays it; we remove two.
+		["pin-nrl117-minimum-indent-not-maximum-still-silenced", "- item\n x\n     %%\nSECRET", "item x"],
+		// THE ACCEPTED COST, per Q46, and it is the SAME TWO CLASSES this repo has
+		// already documented rather than a new one. Declining a wrongly-recognised
+		// opener lets `codeSpanClosesLater` CONFIRM a soft-wrapped span the base only
+		// half-recognised, and the user's own `skipInlineCode` then silences it - 1,536
+		// of 3,021,824 census cells, `skipInlineCode` true in every one, which is
+		// NRL-73's ship-review class (`pin-nrl73-span-of-only-disqualified-openers`).
+		// Four prose sentinels are RECOVERED in the same cell. The `speakImageAlt`
+		// twin is ADR 0023 / NRL-88's designed alt-text class, 256 cells.
+		["pin-nrl117-span-confirmed-then-excluded", "- item\nBefore `a SPANA\n        %%\nSPANB b` after TAILA\nSECRET", "item Before after TAILA SECRET"],
+		["pin-nrl117-span-confirmed-then-spoken", "- item\nBefore `a SPANA\n        %%\nSPANB b` after TAILA\nSECRET", "item Before a SPANA %% SPANB b after TAILA SECRET", { skipInlineCode: false }],
+		["pin-nrl117-label-confirmed-alt-excluded", "- item\nA ![alt LABELA\n        %%\nLABELB](zdestz.png) TAILA\nSECRET", "item A TAILA SECRET", { speakImageAlt: false }],
+		// A SECOND accepted cost, and it is NRL-93's note-scope cost re-triggered rather
+		// than a new class - but it IS newly lost text and must not be read as
+		// pre-existing. Two ingredients, both already named. The budget here is module
+		// 5540's `maximum` where the real `p` is lower, because ` -   ` has no content
+		// after its marker so `M`'s rewritten first line trims to nothing and drops out
+		// of the minimum, leaving `p` = 4 from the `\tSECRET` line; we use 5, remove one
+		// column too many and accept an opener the renderer makes INDENTED CODE. And our
+		// `%%` block is note-scoped (ADR 0006 clause 5), so base's wrongly-accepted
+		// FIRST opener was being closed by this one, while declining the first leaves
+		// this one reaching to end of note. It is a TRADE and not a pure regression:
+		// `%%` and QARROW are recovered, SECRET and TAILA are lost, and the renderer
+		// displays all four. Found only by the fuzz - the structured census carries one
+		// comment construct per note by construction and reported ZERO cells of it -
+		// which is the same way NRL-93 found its own 157-cell version.
+		["pin-nrl117-scope-cost-contentless-marker", "- item\n		%%\nQARROW after.\n -   \n        %%\n	SECRET\nTAILA", "item %% QARROW after."],
+		// THE SAME MECHANISM IN THE DISCLOSURE DIRECTION, which is the one figure in this
+		// ticket that must not be buried. ADR 0006 clause 5 used to scope an unterminated
+		// `%%` block to the NOTE, where Obsidian scopes it to the construct holding it, so
+		// our openers pair up in sequence. DECLINING one therefore shifts the parity of
+		// every later one, and a block that used to cover lines X..Y now covers something
+		// else: text the renderer hides can become spoken. NRL-93, NRL-116 and NRL-120
+		// each narrowed this same predicate and are each exposed to it; NRL-93 reported 0
+		// newly leaking cells, measured with a fuzz whose PRNG this ticket found to be
+		// degenerate (it reported 12,000 notes and generated a few hundred).
+		//
+		// Measured on a 12,000-distinct-note fuzz x 8 option sets = 388,944 graded cells
+		// against real rendered HTML, at base 9bdc74c: 146 newly disclosed in 11 notes
+		// against 1,199 disclosures CLOSED, plus 491 newly lost against 8,475 closed.
+		// (Implement recorded 144 / 1,204 / 512 / 8,530 on the same instrument and the
+		// same seeded corpus; the difference is the four extra option-set masks the
+		// re-measure had to pick. Same measurement, not a disagreement.)
+		//
+		// NRL-118 THEN SHIPPED THE CONTAINER RULE IN CLAUSE 5 AND SHRANK THIS COST.
+		// Re-measured with the base as the only variable, same instrument and same seeded
+		// corpus: 146 cells in 11 notes at 9bdc74c falls to 40 cells in 3 notes at
+		// dad8de2, a 73% reduction, with disclosures closed rising 1,199 -> 1,255 and
+		// newly lost falling 491 -> 301 against 8,483 closed. Net 8.2:1 in favour becomes
+		// 31:1. The class is NOT empty: inside one container our openers still pair up in
+		// sequence, so declining one still shifts the parity of the later ones there.
+		//
+		// ATTRIBUTED BY A CONTROLLED SWITCH rather than argued, and the switch holds on
+		// both bases: capping the corpus at ONE `%%` construct per note gives 193,904
+		// graded cells with NEW_DISCLOSURE 0 and NEW_LOSS 0 at dad8de2, and 0 and 0 at
+		// 9bdc74c, so none of it comes from the dedent model and all of it from the
+		// pairing. The 1,170 x 512 census, one construct per note by construction, is
+		// byte-identical across the rebase (2,957,312 graded text cells, 0 newly
+		// disclosed, 2,816 newly lost, 155,392 closed, 9,728 of 64,512 attribute cells
+		// moved, on both bases), which is the same attribution reached a second way. The
+		// model's own per-line faithfulness is the other half of the control: an ARBITRARY
+		// refusal-only narrowing of the same boolean discloses 1,424 cells at the same
+		// one-construct cap where this one discloses 0, and Q43's disqualified
+		// single-subtraction arm discloses 24 there.
+		//
+		// This note carries BOTH directions at once, which is why it is the one pinned:
+		// PROSEB is hidden by the renderer and newly spoken, TAILA is displayed by it and
+		// newly silenced. Reduce it and the effect reverses - every smaller arrangement
+		// tried has the fix strictly better - so it must be pinned whole. Both of those
+		// per-sentinel directions were re-derived at the rebase and are UNCHANGED on
+		// dad8de2, so this note is one of the 3 that survive NRL-118's narrowing.
+		["pin-nrl117-note-scope-parity-discloses", "  -	item SECRET\n	    %%\nQARROW after.\n>	%%\n   SECRET b after TAILA\n   %%\n			- [ ] item PROSEB", "item SECRET %% QARROW after. item PROSEB"],
 		// NRL-120 PART 1. Term 1 of the HTML-comment rule needs block position: a
 		// line-start `<!--` whose NEXT line is an exact setext underline is not an
 		// HTML block at all, because `blockMethods` runs `setextHeading` (index 10)
