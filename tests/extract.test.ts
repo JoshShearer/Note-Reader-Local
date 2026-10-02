@@ -2555,6 +2555,25 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// it newly disclosing hidden text where remark keeps more lines in one
 		// paragraph than a bare depth test predicts. Fail-closed prose loss, base parity.
 		["pin-nrl114-deeper-quote-still-hides-term2", "> Plain ZPZ prose <!-- ZCZ\n>> ZAZ -->\nTAIL ZBZ", "Plain ZPZ prose TAIL ZBZ"],
+		// TWO UNMASKINGS found by /critique at ship, each ADJUDICATED ON A BASE CONTROL
+		// (decision Q11) rather than waved through. Both are newly lost against base and
+		// both are fail-closed: base spoke ZCZ and ZAZ only because its wide peel ate the
+		// tab after `>`, which this ticket corrects.
+		// (i) A TABLE-SHAPED line right above. `unsureFresh` keeps base's RAW term-2
+		// answer there (see `htmlClosesLaterAt`), and the raw pass never sees `> ---` as
+		// a paragraph end, so the `-->` below it still closes the block: the NRL-95
+		// container residual, unmasked. The renderer displays ZCZ and ZAZ. TRIPWIRE: RED
+		// on base, which spoke them. Its control, the ` \t` twin, is a GUARD that base
+		// already loses the same way, byte-identically.
+		["pin-nrl114-table-line-then-quoted-hr-still-hides-term2", "> | a |\n>\t<!-- ZCZ\n> ---\n> ZAZ -->\nZBZ", "| a | ZBZ"],
+		["guard-nrl114-table-line-space-tab-control", "> | a |\n> \t<!-- ZCZ\n> ---\n> ZAZ -->\nZBZ", "| a | ZBZ"],
+		// (ii) A FOOTNOTE definition right above, in a quote (no reference here). The
+		// renderer puts `<!-- ZCZ` inside the footnote as an html node (hidden) and
+		// displays ZAZ; we drop the `<!--` block and lose ZAZ. Base spoke both, a
+		// disclosure of ZCZ. Control: the unquoted twin, which base already reads the
+		// same way. Footnote fidelity is NRL-163's.
+		["pin-nrl114-quoted-footnote-then-quoted-hr-unmasked", "> [^1]: foot ZFZ\n>\t<!-- ZCZ\n> ---\n> ZAZ -->\nZBZ", "foot ZFZ ZBZ"],
+		["guard-nrl114-unquoted-footnote-control", "[^1]: foot ZFZ\n\t<!-- ZCZ\n---\nZAZ -->\nZBZ", "foot ZFZ ZBZ"],
 		// 3. CLOSED BY NRL-116, and REPLACED IN PLACE keeping its name for the same
 		// citation reason as the three above - the name now reads backwards. Our
 		// `LIST_BULLET` was /^\s*([-*+]|\d+[.)])\s+/ and its `\s+` ate the WHOLE lead

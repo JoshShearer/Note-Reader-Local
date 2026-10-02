@@ -2086,6 +2086,36 @@ NRL-164 and NRL-165 were filed by this ticket with renderer / base / fix rows;
 NRL-163 was filed at the orchestrator's unblock. None is an owner decision for
 NRL-114.
 
+**Found at ship by `/critique`, outside every corpus above, and adjudicated the
+same way.** A hand-built probe set of 60 shapes and a further 4,000-note fuzz (seed 4242,
+quote, list, callout, footnote, table, setext, HR, fence, math, `%%`, `<!--` and
+label populations, 20% CRLF, masks `skipCodeBlocks`/`skipTables` off and on,
+30,064 sentinel-cells, executed renderer) turned up newly moved cells in four
+probe shapes (below) and in 8 fuzz notes (42 sentinel-cells). Every one has a
+twin, one defused token or one `>\t` -> `> \t`, on which base speaks exactly the
+fix's sentinel set (a set comparison, weaker than the byte-identity used for the
+table above), so each is an unmasking under decision Q11 and not a new class:
+the fuzz notes fall into the NRL-163 footnote class, the code-line inline-`%%`
+miss below, and one CRLF `$$` scope note whose `<!--`-defused twin loses the
+same tail on base. But the first probe shape is named nowhere above, which is
+the corpus-blindness lesson again: no structured corpus put a table-shaped line
+above the opener.
+
+| shape | moved | why | base control (base output = fix output) |
+|---|---|---|---|
+| `> \| a \|` / `>\t<!-- ZCZ` / `> ---` / `> ZAZ -->` | lose ZCZ, ZAZ | `unsureFresh` keeps the raw term-2 answer, which never sees `> ---` (the NRL-95 container residual) | the ` \t` twin, `> \| a \|` / `> \t<!-- ZCZ` / ...; also the unquoted `\| a \|` / `\t<!-- ZCZ` / `---` |
+| `> [^1]: foot` / `>\t<!-- ZCZ` / `> ---` / `> ZAZ -->` | lose ZAZ (and stop disclosing ZCZ) | the renderer's footnote holds `<!-- ZCZ` as an html node; NRL-163 | the unquoted `[^1]: foot` / `\t<!-- ZCZ` / `---` / `ZAZ -->` |
+| `>\t%% ZAZ` / `> \tZBZ %% ZCZ %%` | lose ZCZ (and stop losing ZAZ, ZBZ) | a container line declined as code is still cleaned as prose, so its inline `%%` pair is stripped (the known miss above) | the ` \t` twin `> \t%% ZAZ` / ... |
+| `> \t-` / `>\t\tZAZ` / `>\t> ZBZ <!-- ZCZ` / `> \t[^1]: ZDZ` / `[^1]: ZEZ` / `>\tZFZ -->` | disclose ZEZ, ZFZ | an unreferenced footnote definition after a code block; NRL-163 | `<!-- ZCZ` -> `ZCZ` |
+
+The first two are pinned with their controls
+(`pin-nrl114-table-line-then-quoted-hr-still-hides-term2` /
+`guard-nrl114-table-line-space-tab-control`,
+`pin-nrl114-quoted-footnote-then-quoted-hr-unmasked` /
+`guard-nrl114-unquoted-footnote-control`); each pin is RED on base and each
+control is green on base. The same fuzz found 0 `sourceIndex` length or identity
+failures on the fix.
+
 **`sourceIndex`**, by numeric UTF-16 code-unit index on both arms over every corpus
 above and all three fuzz runs: **0 failures** (fix: 28,561,920 chunks / 168,228,352
 units on the largest corpus alone), with all four mutators nonzero on both arms
