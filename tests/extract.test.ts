@@ -3100,13 +3100,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl117-nested-quote-arrow-is-the-sentinel", "> > QARROW SECRET\n        %%\nTAILA", "QARROW SECRET %% TAILA"],
 		["guard-nrl117-lone-percent-still-disqualifies", "- item\n        %% 50% off\nSECRET", "item %% 50% off SECRET"],
 		["guard-nrl117-after-list-ends", "- item\n\npara\n\nother\n        %%\nSECRET", "item para other %% SECRET"],
-		// THREE TRIPWIRES on divergences NRL-117 does NOT close. Each is identical on
-		// both sides, each is prose loss and never disclosure, and each must change on
-		// purpose.
+		// THREE TRIPWIRES on divergences NRL-117 does NOT close. Each was identical on
+		// both sides of NRL-117 (tripwire 1 has since moved with NRL-115, below), each
+		// is prose loss and never disclosure, and each must change on purpose.
 		//
-		// 1. The `<!--` TWIN. `opensHtmlBlock` has no dedent term of any kind, so the
-		// HTML-comment half of this family is untouched: the renderer displays
-		// `<!--`, SECRET and TAILA here and we hide all three. Same mechanism, a
+		// 1. The `<!--` TWIN. `opensHtmlBlock` had no dedent term of any kind, so the
+		// HTML-comment half of this family was untouched: the renderer displays
+		// `<!--`, SECRET and TAILA here and NRL-117 hid all three. Same mechanism, a
 		// different predicate, and deliberately not merged into one (D-73-4).
 		// NRL-115 moved both in place, as this tripwire asked: its container model
 		// (`rendererLeads`, a separate model from NRL-117's `listDedented`, feeding

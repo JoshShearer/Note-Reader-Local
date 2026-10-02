@@ -1623,7 +1623,7 @@ so every citation of them here, in ADR 0006 and in `srs.md` still resolves:
 "still silenced" in any of them, and that wart is deliberate and preferred to a rename that orphans
 the citations. **Three divergences survive on the same marker line and each is pinned rather than
 closed**: the bare `- %%` and no-space `-` + tab forms and the exactly-four-space form, all three
-NRL-118's note scope with a correctly recognised opener, and the `<!--` TWIN, which is NOT fixed:
+NRL-118's note scope with a correctly recognised opener, and the `<!--` TWIN, which NRL-117 left NOT fixed:
 `opensHtmlBlock` accepting a tab is correct for a fresh-block `<!--`, while on a marker line the
 item's content indent makes it indented code first. **This sentence used to end "and we model that
 indent as a boolean rather than an amount", attributing the twin to NRL-117; that half is now wrong

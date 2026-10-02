@@ -1923,3 +1923,26 @@ took 22,347 ms against base's 222 ms. `closerAheadTable` computes the same answe
 pass per frame (241 ms), and the two versions gave byte-identical chunks and `sourceIndex` over
 400,000 fuzz notes x masks. Base is itself quadratic on other long lazy shapes (the critic
 measured 46.7 s for `Prose` plus 20,000 tab-led lines on base); that is not changed here.
+
+**Merged with NRL-117 (#209) after Verify (2026-10-02).** NRL-117 made the `%%` predicate's
+list dedent an amount (`listDedented`); this section's `rendererLeads` is the `<!--` side's own
+container model. The two feed different openers and stay separate (D-73-4). They do encode one
+visible difference, and it is an approximation rather than a contradiction: NRL-117 budgets an
+item's dedent at module 5540's `maximum` (fail toward hiding), while `rendererLeads` takes the
+smaller of that and the item's least indent, which is what the renderer uses. So on
+`- item` / ` x` / `     <!--` the two arrays disagree about whether the third line is a block
+start, and because each array reaches only its own opener, no output moves. NRL-117's two
+`<!--` twin tripwires, `pin-nrl117-html-twin-deep-indent-still-silenced` and
+`-double-tab-still-silenced`, went red on the merge as written to, and were replaced in place
+after checking real rendered HTML (`<li>item\n&#x3C;!--\nSECRET\nTAILA</li>`). Re-measured on
+the merged tree against base `d496646`, bare Node against the executed reading-view parser:
+ticket corpus 6,656 loss cells to 0; structural census 3,820,824 cells with 0 new disclosure
+and 0 new loss (a naive wrong arm W1 newly discloses 32,370); setext single 1,059,840, hand
+277,056, nested 1,351,680, fences 1,216,512 and double 7,065,600 cells all 0 new disclosure, 0
+new loss, 0 lockstep failures; NRL-117's own 1,170-source x 512 census (2,957,312 graded text
+cells) 0 newly lost, 0 newly disclosed, 110,592 losses closed (W1: 1,536 new disclosures);
+NRL-155's 99,840-cell sweep 46,080 loss-to-ok and nothing worse; and a four-arm composition
+check (old base, old head, new base, new head) over 720,000 fuzz cells found 110 cells where
+the two changes interact, every one closing a loss. The carry and interior corpora give the same
+counts the r3 plan recorded (6,372 / 5,376 unmasked and 648 `skipCodeBlocks` exclusion). NOT
+VERIFIED IN OBSIDIAN.
