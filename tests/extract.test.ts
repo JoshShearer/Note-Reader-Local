@@ -2622,6 +2622,87 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// displays as math. Prose loss, identical on base. Tripwire: when the
 		// term-2 pass learns to peel a quote, this expectation must change on purpose.
 		["pin-nrl120-quoted-math-still-hidden", "> Prose <!--\n> $$\n> HIDDENM\n> --> t.", "Prose t."],
+		// NRL-155. NRL-120's setext refusal capped the `<!--` lead at three SPACES,
+		// on the claim that a tab is never setext content. Module 134 (indented code)
+		// is LITERAL: four spaces or one tab at offset 0, no tab-stop expansion, so a
+		// lead of one to three spaces and then a tab reaches setextHeading. Measured
+		// against rendered HTML out of the installed obsidian.asar 1.13.7 (app.js
+		// sha256 8efbf581...9898): `# Head` / ` \t<!--` / `===` / `HIDDENA` / `more` is
+		// `<h1>Head</h1><h1>\t&#x3C;!--</h1><p>HIDDENA<br>more</p>`. Directly after an
+		// ATX heading, a thematic break or a fence closer our INDENTED_CODE (which
+		// needs wasBlank) does not take the line, so it reached opensHtmlBlock and
+		// hid to end of note. Every pin below was RED against main faf55a3, which
+		// spoke only what precedes the `<!--`. NOT OBSERVED IN OBSIDIAN (reading-view
+		// parser executed in Node).
+		["pin-nrl155-atx-1sp-tab", "# Head\n \t<!--\n===\nHIDDENA\nmore", "Head <!-- HIDDENA more"],
+		["pin-nrl155-atx-2sp-tab", "# Head\n  \t<!--\n===\nHIDDENA\nmore", "Head <!-- HIDDENA more"],
+		["pin-nrl155-atx-3sp-tab", "# Head\n   \t<!--\n===\nHIDDENA\nmore", "Head <!-- HIDDENA more"],
+		["pin-nrl155-atx-1sp-tab-1sp", "# Head\n \t <!--\n===\nHIDDENA\nmore", "Head <!-- HIDDENA more"],
+		["pin-nrl155-hr-1sp-tab", "Intro.\n\n***\n \t<!--\n===\nHIDDENA\nmore", "Intro. <!-- HIDDENA more"],
+		["pin-nrl155-hr-2sp-tab", "Intro.\n\n***\n  \t<!--\n===\nHIDDENA\nmore", "Intro. <!-- HIDDENA more"],
+		["pin-nrl155-hr-3sp-tab", "Intro.\n\n***\n   \t<!--\n===\nHIDDENA\nmore", "Intro. <!-- HIDDENA more"],
+		["pin-nrl155-hr-1sp-tab-1sp", "Intro.\n\n***\n \t <!--\n===\nHIDDENA\nmore", "Intro. <!-- HIDDENA more"],
+		["pin-nrl155-fence-1sp-tab", "```\ncode\n```\n \t<!--\n===\nHIDDENA\nmore", "<!-- HIDDENA more"],
+		["pin-nrl155-fence-2sp-tab", "```\ncode\n```\n  \t<!--\n===\nHIDDENA\nmore", "<!-- HIDDENA more"],
+		["pin-nrl155-fence-3sp-tab", "```\ncode\n```\n   \t<!--\n===\nHIDDENA\nmore", "<!-- HIDDENA more"],
+		["pin-nrl155-fence-1sp-tab-1sp", "```\ncode\n```\n \t <!--\n===\nHIDDENA\nmore", "<!-- HIDDENA more"],
+		// GUARDS, green on main and on the fix. Each names the wrong arm it is red
+		// on; none is counted as evidence of the fix.
+		// (a) Document start and after a blank line. Masked on main by INDENTED_CODE
+		// (` \t` is indented code to us, so HIDDENA is spoken). Red on main with
+		// NRL-113's narrowing alone, which hides HIDDENA. TRIPWIRE: when NRL-113
+		// lands the text becomes `<!-- HIDDENA more` / `Intro. <!-- HIDDENA more`,
+		// on purpose; the HIDDENA-is-spoken check after this table must stay green.
+		["guard-nrl155-doc-start-tab-lead", " \t<!--\n===\nHIDDENA\nmore", "=== HIDDENA more"],
+		["guard-nrl155-after-blank-tab-lead", "Intro.\n\n  \t<!--\n---\nHIDDENA\nmore", "Intro. HIDDENA more"],
+		// (b) Paragraph continuation: a tab-led `<!--` does not interrupt a
+		// paragraph, so the renderer makes one `<p>` and the inline comment hides
+		// HIDDENA. Red on the arm with no block-position gate.
+		["guard-nrl155-paragraph-continuation", "Intro.\n \t<!--\n===\nHIDDENA\n--> t.", "Intro. t."],
+		// (c) A TAB-led `# H` or `***` is a lazy paragraph continuation, not a block
+		// end, so the gate's predecessor tests are spaces-only capped. Red on the
+		// arm using the shared HEADING / HR constants, and on the wasPara arm.
+		["guard-nrl155-tab-led-atx-is-lazy", "Intro.\n\t# H\n \t<!--\n===\nHIDDENA\n--> t.", "Intro. H t."],
+		["guard-nrl155-tab-led-hr-is-lazy", "Intro.\n\t***\n \t<!--\n===\nHIDDENA\n--> t.", "Intro. t."],
+		// (d) `| a |` is a paragraph line to the renderer (no delimiter row), so the
+		// opener continues it. Under skipTables our skip path resets the paragraph
+		// state, which is why the gate reads raw lines rather than wasPara: red on
+		// the wasPara arm and on the no-gate arm.
+		["guard-nrl155-table-row-skipped", "| a |\n \t<!--\n===\nHIDDENA\n--> t.", "t."],
+		// (e) Leads module 134 takes as indented code are never setext content.
+		// Red on the arm that drops the module-134 test. TRIPWIRES as well: the
+		// renderer shows `<pre><code>&#x3C;!--</code></pre><p>=== HIDDENA --> t.</p>`
+		// here, so `Head t.` is a PRE-EXISTING prose loss (our INDENTED_CODE needs
+		// wasBlank, so after a heading the line reaches opensHtmlBlock instead).
+		// Not opened by NRL-155 and identical on main; when indented code after a
+		// block end is fixed, these expectations change on purpose.
+		["guard-nrl155-module134-lead-tab", "# Head\n\t<!--\n===\nHIDDENA\n--> t.", "Head t."],
+		["guard-nrl155-module134-lead-tab-1sp", "# Head\n\t <!--\n===\nHIDDENA\n--> t.", "Head t."],
+		["guard-nrl155-module134-lead-4sp", "# Head\n    <!--\n===\nHIDDENA\n--> t.", "Head t."],
+		["guard-nrl155-module134-lead-4sp-tab", "# Head\n    \t<!--\n===\nHIDDENA\n--> t.", "Head t."],
+		["guard-nrl155-module134-lead-tab-tab", "# Head\n\t\t<!--\n===\nHIDDENA\n--> t.", "Head t."],
+		["guard-nrl155-module134-lead-tab-1sp-tab", "# Head\n\t \t<!--\n===\nHIDDENA\n--> t.", "Head t."],
+		// The module-134 test is also what keeps a FOUR-SPACE lead from being
+		// refused as a paragraph continuation: that lead bears no tab, so the
+		// block-position gate does not see it. Red on the arm dropping the test.
+		["guard-nrl155-module134-4sp-paragraph-continuation", "Intro.\n    <!--\n===\nHIDDENA\n--> t.", "Intro. t."],
+		// PRE-EXISTING DISCLOSURE, pinned as a tripwire and not opened here: a
+		// whitespace line holding a tab does not end a paragraph in module 8607, so
+		// the renderer makes one `<p>` and hides HIDDENA, while we take ` \t ` as
+		// blank and the next line as indented code. Identical on main. The fix
+		// counts only a spaces-only line as blank for its own gate; on main that
+		// choice is masked by INDENTED_CODE and measured only on the NRL-113 arm
+		// (accepting a tab there newly spoke HIDDEN in 1,792 census cells). When
+		// either NRL-113 or the blank-line rule lands, this changes on purpose.
+		["pin-nrl155-tab-whitespace-line-is-not-blank", "Intro.\n \t \n \t<!--\n===\nHIDDENA\n--> t.", "Intro. === HIDDENA --> t."],
+		// (f) The QUOTE and LIST arms stay spaces-only (fail-closed). `> \t<!--` is
+		// code inside the quote only through module 6234's one-character peel
+		// (NRL-114), and `- \t<!--` is code inside the item. The quote row is red on
+		// an arm widening the quote arm's lead; no arm tried moves the list row, so
+		// it is a pin of unchanged behaviour only. Both are TRIPWIRES for a
+		// pre-existing prose loss: the renderer displays `=== HIDDENA --> t.`.
+		["guard-nrl155-quote-arm-unchanged", "> \t<!--\n> ===\n> HIDDENA\n> --> t.", "t."],
+		["guard-nrl155-list-arm-unchanged", "- \t<!--\n  ===\n  HIDDENA\n  --> t.", "t."],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -2663,6 +2744,31 @@ console.log("Obsidian comment exclusion (NRL-38)");
 	];
 	for (const [id, src, overrides] of nrl95Lockstep) {
 		check(`NRL-95 ${id}: sourceIndex lockstep by UTF-16 unit`, extractChunks(src, { ...OPTS, ...overrides }).every(
+			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
+		));
+	}
+	// NRL-155. The property guard (a) above must keep after NRL-113 changes its
+	// exact text: a tab-bearing `<!--` over an exact underline at document start
+	// or after a blank line is a heading, so HIDDENA is displayed and spoken. Red
+	// on main with NRL-113's INDENTED_CODE narrowing alone (measured, 20,480 of the
+	// 99,840-cell sweep), green on main and on the fix with or without it.
+	for (const [id, src] of [
+		["doc-start-1sp-tab", " \t<!--\n===\nHIDDENA\nmore"],
+		["doc-start-3sp-tab-dash", "   \t<!--\n-\nHIDDENA\nmore"],
+		["after-blank-2sp-tab", "Intro.\n\n  \t<!--\n---\nHIDDENA\nmore"],
+		["after-blank-1sp-tab-1sp", "Intro.\n\n \t <!--\n--\nHIDDENA\nmore"],
+	] as Array<[string, string]>) {
+		check(`NRL-155 ${id}: HIDDENA spoken`, extractChunks(src, OPTS).some(c => c.text.includes("HIDDENA")));
+	}
+	// NRL-155 lockstep, numeric by UTF-16 unit through unitsMatch: the pins' spoken
+	// text newly spans a heading whose content is led by a tab.
+	for (const src of [
+		"# Head\n \t<!--\n===\nHIDDENA\nmore",
+		"Intro.\n\n***\n \t <!--\n===\nHIDDENA\nmore",
+		"```\ncode\n```\n   \t<!--\n---\nHIDDENA\n--> t.",
+		"# H\u00e9ad \ud83d\ude00\n  \t<!-- \ud83d\ude00\n=\nHIDDENA \u00e9\nmore",
+	]) {
+		check(`NRL-155 sourceIndex lockstep by UTF-16 unit: ${JSON.stringify(src.slice(0, 12))}`, extractChunks(src, { ...OPTS, skipCodeBlocks: false }).every(
 			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
 		));
 	}

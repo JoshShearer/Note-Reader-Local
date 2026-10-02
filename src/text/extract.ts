@@ -2454,13 +2454,84 @@ function rawHtmlBlockEnd(body: string): RegExp | "blank" | undefined {
  */
 const SETEXT_UNDERLINE_EXACT = /^(?:=+|-+)\r?$/;
 /**
- * A `<!--` at the start of the line, with at most three SPACES of lead. A tab
- * or four columns is either indented code (in a fresh block position) or a lazy
- * paragraph continuation, and neither is a setext content line, so refusing an
- * opener there would speak text the renderer hides. An arm using `^\s*` is the
- * measured disclosure this cap exists to prevent.
+ * A `<!--` at the start of the line, with at most three SPACES of lead. Read by
+ * the QUOTE and LIST arms of `isSetextContentLine` only, where the cap stays
+ * spaces-only on purpose (fail-closed): `> \t<!--` is code inside the quote only
+ * through module 6234's one-character peel (NRL-114), and `- \t<!--` is code
+ * inside the item. An arm using `^\s*` is the measured disclosure this cap
+ * exists to prevent.
+ *
+ * NRL-155 corrects what this comment used to claim for the PLAIN arm, that a
+ * tab is never setext content. Module 134 is literal (four spaces or one tab at
+ * offset 0, no tab-stop expansion), so one to three spaces then a tab is NOT
+ * indented code and does reach setextHeading in block position. The plain arm
+ * therefore reads `PLAIN_SETEXT_HTML_OPENER` and `MODULE134_INDENTED_CODE`
+ * below instead of this constant.
  */
 const HTML_OPENER_AT_START = /^ {0,3}<!--/;
+/**
+ * Module 134's indented-code opener, LITERALLY: four spaces or one tab at
+ * offset 0, with no tab-stop expansion (NRL-155). It is deliberately not
+ * `INDENTED_CODE`, which also accepts one to three spaces then a tab (NRL-113's
+ * defect). Measured against rendered HTML out of the installed obsidian.asar
+ * 1.13.7 (app.js sha256 8efbf581...9898): ` \tTitle` / `===` is
+ * `<h1>\tTitle</h1>`, while `\tTitle` / `===` and `    Title` / `===` are
+ * `<pre><code>`. Keyed on the renderer's rule so the setext refusal stays right
+ * before and after NRL-113 narrows our own constant.
+ */
+const MODULE134_INDENTED_CODE = /^(?: {4}|\t)/;
+/**
+ * A `<!--` at the start of a PLAIN line after any run of spaces and tabs. The
+ * plain arm of `isSetextContentLine` pairs it with `MODULE134_INDENTED_CODE`,
+ * so the lead it accepts is exactly the set that reaches module 8671 rather
+ * than module 134.
+ */
+const PLAIN_SETEXT_HTML_OPENER = /^[ \t]*<!--/;
+/**
+ * A lead that carries a tab before any other character. Such a `<!--` line is
+ * setext content only in BLOCK position, never as a paragraph continuation (see
+ * `inSetextBlockPosition`).
+ */
+const TAB_BEARING_LEAD = /^ *\t/;
+/**
+ * Predecessor lines that END a block, so the line after them starts a fresh one
+ * (NRL-155). SPACES-ONLY capped on purpose, not the shared `HEADING`, `HR` and
+ * `FENCE`, which accept `\s{0,3}` or `\s*`: a tab-led `# H` or `***` is a lazy
+ * paragraph continuation for the renderer, so treating it as a block end
+ * refuses a `<!--` the renderer keeps inside an HTML comment. Measured: with
+ * the shared constants, `Intro.` / `\t***` / ` \t<!--` / `===` / `HIDDENA` /
+ * `-->` newly spoke HIDDENA (1,792 predecessor-census cells).
+ */
+const BLOCK_END_ATX = /^ {0,3}#{1,6}(?:[ \t]|\r?$)/;
+const BLOCK_END_HR = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*\r?$/;
+const BLOCK_END_FENCE = /^ {0,3}(?:`{3,}|~{3,})/;
+/**
+ * Is line k in BLOCK position for a tab-led setext content line: the first
+ * line, after a blank (spaces-only) line, or right after an ATX heading, a
+ * thematic break or a fence line? A ` \t<!--` anywhere else continues the
+ * paragraph above it (the renderer makes one `<p>` and the inline comment hides
+ * the rest), because a tab-led `<!--` cannot interrupt a paragraph the way a
+ * space-led one can.
+ *
+ * An ALLOWLIST read off the raw lines, independent of the content options,
+ * rather than extractChunks' `wasPara`: the skip paths (skipTables and friends)
+ * reset that state, and the `wasPara` arm newly spoke hidden text in 3,584
+ * cells of NRL-155's predecessor census (`| a |` / ` \t<!--` / `===` /
+ * `HIDDENA` / `-->` under skipTables among them). Everything not on the list -
+ * a math closer, the end of an indented code block, a setext underline, a
+ * whitespace line holding a tab - answers false and keeps hiding, which is the
+ * fail-closed direction.
+ */
+function inSetextBlockPosition(lines: readonly string[], k: number): boolean {
+	if (k === 0) return true;
+	const prev = lines[k - 1]!;
+	// Blank means SPACES only. A whitespace line holding a tab does not end a
+	// paragraph in module 8607 (the tab counts as four columns of indent, so the
+	// line is a continuation), and `Intro.` / ` \t ` / ` \t<!--` / `===` /
+	// `HIDDEN` / `-->` is one `<p>` that hides HIDDEN. Measured: accepting it
+	// newly spoke HIDDEN in 1,792 predecessor-census cells on the NRL-113 arm.
+	return /^ *\r?$/.test(prev) || BLOCK_END_ATX.test(prev) || BLOCK_END_HR.test(prev) || BLOCK_END_FENCE.test(prev);
+}
 /**
  * Any list marker, including a BARE one with nothing after it. `LIST_BULLET`
  * needs whitespace after the marker, so it misses `-` alone on its line, which
@@ -2486,12 +2557,20 @@ const ONE_SPACE_MARKER = /^(?:[-*+]|\d{1,9}[.)]) (?=\S)/;
  * after all is a disclosure, answering false where it makes a heading is the
  * prose loss this ticket started from.
  *
- * - PLAIN: the line is the `<!--` opener and `next` is an exact underline. No
- *   block-start test is needed on the line ABOVE, because a `<!--` with at most
- *   three spaces of lead interrupts any paragraph (`html` is in
- *   `u.interruptParagraph`), and once the block starts `setextHeading` gets it
- *   before `html`. Measured: `Intro.` / `<!--` / `===` is `<p>Intro.</p>` and
- *   then `<h1>`.
+ * - PLAIN: the line is the `<!--` opener and `next` is an exact underline. The
+ *   lead is any run of spaces and tabs that module 134 does not take as indented
+ *   code, i.e. not four spaces or a tab at offset 0 (NRL-155; one to three
+ *   spaces then a tab IS setext content, measured `<h1>\t&#x3C;!--</h1>`). For a
+ *   spaces-only lead no block-start test is needed on the line ABOVE, because a
+ *   `<!--` with at most three spaces of lead interrupts any paragraph (`html` is
+ *   in `u.interruptParagraph`), and once the block starts `setextHeading` gets
+ *   it before `html`. Measured: `Intro.` / `<!--` / `===` is `<p>Intro.</p>` and
+ *   then `<h1>`. A tab-bearing lead does NOT interrupt: module 8607, the
+ *   paragraph tokenizer, counts the lead's spaces, treats the first tab as
+ *   reaching four columns, and continues the paragraph without walking
+ *   `interruptParagraph` at all (read from app.js, matching `TAB_BEARING_LEAD`).
+ *   So it needs block position, `inSetextBlockPosition`: `Intro.` / ` \t<!--` /
+ *   `===` / `HIDDENA` / `-->` is one `<p>` whose inline comment hides HIDDENA.
  * - QUOTE: quote levels only, no list marker or callout, and `next` carries the
  *   SAME number of levels and nothing else before an exact underline.
  * - LIST: the line IS a column-0 marker line, one space after the marker, `next`
@@ -2552,7 +2631,12 @@ function isSetextContentLine(lines: readonly string[], k: number, lazyInListItem
 		}
 		return true;
 	}
-	return HTML_OPENER_AT_START.test(line) && SETEXT_UNDERLINE_EXACT.test(next);
+	if (!PLAIN_SETEXT_HTML_OPENER.test(line) || MODULE134_INDENTED_CODE.test(line)) return false;
+	if (!SETEXT_UNDERLINE_EXACT.test(next)) return false;
+	// A spaces-only lead needs no position test: `html` interrupts a paragraph,
+	// so the line starts a block wherever it sits. A tab-bearing one does not
+	// interrupt, so it is setext content only in block position (NRL-155).
+	return !TAB_BEARING_LEAD.test(line) || inSetextBlockPosition(lines, k);
 }
 
 /**
@@ -3107,7 +3191,7 @@ export function extractChunks(
 				if (/^ *\r?$/.test(raw)) rawHtml = undefined;
 			} else if (rawHtml !== undefined) {
 				if (rawHtml.test(raw)) rawHtml = undefined;
-			} else if (/^[ \t]*<!--/.test(body) && !HTML_OPENER_AT_START.test(body) && body.indexOf("-->", body.indexOf("<!--") + 4) === -1) {
+			} else if (/^[ \t]*<!--/.test(body) && INDENTED_CODE.test(body) && body.indexOf("-->", body.indexOf("<!--") + 4) === -1) {
 				// A `<!--` led by a tab or four columns is indented code to
 				// extractChunks, but at least the ` \t` lead is an HTML comment BLOCK
 				// to the renderer: measured, ` \t<!--` at document start and after an
@@ -3118,6 +3202,11 @@ export function extractChunks(
 				// is raw HTML for the renderer, and on base it happened to open our
 				// own comment and hide the leaked text again. Without this the fuzz
 				// found that mask removed. Stays open until a `-->`, fail-closed.
+				// Keyed on INDENTED_CODE, "what extractChunks calls indented code",
+				// rather than on the complement of HTML_OPENER_AT_START: the two are
+				// identical today (checked over every space/tab lead up to six
+				// characters), and only this form follows NRL-113's narrowing
+				// (NRL-155).
 				rawHtml = /-->/;
 			} else {
 				rawHtml = rawHtmlBlockEnd(body);
