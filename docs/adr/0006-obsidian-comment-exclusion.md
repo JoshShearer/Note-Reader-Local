@@ -32,7 +32,10 @@ evidence, not a live Obsidian reading or highlighting observation.
    is the renderer's own context-sensitivity and is spelled out in the three terms
    below) **and with no further `%` before the end of that
    line**, an unmatched `%%` opens a block that hides through
-   the first later `%%`, or through EOF when none exists. Apply this to the
+   the first later `%%`, or through EOF when none exists - **but only within
+   the container that holds the opener**: a block opened inside a blockquote or
+   a list item ends where that container ends (NRL-118, the amendment under
+   clause 5). An opener outside every container keeps the note-wide reach. Apply this to the
    line body after structural prefixes are peeled and to closing-line prose
    remainders. An unmatched inline `%%` remains literal and does not consume
    later lines. A lone `%` and backslash-escaped openers remain literal.
@@ -302,7 +305,9 @@ evidence, not a live Obsidian reading or highlighting observation.
    **CLOSED by NRL-116; see the amendment below, and do not quote the 3.**
    And an unterminated `%%` is NOTE-scoped for us (clause 5) where Obsidian scopes
    it to the construct that holds it, which is why a `%%` on a list marker line
-   silences the following items.
+   silenced the following items. **NRL-118 closed that root**; see the amendment
+   under clause 5. The paragraphs below are kept as the record of what was
+   measured while it was open.
 
    **That last one is also the cost this change carries, and it is pinned rather
    than hidden.** Base was accidentally PAIRING a wrongly-recognised
@@ -343,9 +348,13 @@ evidence, not a live Obsidian reading or highlighting observation.
    bundling both arms from this tree: over 8 container prefixes x all 512
    content-key combinations, **4,096 of 4,096 cells leak on base and 4,096 on the
    fix, 0 newly leaking, and 0 cells differ between the two arms in any respect**.
-   It is tracked as **NRL-118** and pinned as a TRIPWIRE by
-   `pin-nrl118-note-scope-closes-at-another-depth` plus its control; when NRL-118
-   closes, both expectations change on purpose.
+   It was tracked as **NRL-118** and pinned as a TRIPWIRE by
+   `pin-nrl118-note-scope-closes-at-another-depth` plus its control. **NRL-118
+   closed it**: the pin was retargeted to `""` and renamed in place to
+   `pin-nrl118-different-depth-percent-opens-new-block`, and its control did NOT
+   move, because with no container the second `%%` really is the first block's
+   closer and the renderer displays `SECRET`. The 1,088 cells are 0 on the fix;
+   the amendment under clause 5 carries the numbers and their corpora.
 
    A **fresh-block** tab-led or four-space line needed no change and did not get
    one: it never reaches this predicate, and the renderer agrees it is code.
@@ -790,6 +799,212 @@ evidence, not a live Obsidian reading or highlighting observation.
    Enclosing label/highlight delimiters inside complete comments or inline
    code cannot end that container. Truncating a comment before recursive
    cleaning would make its hidden remainder speakable.
+
+   **NRL-118 amendment: a `%%` block is CONTAINER-scoped, not note-scoped.**
+   Obsidian's blockquote and list tokenizers collect their own lines first and
+   only then tokenize the content, so a `%%` block opened inside a container can
+   never reach past that container's end. Ours used to, and that one root moved
+   in both directions: a later `%%` at a different depth closed a block the
+   renderer had already ended, so `>> %%` / `%% SECRET` SPOKE `SECRET` (the
+   disclosure the ticket was filed High for), and a block that should have ended
+   at its container kept hiding displayed text up to the next `%%` (the prose-loss
+   half NRL-93 recorded as its cost).
+
+   **The rule, as shipped after the NRL-118 fix pass.** A `%%` block ends where
+   Obsidian's own parser ends it, and nowhere else:
+
+   a. **The renderer's block tokenizer is re-run, not approximated.**
+      `src/text/obsidianBlocks.ts` transcribes remark-parse 8 as Obsidian 1.13.7
+      configures it (`commonmark: true`, `gfm: true`, `pedantic: false`) plus
+      Obsidian's own frontmatter, `$$` math, `%%` comment, footnote-definition and
+      block-id tokenizers, out of the installed bundle (`app.js` sha256
+      `8efbf581...9898`): the same method order, the same `interruptParagraph`,
+      `interruptList`, `interruptBlockquote` and footnote interrupt sets with the
+      same option gates, the same container collection loops, and the same content
+      rewrites (a quote drops `>` plus one space; a list item drops its marker and
+      runs remark's `remove-indentation`; a footnote drops its label), recursing
+      exactly where the renderer recurses. It records every `%%` block comment the
+      renderer creates, with the note line it starts on and the note line holding
+      its last character, using remark's own per-line offset table so a comment
+      that ends at the start of a stripped line ends ON that line.
+   b. **It is consulted only for a block BOTH parsers open on the same line.** The
+      opener is then the same `%%` by construction: in both it is the last `%%` on
+      its line with no `%` after it, and a container only ever strips a line's
+      prefix. If the renderer's comment runs out of container before any closing
+      `%%`, our block ends after the renderer's last covered line. A comment the
+      renderer closes with a `%%` needs nothing, because we find that same closer.
+      A block the renderer does NOT open (one of our own opener misreads) stays
+      note-scoped exactly as before, so no pre-existing opener divergence can be
+      made worse by this rule; it is left to its own root.
+   c. **The first line past the comment is processed FRESH**, as though no block
+      had been open, which is what the renderer does with it: the container's
+      parent tokenizes it, and a line-start `%%` there opens a new block. For
+      `>> %%` / `%% SECRET` the bare `%%` is an `interruptBlockquote` construct, the
+      quotes end on line 1, and a new top-level comment hides `SECRET`.
+   d. **An opener outside every container is unchanged**: its renderer comment
+      reaches the end of the note or a closer we also find, so nothing moves.
+      `%%` / `%% SECRET` still speaks `SECRET`, as the reading view displays it,
+      and `guard-nrl118-note-scope-control-no-container` pins that. `<!--` is
+      untouched (decision 6): its scopes are a different root (ADR 0025).
+
+   **Why a transcription and not a column model.** The first revision of this fix
+   (`26cd7ed`) modelled containers by columns: peel a `>`, compare an indent with
+   an item's content column, test a list of interrupter regexes, then patch the
+   shapes Ship's fuzz found (eight patches: a break line read as a container, a
+   one-column-short break, tab rules, a setext lookahead, uncertain `2.` layers, a
+   taint after hidden container endings, a fallback after a hidden `<!--`). An
+   independent Verify still FAILED it: seven reduced shapes newly spoke text the
+   reading view hides, 244 cells in 74 notes that no `%%` neutralisation could
+   attribute to base. Run against the transcribed loops, all seven come from three
+   rules that are not column rules at all:
+
+   - **`remove-indentation` dedents an item by its SMALLEST indent, lazy lines
+     included**, capped by the content column, and an ordered marker below ten
+     whose `lead + marker + spacing` has odd length gains a phantom column (`1. `
+     counts as four, `1) ` as three). So under `1. > %%` the line `   \tSECRET` is
+     dedented to `SECRET`, a lazy line inside the quote and inside its comment,
+     where the column model left `\tSECRET` (indented code, ending the quote). The
+     same rule decides `  1. > %%` / `    SECRET`, `   - > %%` / `\tSECRET`,
+     `2. x` / `> %%` / `   \tSECRET` and `-    * * *` / `>> %% x` / `    SECRET`.
+   - **The list loop counts a marker character it then rejects.** `   ---` under
+     `-   %% x` and a blank line: the `-` is tried as a marker, adds its column, is
+     refused (no space after it), and the incremented width now reaches the
+     content column, so the line CONTINUES the item, blank line and all. The column
+     model had this as a "one column short" setext special case with no blank.
+   - **Any line indented more than four columns continues an item**, whatever its
+     content column (`V = r2 >= indent || r2 > 4`). `     # SECRET` under a
+     `  \t- %%` item (content column six) is item content, dedented to `# SECRET`
+     inside the comment, not an ATX heading that ends the item.
+
+   None of these is a patch target; each falls out of running the loops. That is
+   the "correct in principle" the fix pass was asked for, and the residuals below
+   are the places where the EXTRACTOR, not the scope, still diverges.
+
+   **Evidence, all bare Node, base `54c3b7a` (origin/main) against the fix, both
+   bundled from copied source with the repo's own esbuild, oracle = real rendered
+   HTML from Obsidian's parser and renderer executed out of the bundle (harness
+   `selftest.cjs` OK, `app.js` sha256 re-verified). Every sentinel is signed at its
+   own position; room is stated; each probe is shown able to fail.**
+
+   - **The transcription against the real parser**, comparing each `%%` block's
+     start line, end line and last covered line, 1,650,000 notes in three
+     unrelated families, 403,944 of them holding a comment: **0 mismatches**.
+     450,000 come from Verify's own generator and a widened variant (more tabs,
+     leads, nesting, markers, callouts, footnotes, tables); 600,000 are token soup
+     (random markdown-significant tokens, no shape templates, half of it weighted
+     to brackets, colons and quotes); 600,000 are a richer soup carrying every
+     block family the bundle has, frontmatter, a BOM and CRLF line ends. The
+     bracket-weighted soup is what found the one transcription miss this pass
+     made, 1 note in 150,000: Obsidian WRAPS remark's definition tokenizer and
+     refuses a label starting `^` (footnote syntax), so `[^id` / ... / `x]:y` is
+     not one definition swallowing a `%%` line. Fixed, and pinned by a direct
+     check. Non-vacuity: a
+     transcription whose quote takes no lazy lines mismatches 731 of 20,000 notes,
+     and one that dedents items by the content column (the column model's rule)
+     mismatches 91 of 20,000. The scan gives up, leaving our own behaviour, on a
+     lone carriage return, on a note the bundle would refuse, and past 64 levels
+     of container nesting, which bounds its O(depth x length) cost on a
+     pathological note (400 nested items: about 0.2 s, then no answer).
+   - **The ticket's class** (NRL-93 second Verify's generator, 432 notes x 4
+     option sets = 1,728 cells, 1,088 hidden-side room): leaks **1,088 -> 0**,
+     loses 0 of 640.
+   - **Verify's method at 600,000 notes**: its `gen.cjs` verbatim (300,000 notes)
+     plus the widened variant (300,000), each x 3 option sets (default,
+     speak-everything, a random mask): 5,688,432 cells, 1,154,197 hidden-side room,
+     3,386,261 displayed-side room. Newly spoken: 7,258 text cells and 123
+     destinations, **every one reducible to a pre-existing root**: 7,333 by Verify's
+     own reduction (some subset of the note's `%%` lines, neutralised, makes BASE
+     speak the sentinel while the renderer still hides it) and 48 more by line
+     deletion plus neutralisation (a variant with no `%%` at all in which base
+     speaks it), **0 not shown**. The usual causes are an opener we misread pairing
+     with a later `%%`, a raw unterminated HTML tag the browser swallows, and a
+     raw `<!--` that escapes its container. 3,774 newly spoken image alt cells:
+     3,719 with the image displayed (alt is an attribute, spoken by design under
+     `speakImageAlt`, ADR 0008), and 55 with it hidden, all 55 reducible. Newly
+     lost: 22,452 cells, 22,449 pre-existing by subset control at their own option
+     set, and 3 (one shape) pinned below with a twin that loses the same text on
+     base. Base-to-fix, the fix closes far more than it opens; the classified
+     counts above are what matter. `sourceIndex` lockstep: 0 failures over
+     25,413,840 UTF-16 units. Can fail, same generator (widened, 30,000 notes,
+     292,458 cells, 58,995 room), cells NOT reducible to a pre-existing root:
+     no-lazy-quote transcription 1,420 in 428 notes, column-dedent transcription 10
+     in 4 notes, a scope that ends every comment on its opener line 6,157 in 1,659
+     notes; the fix **0**. (`26cd7ed` itself fails 22 of this pass's NRL-118 test
+     checks; it predates three later commits on main, so it is not rerun on this
+     fuzz against today's base.)
+   - **Ship's independent fuzz**, its own generator: 160,000 notes, 150,642 cells,
+     29,264 room. 8 newly leaking text cells and 15 newly spoken destinations, all
+     reducible: 21 by `%%` neutralisation and the last 2 (one note) by deletion to
+     a comment-free twin, `- > A [x` / `    y](zdestz.png) z`, whose destination
+     base already speaks (NRL-88's container-label family). 112 newly lost, 112
+     pre-existing by subset control.
+   - **Structural census** (10 opener prefixes x 7 continuation prefixes x 9 line
+     kinds x 7 sentinels, 4 option sets: 13,720 cells, 1,176 room): disclosure
+     **440 -> 0, 0 newly leaking** (the no-lazy-quote arm newly leaks 208). Prose
+     loss 5,495 -> 1,602; 176 newly lost = 72 content exclusions + 96 display math
+     spoken as "equation" (ADR 0004) + 8 on one note, `> - %%` / `> - Z1` /
+     `    %% Z2`, pre-existing (`> - x` / `    %% S` loses S on base).
+   - **Cross-carry sweep** (soft-wrapped code spans, link and image labels whose
+     opener sits before, on or inside the region where the scope now ends and whose
+     closer sits after it; 17,280 notes, 339,840 cells, 115,936 room): **0 newly
+     leaking text, 0 newly spoken destinations**; 936 alt-text cells in their own
+     bucket. Newly lost 24 = 8 exclusions + 16 literal `](zdestz.png)` tails the
+     renderer displays as text and our label carry drops, pre-existing (the
+     neutralised twin drops them on base). Can fail: the no-lazy-quote arm newly
+     leaks 26,756 and speaks 2,648 destinations.
+   - **AC4, NRL-131's shape** over 6 prefixes x all 512 option combinations:
+     `ZHIDEZ` lost **512 -> 0** for each list prefix (2,560 cells), `> ` unchanged.
+   - **NRL-93's census** (480 cells) and two-arm corpus (2,464 + 896, losses 984
+     and 518) identical on
+     both arms, 0 new either way; **NRL-73's two-class probe**, 24,576 cells per
+     class over all 512 combinations: hidden text spoken 0 on both, displayed text
+     lost 0 on both; ADR 0019's literal bucket 256 of 1,024 on both, kept apart.
+   - **Invariance**, the structural claim of part b: a note in which the renderer
+     has no `%%` comment that runs out of container must produce byte-identical
+     chunks (text, `sourceIndex`, `sourceStart`, `blockType`). NRL-93's invariance
+     corpus (3,240 notes, 12,960 cells): 152 cells differ, **0** outside such notes.
+     The two generators above (200,000 notes, 600,000 cells): 105,604 differ, **0**
+     outside such notes.
+   - **Code.** `extract.ts` gains 32 lines and loses none, so every existing
+     function body, `cleanLine` included, is byte-identical to base. The
+     `codeLeadItem` argument the column model added is gone: NRL-116's peel made it
+     redundant, and part b keeps a misread opener note-scoped anyway.
+   - **`sourceIndex`** by numeric UTF-16 index over NRL-118's 2,124-note corpus x 4
+     option sets: 0 failures on both arms (14,320 chunks / 138,672 units base,
+     21,457 / 250,824 fix), all four mutators nonzero on both (drop, shift, swap,
+     negate). The equation exemption is keyed on the synthetic text.
+   - **Runtime** stays linear, and that took two departures from the bundle's
+     letter that keep its answers: the table tokenizer looks for a row's pipe
+     only up to the row's newline (the bundle searches to the end of the note and
+     then compares, which is quadratic on a long note with no pipe), and the
+     definition label close is read from a backward table computed once per
+     content string (the bundle walks to the next `]` at every `[`-led block: 29 s
+     on a 40,000-line note of `[x` paragraphs, now about 0.1 s). Both were shown
+     identical to the literal transcription on 600,000 notes. The scan alone runs
+     at about 170 ms for 160,000 lines of prose and 590 ms for 160,000 lines of
+     dense mixed containers; the whole extraction stays within about 3x base on
+     every shape tried, timings noisy. Container nesting is the one cost that
+     grows with depth, hence the 64-level bound above.
+
+   **Residuals, named rather than closed, each fail-closed or pre-existing.**
+   (1) A line of item content whose `%%` is indented past code depth still opens a
+   block for us, because `dedentedByList` is a boolean (NRL-117):
+   `pin-nrl118-residual-deep-item-content-opener` (identical on base) and
+   `pin-nrl118-residual-code-depth-line-after-item` (`-    %%` / `    %% PROSE`, the
+   3 fuzz cells above; its control loses PROSE on base). (2) A raw HTML block whose
+   tag never closes is hidden by the browser and spoken by us, comment or no
+   comment; `> %%` / `<div\tx` / `SECRET` used to be hidden only because our block
+   ran past the quote, and is now pinned as that pre-existing root
+   (`pin-nrl118-ship-tab-after-tag-not-html` with a comment-free control). (3) A
+   `%%` the renderer does not treat as an opener but we do (NRL-93, NRL-114,
+   NRL-159 shapes) keeps base's note scope by part b. (4) `<!--` keeps its own
+   scopes. (5) The transcription is of Obsidian 1.13.7; an Obsidian update can
+   change any tokenizer, so the differential above must be re-run against a new
+   bundle before trusting the scope again.
+
+   **NOTHING WAS OBSERVED IN A RUNNING OBSIDIAN.** Reading view only; Live Preview
+   has never been read or run by any ticket in this family, and AGENTS.md rule 11
+   applies to every number above.
 
 ## Consequences and verification
 
