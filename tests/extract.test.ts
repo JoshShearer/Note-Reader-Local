@@ -2990,11 +2990,23 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// in the fix pass's 600,000-note fuzz that subset control did not attribute
 		// (3 cells). `-    %%` opens a comment that the renderer ends with the item, so
 		// `    %% PROSE` is read afresh, and the reading view shows it as indented
-		// code. We open a block on it - NRL-117's boolean `dedentedByList` root - so
-		// PROSE goes quiet, where base happened to close its note-scoped block there
-		// and speak it. Pre-existing and fail-closed: the control below, with the
-		// first `%%` neutralised, loses PROSE on base and on the fix alike. MUST
-		// CHANGE ON PURPOSE when NRL-117 closes.
+		// code. We open a block on it, so PROSE goes quiet, where base happened to
+		// close its note-scoped block there and speak it. Pre-existing and
+		// fail-closed: the control below, with the first `%%` neutralised, loses
+		// PROSE on base and on the fix alike.
+		//
+		// This comment used to attribute the root to "NRL-117's boolean
+		// `dedentedByList`" and to predict that the expectation "MUST CHANGE ON
+		// PURPOSE when NRL-117 closes". NRL-117 has closed (`d53aa1d`) and the
+		// prediction DID NOT COME TRUE, so both halves are corrected rather than
+		// left standing. Measured by bundling the real extractor at `d53aa1d` and at
+		// its parent `dad8de2`: this row, its 3-space sibling and the control below
+		// all speak the same on BOTH arms, and a 5-space lead speaks PROSE on both
+		// too - so "the boolean could not tell leads apart" is not the explanation
+		// either. The live root is the one the deep-item-content pin above records:
+		// the dedent term correctly reports a block start while the renderer reads
+		// the line as indented CODE, and nothing routes it to the code exclusion, so
+		// `skipCodeBlocks` cannot reach it. That is not the indent.
 		["pin-nrl118-residual-code-depth-line-after-item", "-    %%\n    %% PROSE", ""],
 		["guard-nrl118-residual-code-depth-line-after-item-control", "-    xx\n    %% PROSE", "xx"],
 		// NRL-117. `listDedented` stopped being "this line is list content, so keep
