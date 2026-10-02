@@ -2679,6 +2679,24 @@ const ANY_LIST_MARKER = /^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
  */
 const ONE_SPACE_MARKER = /^(?:[-*+]|\d{1,9}[.)]) (?=\S)/;
 /**
+ * Module 745's `b` regex, which is how that module decides what an item's marker
+ * prefix IS before module 5540 is told how much to remove. Kept separate from
+ * `LIST_BULLET`, `ANY_LIST_MARKER`, `ONE_SPACE_MARKER` and `PEEL_MARKER`
+ * deliberately, because each of those five answers a different question and the
+ * NRL-66 precedent says not to merge scans that do: this one must capture the
+ * lead, the marker and the gap as three separate groups, VERBATIM, since
+ * `itemHeadCols` measures a string rebuilt from them.
+ *
+ * Two details are module 745's and not ours. The gap alternation is ordered, so
+ * ` {1,4}(?! )` takes up to four spaces only when a fifth does not follow -
+ * `-     x` therefore has a ONE-space gap and a content indent of two, not six.
+ * And the final `$` stands in for module 745's `$|(?=\n)`, because every caller
+ * here is handed one line with no newline in it.
+ */
+const ITEM_HEAD = /^([ \t]*)([*+-]|\d+[.)])( {1,4}(?! )| |\t|$)/;
+/** See the `LIST_LEVEL_CAP` comment in extractChunks' listDedented pass. */
+const LIST_LEVEL_CAP = 64;
+/**
  * Is `line` the single content line of a setext heading whose underline is
  * `next`, with a `<!--` at the start of that content (NRL-120)?
  *
@@ -3119,6 +3137,120 @@ export interface ExtractOptions {
 }
 
 /**
+ * Module 6058's `indentation()`: how many COLUMNS of lead a line has, and which
+ * character covers each of those columns.
+ *
+ * A tab advances to the next multiple of four - `s += 4` then
+ * `s = Math.floor(s / 4) * 4` - so a tab at column 2 reaches column 4 and not 6.
+ * `stops[col]` is the index of the character that covers column `col`, filled
+ * contiguously for every column from 1 to `indent`, which is why module 5540's
+ * "largest stop not past the budget" is simply `Math.min(budget, indent)`.
+ *
+ * Columns are 1-based here because the module they mirror numbers them that way
+ * and `stops` is indexed by them; `stops[0]` is deliberately absent, and that
+ * absence is load-bearing in `listDedentCut`.
+ */
+function leadStops(line: string): { indent: number; stops: number[] } {
+	const stops: number[] = [];
+	let col = 0;
+	for (let i = 0; i < line.length; i++) {
+		const c = line.charCodeAt(i);
+		if (c !== 32 && c !== 9) break;
+		let next = col + (c === 9 ? 4 : 1);
+		if (c === 9) next = Math.floor(next / 4) * 4;
+		while (col < next) stops[++col] = i;
+	}
+	return { indent: col, stops };
+}
+
+/**
+ * Module 5540's per-line slice: how many CHARACTERS a list item's dedent removes
+ * from the front of one of its lines, given a column budget.
+ *
+ * This is the whole reason NRL-117 could not be a column subtraction, and NRL-93
+ * said as much before either was measured. The budget is in columns but the cut
+ * is in characters, so a tab is removed WHOLE or not at all: with a budget of two
+ * columns, `\t\tx` loses its first tab entirely and keeps four columns of lead,
+ * not six. Module 5540 reaches that by `while (s && !(s in c)) s--` then
+ * `slice(c[s] + 1)`, and when `s` falls to 0 it slices `c[0] + 1`, which is
+ * `undefined + 1`, which is `NaN`, which `String.slice` reads as 0 - so a line
+ * with no lead at all keeps every character. That is the `s <= 0` return here,
+ * and it is what makes a lazy continuation at column 0 cost nothing.
+ */
+function listDedentCut(line: string, budgetCols: number): number {
+	const { indent, stops } = leadStops(line);
+	const s = Math.min(budgetCols, indent);
+	return s <= 0 ? 0 : stops[s]! + 1;
+}
+
+/**
+ * Module 745's `M`: the content indent of a list item, in columns, as the
+ * budget it hands module 5540.
+ *
+ * It is NOT the marker's width plus one. `M` rewrites the item's first line as
+ * `lead + " ".repeat(marker.length) + gap`, keeping the lead and the gap
+ * VERBATIM - so a tab in either is still a tab, and module 6058 snaps it - and
+ * pads a one-digit ordered marker with a leading space when the consumed prefix
+ * has odd length (`Number(n) < 10 && a.length % 2 === 1`), which is why `1. x`
+ * budgets five columns where `- x` budgets two.
+ *
+ * That `Number` call is handed the WHOLE marker, delimiter included, because
+ * module 745's own `n` is group 2 of its `b` regex - the same group `ITEM_HEAD`
+ * mirrors. So the pad is narrower than "a one-digit ordered marker" sounds:
+ * `Number("-")` is NaN and `Number("1)")` is NaN too, while `Number("1.")` is 1.
+ * Only the `.` form ever pads. **That asymmetry is the renderer's and must not be
+ * "fixed"** by coercing the digits alone: doing so would pad `1)` where module 745
+ * does not, over-dedent its lines by a column, and so keep hiding text the
+ * renderer displays - a prose loss rather than a disclosure, but a divergence
+ * either way, and the reason this helper takes the marker with its delimiter on.
+ * Measured on the shipped form: `1)` flips at a seven-space lead where `1.` flips
+ * at eight, and over 225 marker x lead cells and 760 nested cells graded against
+ * real rendered HTML neither flip moves a cell in either direction.
+ *
+ * Takes the MATCH rather than the line, because the caller walks one line head by
+ * head: `- - x` is TWO items and so two budgets, module 745 reaching the inner one
+ * by tokenizing the outer item's first-line content, which `M` restores
+ * undedented (`c[0] = s`). Measured before this took a match: pushing one level
+ * for `- -` under-dedents every line below it and the predicate then DECLINES an
+ * opener the renderer honours - 2,342 cells of newly SPOKEN hidden text in a
+ * 219,300-cell exhaustive sweep, which is the one direction this change must not
+ * move. Bare markers are the other half of that class and are why `ITEM_HEAD`'s
+ * gap alternation ends in `$`.
+ */
+function itemHeadCols(m: RegExpExecArray): number {
+	const lead = m[1]!;
+	const gap = m[3]!;
+	let marker = m[2]!;
+	if (Number(marker) < 10 && (lead + marker + gap).length % 2 === 1) marker = " " + marker;
+	return leadStops(lead + " ".repeat(marker.length) + gap).indent;
+}
+
+/**
+ * Does this line's lead, AFTER its enclosing list items have taken their dedent,
+ * still reach the block start that a `%%` opener needs?
+ *
+ * The two halves are the renderer's, and they are the same two
+ * `opensObsidianBlock` applies to an undedented line: spaces only, because the
+ * `%%` tokenizer's skip loop compares to charCode 32 and module 8607's paragraph
+ * tokenizer breaks its own scan on a tab and declares the line a lazy
+ * continuation; and at most three of them, because four columns is indented code
+ * in a fresh block and is likewise absorbed as lazy prose after a paragraph line.
+ */
+function leadReachesBlockStart(line: string): boolean {
+	let k = 0;
+	while (k < line.length) {
+		const c = line.charCodeAt(k);
+		if (c === 32) {
+			k++;
+			continue;
+		}
+		if (c === 9) return false;
+		break;
+	}
+	return k <= 3;
+}
+
+/**
  * Turn a markdown note into speakable chunks.
  *
  * Frontmatter is located up front by shape (see detectFrontmatter) and then
@@ -3200,11 +3332,15 @@ export function extractChunks(
 		}
 		if (line.includes("-->")) ahead = true;
 	}
-	// `listDedented[n]` is "line n is the CONTENT of a list item, so Obsidian has
-	// already removed its leading whitespace before any block tokenizer sees it"
-	// (NRL-93). It is the third argument of opensObsidianBlock and the reason the
-	// `%%` line-start rule cannot be a character class: see that predicate for the
-	// three modules that do the dedenting.
+	// `listDedented[n]` is "line n is the content of a list item AND the dedent
+	// Obsidian applies to that item leaves its lead at the block start a `%%`
+	// opener needs" (NRL-93 for the first half, NRL-117 for the second). It is the
+	// third argument of opensObsidianBlock and the reason the `%%` line-start rule
+	// cannot be a character class: see that predicate for the three modules that
+	// do the dedenting.
+	//
+	// `listItemContent[n]` is the first half alone, which is all NRL-120's setext
+	// pass wants, and it is the pre-NRL-117 array unchanged.
 	//
 	// A forward O(L) pass with O(L) booleans, in the shape of the backward
 	// htmlCloserAhead pass above and for the same reason - codeSpanClosesLater and
@@ -3254,10 +3390,64 @@ export function extractChunks(
 	// where it did not hold, they were found by measurement and not by reading,
 	// and the guarantee that survives is the structural one stated on
 	// `opensObsidianBlock` instead.
+	//
+	// NRL-117 narrowed the ANSWER without touching the question or the predicate.
+	// `listItemContent[k]` below is the array this pass used to produce, bit for
+	// bit; `listDedented[k]` is that value CONJOINED with "and the dedent really
+	// does take this line's lead away", so the whole change is one extra term on
+	// a boolean and the predicate's own structural guarantee is untouched. The
+	// subset direction is therefore true by construction rather than by probe:
+	// this pass can only ever answer `true` where the pre-NRL-117 pass did.
+	//
+	// Why the extra term needs a STACK and could not be an indent SUBTRACTION,
+	// which is what NRL-93 named as the faithful rule and declined to
+	// approximate. Measured, and the counter-example is `- outer` / `  - inner` /
+	// `\t\t%%`: module 745 NESTS, so the item's dedent runs once per enclosing
+	// level, and module 5540's budget is in COLUMNS while its cut is in
+	// CHARACTERS, so a tab is removed whole or not at all. Two levels of a
+	// two-column budget therefore take both tabs and leave column 0 - the block
+	// really does open and the renderer really does hide the rest of the note -
+	// where `8 - 4 = 4` says four columns survive. An arm built on that single
+	// subtraction DISCLOSED 7,168 cells of a 3,021,824-cell census, in that one
+	// shape. See `leadStops`, `listDedentCut` and `itemHeadCols`.
+	//
+	// Three things about the walk are load-bearing.
+	//
+	// The budget at each level is the item's content indent, which is module
+	// 5540's `maximum` rather than the `p` it actually uses - `p` is the MINIMUM
+	// indent over the item's own non-blank lines, capped by that maximum. Using
+	// the cap over-estimates the dedent, which leaves a SMALLER residual, which
+	// makes this term `true` more often, which is the pre-NRL-117 answer. So the
+	// one approximation in here fails toward hiding, which is the direction the
+	// ticket's own asymmetry argument asks for: an under-estimate speaks text the
+	// author hid, an over-estimate keeps a prose loss that was already there.
+	// Measured cost, 22 cells of a 667-cell renderer-keyed sweep, every one of
+	// them identical on both sides of this change.
+	//
+	// A line SHALLOWER than the current level's budget stops the walk only when it
+	// is itself a marker, because that is a new item at this level and module 745
+	// restarts `L` there. A shallower NON-marker line is a lazy continuation and
+	// module 5540 still slices it - to `stops[indent] + 1`, i.e. its whole lead -
+	// so descending is right and the cut is naturally zero at column 0.
+	//
+	// An item head this file cannot parse pushes `MAX_SAFE_INTEGER` rather than
+	// nothing. `LIST_BULLET`'s `\s*` admits a lead `ITEM_HEAD`'s `[ \t]*` does
+	// not (a no-break space, a vertical tab), and a level left off the stack would
+	// UNDER-dedent every line below it, which is the one direction that can speak
+	// hidden text. A whole-lead budget reproduces the pre-NRL-117 answer instead.
+	//
+	// NOT closed here, and pinned rather than left to be rediscovered: a
+	// blockquote nested inside a list item. `BLOCKQUOTE` is peeled from `raw`
+	// BEFORE this walk runs, where the renderer dedents the item first and peels
+	// the quote second, so for `- item` / `  > \t%%` the tab is gone before any
+	// budget is applied and no indent model can see it. That is NRL-114's
+	// quote-peel narrowing; 8 such cells stay divergent and 4 close here.
+	const listItemContent: boolean[] = new Array<boolean>(lines.length).fill(false);
 	const listDedented: boolean[] = new Array<boolean>(lines.length).fill(false);
 	{
 		let inItem = false;
 		let blankBefore = true;
+		let levels: number[] = [];
 		for (let k = 0; k < lines.length; k++) {
 			const raw = lines[k]!;
 			const body = raw.replace(BLOCKQUOTE, "");
@@ -3266,16 +3456,42 @@ export function extractChunks(
 			const marker = LIST_BULLET.test(body);
 			const indented = /^\s/.test(raw) || /^\s/.test(body);
 			if (
-				inItem &&
 				!blank &&
 				!marker &&
 				!indented &&
 				(blankBefore || (!quoted && (HEADING.test(body) || FENCE.test(body) || HR.test(body))))
 			) {
 				inItem = false;
+				levels = [];
 			}
-			listDedented[k] = inItem && !marker;
+			let view = body;
+			let depth = 0;
+			for (; depth < levels.length; depth++) {
+				if (leadStops(view).indent < levels[depth]! && ITEM_HEAD.test(view)) break;
+				view = view.slice(listDedentCut(view, levels[depth]!));
+			}
+			levels.length = depth;
+			listItemContent[k] = inItem && !marker;
+			listDedented[k] = listItemContent[k]! && leadReachesBlockStart(view);
 			if (marker) inItem = true;
+			let head = ITEM_HEAD.exec(view);
+			if (head === null && marker) {
+				levels.push(Number.MAX_SAFE_INTEGER);
+			} else {
+				for (let rest = view; head !== null; head = ITEM_HEAD.exec(rest)) {
+					if (levels.length >= LIST_LEVEL_CAP) {
+						// A bound on the walk, because `- - - - ...` pushes one level per
+						// pair and every later line then walks all of them. The terminal
+						// level is a whole-lead budget rather than a truncation: a stack
+						// SHALLOWER than the renderer's under-dedents and can speak hidden
+						// text, where a whole-lead budget reproduces the pre-NRL-117 answer.
+						levels.push(Number.MAX_SAFE_INTEGER);
+						break;
+					}
+					levels.push(itemHeadCols(head));
+					rest = rest.slice(head[0].length);
+				}
+			}
 			blankBefore = blank;
 		}
 	}
@@ -3312,7 +3528,30 @@ export function extractChunks(
 			const raw = lines[k]!;
 			const insideHtml = rawHtml !== undefined;
 			const prefix = containerPrefix(raw);
-			const lazyInList = listDedented[k]! || (listInRun && prefix.blockType !== "list");
+			// `listItemContent`, deliberately NOT `listDedented`. NRL-117 narrowed
+			// `listDedented` with a term about how much lead survives the item's
+			// dedent, which is a question about a `%%` opener and says nothing about
+			// whether this line can be a setext heading's content, so the two arrays
+			// are kept apart. NRL-120's behaviour is byte-identical across NRL-117.
+			//
+			// This comment used to say that reading the narrowed array here WOULD
+			// make `lazyInList` false on a deeply indented item line, make
+			// `setextContent` true there, and so make a `<!--` LITERAL and SPOKEN.
+			// The rebase onto NRL-118 re-measured that and it is NOT observable
+			// today, so the claim is corrected rather than left standing: an arm
+			// with this line pointed at `listDedented` is byte-identical to this one
+			// over 103,776 cells (22,176 structured plus 80,000 fuzz plus 1,600
+			// targeted at the one lead shape that could discriminate). The reason is
+			// that the two arrays differ ONLY where the surviving lead is four-plus
+			// columns or tab-bearing, and `isSetextContentLine`'s plain path already
+			// refuses exactly those through `MODULE134_INDENTED_CODE` and through
+			// `TAB_BEARING_LEAD` plus `inSetextBlockPosition`, independently of
+			// `lazyInListItem`. So the split is DEFENCE IN DEPTH, not the only guard,
+			// and the direction of the hazard is still real: `MODULE134_INDENTED_CODE`
+			// has already been narrowed once (NRL-113) and narrowing it again would
+			// expose this. Keep the arrays apart, and do not re-state the disclosure
+			// as measured.
+			const lazyInList = listItemContent[k]! || (listInRun && prefix.blockType !== "list");
 			if (k + 1 < lines.length && !insideHtml) setextContent[k] = isSetextContentLine(lines, k, lazyInList);
 			const quotePeeled = raw.replace(BLOCKQUOTE, "");
 			if (/^ *\r?$/.test(quotePeeled)) listInRun = false;
