@@ -816,8 +816,8 @@ evidence, not a live Obsidian reading or highlighting observation.
    a. **The renderer's block tokenizer is re-run, not approximated.**
       `src/text/obsidianBlocks.ts` transcribes remark-parse 8 as Obsidian 1.13.7
       configures it (`commonmark: true`, `gfm: true`, `pedantic: false`) plus
-      Obsidian's own frontmatter, `$$` math, `%%` comment, footnote-definition and
-      block-id tokenizers, out of the installed bundle (`app.js` sha256
+      the frontmatter, `$$` math, `%%` comment, footnote-definition and block-id
+      tokenizers Obsidian registers, out of the installed bundle (`app.js` sha256
       `8efbf581...9898`): the same method order, the same `interruptParagraph`,
       `interruptList`, `interruptBlockquote` and footnote interrupt sets with the
       same option gates, the same container collection loops, and the same content
@@ -827,6 +827,17 @@ evidence, not a live Obsidian reading or highlighting observation.
       renderer creates, with the note line it starts on and the note line holding
       its last character, using remark's own per-line offset table so a comment
       that ends at the start of a stripped line ends ON that line.
+      **Provenance and licensing (added before merge, from the second Verify).**
+      Most of the transcribed code is MIT-licensed upstream code as bundled by
+      Obsidian: remark-parse 8 (Titus Wormer), and math and footnote tokenizers
+      whose structure matches remark-math 3 (Junyoung Choi) and remark-footnotes 2
+      (Titus Wormer), identified by structure and not diffed line by line against
+      upstream. The MIT notices are carried in the module's header. Obsidian's own
+      code is small: the `%%` comment tokenizer (about 25 lines), the block-id
+      pattern, the `[^` definition refusal and frontmatter. Those are retyped
+      functional transcriptions, not verbatim copies, but they reproduce
+      proprietary behaviour closely, and **whether that is acceptable is an owner
+      decision recorded as open**, not settled here.
    b. **It is consulted only for a block BOTH parsers open on the same line.** The
       opener is then the same `%%` by construction: in both it is the last `%%` on
       its line with no `%` after it, and a container only ever strips a line's

@@ -1,9 +1,43 @@
+/*
+ * Third-party notices. Parts of this file are transcriptions of MIT-licensed
+ * code as Obsidian bundles it:
+ *
+ *   remark-parse 8 (block tokenizers, interrupt sets, remove-indentation)
+ *     Copyright (c) Titus Wormer <tituswormer@gmail.com>
+ *   remark-math 3 (the `$$` block tokenizer, identified by structure)
+ *     Copyright (c) Junyoung Choi <fluke8259@gmail.com>
+ *   remark-footnotes 2 (the footnote definition tokenizer, identified by structure)
+ *     Copyright (c) 2020 Titus Wormer <tituswormer@gmail.com>
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ * The `%%` comment tokenizer, the block-id pattern, the `[^` definition refusal
+ * and the frontmatter rule reproduce Obsidian's own behaviour; see ADR 0006
+ * clause 5's provenance note.
+ */
+
 /**
  * Where Obsidian's reading view ENDS a `%%` comment block (NRL-118, ADR 0006
  * clause 5).
  *
  * Obsidian 1.13.7 parses a note with remark-parse 8 (`commonmark: true`,
- * `gfm: true`, `pedantic: false`) plus its own block tokenizers for
+ * `gfm: true`, `pedantic: false`) plus block tokenizers it registers for
  * frontmatter, `$$` math, `%%` comments, footnote definitions and block ids.
  * That parser is recursive: a blockquote, a list item or a footnote definition
  * first COLLECTS its lines by a line-based loop, rewrites them (a quote drops
