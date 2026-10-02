@@ -789,8 +789,9 @@ sits outside the opener's paragraph.
   `Prose <!--` / `1) HIDDENE` / `more -->` gives
   `<p>Prose &#x3C;!--</p><ol><li>HIDDENE...`, so the paragraph ends there and the
   renderer displays it; `7.`, `7)`, `01.` and `01)` all stay one `<p>` with the
-  sentinel inside the comment. The term is now
-  `TERM2_LIST = /^ {0,3}(?:[-*+]|1[.)])[ \t]/`,
+  sentinel inside the comment. The term became
+  `TERM2_LIST = /^ {0,3}(?:[-*+]|1[.)])[ \t]/` (and, since NRL-119, its tail is
+  `(?:[ \t]|\r?$)`; see "CLOSED by NRL-119" at the end of this ADR),
   `guard-nrl95-ordered-paren-not-an-interrupter` was REPLACED IN PLACE by
   `pin-nrl111-ordered-paren-interrupts` with the opposite expectation, and two
   `)` twins of the digit-string guards were added.
@@ -819,8 +820,9 @@ sits outside the opener's paragraph.
   of `TERM2_LIST`'s indent axis moved together, which is what this bullet's own
   prose had argued for and the first diff failed to do.
 
-  **Two things about `TERM2_LIST`. The FIRST IS NOW FIXED by NRL-111's second
-  pass; the second is still open as NRL-119's remaining half.** `^[ \t]*` had NO
+  **Two things about `TERM2_LIST`. The FIRST WAS FIXED by NRL-111's second
+  pass; the second was NRL-119's remaining half and is now CLOSED by NRL-119 (see
+  the section of that name at the end of this ADR).** `^[ \t]*` had NO
   indent cap, and that was wrong in the DISCLOSURE direction: module 745's list
   tokenizer gives up past three columns of indent and a tab reaches column four on
   its own, so `\t- x` and `    - x` are lazy paragraph prose and do NOT interrupt.
@@ -841,14 +843,14 @@ sits outside the opener's paragraph.
   Obsidian's own default indent for a nested list item, so the leaking shape was
   the ordinary one.
 
-  The SECOND is untouched: the `[ \t]` requirement misses a BARE marker, which
-  module 745 accepts (`next!=="\n" && next!==""` passes), so `*`, `+`, `1.` and
-  `1)` alone on a line are all measured interrupters and we fail closed on all four
-  - 5,120 cells, prose loss. That is **NRL-119's second half** and it is
-  deliberately not done here; `pin-nrl111-bare-ordered-marker-unmasked` is the only
-  thing in the suite that goes red on an arm widening `[ \t]` to `([ \t]|$)`, so
-  it is the tripwire that stops the stop set growing a bare-marker term by
-  accident. Measured on the first pass's own list change: five
+  The SECOND was untouched by NRL-111: the `[ \t]` requirement missed a BARE
+  marker, which module 745 accepts (`next!=="\n" && next!==""` passes), so `*`,
+  `+`, `1.` and `1)` alone on a line are all measured interrupters and we failed
+  closed on all four - 5,120 cells, prose loss. That was **NRL-119's second half**,
+  deliberately not done in NRL-111, with `pin-nrl111-bare-ordered-marker-unmasked`
+  as the tripwire that stopped the stop set growing a bare-marker term by accident.
+  **NRL-119 has since closed it on purpose**, with the measurement that tripwire
+  asked for, and replaced the pin in place; see "CLOSED by NRL-119" below. Measured on the first pass's own list change: five
   fixtures RED against the pre-ship-review arm
   (`pin-nrl95-bullet-items-are-three-paragraphs`, `-bullet-line-between`,
   `-bullet-any-indent`, `-bullet-tab-indent`, `-ordered-one-dot-interrupts`), 0
@@ -1161,8 +1163,9 @@ Class B 0. The cap is what landed, together with `1)`, so **both halves of
 `TERM2_LIST`'s indent axis moved in one commit** - which is what this ADR's own
 prose had argued for and the first diff failed to do. It closes **NRL-119's first
 half** (a live 5,120-cell disclosure) as well as the first pass's own widening.
-**NRL-119's second half, a bare marker alone on a line, stays open** and is
-tripwired, not fixed.
+**NRL-119's second half, a bare marker alone on a line, stayed open** and was
+tripwired, not fixed, by NRL-111. It is now closed; see "CLOSED by NRL-119" at the
+end of this ADR.
 
 **Re-measured, with the corpus and the room to fail stated for every figure.**
 Arm 0 is base `874410d`; "head" is the first pass; "new" is what ships.
@@ -2162,3 +2165,130 @@ to every number above. Overlap: NRL-119 edits `endsTerm2Block` and `TERM2_LIST`;
 this change wraps them and never edits their bodies, and whichever of the two
 merges second must rebase and re-run both censuses. R-M08 is NOT met and the
 2-of-16 MUST count does not move.
+
+### CLOSED by NRL-119: a list marker alone on its line ends the paragraph
+
+`TERM2_LIST` required `[ \t]` after the marker, so a marker ALONE on its line was not
+a term-2 stop. Module 745's silent path accepts a marker followed by a newline or end
+of input (`if (next!==" " && next!=="\t" && (pedantic || next!=="\n" && next!=="")) return;`),
+and `list` is unconditionally in `u.interruptParagraph`, so `*`, `+`, `1.` and `1)`
+alone on a line each end the paragraph. Reproduced at base `faf55a3` before any edit,
+with Obsidian 1.13.7's own `WT` parser and `GT` renderer executed from the installed
+`obsidian.asar` (app.js sha256 `8efbf581...9898`, re-derived from the installed flatpak
+with `asar2.mjs` in the same session): `Prose <!--` / `*` / `HIDDENE` / `--> t.` renders
+`<p>Prose &#x3C;!--</p><ul><li>HIDDENE<br>--> t.</li></ul>`, and the same for `+`, `1.`,
+`1)` and a CRLF `*\r`, while base spoke `"Prose t."` in all five. Fail-closed prose loss.
+
+**The change is the tail only:**
+
+```
+TERM2_LIST = /^ {0,3}(?:[-*+]|1[.)])(?:[ \t]|\r?$)/
+```
+
+The indent cap and the digit rule from NRL-111 are unchanged, and both still bind a
+bare marker: `    *`, `\t*`, `7.`, `7)` and `01.` alone on a line each render as ONE
+`<p>` with the sentinel inside the raw comment, so the renderer HIDES it. `\r?` is
+there because `extractChunks` splits on `\n` alone. `TERM2_LONE_DASH` was deliberately
+NOT folded into this pattern: it carries a distinct setext-position meaning (the `<h2>`
+case) and folding it would move the NRL-95 and NRL-111 dash pins that cite it. The two
+now overlap on a bare `-`, which changes no answer because both are ungated block ends
+in `endsTerm2Block`. `LIST_BULLET` was deliberately NOT widened (see the glyph residual
+below). The `src/` diff is that one regex plus comments.
+
+**Fixtures: 7 RED before, 0 after.** `pin-nrl111-bare-ordered-marker-unmasked` was
+REPLACED IN PLACE (same name) from the tripwire `"Prose t."` to
+`"Prose <!-- more === 1) HIDDENE --> t."`, re-measured against the renderer; six new
+pins, `pin-nrl119-bare-{star,plus,one-dot,one-paren}-interrupts`,
+`-bare-star-three-space-indent-interrupts` and `-bare-star-crlf-interrupts`, were each
+RED on base. Six fixtures are GUARDS, green on both sides and not counted:
+`guard-nrl119-bare-star-trailing-space-interrupts` (the plan expected it red; `* `
+already matched the old `[ \t]`, so it was relabelled), and
+`guard-nrl119-bare-{seven-dot,seven-paren,zero-padded-one,four-space-star,tab-star}-hidden`.
+Each guard of the last five has room to fail against a deliberately wrong arm: the
+three digit guards are RED on an arm with `\d+[.)]` in front of the widened tail, and
+the two indent guards are RED on an arm with `^[ \t]*`, as are NRL-111's four digit
+guards and its two indent pins respectively. A shadow arm (the fix tree with the old
+pattern restored) reproduced base exactly, so the arm builds read their own copies.
+
+**Two-class probes, oracle = `oracle111.rendererHides`, never `leak.cjs`.**
+
+| corpus | cells per arm | room (disclosure / prose loss) | base A spoken / B lost | fix A spoken / B lost | newly leaking | newly lost |
+|---|---|---|---|---|---|---|
+| NRL-111's 1,350-shape corpus | 691,200 | 301,056 / 374,784 | 0 / 15,360 | 0 / 10,240 | **0** | **0** |
+| NRL-119 bare-marker corpus | 622,080 | 294,912 / 86,016 | 0 / 241,152 | 0 / 142,848 | **0** | **0** |
+| NRL-111's 17 must-not-widen controls | 8,704 | - | agree with renderer in 17 | agree in 17, 0 moved | 0 | 0 |
+
+The bare-marker corpus is 9 markers (`-`, `*`, `+`, `1.`, `1)`, plus `7.`, `7)`, `01.`,
+`01)` so the disclosure side has room) x indents {0, 1, 3, 4 spaces, tab} x tails {end of
+line, a space, `\r`} x 9 positions (line after the opener, after two content lines,
+after a block end, after `===  `, opener in a list item, in a quote, as an ATX heading,
+the line before the closer, and the marker line BEFORE the opener with a `===` after it)
+x 512 content keys. It closed 98,304 prose-loss cells and moved nothing else. **The
+probe reaches the disclosure side on wrong arms**: `\d+[.)]` with the widened tail
+newly leaks **98,304** cells and `^[ \t]*` with it **76,800**; on NRL-111's corpus the
+same two arms newly leak 20,480 and 5,120. An arm using `(?:\s|$)` instead of
+`(?:[ \t]|\r?$)` agrees with the fix on both corpora and on every fixture; only the
+census below separates them.
+
+**Exhaustive moved-line census.** Every line of length 5 or less over {space, tab, `-`,
+`*`, `+`, `1`, `7`, `0`, `.`, `)`, `x`, `\r`} (271,452 lines) x `paraLinesAbove` 0..3,
+with `endsTerm2Scan` and `endsTerm2Block` LIFTED from each arm's own source by brace
+extraction (throws on a missing span, no transcription). **30 lines widen, 0 narrow, and
+every one of the 30 is `^ {0,3}(?:[-*+]|1[.)])\r?$`.** Each was then SIGNED at its own
+position against the renderer, in 11 positions x 512 masks = 168,960 cells: **0 newly
+leaking, 0 newly lost, 138,240 prose-loss cells closed.** The disclosure room inside that
+set is only 15,360 cells (a line-start `<!--`, where the renderer hides and nothing
+moved), because the 30 lines are real interrupters; room on the disclosure side is
+carried by the corpus above, not by this census. The census does separate the wrong
+arms, signed at the same 11 positions over masks 0 and 511: `\d+[.)]` widens 2,452
+lines (2,422 off the expected form) and newly leaks 30,868 cells; `^[ \t]*` widens 1,452
+(1,422 off-form) and newly leaks 17,202; `(?:\s|$)` widens 6,444 (6,414 off-form, every
+one with a `\r` before the end of the line) and newly leaks **10,834** cells in the
+"marker line before the opener" position. So the `\r?$` shape is load-bearing, not
+cosmetic.
+
+**`sourceIndex` lockstep** by numeric UTF-16 code-unit index on both arms: NRL-111's
+corpus base 974,848 chunks / 17,349,120 units and fix 974,848 / 17,477,120, 0 failures
+of length, monotonicity, bounds or identity; the bare-marker corpus base 889,344 /
+6,352,640 and fix 920,064 / 8,364,800, 0 failures. All four mutators nonzero on both
+arms (bare-marker corpus, fix: drop 880,896 length; shift 622,080 bounds + 297,984
+identity; swap 713,472 monotonic + 713,472 identity; zero 920,064 identity; base drop
+850,176, shift 622,080 + 267,264, swap 658,176 + 658,176, zero 889,344). The
+`text[i] === " "` exemption is mandatory and pre-existing (without it: fix 221,184,
+base 116,736). The equation exemption keys on the synthetic TEXT and was exercised on a
+156-note math corpus (inline `$$y$$`, `$x$`, display, with bare-marker middles added):
+0 failures with it, and without it 70,656 on the fix and 60,416 on base, all four
+mutators nonzero on both.
+
+**Fuzz**, 4,000 notes x 4 option sets with bare markers added to NRL-111's vocabulary:
+0 newly leaking, 0 newly lost, class B 858 -> 854. NRL-111's own fuzz, unchanged: 0 and
+0, class B 1,112 -> 1,100. **Honest limit:** the fuzz is weak on this axis; the
+`\d+[.)]` arm also reads 0 newly leaking on it, and only `^[ \t]*` reaches 4 cells.
+
+**Residuals, all fail-closed and all identical on base and fix.**
+
+- **The marker GLYPH is still spoken.** The renderer shows no marker, but `TERM2_LIST`
+  only decides where the term-2 scan stops; dropping the glyph is `LIST_BULLET`'s
+  block-level `\s+` strip, which feeds `containerPrefix` and `blockType` and accepts any
+  `\d+`, so it needs its own position-gated measurement. So the new pins expect
+  `"Prose <!-- * HIDDENE --> t."`, and `guard-nrl111-lone-dash-third-line` keeps its
+  expectation (only its comment changed). No word is lost or leaked by the glyph. Owned
+  by NRL-154, filed from NRL-119's ship phase. The same root (`LIST_BULLET` and
+  `interruptsParagraph` not seeing a bare marker) also lets `bracketClosesLater` carry a
+  soft-wrapped label across one, which silences displayed text on base and fix alike
+  (`a ![x` / `*` / `HIDDENE](dest.png) b` speaks `"a x * HIDDENE b"`); NRL-154 owns that too.
+- **A quoted opener** (`> Prose <!--` / `> *`): 23,040 cells lost on both arms. The
+  term-2 pass reads raw lines and never peels `>`; the NRL-88 root-1 class.
+- **Container-relative indentation in a list item**: `- Prose <!--` followed by a
+  4-space or tab-indented marker, or by `7.` / `01.` at 0 or 1 space, displays the
+  sentinel and we hide it, 27,648 cells on both arms.
+- **An ATX opener and a marker line before the opener**: 46,080 cells each on both
+  arms, the 4-space/tab and non-`1` digit rows. The ATX one is
+  `guard-nrl95-atx-opener-not-bounded`'s class; the before-the-opener one is a fresh
+  block, where indented code or any digit string starts a block that our count does not
+  model. Not opened or widened here.
+
+**NOT VERIFIED IN OBSIDIAN.** No deploy happened and no running Obsidian was touched;
+every verdict above is the reading-view parser and renderer executed in Node. Live
+Preview has never been read. Rule 11 applies to every number. R-M08 is still NOT met and
+the `2 of 16` count does not move.

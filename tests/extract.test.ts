@@ -1748,25 +1748,62 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// `--` calls it a second line, stops, and speaks HIDDENE. RED against
 		// 874410d, and RED against that arm too.
 		["pin-nrl111-dash-pair-is-not-a-block-end", "--\nProse <!--\n===\nHIDDENE\n--> t.", "-- Prose t."],
-		// TRIPWIRE, and the one place NRL-111 makes something WORSE. The bare `1)`
-		// line is a real paragraph interrupter - module 745 accepts a marker with
-		// nothing after it, measured: the renderer puts HIDDENE in an `<ol><li>` and
-		// DISPLAYS it - and `TERM2_LIST`'s `[ \t]` requirement misses it, which is a
-		// pre-existing fail-closed gap already pinned in its own right below
-		// (`guard-nrl95-bullet-needs-a-space`'s family). Base's wrong `===  ` stop
-		// happened to MASK it here; removing that stop unmasks it, so this note goes
-		// `"Prose <!-- more 1) HIDDENE --> t."` -> `"Prose t."`. Measured at 12 cells
-		// of a 16,000-cell fuzz and 5,120 cells of NRL-111's own corpus, where it is
-		// identical on base because nothing masks it there. It is PROSE LOSS, not a
-		// disclosure. Closing it meant two changes in OPPOSITE directions: widening
-		// `TERM2_LIST` to end-of-line, and giving it the three-space indent cap it
-		// was missing. NRL-111's second pass landed the CAP half, because leaving it
-		// out was a live disclosure; the end-of-line half is NRL-119 and is
-		// deliberately still open, so this tripwire stands. When it lands, this
-		// expectation must change on purpose. Do NOT add a bare-marker term to the
-		// stop set without the measurement: this fixture is the only thing in the
-		// suite that goes red on an arm that widens `[ \t]` to `([ \t]|$)`.
-		["pin-nrl111-bare-ordered-marker-unmasked", "Prose <!--\nmore\n===  \n1)\nHIDDENE\n--> t.", "Prose t."],
+		// REPLACED IN PLACE by NRL-119, per the NRL-66/NRL-67 convention: same name,
+		// new expectation. This was a TRIPWIRE expecting `"Prose t."`, recording the
+		// one place NRL-111 made something worse. The bare `1)` line is a real
+		// paragraph interrupter - module 745 accepts a marker with nothing after it,
+		// and the renderer puts HIDDENE in an `<ol><li>` and DISPLAYS it - while
+		// `TERM2_LIST`'s old `[ \t]` tail missed it. Base's wrong `===  ` stop had
+		// masked that until NRL-111 removed it. NRL-119 widened the tail to
+		// `(?:[ \t]|\r?$)`, so the scan now stops at the bare `1)` and HIDDENE is
+		// spoken. Re-measured against real rendered HTML out of the installed
+		// obsidian.asar 1.13.7 (app.js sha256 8efbf581...9898) in NRL-119's session:
+		// `<p>Prose &#x3C;!--<br>more<br>===  </p><ol><li>HIDDENE<br>--> t.</li></ol>`.
+		// RED against base faf55a3, which said `"Prose t."`.
+		//
+		// The `1)` GLYPH is still spoken, and the renderer does not show it (it is the
+		// list marker). That is a separate residual and deliberately not closed here:
+		// `LIST_BULLET`'s `\s+` is the block-level strip that would drop it, and it
+		// feeds `containerPrefix` and `blockType` and accepts any `\d+`, so widening it
+		// needs its own position-gated measurement. No word is lost or leaked by it.
+		// NRL-154, the bare-marker glyph follow-up filed from NRL-119, owns it; when
+		// that lands, this expectation must change on purpose.
+		["pin-nrl111-bare-ordered-marker-unmasked", "Prose <!--\nmore\n===  \n1)\nHIDDENE\n--> t.", "Prose <!-- more === 1) HIDDENE --> t."],
+		// NRL-119: a list marker ALONE on its line ends the paragraph, so the term-2
+		// scan must stop there. Module 745's silent path accepts a marker followed by
+		// a newline or end of input (`if (next!==" " && next!=="\t" && (pedantic ||
+		// next!=="\n" && next!=="")) return;`), and `list` is unconditionally in
+		// `u.interruptParagraph`. Measured against real rendered HTML in this session:
+		// each of these renders `<p>Prose &#x3C;!--</p>` followed by a `<ul>` or `<ol>`
+		// whose item holds `HIDDENE<br>--> t.`, so HIDDENE is DISPLAYED. All six were
+		// RED against base faf55a3 (each said `"Prose t."`, prose loss). The glyph is
+		// spoken in the first five for the `LIST_BULLET` reason given above; the CRLF
+		// twin drops it because `\s+` matches the `\r`.
+		["pin-nrl119-bare-star-interrupts", "Prose <!--\n*\nHIDDENE\n--> t.", "Prose <!-- * HIDDENE --> t."],
+		["pin-nrl119-bare-plus-interrupts", "Prose <!--\n+\nHIDDENE\n--> t.", "Prose <!-- + HIDDENE --> t."],
+		["pin-nrl119-bare-one-dot-interrupts", "Prose <!--\n1.\nHIDDENE\n--> t.", "Prose <!-- 1. HIDDENE --> t."],
+		["pin-nrl119-bare-one-paren-interrupts", "Prose <!--\n1)\nHIDDENE\n--> t.", "Prose <!-- 1) HIDDENE --> t."],
+		["pin-nrl119-bare-star-three-space-indent-interrupts", "Prose <!--\n   *\nHIDDENE\n--> t.", "Prose <!-- * HIDDENE --> t."],
+		// `extractChunks` splits on `\n` alone, so a CRLF note hands the marker line a
+		// trailing `\r`, which the renderer treats as a line ending. Hence `\r?$`.
+		["pin-nrl119-bare-star-crlf-interrupts", "Prose <!--\n*\r\nHIDDENE\n--> t.", "Prose <!-- HIDDENE --> t."],
+		// GUARD, green on base and on the fix, so not counted as evidence: a marker
+		// followed by trailing whitespace already matched the old `[ \t]` tail. The
+		// plan expected it red; measured green on base faf55a3, so relabelled.
+		["guard-nrl119-bare-star-trailing-space-interrupts", "Prose <!--\n* \nHIDDENE\n--> t.", "Prose <!-- HIDDENE --> t."],
+		// GUARDS, green on base and on the fix: the widening must keep the digit rule
+		// and the indent cap. Module 745's silent path returns unless the digit string
+		// is exactly `"1"` (`7.`, `7)`, `01.`), and past three columns of indent (four
+		// spaces, or a tab) the marker line is a lazy paragraph continuation. Measured:
+		// all five render as ONE `<p>` with HIDDENE inside the raw comment, so the
+		// renderer HIDES it and speaking it would be a disclosure. Each is RED against
+		// a deliberately wrong arm: `\d+[.)]` with `$` for the first three, `^[ \t]*`
+		// with `$` for the last two.
+		["guard-nrl119-bare-seven-dot-hidden", "Prose <!--\n7.\nHIDDENE\n--> t.", "Prose t."],
+		["guard-nrl119-bare-seven-paren-hidden", "Prose <!--\n7)\nHIDDENE\n--> t.", "Prose t."],
+		["guard-nrl119-bare-zero-padded-one-hidden", "Prose <!--\n01.\nHIDDENE\n--> t.", "Prose t."],
+		["guard-nrl119-bare-four-space-star-hidden", "Prose <!--\n    *\nHIDDENE\n--> t.", "Prose t."],
+		["guard-nrl119-bare-tab-star-hidden", "Prose <!--\n\t*\nHIDDENE\n--> t.", "Prose t."],
 		// MUST NOT WIDEN, three controls, all three green on BOTH sides of NRL-111.
 		// Each dash shape keeps the stop NRL-95 gave it, for three different reasons
 		// and none of them setext: `---` and longer are `thematicBreak`, which is in
@@ -1790,13 +1827,18 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// closed with NRL-120's exact-shape setext rule (two content lines above,
 		// so no heading), re-read on Obsidian 1.13.7's MarkdownRenderer 2026-10-01.
 		["guard-nrl111-dash-pair-third-line", "Prose <!--\nmore\n--\nHIDDENE\n--> t.", "Prose <!-- more -- HIDDENE --> t."],
-		// TRIPWIRE, NRL-119. Obsidian renders the lone `-` as an EMPTY LIST BULLET
+		// TRIPWIRE. Obsidian renders the lone `-` as an EMPTY LIST BULLET
 		// (`<p>Prose &lt;!-- more</p><ul><li>HIDDENE --&gt; t.</li></ul>`), so the
-		// `-` is markup and should not be spoken. We do not recognise a bare marker
-		// alone on a line (NRL-119), and since NRL-120's exact-shape setext rule
-		// stopped swallowing it as an underline, it is spoken as a glyph. No word is
-		// lost or leaked; under skipHeadings the old rule dropped `Prose <!-- more`
-		// with it. Change this on purpose when NRL-119 closes.
+		// `-` is markup and should not be spoken. Since NRL-120's exact-shape setext
+		// rule stopped swallowing it as an underline, it is spoken as a glyph. No
+		// word is lost or leaked; under skipHeadings the old rule dropped
+		// `Prose <!-- more` with it. NRL-119 closed the term-2 STOP for a bare marker
+		// and deliberately left this expectation alone: the stop was already right
+		// here (`TERM2_LONE_DASH`), and what is wrong is the GLYPH, which only
+		// `LIST_BULLET`'s block-level `\s+` strip could drop. That strip feeds
+		// `containerPrefix` and `blockType` and accepts any `\d+`, so it needs its
+		// own position-gated measurement; NRL-154, the bare-marker glyph follow-up
+		// filed from NRL-119, owns it. Change this on purpose when NRL-154 closes.
 		["guard-nrl111-lone-dash-third-line", "Prose <!--\nmore\n-\nHIDDENE\n--> t.", "Prose <!-- more - HIDDENE --> t."],
 		// The content-line count must RESET at a block end, or an opener that is not
 		// on line 0 never sees its own `===` as a second line and the fix hides text

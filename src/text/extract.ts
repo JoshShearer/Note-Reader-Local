@@ -2267,10 +2267,13 @@ const TERM2_SETEXT_EQ = /^=+\r?$/;
  * it first and it is an `<h2>` instead - measured as well - which ends the block
  * too, so the stop holds in both positions and needs no gate.
  *
- * `TERM2_LIST` does not cover it: that pattern requires `[ \t]` after the
- * marker. Widening `TERM2_LIST` to end-of-line would cover `*`, `+`, `1.` and
- * `1)` alone on a line as well, all four of which are measured interrupters, but
- * that is a widening NRL-111 is not scoped for and those four stay fail-closed.
+ * Since NRL-119 `TERM2_LIST` matches a bare `-` too, because its tail accepts
+ * end of line, so the two patterns now OVERLAP on this shape and both stop it.
+ * This one is deliberately kept separate rather than folded in: its comment
+ * above records a distinct setext-position meaning (the `<h2>` case), and
+ * folding it would move the NRL-95 and NRL-111 dash pins that cite it. The
+ * overlap changes no answer, since both are ungated block ends in
+ * `endsTerm2Block`.
  */
 const TERM2_LONE_DASH = /^ {0,3}-\s*$/;
 /**
@@ -2510,15 +2513,32 @@ function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByLi
  * the ordinary one, not an exotic one. Closing it here closes NRL-119's first
  * half as well as NRL-111's own.
  *
- * Narrower than remark in one direction only, deliberately: a marker alone on
- * its line (`1.`, `*`) is not matched here, because `[ \t]` is required rather
- * than end-of-line. All four of `*`, `+`, `1.` and `1)` alone on a line are
- * measured interrupters, so that is a real fail-CLOSED gap and not a statement
- * about the renderer; widening it is NRL-119's second half and deliberately not
- * done here. A lone `-` is the one that is covered, by `TERM2_LONE_DASH` rather
- * than by this pattern.
+ * A MARKER ALONE ON ITS LINE IS A MARKER (NRL-119). Module 745's last test
+ * above passes when the character after the marker is a newline or end of input,
+ * so `*`, `+`, `1.` and `1)` alone on a line each start a list item and end the
+ * paragraph. Measured against real rendered HTML: `Prose <!--` / `*` /
+ * `HIDDENE` / `--> t.` renders `<p>Prose &#x3C;!--</p><ul><li>HIDDENE...`, and the
+ * same for the other three, so HIDDENE is DISPLAYED. The tail was `[ \t]`, which
+ * missed all four and hid that text (fail-closed prose loss). It is now
+ * `(?:[ \t]|\r?$)`: `\r?` because `extractChunks` splits on `\n` alone, so a CRLF
+ * note hands the line a trailing `\r` that the renderer reads as a line ending.
+ *
+ * The widening touches ONLY the tail. The indent cap and the digit rule above
+ * still apply to a bare marker exactly as to a marker with content, and both are
+ * load-bearing here too: measured, `    *`, `\t*`, `7.`, `7)` and `01.` alone on a
+ * line each render as ONE `<p>` with HIDDENE inside the raw comment, so stopping
+ * at any of them is a disclosure. An arm with `^[ \t]*` or `\d+[.)]` in front of
+ * the widened tail reaches that disclosure; see ADR 0025's NRL-119 section.
+ *
+ * What this does NOT do: stop the marker GLYPH being spoken. The renderer does
+ * not display a list marker, but this pattern only decides where the term-2 scan
+ * stops. Dropping the glyph is `LIST_BULLET`'s block-level `\s+` strip, which
+ * feeds `containerPrefix` and `blockType` and accepts any `\d+`, so it is left to
+ * NRL-154 with its own position-gated measurement.
+ *
+ * A lone `-` is matched by `TERM2_LONE_DASH` as well, and stays there on purpose.
  */
-const TERM2_LIST = /^ {0,3}(?:[-*+]|1[.)])[ \t]/;
+const TERM2_LIST = /^ {0,3}(?:[-*+]|1[.)])(?:[ \t]|\r?$)/;
 /**
  * A display-math opening line, at the EXACT shape Obsidian's own math block
  * tokenizer accepts in the `interruptParagraph` walk (NRL-120). `math` is in
