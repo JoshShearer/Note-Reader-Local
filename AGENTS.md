@@ -3153,7 +3153,12 @@ rediscover them:
   99,840-cell sweep. **NRL-155 (`b0bed1b`, PR #201) fixed it** by giving the plain arm of
   `isSetextContentLine` `PLAIN_SETEXT_HTML_OPENER` plus `MODULE134_INDENTED_CODE` - NRL-113's own
   rule, written as a separate constant on purpose - and by re-keying the setext pre-pass's
-  raw-HTML mask onto `INDENTED_CODE` itself so it follows a narrowing. Re-measured on the same
+  raw-HTML mask onto `INDENTED_CODE` itself so it follows a narrowing. **ADR 0025 decision 2's
+  amendment PREDICTED the outcome in as many words - "with the correction those 20,480 are 0" -
+  and NRL-113's third rebase attempt VERIFIED it rather than inheriting it.** That distinction is
+  the point: NRL-155 shipped before NRL-113 existed on that base, so its sentence was a forecast
+  about an arm nobody had built, and attempt 2's NRL-131 regression is what a trusted forecast
+  costs. Re-measured on the same
   99,840-cell sweep (13 leads x 5 underline forms x 3 positions x 512 masks): **0 newly lost and
   0 newly leaking**, 18,432 cells moved, 81,408 byte-identical, 40 of 195 rows moving and every
   control row moving 0. The worked example that was losing a note,
@@ -3201,7 +3206,11 @@ rediscover them:
   NRL-146 link-reference-definition class, with **0 undeclared**. The fuzz is shown ABLE TO FAIL
   in both directions: restoring `{0,3}\t` gives 0 against base, and over-narrowing to `/^ {4}/`
   gives 24 newly lost and 23 new destinations against the fix. And **three pre-existing fixtures
-  were replaced in place** rather than the "zero replacements" the ticket predicted -
+  were replaced in place** rather than the "zero replacements" the ticket predicted. **Read the
+  squash commit message's own "0 deletions" as superseded by this paragraph, not by it**: the
+  message is immutable and was written before the rebase, while `git show --numstat 54c3b7a`
+  reports `tests/extract.test.ts` at **279 additions and 3 deletions**, one deletion per replaced
+  fixture. The three are -
   `guard-nrl155-doc-start-tab-lead`, `guard-nrl155-after-blank-tab-lead` and
   `pin-nrl155-tab-whitespace-line-is-not-blank` - each of which NRL-155 had already labelled a
   TRIPWIRE that "changes on purpose" when NRL-113 lands, two of them to the exact strings NRL-155
