@@ -1623,13 +1623,15 @@ so every citation of them here, in ADR 0006 and in `srs.md` still resolves:
 "still silenced" in any of them, and that wart is deliberate and preferred to a rename that orphans
 the citations. **Three divergences survive on the same marker line and each is pinned rather than
 closed**: the bare `- %%` and no-space `-` + tab forms and the exactly-four-space form, all three
-NRL-118's note scope with a correctly recognised opener, and the `<!--` TWIN, which is NOT fixed:
+NRL-118's note scope with a correctly recognised opener, and the `<!--` TWIN, which NRL-117 left NOT fixed:
 `opensHtmlBlock` accepting a tab is correct for a fresh-block `<!--`, while on a marker line the
 item's content indent makes it indented code first. **This sentence used to end "and we model that
 indent as a boolean rather than an amount", attributing the twin to NRL-117; that half is now wrong
 and is corrected rather than left standing.** NRL-117 has since made the `%%` side an AMOUNT, and
-`opensHtmlBlock` has **no dedent term at all** - so the twin is still open, but not for the reason
-recorded here. `srs.md:328` carries the same correction.
+`opensHtmlBlock` had **no dedent term at all** - so the twin stayed open, but not for the reason
+recorded here. `srs.md:328` carries the same correction. **NRL-115 then closed the twin's prose loss**
+with its own container model (`rendererLeads`, feeding `opensHtmlBlock` only and kept separate from
+NRL-117's `listDedented`), and the NRL-116 and two NRL-117 `html-twin` pins were replaced in place.
 
 **NOTHING WAS OBSERVED IN A LIVE OBSIDIAN.** No deploy and no CDP session happened for this ticket;
 the renderer side is Obsidian's own parser and renderer EXECUTED in Node, which is stronger than a
@@ -1741,8 +1743,8 @@ codespan-wrap plus `SPANA` with `skipInlineCode` **true in every loss cell** - N
 class, not a new one - against **155,392 losses closed**. **8 quote-in-list cells are scoped out to
 NRL-114** with 4 closing here, because `BLOCKQUOTE` is peeled before the budget is applied so `at` is
 0 and no indent model can see the tab; 4 further q4 cells that read as disclosures are byte-identical
-on both arms and so pre-existing. The **`<!--` twin is NOT fixed** - `opensHtmlBlock` has no dedent
-term at all. And **three deliberate over-dedenting approximations**, all failing toward HIDING:
+on both arms and so pre-existing. The **`<!--` twin was NOT fixed here** - `opensHtmlBlock` had no dedent
+term at all; NRL-115 closed it later with a separate model, and both `pin-nrl117-html-twin-*` rows moved. And **three deliberate over-dedenting approximations**, all failing toward HIDING:
 module 5540's `maximum` standing in for the real `p`, `interruptList` unmodelled, and an unparseable
 item head taking a whole-lead budget - 22 cells of a 667-cell renderer-keyed sweep, identical on both
 sides. The refusal-only property is exhaustive rather than sampled: **0 violations over 11,438,076
@@ -1774,7 +1776,7 @@ applies to every figure above. **No requirement moves. R-M08 is NOT met and the 
 headline count does NOT move**: this closed one named residual of `srs.md:328`, not the requirement.
 What stays open against R-M08 is otherwise unchanged - NRL-63's roots 3 and 5, root 4's named
 residuals, roots 1 and 2's three non-container shapes (NRL-109), NRL-45's `[a]: x.png "%%"` leftover,
-NRL-114's 8 quote-in-list cells, the unfixed `<!--` twin, and NRL-137 and NRL-159 on the NRL-118
+NRL-114's 8 quote-in-list cells, and NRL-137 and NRL-159 on the NRL-118
 residuals.
 
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
@@ -3064,7 +3066,38 @@ rediscover them:
   line" and omitted the same-line stage; corrected at ship review by re-reading module 8776,
   and it matters - it is what makes `<!--x--> prose <!--` a one-line block with the next line
   displayed.) So the line-start term is the renderer's own rule, and our `.trim()` is
-  **correct** here where it is wrong for `%%` (NRL-93 is not shared). The second term is the
+  **correct** here where it is wrong for `%%` (NRL-93 is not shared). **NRL-115 corrected
+  half of that sentence** (ADR 0025's dated NRL-115 section). `.trim()` is right for an
+  UNINDENTED `<!--`, which is what NRL-74 fixed, but module 8776 is never REACHED for a
+  paragraph continuation led by a tab or four columns (module 8607's lazy branch skips the
+  interrupt check) or for a fresh block inside a quote or list item led by a tab or four
+  spaces (indented code), both judged after the renderer's container dedent. So the `<!--`
+  and `%%` defects are different defects that DO share the module 8607 root.
+  `opensHtmlBlock` takes a fifth argument from a per-line `rendererLeads` pass and refuses
+  term 1 only; NRL-120's `setextContent` still gates both terms, because a setext content
+  line ends the paragraph and a lazy line does not. **Its first version (PR #169) was
+  blocked at Verify for a disclosure** the model made by reading a setext underline as
+  paragraph text, so a ` \t<!--` straight after `PROSEP` / `===` was claimed lazy and its
+  comment body spoken; `=`, `==`, `-` and `--` leak the same way. The rework ends the
+  paragraph at an underline in two ordered tiers (the exact one-content-line heading before
+  the interrupt test, any other underline-shaped line as `unknown` after it), and a broad
+  test placed before the interrupt test was measured to leak 45,056 sentinel-cells through
+  `>    -` list items. Measured on base `2c4e2ca`: the ticket's 6,656 prose-loss cells go to
+  0; 0 newly disclosing and 0 newly lost over a 1,232,896-cell position census and a
+  5,160,960-cell after-setext census; every newly moved cell in NRL-120's structural census
+  (10,640 + 72), a lookahead probe (17,408, all image alt text under `speakImageAlt`) and a
+  fresh-seed fuzz (6 + 22) reproduces on base with the declined `<!--` defused. Known misses:
+  underline-shaped lines that are not the exact one-line heading keep base's hiding, and
+  top-level fresh blocks stay NRL-113's. **Rework r3 (on `9dadbea`) closed the ship
+  critique's three blockers and four more the fuzz found** (ADR 0025's r3 section): F1, the
+  label carry's HTML-tag stop is skipped on a LAZY indented line only; F2, a lazy `<!--`
+  keeps term 1 when a `-->` lies later in the walker's lazy paragraph; F3, the walker is a
+  stack capped at 32 container levels, beyond which it keeps base's answer (fail-closed,
+  prose loss retained); plus tab-free thematic breaks, ambiguous-line setext counting, and
+  an unwalked uncertain list tail. NRL-155's (iv) is closed. The fuzz found four
+  disclosures the plan's corpora did not, so a clean census is still not evidence by itself.
+  **NOT VERIFIED IN OBSIDIAN**, reading-view parser
+  only, Live Preview not examined. The second term is the
   renderer's **inline** path instead (module 4839's `.T`,
   `<!--(?:-?[^>-])(?:-?[^-])*-->`), which requires a closer - and that path is
   **paragraph-scoped** where NRL-74's was document-scoped.

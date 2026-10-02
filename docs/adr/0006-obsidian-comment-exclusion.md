@@ -738,6 +738,16 @@ evidence, not a live Obsidian reading or highlighting observation.
    boolean reason the `%%` on the newly-fixed lines is itself SPOKEN where the
    renderer shows it as code, so `skipCodeBlocks` cannot reach it.
 
+   (NRL-115, at its merge with NRL-117: the `<!--` twin is now CLOSED for prose
+   loss. NRL-115 gives `opensHtmlBlock` a container model of its own,
+   `rendererLeads`, which dedents a list item by the renderer's rule and refuses
+   the opener on a line module 8776 is never offered. It is deliberately a
+   separate model from NRL-117's `listDedented`, which feeds the `%%` predicate
+   only (D-73-4). `pin-nrl116-html-twin-tab-lead-still-silenced` and both
+   `pin-nrl117-html-twin-*` rows were replaced in place, each re-checked against
+   real rendered HTML from the executed reading-view parser; see ADR 0025's
+   NRL-115 section. NOT VERIFIED IN OBSIDIAN.)
+
    Four NRL-93 fixtures MOVED and are **REPLACED IN PLACE keeping their names**,
    per the NRL-66/NRL-67 convention, so every citation of them here and in
    `srs.md` still resolves: `pin-nrl93-tab-after-{bullet,ordered,task}-marker-still-silenced`

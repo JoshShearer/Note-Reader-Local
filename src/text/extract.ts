@@ -523,9 +523,34 @@ function wikiTargetClose(raw: string, from: number): number {
  * (decision Q7); in practice term 2 is already false there, since the underline
  * is a term-2 stop when it is a block's second line. Required, not defaulted, so
  * no caller keeps the old answer silently.
+ *
+ * `leadIndented` narrows TERM 1 ONLY, and is the correction to NRL-74's claim
+ * that `.trim()` is right for `<!--` (NRL-115). Module 8776's skip loop does
+ * accept any run of spaces and tabs, but module 8776 is never REACHED for a
+ * paragraph continuation led by a tab or four columns (module 8607 absorbs it
+ * as lazy prose without running the interrupt check) or for a fresh block
+ * inside a container led by a tab or four spaces (module 134 makes it indented
+ * code first). Both are judged after the renderer's own container dedent, which
+ * a line-local predicate cannot see, so `rendererLeads` in extractChunks
+ * decides it per line and it is handed in like `closesLater`. Term 2 is left
+ * alone on purpose (decision Q3): a lazy `<!--` whose `-->` is later in the
+ * same paragraph is still an inline comment for module 4839 and is hidden.
+ *
+ * NRL-115 and NRL-120 are two conjunctive refusals and they are deliberately
+ * not the same shape: NRL-120's gates both terms because a setext content line
+ * ENDS the paragraph (it is a heading), while NRL-115's gates term 1 only
+ * because a lazy continuation line does NOT end it.
+ *
+ * It is a conjunctive refusal in front of term 1, so the new predicate implies
+ * the old one for every argument: it can decline an opener the NRL-95 rule
+ * accepted and can never accept one that rule declined. Checked exhaustively,
+ * with this body read out of the file against NRL-120's four-argument body:
+ * 0 violations over 291,272 tuples (every string on {space, tab, `<`, `x`} up
+ * to length 6, every `at`, both values of all three flags), against 25,614 for
+ * a deliberately widened variant.
  */
-function opensHtmlBlock(view: string, at: number, closesLater: boolean, setextContent: boolean): boolean {
-	return !setextContent && (view.slice(0, at).trim() === "" || closesLater);
+function opensHtmlBlock(view: string, at: number, closesLater: boolean, setextContent: boolean, leadIndented: boolean): boolean {
+	return !setextContent && ((!leadIndented && view.slice(0, at).trim() === "") || closesLater);
 }
 
 /**
@@ -654,6 +679,14 @@ function opensObsidianBlock(view: string, at: number, dedentedByList: boolean): 
  * is immaterial to the recursive call sites; `appendRemainder` passes false
  * explicitly, because the remainder of a comment's closing line is still inside
  * that raw HTML block for the renderer.
+ *
+ * `htmlLeadIndented` is `opensHtmlBlock`'s fifth argument and the same shape
+ * again (NRL-115): the renderer never offers this line's content to its HTML
+ * block tokenizer, so a line-start `<!--` here is literal. It defaults false,
+ * the old answer, and that default is right for every site but the main per-line
+ * one rather than merely harmless: it is a fact about the WHOLE line, and the
+ * recursive label sites and `appendRemainder` pass a slice whose start is not the
+ * line's start, where the claim would not hold.
  */
 function cleanLine(
 	raw: string,
@@ -668,6 +701,7 @@ function cleanLine(
 	incomingBracketDepth = 0,
 	dedentedByList = false,
 	setextContent = false,
+	htmlLeadIndented = false,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -1109,7 +1143,7 @@ function cleanLine(
 			// advances past them, mirroring the two-and-two above. Emitting only
 			// `<` would re-enter the loop at `!--` and risk another branch (the
 			// autolink or raw-HTML one) claiming it.
-			if (close === -1 && htmlComment && blockComments && !opensHtmlBlock(raw, i, htmlClosesLater, setextContent)) {
+			if (close === -1 && htmlComment && blockComments && !opensHtmlBlock(raw, i, htmlClosesLater, setextContent, htmlLeadIndented)) {
 				for (let k = 0; k < 4; k++) emit(raw[i + k]!, rawStart + i + k);
 				i += 4;
 				continue;
@@ -2120,9 +2154,19 @@ const HTML_BLOCK_OPEN = /^ {0,3}<(?:[!?/]|[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$))/;
  * to the cells the peel newly reaches: the PLAIN form of the html shape
  * (`A ![alt` / `<div>` / `words](dest.png) B`) is already carried before NRL-98
  * and is a pre-existing defect recorded as a leftover, not opened here.
+ *
+ * `lazyLead` is NRL-115's F1 correction: a line `rendererLeads` marks as a LAZY
+ * paragraph continuation led by a tab or four columns never reaches the
+ * renderer's HTML block tokenizer, so `HTML_BLOCK_OPEN` must not stop the carry
+ * there (cleanLine already speaks such a line; stopping here while cleanLine
+ * did not left the label unconfirmed and spoke its destination). It is the
+ * lazy half of `htmlLeadIndented` only, deliberately: on a FRESH indented-code
+ * line inside a container the renderer has a code block, which no label can
+ * span, so the stop stays (crossing it was measured to newly lose a displayed
+ * destination in the fuzz).
  */
-function containerCarryStops(peeled: string, lazy: boolean): boolean {
-	return (lazy && INDENTED_CODE.test(peeled)) || HTML_BLOCK_OPEN.test(peeled);
+function containerCarryStops(peeled: string, lazy: boolean, lazyLead: boolean): boolean {
+	return (lazy && INDENTED_CODE.test(peeled)) || (!lazyLead && HTML_BLOCK_OPEN.test(peeled));
 }
 
 /**
@@ -2336,7 +2380,7 @@ const LINK_REF_DEF =
  * terminates the paragraph before any inline tokenizing happens and a code span
  * can never contain one. Read off the installed parser, not observed live.
  */
-function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByList: boolean): boolean {
+function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByList: boolean, htmlLeadIndented: boolean): boolean {
 	const pct = line.indexOf("%%");
 	if (pct !== -1 && opensObsidianBlock(line, pct, dedentedByList)) return true;
 	const html = line.indexOf("<!--");
@@ -2348,7 +2392,12 @@ function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByLi
 	// `===` / `b\` c` has no code span for the renderer either. Threading the
 	// refusal in here would only make the code-span and label carries reach
 	// further, the disclosure direction, for no fidelity gain (NRL-120).
-	return opensHtmlBlock(line, html, htmlClosesLater, false);
+	//
+	// `htmlLeadIndented` IS threaded, and the asymmetry is the point (NRL-115).
+	// A setext content line still ENDS the paragraph, as a heading; a line the
+	// renderer takes as a lazy continuation does NOT, because module 8607 never
+	// ran the interrupt check on it, so the carries must be allowed to cross it.
+	return opensHtmlBlock(line, html, htmlClosesLater, false, htmlLeadIndented);
 }
 
 /**
@@ -2800,8 +2849,15 @@ function isSetextContentLine(lines: readonly string[], k: number, lazyInListItem
  * which is the dead-toggle shape CONTEXT.md warns about. It also means this is
  * no longer a pure line predicate - the in-file precedent is opensMathBlock,
  * already document-aware and already called beside this one.
+ *
+ * `htmlLeadIndented` is required for the same reason (NRL-115). A line it marks
+ * no longer interrupts here, which WIDENS codeSpanClosesLater and
+ * bracketClosesLater: a carry can now cross a lazy indented `<!--` line. That is
+ * the renderer's own behaviour, since module 8607 never ran the interrupt check
+ * on such a line, and it was measured for disclosure over plain and container
+ * shapes rather than assumed safe.
  */
-function interruptsParagraph(line: string, htmlClosesLater: boolean, dedentedByList: boolean): boolean {
+function interruptsParagraph(line: string, htmlClosesLater: boolean, dedentedByList: boolean, htmlLeadIndented: boolean): boolean {
 	return (
 		line.trim() === "" ||
 		FENCE.test(line) ||
@@ -2811,7 +2867,7 @@ function interruptsParagraph(line: string, htmlClosesLater: boolean, dedentedByL
 		TABLE_ROW.test(line) ||
 		LIST_BULLET.test(line) ||
 		BLOCKQUOTE.test(line) ||
-		opensHiddenComment(line, htmlClosesLater, dedentedByList)
+		opensHiddenComment(line, htmlClosesLater, dedentedByList, htmlLeadIndented)
 	);
 }
 
@@ -2829,11 +2885,18 @@ function interruptsParagraph(line: string, htmlClosesLater: boolean, dedentedByL
  * as every line scanned, because a table row reaches the carry site as plain
  * paragraph text when tables are spoken and a span cannot leave its own row.
  */
-function codeSpanClosesLater(lines: string[], from: number, len: number, htmlCloserAhead: readonly boolean[], listDedented: readonly boolean[]): boolean {
-	if (interruptsParagraph(lines[from]!, htmlCloserAhead[from]!, listDedented[from]!)) return false;
+function codeSpanClosesLater(
+	lines: string[],
+	from: number,
+	len: number,
+	htmlCloserAhead: readonly boolean[],
+	listDedented: readonly boolean[],
+	htmlLeadIndented: readonly boolean[],
+): boolean {
+	if (interruptsParagraph(lines[from]!, htmlCloserAhead[from]!, listDedented[from]!, htmlLeadIndented[from]!)) return false;
 	for (let n = from + 1; n < lines.length; n++) {
 		const line = lines[n]!;
-		if (interruptsParagraph(line, htmlCloserAhead[n]!, listDedented[n]!)) return false;
+		if (interruptsParagraph(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!)) return false;
 		if (firstRunOfLength(line, len, 0) !== -1) return true;
 	}
 	return false;
@@ -2972,7 +3035,14 @@ function labelClose(line: string, from: number, depth: number): { close: number;
  * consumption site in cleanLine uses, so the two can never disagree about which
  * `]` is the label's own (NRL-88, D-88-10).
  */
-function bracketClosesLater(lines: string[], from: number, htmlCloserAhead: readonly boolean[], listDedented: readonly boolean[]): boolean {
+function bracketClosesLater(
+	lines: string[],
+	from: number,
+	htmlCloserAhead: readonly boolean[],
+	listDedented: readonly boolean[],
+	htmlLeadIndented: readonly boolean[],
+	htmlLeadLazy: readonly boolean[],
+): boolean {
 	// `htmlCloserAhead` is indexed by RAW line number and stays so under the peel
 	// (NRL-95 landing under NRL-98). That is sound rather than an oversight: the
 	// array answers "is there a `-->` later in THIS line's paragraph", and
@@ -2998,8 +3068,8 @@ function bracketClosesLater(lines: string[], from: number, htmlCloserAhead: read
 	// Only where the peel exposed them. A plain-paragraph opener is left exactly
 	// as it was, pre-existing holes included.
 	const containerInPlay = op.quotes > 0 || op.blockType === "list";
-	if (interruptsParagraph(lines[from]!.slice(op.chars), htmlCloserAhead[from]!, listDedented[from]!) || opensMathBlock(lines, from, op.quotes)) return false;
-	if (containerInPlay && containerCarryStops(lines[from]!.slice(op.chars), false)) return false;
+	if (interruptsParagraph(lines[from]!.slice(op.chars), htmlCloserAhead[from]!, listDedented[from]!, htmlLeadIndented[from]!) || opensMathBlock(lines, from, op.quotes)) return false;
+	if (containerInPlay && containerCarryStops(lines[from]!.slice(op.chars), false, htmlLeadLazy[from]!)) return false;
 	// Starts at 0 rather than at a depth read off the opener line, and that is
 	// provable rather than an approximation: the carry is armed only when
 	// `inlineContainerClose(raw, openerAt, "]")` is -1, so there is no `]` after
@@ -3019,8 +3089,8 @@ function bracketClosesLater(lines: string[], from: number, htmlCloserAhead: read
 		// critique, the carry crossed a quoted math block where the plain twin
 		// aborts, silencing a line Obsidian displays as math source.
 		const line = peelQuotes(lines[n]!, op.quotes);
-		if (interruptsParagraph(line, htmlCloserAhead[n]!, listDedented[n]!) || opensMathBlock(lines, n, op.quotes)) return false;
-		if (containerInPlay && containerCarryStops(line, op.quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!))) return false;
+		if (interruptsParagraph(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!) || opensMathBlock(lines, n, op.quotes)) return false;
+		if (containerInPlay && containerCarryStops(line, op.quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!), htmlLeadLazy[n]!)) return false;
 		const found = labelClose(line, 0, depth);
 		if (found.close === -1) {
 			depth = found.depth;
@@ -3110,6 +3180,713 @@ function detectFrontmatter(lines: string[]): { startLine: number; endLine: numbe
  * them straight through. A negation at the boundary is how skipUrls and
  * speakUrls drifted apart once already.
  */
+/*
+ * NRL-115: WHERE A LINE'S LEAD LANDS FOR THE RENDERER.
+ *
+ * `opensHtmlBlock`'s term 1 asks "does `<!--` begin its line, leading
+ * whitespace allowed". Module 8776, Obsidian's HTML block tokenizer, really
+ * does skip spaces and tabs with no cap, so that question is the right one
+ * WHEN MODULE 8776 IS REACHED. For two kinds of line it never is, and the
+ * pass below finds them:
+ *
+ * - A PARAGRAPH CONTINUATION indented a tab or four or more columns. Module
+ *   8607 (paragraph), on the `commonmark: true` branch Obsidian always runs,
+ *   counts each following line's indent, sets it to four on a tab
+ *   (`if((h=t.charAt(c))===o){p=l;break}` with o = "\t", l = 4) and, when it
+ *   reaches four, `continue`s WITHOUT running the `interruptParagraph` check
+ *   at all. The line is absorbed as lazy prose and no block tokenizer sees it.
+ * - A FRESH BLOCK INSIDE A CONTAINER that starts with a tab or four spaces.
+ *   `blockMethods` runs `indentedCode` (module 134) before `html`, so the line
+ *   is indented code, displayed. At the top level `extractChunks`' own
+ *   INDENTED_CODE branch already handles this and is deliberately NOT
+ *   touched (NRL-113 owns those positions); inside a quote or a list item no
+ *   branch of ours does.
+ *
+ * "After container dedent" is the whole difficulty, and it is why this is a
+ * pass and not a regex. Module 6234 (blockquote) strips `>` and ONE SPACE,
+ * never a tab. Module 745 (list) hands each item's value to module 5540,
+ * which removes `p` columns from every line, where `p` is the smaller of the
+ * item's marker width (with module 745's odd-width bump for `1.`-style
+ * markers) and the least indent of any indented line in the WHOLE ITEM, and
+ * removes them by module 6058's tab stops, so a tab straddling the boundary
+ * goes entirely. `- a` / tab / `<!--` therefore reaches the item's tokenizer
+ * as `<!--` at column 0 and DOES open a comment, while `- a` / two spaces,
+ * tab / `<!--` reaches it as tab, `<!--` and is lazy prose. Both measured.
+ * Because `p` depends on lines AFTER the one being judged, each item is
+ * collected whole before any of its lines is judged.
+ *
+ * Everything here is a model of the renderer's container structure and is
+ * built to FAIL CLOSED. Its one output is a claim that a line is NOT an HTML
+ * block opener, so the only harmful error is claiming that of a line the
+ * renderer does open a block on - which would read author-hidden text aloud.
+ * Wherever the model is unsure it records nothing (`unknown`), and a line
+ * with no record keeps the old answer. Three choices carry that:
+ *
+ * - The default classification of a block is FRESH, never PARAGRAPH. A FRESH
+ *   line is only ever claimed when it starts with a tab or four spaces, and
+ *   the renderer shows such a line in both positions (code if fresh, lazy if
+ *   a continuation), so mistaking a paragraph for a fresh block is harmless.
+ *   The reverse mistake is not: ` \t<!--` is lazy prose after a paragraph and
+ *   an HTML block opener at a block start. So only a line positively known to
+ *   be paragraph text arms the continuation rule.
+ * - Anything not modelled - a non-comment HTML block, a callout's quirks, a
+ *   lazy line that might interrupt a list or a quote - puts the frame into
+ *   `unknown`, which ends only at a TRULY EMPTY line followed by a column-0
+ *   line. Not a whitespace-only line: an HTML block of kinds 6 and 7 ends at
+ *   `/^$/`, so a line holding a tab does not end it. Relaxing that to
+ *   `trim() === ""` was measured to produce a wrong claim in the fuzz.
+ * - Constructs that can span blank lines (fences, `%%`, `$$`, and the HTML
+ *   kinds with closers) are skipped to their closer in every state, so an
+ *   empty line inside one cannot end `unknown` early.
+ *
+ * Measured, not argued: the model's claims were checked against Obsidian
+ * 1.13.7's own parser and renderer executed out of the installed bundle, with
+ * a causal oracle (the sentinel after a `<!--` line is hidden in the note but
+ * shown once that one `<!--` is defused). 0 wrong claims over the 338-cell
+ * position census and 24,000 fuzz notes with tabs, multi-space leads and
+ * nested quotes and lists; dropping the item dedent gives 702 wrong claims,
+ * lowering the lazy threshold to three columns gives 32, and resetting
+ * `unknown` on a whitespace-only line gives 1, so the check can fail.
+ * Those figures are PR #169's, on the model BEFORE the setext tiers in
+ * walkLeadFrame, and that clean result was itself corpus-blind: neither the
+ * census nor the fuzz put an indented `<!--` straight after a setext
+ * underline, which is exactly where the model was wrong (it read the heading
+ * as paragraph text). Verify found it end to end. The tiers were then measured
+ * end to end rather than by claims: 0 newly disclosing and 0 newly lost
+ * sentinel cells over a 1,232,896-cell position census and a 5,160,960-cell
+ * after-setext census (all 512 option combinations each), with four
+ * deliberately wrong arms each leaking there, so neither census is saturated.
+ *
+ * The arrays are kept per line rather than folded into one boolean so the
+ * `%%` side can share them later (NRL-115 Q1). It does not today:
+ * `opensObsidianBlock` keeps `listDedented`, because changing `%%` needs its
+ * own invariance probe and the two predicates are deliberately separate.
+ */
+
+/** Columns a run of leading whitespace reaches; a tab advances to the next multiple of four (module 6058). */
+function leadColumns(s: string): number {
+	let c = 0;
+	for (let k = 0; k < s.length; k++) {
+		const ch = s[k];
+		if (ch === "\t") c += 4 - (c % 4);
+		else if (ch === " ") c += 1;
+		else break;
+	}
+	return c;
+}
+
+/**
+ * Module 5540's per-line slice: remove `p` columns of lead by module 6058's
+ * stops. A tab that crosses column `p` is removed whole, and a line indented
+ * less than `p` loses all of its lead, which is what `while (s && !(s in c))
+ * s--` does; a line with no lead at all is left alone.
+ */
+function removeLeadColumns(line: string, p: number): string {
+	const stops: number[] = [];
+	let col = 0;
+	let filled = 0;
+	for (let a = 0; a < line.length; a++) {
+		const ch = line[a];
+		if (ch !== " " && ch !== "\t") break;
+		col = ch === "\t" ? col + 4 - (col % 4) : col + 1;
+		while (filled < col) stops[++filled] = a;
+	}
+	let s = p;
+	while (s > 0 && stops[s] === undefined) s--;
+	return s === 0 ? line : line.slice(stops[s]! + 1);
+}
+
+/*
+ * A thematic break as Obsidian's thematic-break tokenizer
+ * actually takes it: leading spaces and tabs, then three or more markers
+ * separated and followed by SPACES ONLY. A tab between or after the markers
+ * is not a break: `- \t---` is a list item whose content is indented code,
+ * `***\t` is paragraph text, and `*\t*\t*` is three nested list items, all
+ * measured on the executed parser. The first NRL-115 rework accepted tabs
+ * there, read `> - \t---` / `>\t<!--` as a break followed by an indented-code
+ * line and spoke a comment the renderer opens (the list item's dedent puts the
+ * `<!--` at column 0), and read `***\t` as ending the paragraph in
+ * the closer scan (now `closerAheadTable`) so a `-->` past it was missed. Both were disclosures
+ * found by the implement-phase fuzz, not by the plan's corpora.
+ */
+const RL_HR = /^[ \t]*([-*_])(?: *\1){2,} *$/;
+/*
+ * The old, tab-tolerant shape, kept ONLY for mayInterruptQuote and
+ * mayInterruptList. Those two must over-approximate (a false yes ends the
+ * container early into `unknown`, which records nothing), so the wider test
+ * is the safe one there and the strict one would not be.
+ */
+const RL_HR_LOOSE = /^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+const RL_HEADING = /^[ \t]*#{1,6}(?:[ \t]|$)/;
+const RL_QUOTE = /^[ \t]*>/;
+// Any underline-SHAPED line, deliberately broader than module 8671's exact
+// shape (`SETEXT_UNDERLINE_EXACT`): up to three spaces of lead, trailing
+// whitespace, a trailing CR. Every use of it below is a fail-closed one - it
+// classifies a line FRESH, ends a quote early, or ends a paragraph as `unknown`.
+const RL_SETEXT = /^ {0,3}(?:=+|-+)[ \t]*\r?$/;
+// Any list marker module 745 accepts at a block start.
+const RL_LIST_ANY = /^[ \t]*(?:[*+-]|\d+[.)])(?:[ \t]|$)/;
+// The subset its silent mode accepts, which is what `interruptParagraph` asks:
+// a bullet, or an ordered marker whose digits are exactly "1".
+const RL_LIST_INTERRUPT = /^[ \t]*(?:[*+-]|1[.)])(?:[ \t]|$)/;
+// Module 745's own marker regex `b`, which decides what an item's first line is.
+const RL_ITEM = /^([ \t]*)([*+-]|\d+[.)])( {1,4}(?! )| |\t|$)(.*)$/;
+// Module 8776's HTML kinds that carry their own closer and so can span an
+// empty line. Kinds 6 and 7 end at an empty line and are left to `unknown`.
+const RL_SPAN_HTML: ReadonlyArray<readonly [RegExp, RegExp]> = [
+	[/^<(script|pre|style)(?=(\s|>|$))/i, /<\/(script|pre|style)>/i],
+	[/^<!--/, /-->/],
+	[/^<\?/, /\?>/],
+	[/^<![A-Za-z]/, />/],
+	[/^<!\[CDATA\[/, /]]>/],
+];
+
+const RL_MAX_DEPTH = 32;
+type LeadState = "fresh" | "para" | "unknown" | "unknownAfterEmpty";
+
+interface LeadFrameLine {
+	view: string;
+	id: number;
+}
+
+/**
+ * Per raw line: the lead the renderer's block tokenizers see once every
+ * container has been stripped (`null` where the model is unsure), whether the
+ * line is a paragraph continuation there, and whether it sits inside a quote
+ * or a list item.
+ */
+interface RendererLeads {
+	lead: (string | null)[];
+	cont: boolean[];
+	nested: boolean[];
+	closerInPara: boolean[];
+	pending: { frame: LeadFrameLine[]; depth: number }[];
+}
+
+function startsIndentedCode(view: string): boolean {
+	return view.startsWith("\t") || view.startsWith("    ");
+}
+
+/**
+ * If `rest` opens a construct that can span an empty line, the frame index
+ * just past its closer (or the frame's end); otherwise -1.
+ */
+function spanningEnd(frame: readonly LeadFrameLine[], i: number, rest: string): number {
+	const fence = /^(`{3,}|~{3,})/.exec(rest);
+	if (fence) {
+		// Module 1498's closer: at most three SPACES, the same character, at
+		// least as long, then only whitespace.
+		const run = fence[1]!;
+		const closer = new RegExp(`^ {0,3}${run[0] === "`" ? "`" : "~"}{${run.length},}[ \\t]*$`);
+		for (let j = i + 1; j < frame.length; j++) if (closer.test(frame[j]!.view)) return j + 1;
+		return frame.length;
+	}
+	for (const open of ["%%", "$$"]) {
+		if (!rest.startsWith(open)) continue;
+		if (rest.indexOf(open, 2) !== -1) return -1;
+		for (let j = i + 1; j < frame.length; j++) if (frame[j]!.view.includes(open)) return j + 1;
+		return frame.length;
+	}
+	for (const [open, close] of RL_SPAN_HTML) {
+		if (!open.test(rest)) continue;
+		if (close.test(rest)) return i + 1;
+		for (let j = i + 1; j < frame.length; j++) if (close.test(frame[j]!.view)) return j + 1;
+		return frame.length;
+	}
+	return -1;
+}
+
+/**
+ * Might a non-`>` line end the quote above it? Over-approximates module
+ * 6234's `interruptBlockquote` walk on purpose: a false yes only ends the
+ * quote early and puts the frame into `unknown`.
+ */
+function mayInterruptQuote(frame: readonly LeadFrameLine[], j: number): boolean {
+	const v = frame[j]!.view;
+	if (startsIndentedCode(v)) return true;
+	if (/^[ \t]*(`{3,}|~{3,}|%%|\$\$|<|#)/.test(v)) return true;
+	if (RL_HR_LOOSE.test(v) || RL_LIST_ANY.test(v)) return true;
+	const next = frame[j + 1];
+	return next !== undefined && RL_SETEXT.test(next.view);
+}
+
+/** The same over-approximation of module 745's `interruptList`. */
+function mayInterruptList(view: string): boolean {
+	return /^[ \t]*(`{3,}|~{3,}|%%|\$\$|#)/.test(view) || RL_HR_LOOSE.test(view);
+}
+
+/**
+ * `closerInPara` for every line of one frame, in ONE backward pass (NRL-115 ship
+ * critique, r3 F2). Entry `i` answers "scanning forward from line i + 1, is a
+ * `-->` reached before the walker's lazy paragraph certainly ends", where it
+ * ends at a whitespace-only line with no tab or at a line with under four
+ * columns of tab-free lead that the walker's own interrupt set matches. The
+ * scan used to be re-run from every lazy indented line, which is quadratic in
+ * the paragraph's length: a quote of 20,000 `>\tlazy` lines took 22 s against
+ * base's 0.27 s. The recurrence is exactly that loop read backwards - each
+ * line either ends the scan (false), answers it (`-->`, true), or passes the
+ * answer of the line after it through - so the result is unchanged.
+ */
+function closerAheadTable(frame: readonly LeadFrameLine[]): boolean[] {
+	const ahead = new Array<boolean>(frame.length).fill(false);
+	let rest = false; // the answer for a scan starting at line j + 1
+	for (let j = frame.length - 1; j >= 1; j--) {
+		const v = frame[j]!.view;
+		if (v.trim() === "" && !v.includes("\t")) {
+			rest = false;
+		} else {
+			const lead = /^[ \t]*/.exec(v)![0];
+			const interrupts =
+				!lead.includes("\t") && leadColumns(lead) < 4 &&
+				(RL_HR.test(v) || RL_LIST_INTERRUPT.test(v) || RL_HEADING.test(v) ||
+					/^(`{3,}|~{3,}|%%|\$\$|>|<)/.test(v.slice(lead.length)));
+			if (interrupts) rest = false;
+			else if (v.includes("-->")) rest = true;
+		}
+		ahead[j - 1] = rest;
+	}
+	return ahead;
+}
+
+function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: RendererLeads): void {
+	const nested = depth > 0;
+	let state: LeadState = "fresh";
+	// Built on first use, so a frame with no lazy indented line pays nothing.
+	let closerAhead: boolean[] | null = null;
+	// The frame index of the line that put the frame into "para", so a setext
+	// underline can be judged against exactly ONE content line above it.
+	let paraStart = -1;
+	// Whether the paragraph that began at `paraStart` began at a line the
+	// renderer certainly starts a block on. False when the line before it was
+	// one of the ambiguous shapes classified FRESH below (table-, definition-,
+	// block-id- or underline-shaped), which the renderer may instead have taken
+	// as paragraph text, so `paraStart` may undercount the content lines.
+	let paraTrusted = true;
+	let ambiguousAt = -2;
+	const record = (k: number, cont: boolean): void => {
+		const { view, id } = frame[k]!;
+		out.lead[id] = /^[ \t]*/.exec(view)![0];
+		out.cont[id] = cont;
+		out.nested[id] = nested;
+	};
+	let i = 0;
+	while (i < frame.length) {
+		const view = frame[i]!.view;
+		const blank = view.trim() === "";
+		if (state === "unknown" || state === "unknownAfterEmpty") {
+			if (blank) {
+				state = view === "" ? "unknownAfterEmpty" : "unknown";
+				i++;
+				continue;
+			}
+			const span = spanningEnd(frame, i, view.replace(/^[ \t>]*/, ""));
+			if (span !== -1) {
+				state = "unknown";
+				i = span;
+				continue;
+			}
+			if (state === "unknown" || /^[ \t]/.test(view)) {
+				state = "unknown";
+				i++;
+				continue;
+			}
+			state = "fresh";
+		}
+		if (state === "para") {
+			// Module 8607 reads a whitespace-only line holding a tab as a lazy
+			// continuation, not as the blank line that would end the paragraph.
+			if (blank && !view.includes("\t")) {
+				state = "fresh";
+				i++;
+				continue;
+			}
+			const lead = /^[ \t]*/.exec(view)![0];
+			if (lead.includes("\t") || leadColumns(lead) >= 4) {
+				record(i, true);
+				out.closerInPara[frame[i]!.id] = (closerAhead ??= closerAheadTable(frame))[i]!;
+				i++;
+				continue;
+			}
+			/*
+			 * A setext underline ENDS the paragraph: module 8671 closes the block
+			 * as a heading, so the next line is a block start and module 8776 IS
+			 * reached for it. Without this the walker read `PROSEP` / `===` /
+			 * ` \t<!--` as a three-line paragraph and claimed the `<!--` line was
+			 * lazy, which spoke the comment body - the disclosure that blocked
+			 * PR #169 at Verify (6,144 census cells), and wider than recorded there:
+			 * `=`, `==`, `-` and `--` leak the same way. Two tiers, in this order
+			 * and placed exactly here, and both orderings are load-bearing:
+			 *
+			 * - After the tab / four-column test above, because a tab-led or
+			 *   four-column underline is a lazy continuation for module 8607 and
+			 *   never an underline.
+			 * - Tier 1 BEFORE the interrupt test: the exact module 8671 shape under
+			 *   exactly one content line is a heading (NRL-120's measured case), and
+			 *   it has to pre-empt RL_LIST_INTERRUPT and RL_HR because `-` and `---`
+			 *   there are h2 in Obsidian, not a list item or a rule.
+			 * - Tier 2 AFTER the interrupt test and only when it is false: any other
+			 *   underline-shaped line (under two or more content lines, ` ===`,
+			 *   `=== `, a count the walker may have wrong in a container view) ends
+			 *   the paragraph as `unknown`, which records nothing, so the following
+			 *   lines keep the old answer. Placing the broad test BEFORE the interrupt
+			 *   test was measured wrong: it pre-empts walkLeadList, so `> PROSEP` /
+			 *   `>    -` / `>\t<!--` leaked (20 cells over quote, nested quote,
+			 *   list, ordered and callout), because the renderer opens a list item
+			 *   there whose content `<!--` opens an HTML block.
+			 */
+			/*
+			 * Tier 1 also needs `paraTrusted` (implement-phase fuzz). In
+			 * `>>|` / `Z` / `>>-` / `>>\t<!--` / `ZLFZ` the `|` line is paragraph
+			 * text for the renderer, so `-` sits under TWO content lines and is a
+			 * list item whose dedent puts `<!--` at column 0; the walker had counted
+			 * one line, read `-` as an h2 and claimed the next line as indented
+			 * code, which spoke ZLFZ. An untrusted count falls through to the
+			 * interrupt and tier-2 tests below, both fail-closed.
+			 */
+			if (SETEXT_UNDERLINE_EXACT.test(view) && i === paraStart + 1 && paraTrusted) {
+				state = "fresh";
+				i++;
+				continue;
+			}
+			const interrupts =
+				RL_HR.test(view) ||
+				RL_LIST_INTERRUPT.test(view) ||
+				RL_HEADING.test(view) ||
+				/^(`{3,}|~{3,}|%%|\$\$|>|<)/.test(view.slice(lead.length));
+			if (!interrupts && RL_SETEXT.test(view)) {
+				state = "unknown";
+				i++;
+				continue;
+			}
+			if (!interrupts) {
+				record(i, true);
+				i++;
+				continue;
+			}
+			// An interrupter starts a fresh block on this very line.
+		}
+		if (blank) {
+			state = "fresh";
+			i++;
+			continue;
+		}
+		record(i, false);
+		if (startsIndentedCode(view)) {
+			let j = i + 1;
+			while (j < frame.length && (frame[j]!.view.trim() === "" || startsIndentedCode(frame[j]!.view))) {
+				record(j, false);
+				j++;
+			}
+			state = "fresh";
+			i = j;
+			continue;
+		}
+		const lead = /^[ \t]*/.exec(view)![0];
+		const rest = view.slice(lead.length);
+		/*
+		 * `setextHeading` precedes `html` in `blockMethods`, so a line-start HTML
+		 * construct with an underline-shaped line under it may be heading content
+		 * (NRL-120) rather than a block to skip to its closer. Skipping it as a
+		 * comment made `><!--` / `>-` / `>1.` / `-->` / `>\t<!--` / `ZPJZ` read as
+		 * a closed comment followed by a fresh indented-code line, where the
+		 * renderer has an h2, then a list item whose dedent opens a comment at
+		 * column 0: ZPJZ was spoken (implement-phase fuzz). Such a line now puts
+		 * the frame into `unknown` instead, which records nothing.
+		 */
+		if (rest.startsWith("<") && i + 1 < frame.length && RL_SETEXT.test(frame[i + 1]!.view)) {
+			state = "unknown";
+			i++;
+			continue;
+		}
+		const span = spanningEnd(frame, i, rest);
+		if (span !== -1) {
+			state = rest.startsWith("<!--") || /^(`{3,}|~{3,})/.test(rest) ? "fresh" : "unknown";
+			i = span;
+			continue;
+		}
+		// The rest follows `blockMethods`' own order: blockquote, atxHeading,
+		// thematicBreak, list, setextHeading, html, ..., paragraph.
+		if (RL_QUOTE.test(view)) {
+			i = walkLeadQuote(frame, i, depth, out);
+			state = i < frame.length && frame[i]!.view.trim() === "" ? "fresh" : "unknown";
+			continue;
+		}
+		if (RL_HEADING.test(view) || RL_HR.test(view)) {
+			state = "fresh";
+			i++;
+			continue;
+		}
+		if (RL_LIST_ANY.test(view)) {
+			const r = walkLeadList(frame, i, depth, out);
+			i = r.end;
+			state = r.state;
+			continue;
+		}
+		if (rest.startsWith("<")) {
+			state = "unknown";
+			i++;
+			continue;
+		}
+		// A setext-shaped line, a table-shaped line, a definition and a block id
+		// are all classified FRESH rather than paragraph: the safe default.
+		if (RL_SETEXT.test(view) || rest.includes("|") || /^\[[^\]]*\]:/.test(rest) || /^\^[\w-]+\s*$/.test(rest)) {
+			// Unless an underline-shaped line follows: then this line may be setext
+			// heading content, and the next line its underline rather than the list
+			// item or rule the walker would read it as (`>>=` / `>>-` /
+			// `>>  \t<!--` is an h2 and then a comment for the renderer; the walker
+			// read a list item and claimed the `<!--` line). Fail closed.
+			if (i + 1 < frame.length && RL_SETEXT.test(frame[i + 1]!.view)) {
+				state = "unknown";
+				i++;
+				continue;
+			}
+			state = "fresh";
+			ambiguousAt = i;
+			i++;
+			continue;
+		}
+		state = "para";
+		paraStart = i;
+		paraTrusted = ambiguousAt !== i - 1;
+		i++;
+	}
+}
+
+/**
+ * Module 6234's collection of one blockquote, then its content as a frame of
+ * its own. Returns the frame index of the first line not in the quote.
+ */
+function walkLeadQuote(frame: readonly LeadFrameLine[], start: number, depth: number, out: RendererLeads): number {
+	const inner: LeadFrameLine[] = [];
+	let title: LeadFrameLine | undefined;
+	let j = start;
+	for (; j < frame.length; j++) {
+		const { view, id } = frame[j]!;
+		const m = /^[ \t]*>/.exec(view);
+		if (!m) {
+			if (view.trim() === "" || mayInterruptQuote(frame, j)) break;
+			// A lazy line joins the quote WHOLE, lead and all (`d = f === D ? p : ...`).
+			inner.push({ view, id });
+			continue;
+		}
+		// One SPACE after `>`, never a tab: `t.charAt(D)===a&&D++` with a = " ".
+		let content = view.slice(m[0].length);
+		if (content.startsWith(" ")) content = content.slice(1);
+		if (j === start) {
+			// A callout title is tokenized on its own, before the rest.
+			const c = /^\[!([^\]]+)\]([+\-]?)(?:\s|$)/.exec(content);
+			if (c) {
+				title = { view: content.slice(c[0].length), id };
+				continue;
+			}
+		}
+		inner.push({ view: content, id });
+	}
+	if (depth < RL_MAX_DEPTH) {
+		if (title !== undefined && title.view !== "") out.pending.push({ frame: [title], depth: depth + 1 });
+		out.pending.push({ frame: inner, depth: depth + 1 });
+	}
+	return j;
+}
+
+/**
+ * Module 745's loop, ported for its item boundaries only, then each item as a
+ * frame of its own. Returns where the list ends and the state that line is in.
+ */
+function walkLeadList(frame: readonly LeadFrameLine[], start: number, depth: number, out: RendererLeads): { end: number; state: LeadState } {
+	interface Item {
+		indent: number;
+		lines: number[];
+	}
+	const items: Item[] = [];
+	let item: Item | undefined;
+	let pending: number[] = [];
+	let bullet = "";
+	let blankHere = false;
+	let last = start;
+	let end = -1;
+	let state: LeadState = "fresh";
+	for (let j = start; j < frame.length; j++) {
+		const x = frame[j]!.view;
+		let u = 0;
+		let r = 0;
+		for (; u < x.length; u++) {
+			const ch = x[u];
+			if (ch === "\t") r += 4 - (r % 4);
+			else if (ch === " ") r += 1;
+			else break;
+		}
+		let v = item !== undefined && r >= item.indent;
+		let marker: string | null = null;
+		if (!v) {
+			const ch = x[u];
+			if (ch === "*" || ch === "+" || ch === "-") {
+				marker = ch;
+				u++;
+				r++;
+			} else {
+				let digits = "";
+				while (u < x.length && x[u]! >= "0" && x[u]! <= "9") digits += x[u++];
+				const d = x[u];
+				u++;
+				if (digits !== "" && (d === "." || d === ")")) {
+					marker = d;
+					r += digits.length + 1;
+				}
+			}
+			if (marker !== null) {
+				const next = x[u];
+				if (next === "\t") {
+					r += 4 - (r % 4);
+					u++;
+				} else if (next === " ") {
+					const b = u + 4;
+					while (u < b && x[u] === " ") {
+						u++;
+						r++;
+					}
+					if (u === b && x[u] === " ") {
+						u -= 3;
+						r -= 3;
+					}
+				} else if (next !== undefined) {
+					marker = null;
+				}
+			}
+		}
+		let isItem = false;
+		if (marker !== null) {
+			if (bullet !== "" && bullet !== marker) {
+				end = j;
+				break;
+			}
+			bullet = marker;
+			isItem = true;
+		} else {
+			// r is deliberately NOT reset: module 745 keeps the increments a
+			// failed marker made, and so does this port.
+			if (item !== undefined) v = r >= item.indent || r > 4;
+			u = 0;
+		}
+		if ((marker === "*" || marker === "-") && RL_HR.test(x)) {
+			end = j;
+			break;
+		}
+		const prevBlank = blankHere;
+		blankHere = !isItem && (u === 0 ? x : x.slice(u)).trim() === "";
+		if (v && item !== undefined) {
+			item.lines.push(...pending, j);
+			pending = [];
+			last = j;
+		} else if (isItem) {
+			item = { indent: r, lines: [j] };
+			items.push(item);
+			pending = [];
+			last = j;
+		} else if (blankHere) {
+			pending.push(j);
+		} else {
+			if (prevBlank) {
+				end = j;
+				break;
+			}
+			if (mayInterruptList(x)) {
+				end = j;
+				state = "unknown";
+				break;
+			}
+			item!.lines.push(...pending, j);
+			pending = [];
+			last = j;
+		}
+	}
+	if (end === -1) end = last + 1;
+	/*
+	 * When the list ended at a line that MAY interrupt it (the over-approximation
+	 * above), that line and the ones after it may in fact belong to the last
+	 * item, and module 5540's dedent `p` is the least indent over the WHOLE item,
+	 * so a line it really contains can lower `p`. Lowering `p` is not monotone in
+	 * the safe direction: `  -` / `   \t<!--` / `  $$` has `p` = 2 for the
+	 * renderer, which leaves ` \t<!--` (an HTML block opener); the walker, cut
+	 * at `$$`, used 3 and left a bare tab, claimed indented code and spoke the
+	 * comment body (implement-phase fuzz). So the last item is not walked then,
+	 * and its lines keep the old answer.
+	 */
+	const walkable = state === "unknown" ? items.slice(0, -1) : items;
+	if (depth < RL_MAX_DEPTH) for (const it of walkable) walkLeadItem(frame, it.lines, depth, out);
+	return { end, state };
+}
+
+/** Module 745's `M` plus module 5540, then the item's content as a frame. */
+function walkLeadItem(frame: readonly LeadFrameLine[], lineIdx: readonly number[], depth: number, out: RendererLeads): void {
+	const first = frame[lineIdx[0]!]!;
+	const m = RL_ITEM.exec(first.view);
+	if (!m) return;
+	let marker = m[2]!;
+	// `Number(n)<10&&a.length%2==1&&(n=p+n)`: a short odd-width ordered marker
+	// gets one extra column of padding, so `1. ` pads to four, not three.
+	if (Number(marker) < 10 && (m[1]! + m[2]! + m[3]!).length % 2 === 1) marker = " " + marker;
+	const pad = m[1]! + " ".repeat(marker.length) + m[3]!;
+	const replaced = [pad + m[4]!, ...lineIdx.slice(1).map((k) => frame[k]!.view)];
+	let p = leadColumns(pad);
+	for (const line of replaced) {
+		if (line.trim() === "") continue;
+		const c = leadColumns(line);
+		if (c > 0 && c < p) p = c;
+	}
+	let rest = m[4]!;
+	const task = /^\[(.)][ \t]/.exec(rest);
+	if (task) rest = rest.slice(task[0].length);
+	const inner: LeadFrameLine[] = [{ view: rest, id: first.id }];
+	for (let n = 1; n < lineIdx.length; n++) {
+		inner.push({ view: removeLeadColumns(replaced[n]!, p), id: frame[lineIdx[n]!]!.id });
+	}
+	out.pending.push({ frame: inner, depth: depth + 1 });
+}
+
+/** Run the model over `lines[from..]`. Lines before `from` (frontmatter) get no record. */
+function rendererLeads(lines: readonly string[], from: number): RendererLeads {
+	const out: RendererLeads = {
+		lead: new Array<string | null>(lines.length).fill(null),
+		cont: new Array<boolean>(lines.length).fill(false),
+		nested: new Array<boolean>(lines.length).fill(false),
+		closerInPara: new Array<boolean>(lines.length).fill(false),
+		pending: [],
+	};
+	const frame: LeadFrameLine[] = [];
+	// One trailing `\r` is dropped from each view (NRL-115 ship critique, r3 F1).
+	// `extractChunks` splits on `\n` only, so a CRLF note hands every line a
+	// trailing `\r`, and the walker's thematic-break, heading and blank tests do
+	// not allow for one: `___\r` read as paragraph text, the ` \t<!--` after it
+	// as a lazy continuation, and a comment the renderer hides was spoken. The
+	// renderer takes `\r\n` as a line ending. Only the walker's VIEW changes; a
+	// lead is a prefix, so no offset it reports moves.
+	for (let k = from; k < lines.length; k++) {
+		const raw = lines[k]!;
+		frame.push({ view: raw.endsWith("\r") ? raw.slice(0, -1) : raw, id: k });
+	}
+	walkLeadFrame(frame, 0, out);
+	for (let f = out.pending.pop(); f !== undefined; f = out.pending.pop()) walkLeadFrame(f.frame, f.depth, out);
+	return out;
+}
+
+/**
+ * `opensHtmlBlock`'s fourth argument, per raw line: true when the renderer
+ * never offers this line's content to module 8776. A continuation needs a tab
+ * anywhere in its lead or four columns (module 8607); a fresh block needs to
+ * START with a tab or four spaces (module 134), and only inside a container,
+ * because a top-level fresh block is the INDENTED_CODE branch's and NRL-113's.
+ * The two thresholds differ on purpose: ` \t` is four columns, lazy after a
+ * paragraph, and NOT indented code at a block start, where it opens a comment.
+ */
+function leadIndentedForHtml(r: RendererLeads): boolean[] {
+	return r.lead.map((lead, k) => {
+		if (lead === null) return false;
+		if (r.cont[k]) return (lead.includes("\t") || leadColumns(lead) >= 4) && !r.closerInPara[k];
+		return r.nested[k]! && startsIndentedCode(lead);
+	});
+}
+
 export interface ExtractOptions {
 	stripTags: boolean;
 	/** Bare URLs are spoken as their host only (docs/adr/0003). */
@@ -3645,6 +4422,16 @@ export function extractChunks(
 	// rule. Getting this wrong let skipHeadings drop the continuation text.
 	let prevContainer = false;
 	const frontmatter = detectFrontmatter(lines);
+	// `htmlLeadIndented[n]` is "the renderer never offers line n's content to its
+	// HTML block tokenizer, because after its own container dedent the line is a
+	// lazy paragraph continuation or indented code" (NRL-115). It is
+	// opensHtmlBlock's fifth argument; the reasoning, the failure direction and
+	// the measurements live on `rendererLeads`. Frontmatter lines get no record,
+	// and the first line after it starts a fresh frame, which is the safe default.
+	const leads = rendererLeads(lines, frontmatter ? frontmatter.endLine + 1 : 0);
+	const htmlLeadIndented = leadIndentedForHtml(leads);
+	// Its lazy-continuation half, for containerCarryStops only (F1).
+	const htmlLeadLazy = htmlLeadIndented.map((v, k) => v && leads.cont[k]!);
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,
@@ -4005,15 +4792,16 @@ export function extractChunks(
 		// the census, whose rows never put prose directly above the opener with
 		// skipHeadings on (NRL-120).
 		if (isSetextContent && blockType === "paragraph") flushParagraph();
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent);
+		const leadIndented = htmlLeadIndented[lineNo]!;
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
 			cleaned.openCode !== undefined &&
-			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlCloserAhead, listDedented)
+			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlCloserAhead, listDedented, htmlLeadIndented)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -4052,7 +4840,7 @@ export function extractChunks(
 			(blockType === "paragraph" || blockType === "quote" || blockType === "list") &&
 			confirmed === undefined &&
 			cleaned.unclosedBracket !== undefined &&
-			bracketClosesLater(lines, lineNo, htmlCloserAhead, listDedented)
+			bracketClosesLater(lines, lineNo, htmlCloserAhead, listDedented, htmlLeadIndented, htmlLeadLazy)
 		) {
 			confirmedBracket = cleaned.unclosedBracket;
 			cleaned = cleanLine(
@@ -4068,6 +4856,7 @@ export function extractChunks(
 				carriedBracketDepth,
 				dedentedByList,
 				isSetextContent,
+				leadIndented,
 			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the
