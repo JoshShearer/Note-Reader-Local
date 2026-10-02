@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-09-29
 - Ticket: NRL-38 (R-M08); clause 4 amended by NRL-42, NRL-44, NRL-64, NRL-74 and
-  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74, NRL-95 and NRL-93
+  NRL-95; clause 2 amended by NRL-68, NRL-73, NRL-74, NRL-95, NRL-93 and NRL-116
 
 ## Context
 
@@ -297,7 +297,8 @@ evidence, not a live Obsidian reading or highlighting observation.
    TAB, where module 6234 consumes `>` plus at most one SPACE
    (`t.charAt(D)===a&&D++` with `a = " "`), 2 cells. Our `LIST_BULLET` is
    `/^\s*([-*+]|\d+[.)])\s+/` and its `\s+` eats the whole lead after a marker,
-   where module 745's third group takes at most four spaces or one tab, 3 cells.
+   where module 745's third group takes at most four spaces or one tab, 3 cells -
+   **CLOSED by NRL-116; see the amendment below, and do not quote the 3.**
    And an unterminated `%%` is NOTE-scoped for us (clause 5) where Obsidian scopes
    it to the construct that holds it, which is why a `%%` on a list marker line
    silences the following items.
@@ -370,6 +371,204 @@ evidence, not a live Obsidian reading or highlighting observation.
    tokenizer citations have. NRL-73's numbers above are bare-Node measurement
    against base `bb77b77`; NRL-93's are bare-Node measurement against base
    `1ed6f1c`, whose `src/` is identical to `f27517d`'s.
+
+   **NRL-116 amendment: the marker's lead is peeled separately from the marker.**
+
+   The `LIST_BULLET` row above is closed, and the number it is recorded at was
+   **far too small - 3 cells, where the real figure is 313,344 losses closed on a
+   3,096,576-cell census**, about five orders of magnitude. That is a property of
+   NRL-93's corpus (a 140-cell position census that ADR 0006 describes but does
+   not enumerate, and so is not reconstructable) rather than a mistake in its
+   arithmetic, and it is the same caveat the subsection above already attaches to
+   every count in it. Quote the corpus with the number or do not quote the number.
+
+   **The rule.** `containerPrefix` no longer peels with the shared `LIST_BULLET`
+   and `TASK`. It peels with three PEEL-LOCAL patterns, and `LIST_BULLET` stays
+   **byte-identical** for its three other readers - `interruptsParagraph`, the
+   `listDedented` pass and that pass's `inList` end test - which is the rule
+   NRL-114's Q6 and NRL-116's Q11 both set, after NRL-93's own planned one-term
+   change to a shared predicate measured a 6,144-cell regression (`TASK` is the
+   one exception and the paragraph after next says why):
+
+   ```
+   PEEL_MARKER = /^\s*([-*+]|\d+[.)])(?=\s)/     module 745 group 2, as a lookahead
+   PEEL_LEAD   = /^(?: {1,4}(?! )| |\t)/          module 745 group 3, verbatim
+   PEEL_TASK   = /^\[[^\]]\](?=\s|$)/             the old TASK, trailing run removed
+   ```
+
+   Group 3 is the whole point: AT MOST FOUR SPACES NOT FOLLOWED BY A FIFTH, or one
+   space, or one tab, and everything past it is the item's CONTENT INDENT. So
+   `- ` + tab + `%%` leaves `\t%%` as content, a tab of content indent is indented
+   code inside the item, and the following item is DISPLAYED.
+
+   **It is TWO constants and not one.** `TASK`'s own trailing `\s*` ate the lead
+   after a checkbox exactly as `LIST_BULLET`'s `\s+` did after a marker. Reverting
+   only that half re-breaks all three task shapes AND loses a displayed `>`,
+   measured directly, so narrowing one without the other is not a smaller fix.
+   The shared `TASK` is **DELETED** rather than left byte-identical the way
+   `LIST_BULLET` is, and that asymmetry is deliberate: once `containerPrefix`
+   stopped reading it, `TASK` had no other reader anywhere in `src/` or `tests/`,
+   so keeping it would have been dead code carrying a comment saying nothing reads
+   it. Its NRL-8 docstring survives on `PEEL_TASK`, and the deletion is shown
+   behaviour-neutral rather than argued to be: the arm was rebuilt after it and
+   compared cell for cell against the one every figure below was taken on -
+   **0 differing cells of 3,096,576** on the census corpus and **0 of 120,000** on
+   a fuzz, against non-vacuity controls of 147,456 and 11,712 cells in which that
+   same arm differs from base - and the lockstep, bucket, fuzz and attribution
+   probes were all re-run against it and reproduced every number to the digit.
+
+   **Group 3's `$` and `(?=\n)` branches are deliberately OMITTED**, so a BARE
+   marker peels exactly as before. `- %%` and `-` + tab + `%%` really do reduce to
+   `%%` at the item's block start, so the opener is already right and what diverges
+   is the block's SCOPE - NRL-118, the row above. Widening the peel to cover them
+   would change nothing about that and only enlarge the diff.
+
+   **THE LOAD-BEARING PART IS NOT THE LEAD, IT IS RELOCATING NRL-131'S STOP
+   (ADR 0035), and it is invisible from the defect's own description.** That stop
+   used to read the PEELED string's own trailing whitespace run,
+   `INDENTED_CODE.test(b[0].match(/\s*$/)![0].slice(1))`, which only worked because
+   `\s+` had swallowed the entire lead into `b[0]`. With the lead bounded that run
+   is at most four spaces or one tab, `.slice(1)` leaves at most three spaces or
+   nothing, and the stop NEVER FIRES. Measured on the census corpus below, a
+   variant that narrows the lead and leaves the stop where it is newly loses
+   **314,880 cells of 3,096,576**, every one an NRL-131 case regressing, against
+   **0** for the shipped form - which asks `INDENTED_CODE` of the REMAINING BODY,
+   the place the indent lives after the narrowing, and lets `PEEL_LEAD` do
+   `.slice(1)`'s old job of discounting the marker's required space.
+
+   **The faithful lead rule is observationally equivalent to the "single space"
+   rule the NRL-116 ticket text asserted.** Measured at **0 differing cells over
+   48,384** structured cells and **0 over a 120,000-cell fuzz**, against a
+   12,489-cell non-vacuity control, because whatever the lead declines falls to
+   `INDENTED_CODE`, to `BLOCKQUOTE`'s own `\s{0,3}>` or to term B's three-space cap
+   and is absorbed identically. Module 745's real rule is implemented because it is
+   the renderer's, not because a measured shape distinguishes it. Said plainly so
+   it is not mistaken for evidence: this is fidelity, not a closed cell count.
+
+   **Q41: THE PROBE FOUND CORPUS BLINDNESS IN ITSELF, and it is the sixth recorded
+   instance in this repo.** The Start-phase collision probe swept 2,654,208 cells
+   and reported the no-relocation arm CLEAN. That zero was blind twice over: its
+   nested-quote shape used `> ZQZ`, so the SENTINEL survived while the DISPLAYED
+   `>` was dropped, and it carried no `marker + lead + > %%` shape at all. The
+   corrected corpus adds both - a `marker + lead + > <construct>` shape, a doubly
+   nested `> > ` shape, and the bare `>` CHARACTER tracked as a sentinel of its own
+   across every shape - and the same arm then measures **314,880 newly lost**. The
+   `marker + lead + > %%` shape the old corpus could not reach at all is the single
+   largest contributor, at 110,592 of that total. A clean row on a corpus that
+   cannot reach the colliding shape is not evidence, and this is the sixth time
+   that has been written down here.
+
+   **The census, on the corrected corpus.** 14 shapes x 12 leads x 6 markers x 6
+   constructs x all 512 content-key combinations = **3,096,576 cells per arm**,
+   verdicts from real rendered HTML produced by Obsidian 1.13.7's own parser and
+   renderer run in Node (`app.js` sha256 `8efbf581...`, both selftests green),
+   0 render errors over 6,048 sources, shadow root COPIED and sanity-mutated:
+   **0 newly lost, 0 newly leaking, 313,344 losses closed**, 2,949,120 cells
+   byte-identical, and 0 newly lost in every one of the 14 shapes. SIX of the
+   fourteen shapes report **0 cells moved**, including all three nested-quote
+   shapes - the plain one and both of Q41's additions - so the relocation leaves
+   that family byte-identical to base rather than merely equal in leak count.
+   On the same corpus the no-relocation arm moves 73,728 cells in each of those
+   three and loses in all of them, which is the whole of the Q38 risk in one row.
+
+   **The cost is the SAME NRL-118 note-scope class this subsection already
+   records, and it is signed.** A 4,803-note fuzz with tabs, multi-space leads and
+   a list-bearing population: **365 of 57,636 cells newly lose displayed text, over
+   25 distinct notes**, against **4,038 losses closed**, **252 leaks closed** and
+   **0 newly leaking**. All 25 are attributed BY CONSTRUCTION and not by
+   inspection: on a corpus carrying exactly ONE comment construct per note, so no
+   pairing is possible, newly-lost is **0 of 73,236 cells over 6,103 notes** with
+   14,392 losses closed; and independently, every one of the 25 losing notes
+   carries TWO OR MORE comment constructs, never one. The probe's own classifier
+   left 4 of 19 notes "UNEXPLAINED" on a smaller run and those four were run down
+   rather than waved at - each is the same pairing root with a second opener the
+   classifier's regex could not describe, a list-CONTINUATION opener the item
+   itself dedents or a container-prefixed one with a marker between the prefix and
+   the `%%` - so the predicate is widened to "any later opener", which is what the
+   root requires. The fuzz is shown able to fail in BOTH directions: base against
+   base moves 0 cells and reports 0 in every column; an arm that declines the
+   item-continuation openers the renderer honours reports **360 newly leaking**;
+   an arm that restores NRL-93's `.trim()` reports **427 newly lost**. Note that
+   this fuzz is BLIND to the relocation - the no-relocation arm scores identically
+   to the shipped one on it - which is why the structured corpus is not optional.
+
+   **Four buckets, with destinations in a bucket of their own**, because a
+   destination is an ATTRIBUTE and sits in neither text class, the gap that let
+   NRL-74's 5,120-cell class through a probe reporting zero. Hidden text: **0
+   newly leaking of 73,728** cells. Displayed text: **0 newly lost of 364,544**.
+   Destinations: an image or link label soft-wrapped across a DECLINED `%%` line
+   newly speaks its destination in **10,240 of 22,528** cells for each of the two
+   kinds, base 0 - which is NRL-93's own `pin-nrl93-unmasked-label-destination`
+   mechanism unmasked further rather than a new class, and the CONTROL is what
+   makes that a tripwire rather than a leak: the same label with ordinary prose in
+   place of the `%%` speaks the destination in **22,528 of 22,528 cells on BOTH
+   arms**. ADR 0019's designed literal is kept separate at 22,528 cells, base 0 and
+   fix 10,240, because collapsing it into the hidden bucket scores a designed
+   behaviour as a leak.
+
+   **`sourceIndex` (non-negotiable 8)** is clean by NUMERIC UTF-16 code-unit index
+   over 6,051 sources x 8 content-key sets per arm - 138,340 base chunks, 1,092,866
+   units - with four mutators (drop-one, shift-all, swap-two, negate-one) NONZERO
+   ON BOTH ARMS, and both exemptions shown PRE-EXISTING by removing each from a
+   correct tree: without the mapped-space exemption base reports 18,552 identity
+   failures and the fix 19,704, and without ADR 0004's equation exemption both
+   report 128. That exemption MUST key on the synthetic TEXT and never on
+   `blockType` - `extract.ts` pushes the `"equation"` chunk with blockType
+   `"other"`, so a `blockType`-keyed exemption exempts nothing and reports phantom
+   failures on a correct tree.
+
+   **Exactly one function body moved**: `containerPrefix`, 105 lines to 134,
+   `04a3492d` to `064e2e50` (mostly comment - the executable change is three new
+   patterns plus a four-line split of one arm). The other 16 are byte-identical,
+   including
+   `interruptsParagraph` `0212b5f4`, `codeSpanClosesLater` `43ec230e`,
+   `bracketClosesLater` `311285bb`, `opensObsidianBlock` `f3cce67c`,
+   `opensHtmlBlock` `6b3bdcc3`, `opensHiddenComment` `25c9ff98`, `opensMathBlock`
+   `77f97d0a`, `labelClose` `92023b33`, `cleanLine` `734750b6`, `extractChunks`
+   `5c30ca2a` and `isSetextContentLine` `7ba7bfdc`. The last two of those are
+   **re-measured against the rebased base `9dadbea`, not the base this ticket was
+   written on**, and the old values `97edd47a` and `9588a3df` are corrected rather
+   than left standing: NRL-155 (#201) landed between Verify and Merge and changed
+   both of those bodies itself, so the hashes moved for a reason that is not
+   NRL-116's. What the property asserts is unchanged and still holds - NRL-116's
+   own diff moves `containerPrefix` and nothing else, and all 16 neighbours are
+   byte-identical between `9dadbea` and this commit - but a stale literal hash in
+   an identity claim is the one thing that claim must not carry. Two traps in that technique
+   were both hit and both matter. The body extractor must SKIP REGEX LITERALS, or
+   it mis-pairs on `flowDepthDelta`, whose body holds `/"(?:[^"\\]|\\.)*"|'[^']*'/g`
+   and is followed by `"["`, `"{"`, `"]"` and `"}"` as string literals. And it must
+   skip a RETURN-TYPE ANNOTATION: `containerPrefix`'s return type is a
+   brace-balanced object literal sitting at end of line exactly as a body does, so
+   the first naive run reported a 7-line "containerPrefix" that was byte-identical
+   across the change - a silent false negative, which is the one failure mode a
+   sha256 identity claim must not have. The extractor is shown non-vacuous by
+   mutating a neighbour and watching it report as moved.
+
+   **Three divergences survive on the same marker line and each is pinned rather
+   than closed**: the bare `- %%` and no-space `-` + tab forms and the
+   exactly-four-space form, all three NRL-118's note scope with a correctly
+   recognised opener (`pin-nrl93-bare-marker-opener-still-silenced`,
+   `pin-nrl116-tab-no-space-after-marker-still-silenced`,
+   `pin-nrl116-four-space-lead-still-silenced`); and the `<!--` TWIN, which is NOT
+   fixed - `opensHtmlBlock` accepting a tab is CORRECT for a fresh-block `<!--`,
+   module 8776's skip loop taking spaces and tabs, while on a marker line the
+   item's content indent makes it indented code before the HTML tokenizer is
+   reached, and we model that indent as a BOOLEAN rather than an amount, which is
+   the row above (`pin-nrl116-html-twin-tab-lead-still-silenced`). For the same
+   boolean reason the `%%` on the newly-fixed lines is itself SPOKEN where the
+   renderer shows it as code, so `skipCodeBlocks` cannot reach it.
+
+   Four NRL-93 fixtures MOVED and are **REPLACED IN PLACE keeping their names**,
+   per the NRL-66/NRL-67 convention, so every citation of them here and in
+   `srs.md` still resolves: `pin-nrl93-tab-after-{bullet,ordered,task}-marker-still-silenced`
+   and `pin-nrl93-list-marker-lead-eaten-still-silenced`. THEIR NAMES NOW READ
+   BACKWARDS, nothing being "still silenced" in any of them, and that wart is
+   deliberate and preferred to a rename that orphans the citations.
+
+   **NOT OBSERVED IN A LIVE OBSIDIAN.** No deploy and no CDP session happened; the
+   renderer side is Obsidian's own parser and renderer executed in Node, which is
+   stronger than a transcription and is still not the application, and it is the
+   READING-VIEW path only. Rule 11 applies to every figure above.
 
 3. **Only the active comment's first matching closer ends it.** Comments do
    not nest. HTML comments end at `-->`; Obsidian comments end at `%%`.
