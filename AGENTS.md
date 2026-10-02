@@ -1544,6 +1544,96 @@ roots 1 and 2's three non-container shapes (NRL-109), the two pre-existing image
 `![a [[N|l]] b](dest.png)` and `![alt](dest(1).png)`, NRL-45's `[a]: x.png "%%"` leftover, NRL-93,
 NRL-118 and now **NRL-145**.
 
+**A list marker's LEAD is peeled separately from the marker, as of NRL-116** (PR #200, squash
+`efcf5cc`, `docs/adr/0006` clause 2's NRL-116 amendment, `srs.md:328` amended). `containerPrefix`'s
+list arm peeled with the shared `LIST_BULLET`, whose trailing `\s+` consumed a marker's WHOLE lead,
+and with the shared `TASK`, whose trailing `\s*` did the same after a checkbox. Obsidian's list
+tokenizer, module 745, takes at most four spaces not followed by a fifth, or one space, or one tab,
+and leaves everything past that as the item's CONTENT INDENT. So for `- ` + tab + `%%` the renderer
+leaves `\t%%` as content, a tab of content indent is indented code inside the item, and the
+following item is DISPLAYED, while we handed a bare `%%` to `opensObsidianBlock`, opened a
+note-scoped comment block and hid text the reader can see. The peel is now three PEEL-LOCAL
+patterns - `PEEL_MARKER` (`LIST_BULLET` with its trailing `\s+` turned into a lookahead),
+`PEEL_LEAD` (module 745's group 3 verbatim, ` {1,4}(?! )| |\t`) and `PEEL_TASK` - and the shared
+`LIST_BULLET` stays **byte-identical** for its three other readers, `interruptsParagraph`, the
+`listDedented` pass and that pass's `inList` end test. That is the rule NRL-114's Q6 and NRL-116's
+Q11 both set, after NRL-93's planned one-term change to a shared predicate measured a 6,144-cell
+regression. **The shared `TASK` is DELETED rather than kept byte-identical, and that asymmetry is
+deliberate**: once `containerPrefix` stopped reading it nothing in `src/` or `tests/` did, so
+keeping it would be dead code annotated "nothing reads this", and the deletion is shown
+behaviour-neutral by rebuilding the arm after it and reproducing every figure rather than argued.
+
+**The load-bearing part is NOT the lead, it is RELOCATING NRL-131's indented-code stop, and it is
+invisible from the defect's own text (Q38).** That stop read the PEELED string's trailing
+whitespace run, which only worked because `\s+` had swallowed the whole lead into it; with the lead
+bounded that run is at most four spaces or one tab, `.slice(1)` leaves at most three spaces or
+nothing, and the stop NEVER FIRES. Measured on the census corpus below, a variant that narrows the
+lead and leaves the stop where it is newly loses **314,880 cells of 3,096,576**, every one an
+NRL-131 case regressing, against **0** for the shipped form, which asks `INDENTED_CODE` of the
+REMAINING BODY instead. **A clean probe found corpus blindness in itself here, the sixth recorded
+instance in this repo**: the Start-phase collision probe swept 2,654,208 cells and reported the
+no-relocation arm CLEAN, blind twice over - its nested-quote shape used `> ZQZ`, so the sentinel
+survived while the DISPLAYED `>` was dropped, and it carried no `marker + lead + > %%` shape at all.
+With both added, the same arm measures the 314,880, of which that one unreachable shape is 110,592.
+
+**The census**, verdicts from real rendered HTML produced by Obsidian 1.13.7's own parser and
+renderer run in Node: 14 shapes x 12 leads x 6 markers x 6 constructs x all 512 content-key
+combinations = **3,096,576 cells per arm**, with **0 newly lost, 0 newly leaking, 313,344 losses
+closed**, 2,949,120 cells byte-identical, and 0 newly lost in every one of the 14 shapes. **The
+`3 cells` that `srs.md:328` recorded this row at was far too small, by about five orders of
+magnitude**, and that is a property of NRL-93's 140-cell position census being described but not
+enumerated, and so not reconstructable, rather than an arithmetic mistake. Quote the corpus with
+the number or do not quote the number. **The faithful lead rule is observationally equivalent to
+the "single space" rule the ticket text asserted** - 0 differing cells over 48,384 structured cells
+and 0 over a 120,000-cell fuzz against a 12,489-cell non-vacuity control - so module 745's real
+rule ships because it is the renderer's, not because any measured shape distinguishes it.
+
+**The cost is signed rather than hidden, and it is the same NRL-118 note-scope class (decision
+Q37).** Declining a wrongly-recognised opener leaves the real one's note scope reaching further:
+on a 4,803-note fuzz with tabs, multi-space leads and a list-bearing population, **365 of 57,636
+cells newly lose displayed text, over 25 distinct notes**, against **4,038 losses closed, 252 leaks
+closed and 0 newly leaking**. All 25 are attributed BY CONSTRUCTION and not by inspection: on a
+corpus carrying exactly ONE comment construct per note, so no pairing is possible, newly-lost is
+**0 of 73,236 cells over 6,103 notes** with 14,392 losses closed, and independently every one of the
+25 losing notes carries two or more constructs. That fuzz is **blind to the relocation** - the
+no-relocation arm scores identically on it - which is why the structured census is not optional.
+
+**The destination bucket carries one real cost, and its CONTROL is what makes it a tripwire rather
+than a leak.** Four buckets were kept apart with destinations in one of their own, because a
+destination is an ATTRIBUTE and sits in neither text class, which is the gap that let NRL-74's
+5,120-cell class through a probe reporting zero. Hidden text: **0 newly leaking of 73,728** cells.
+Displayed text: **0 newly lost of 364,544**. Destinations: an image or link label soft-wrapped
+across a DECLINED `%%` line newly speaks its destination in **10,240 of 22,528** cells for each of
+the two kinds, base 0 - NRL-93's own `pin-nrl93-unmasked-label-destination` mechanism unmasked
+further rather than a new class, and the control, the same label with ordinary prose in place of the
+`%%`, speaks the destination in **22,528 of 22,528 cells on BOTH arms**. ADR 0019's designed
+literal is kept in its own bucket at 22,528 cells, base 0 and fix 10,240. `sourceIndex` is clean by
+numeric UTF-16 code-unit index over 6,051 sources x 8 content-key sets per arm (138,340 base chunks,
+1,092,866 units), four mutators nonzero on both arms, both exemptions shown pre-existing by removing
+each from a correct tree. Exactly one function body moved, `containerPrefix`; the other 16 are
+byte-identical, and the extractor had to skip a RETURN-TYPE ANNOTATION or it reported a 7-line
+`containerPrefix` that was byte-identical across the change, which is the one failure mode a sha256
+identity claim must not have.
+
+**Four NRL-93 pins were REPLACED IN PLACE keeping their names**, per the NRL-66/NRL-67 convention,
+so every citation of them here, in ADR 0006 and in `srs.md` still resolves:
+`pin-nrl93-tab-after-{bullet,ordered,task}-marker-still-silenced` and
+`pin-nrl93-list-marker-lead-eaten-still-silenced`. **Their names now read backwards**, nothing being
+"still silenced" in any of them, and that wart is deliberate and preferred to a rename that orphans
+the citations. **Three divergences survive on the same marker line and each is pinned rather than
+closed**: the bare `- %%` and no-space `-` + tab forms and the exactly-four-space form, all three
+NRL-118's note scope with a correctly recognised opener, and the `<!--` TWIN, which is NOT fixed
+and is NRL-117's, `opensHtmlBlock` accepting a tab being correct for a fresh-block `<!--` while on a
+marker line the item's content indent makes it indented code first and we model that indent as a
+boolean rather than an amount.
+
+**NOTHING WAS OBSERVED IN A LIVE OBSIDIAN.** No deploy and no CDP session happened for this ticket;
+the renderer side is Obsidian's own parser and renderer EXECUTED in Node, which is stronger than a
+transcription and is still not the application, and it is the READING-VIEW path only. Rule 11
+applies to every figure above. **R-M08 is NOT met and the `2 of 16` MUST headline count does NOT
+move**: this closed one named residual of `srs.md:328`, not the requirement. What stays open against
+R-M08 is unchanged by it, plus NRL-117 and NRL-118 in this family.
+
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
 commit: a `$$` display-math block between a label's opener and closer silenced the alt text
