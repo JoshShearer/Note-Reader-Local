@@ -3437,6 +3437,12 @@ interface LineView {
  * its opening line was in (`browserBlockHolds`), which is the renderer's rule:
  * a block cannot outlive its container. `home` is the stack of the level being
  * parsed and `ids` the counter.
+ *
+ * `depth` caps the recursion at main's `RL_MAX_DEPTH` (NRL-115 F3): one frame per
+ * container level threw RangeError on a few thousand `>` or `- `. Beyond the cap
+ * the deeper content is not parsed, so its lines keep the outer level's offset,
+ * which still starts with a container marker and so never reads as an HTML block
+ * line: the pre-NRL-136 answer, fail-closed.
  */
 function containerViews(
 	views: LineView[],
@@ -3447,6 +3453,7 @@ function containerViews(
 	literal: Array<LiteralKind | undefined>,
 	fences: Array<"open" | "close" | undefined>,
 	htmlLines: boolean[],
+	depth = 0,
 ): void {
 	let n = 0;
 	// The literal block open at THIS level: a fence (its character and length)
@@ -3554,7 +3561,7 @@ function containerViews(
 				out[r.k] = r.off;
 				homes[r.k] = quoteHome;
 			}
-			containerViews(run, out, homes, quoteHome, ids, literal, fences, htmlLines);
+			if (depth < RL_MAX_DEPTH) containerViews(run, out, homes, quoteHome, ids, literal, fences, htmlLines, depth + 1);
 			n = m;
 			continue;
 		}
@@ -3667,7 +3674,7 @@ function containerViews(
 				out[c.k] = c.off;
 				homes[c.k] = itemHome;
 			}
-			containerViews(content, out, homes, itemHome, ids, literal, fences, htmlLines);
+			if (depth < RL_MAX_DEPTH) containerViews(content, out, homes, itemHome, ids, literal, fences, htmlLines, depth + 1);
 		}
 		n = k;
 	}
