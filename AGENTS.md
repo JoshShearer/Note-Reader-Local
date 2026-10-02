@@ -1531,8 +1531,9 @@ renderer verdict comes from the parser harness, which **EXECUTES Obsidian 1.13.7
 parser and renderer out of the installed asar**, so it is stronger than a transcription and **is
 still not the application**; Live Preview's CodeMirror/Lezer parser has never been read by any
 ticket in this family. Rule 11 applies to every number above. **AC4** (updating the four
-`pin-nrl115-*` tripwires deliberately) was **out of scope** because NRL-115 is still unmerged and
-those fixtures do not exist on `main`, and it is handed to whoever lands it. Residual **DEST-LEAK**
+`pin-nrl115-*` tripwires deliberately) was **out of scope** because NRL-115 was then unmerged.
+**NRL-115 landed it** (PR #208, `9cca242`): it was ported onto the NRL-120 + NRL-131 base, and
+NRL-131's `- > \t<!-- ZHIDEZ` tripwire moved to the renderer's verdict, replaced in place (ADR 0025). Residual **DEST-LEAK**
 families remain on the fix: **3,584 of 8,704** cells in the soft-wrapped-with-tab-interior class
 and **4,608 of 9,216** in the soft-wrapped-with-mid-line-comment class, both pre-existing. And one
 **user-visible widening past the ticket's headline**, renderer-verified and deliberate: `- - x` now
@@ -3574,9 +3575,9 @@ rediscover them:
   note; **NRL-136**), which part 2's `$$` stop also unmasks by a second route; and raw HTML blocks
   spoken as prose, `<?x` and a `<div>` holding a mid-line `<!--` (**NRL-137**). Verify added a
   fourth, **736 cells** of a space-tab `<!--`, the NRL-93 / NRL-115 family. The
-  `pin-nrl120-unmasked-*` rows are the tripwires, each beside a base control. **NRL-115 overlaps term 1**: whichever
-  of NRL-115 and NRL-120 merges second must rebase and re-run both censuses (the `after setext`
-  rows with leads ` `, `  `, `   `, ` \t`, `\t` are in NRL-120's corpus for that). **NOT VERIFIED
+  `pin-nrl120-unmasked-*` rows are the tripwires, each beside a base control. **NRL-115 overlaps term 1**, and it
+  merged second (PR #208, `9cca242`), ported onto this base with the setext census re-run there
+  (LF and CRLF, 0 new disclosure and 0 new loss; ADR 0025's NRL-115 section). **NOT VERIFIED
   IN OBSIDIAN BY A HUMAN, and the new extractor never ran inside Obsidian**: Obsidian's live
   `MarkdownRenderer` was used over CDP as an oracle (45 named inputs, structurally identical to
   the Node harness), but the deployed build was not loaded because Obsidian was not restarted.
