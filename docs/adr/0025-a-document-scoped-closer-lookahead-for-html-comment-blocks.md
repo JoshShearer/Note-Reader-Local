@@ -2218,6 +2218,13 @@ pattern restored) reproduced base exactly, so the arm builds read their own copi
 | NRL-119 bare-marker corpus | 622,080 | 294,912 / 86,016 | 0 / 241,152 | 0 / 142,848 | **0** | **0** |
 | NRL-111's 17 must-not-widen controls | 8,704 | - | agree with renderer in 17 | agree in 17, 0 moved | 0 | 0 |
 
+**Those two "0 newly lost" figures were TRUE OF THEIR CORPORA AND FALSE OF THE CHANGE,
+and independent Verify blocked the PR on it.** Neither corpus held a soft-wrapped code
+span or link/image label, so neither could see the carries; see "NRL-119 fix round 1"
+below for the 67,584 cells of new prose loss the first diff caused there and the second
+edit that closes them. Read every number in this section as the first diff's, except
+where the fix round re-measured it.
+
 The bare-marker corpus is 9 markers (`-`, `*`, `+`, `1.`, `1)`, plus `7.`, `7)`, `01.`,
 `01)` so the disclosure side has room) x indents {0, 1, 3, 4 spaces, tab} x tails {end of
 line, a space, `\r`} x 9 positions (line after the opener, after two content lines,
@@ -2273,10 +2280,9 @@ mutators nonzero on both.
   `\d+`, so it needs its own position-gated measurement. So the new pins expect
   `"Prose <!-- * HIDDENE --> t."`, and `guard-nrl111-lone-dash-third-line` keeps its
   expectation (only its comment changed). No word is lost or leaked by the glyph. Owned
-  by NRL-154, filed from NRL-119's ship phase. The same root (`LIST_BULLET` and
-  `interruptsParagraph` not seeing a bare marker) also lets `bracketClosesLater` carry a
-  soft-wrapped label across one, which silences displayed text on base and fix alike
-  (`a ![x` / `*` / `HIDDENE](dest.png) b` speaks `"a x * HIDDENE b"`); NRL-154 owns that too.
+  by NRL-154, filed from NRL-119's ship phase. The same root also let
+  `bracketClosesLater` and `codeSpanClosesLater` carry across a bare marker; that half
+  is NO LONGER a residual, it was folded into NRL-119 by the fix round below.
 - **A quoted opener** (`> Prose <!--` / `> *`): 23,040 cells lost on both arms. The
   term-2 pass reads raw lines and never peels `>`; the NRL-88 root-1 class.
 - **Container-relative indentation in a list item**: `- Prose <!--` followed by a
@@ -2287,6 +2293,112 @@ mutators nonzero on both.
   `guard-nrl95-atx-opener-not-bounded`'s class; the before-the-opener one is a fresh
   block, where indented code or any digit string starts a block that our count does not
   model. Not opened or widened here.
+
+### NRL-119 fix round 1: `interruptsParagraph` sees a bare marker too
+
+**What Verify found.** Widening `TERM2_LIST` alone newly LOST displayed prose. A
+soft-wrapped code span, link label or image label whose opener line carries a mid-line
+`<!--`, and which wraps across a bare marker line, was CARRIED across it:
+``A `xx <!--`` / `*` / `HIDDENE` / ``--> yy` B.`` spoke `"A B."` on the first diff and
+`"A xx yy B."` on base, while the renderer makes no span at all
+(``<p>A `xx &#x3C;!--</p><ul><li>HIDDENE<br>--> yy` B.</li></ul>``, every word displayed).
+The label form, `a [xx <!--` / `*` / `HIDDENE --> zz](dest.png) b`, spoke
+`"a xx * HIDDENE --> zz b"`, dropping the displayed literal `](dest.png)`. Over Verify's
+42 shapes x 512 content keys: code 2,560 + 2,560, link 5,120, image 2,560 + 2,560 + 5,120
+newly lost, 0 newly leaking. Reproduced on the rebased head before any edit.
+
+**Root cause.** Two predicates answer "does this line end the paragraph", and only one
+learned the bare-marker rule. The first diff taught `TERM2_LIST`, so `opensHtmlBlock`
+now (correctly) answers false on such an opener line, which lets `codeSpanClosesLater`
+and `bracketClosesLater` run at all. They ask `interruptsParagraph`, whose list term is
+`LIST_BULLET` (`\s+` after the marker), so it never saw `*`, `+`, `1.` or `1)` alone.
+The carry was confirmed across a line the renderer ends the paragraph at. This was NOT
+new: the same predicate gap already silenced displayed text with no `<!--` at all
+(``A `xx`` / `*` / `HIDDENE` / ``yy` B.`` spoke `"A B."` on base; that was NRL-154's
+symptom 2). Base's wider `<!--` block had masked the `<!--`-bearing members, exactly as
+NRL-74 unmasked root 1.
+
+**The fix** adds one disjunct to `interruptsParagraph`:
+
+```
+BARE_LIST_MARKER = /^ {0,3}(?:[-*+]|1[.)])\r?$/
+```
+
+the bare-marker half of `TERM2_LIST`, deliberately the PRECISE rule and not
+`LIST_BULLET`'s loose one. The cap and the digit rule are load-bearing in the
+DISCLOSURE direction here, the opposite of the term-2 case: past three columns, or with
+`7.` or `01.`, the line is a lazy continuation, the renderer forms the image or link
+across it (`a ![x` / `7.` / `HIDDENE](dest.png) b` is one `<p>` with an
+`internal-embed src="dest.png"`), and stopping the carry speaks the destination. This
+folds NRL-154's `interruptsParagraph` acceptance criterion into NRL-119, because the two
+cannot be closed separately without shipping the regression; NRL-154 keeps the glyph.
+`interruptsParagraph` is still a pure widening (more stops, never fewer), so ADR 0019's
+F5 invariant stays green, and its only callers are the two carry confirmations.
+
+**Fixtures: 18 RED on the pre-round head, 0 after.** Fifteen `<!--`-bearing pins
+(code, link, image x `*`, `+`, `1.`, `1)`, `   *`) and three no-comment pins for the
+pre-existing class. Seven GUARDS, green on base, pre-round head and fix: a CRLF `*\r`
+and a lone `-` (already stopped by `LIST_BULLET` and `SETEXT`), and five disclosure-side
+guards (`7.`, `01.`, `7)`, four-space `*`, tab `*` inside an image or link label). The
+`\d+[.)]` arm makes the three digit guards RED and the `^[ \t]*` arm the two indent
+guards, measured in a COPIED shadow tree whose pre-round arm reproduces the 18 RED, so
+the shadow reads its own source. One tripwire pin records a pre-existing class the
+fix round's fuzz surfaced (below).
+
+**Measurements, all against Obsidian 1.13.7's own `WT`/`GT` (app.js sha256
+`8efbf581...9898`, `selftest.cjs` SELFTEST OK), base = `origin/main` at the rebase.**
+
+| probe | corpus | room on base (disclosure / prose loss) | newly leaking | newly lost |
+|---|---|---|---|---|
+| Verify's `p3.cjs`, base -> fix | 42 shapes x 512 x 4 sentinels | - | **0** | **0** (first diff: 20,480) |
+| carry corpus `p4.cjs`, base -> fix | 1,200 shapes (code/link/image x with/without `<!--` x 20 marker lines x 2 positions x plain, quote, list item, lazy, ordered item) x 512 x 4 sentinels = 2,457,600 | 407,552 / 1,486,336 | **0** | **0** (188,416 closed) |
+| same, base -> first diff | same | same | 0 | **67,584** |
+| same, first diff -> fix | same | 407,552 / 1,491,456 | 0 | 0 (183,296 closed) |
+| same, three wrong arms | `\d+[.)]` / `^[ \t]*` / `^\s*(?:[-*+]\|\d+[.)])\s*$` | same | **100,352 / 28,672 / 129,024** | 0 |
+| moved-line signing `sign.cjs`, base -> fix | the 16 moved lines x 3 kinds x 2 x 4 positions x 5 containers x 512 x 4 = 3,932,160 | 573,440 / 2,392,064 | **0** | **0** (662,528 closed) |
+| NRL-111 corpus `probe111.cjs`, base -> fix | 691,200 | 301,056 / 390,144 | 0 | 0 |
+| NRL-119 bare corpus `bare119.cjs`, base -> fix | 622,080 | 294,912 / 86,016 | 0 | 0 |
+| 17 must-not-widen controls | 8,704 | - | 0 moved | 0 moved |
+
+**Exhaustive census of `interruptsParagraph` itself**, lifted from each arm's own bundle
+(exported from a copied tree): every line of length 5 or less over {space, tab, `-`, `*`,
+`+`, `1`, `7`, `0`, `.`, `)`, `x`, `\r`} (271,453 lines) x all four
+(`htmlClosesLater`, `dedentedByList`) pairs. Against base and against the first diff
+alike: **16 lines widen, 0 narrow, all 16 `^ {0,3}(?:[*+]|1[.)])$`** (the `-` and `\r`
+forms were already stopped). Wrong arms: `\d+[.)]` widens 356 (340 off-form), `^[ \t]*`
+119 (103), the loose `\s` arm 1,211 (1,195). The 16 were then signed at their own
+positions (the `sign.cjs` row above).
+
+**Carry fuzz** (`fuzzc.cjs`, new): 4,000 notes over a vocabulary of span and label openers
+and closers, `<!--`/`-->`, bare and spaced markers and containers, a unique sentinel per
+prose line and per destination, 6 option sets, 82,872 cells, signed against an
+option-aware view of the rendered HTML (inline `<code>` dropped under `skipInlineCode`,
+`<pre>` under `skipCodeBlocks`, image `alt` counted under `speakImageAlt`). First diff
+-> fix: **0 newly leaking, 0 newly lost**. Base -> fix: 0 newly lost and **8 newly spoken
+cells, all one note, all inline-code text under `skipInlineCode`**, introduced by the
+first diff and unchanged by this round. They are not a disclosure: the renderer
+DISPLAYS the text, as code. It is a pre-existing class unmasked: a quoted code span with
+its closer on a lazy line (``> A `xx`` / ``--> yy` B.``) is never carried, on base too,
+because `codeSpanClosesLater` tests the raw opener line and `BLOCKQUOTE` stops it (the
+code-span twin of NRL-88 root 1; NRL-98 closed it for labels only). Pinned as the
+tripwire `pin-nrl119-quoted-code-span-lazy-closer-not-carried`. The fuzz reaches the
+disclosure side: `\d+[.)]` 46, `^[ \t]*` 96, loose 134 newly leaking, against 10,959
+cells of room.
+
+**`sourceIndex` lockstep** by numeric UTF-16 code-unit index over the carry corpus: base
+1,275,648 chunks / 13,950,976 units, fix 1,298,688 / 16,848,384, 0 failures of length,
+monotonicity, bounds or identity on both. Mutators nonzero on both arms (fix: drop
+1,260,800 length; shift 614,400 bounds + 684,288 identity; swap 1,220,864 monotonic +
+1,220,864 identity; zero 1,298,688 identity; base: 1,229,056; 614,400 + 661,248;
+1,180,416 + 1,180,416; 1,275,648). The space exemption is mandatory on both (fix 191,488,
+base 130,048 without it). NRL-111's corpus: base 974,848 / 17,349,120 and fix 974,848 /
+17,477,120, 0 failures. Math corpus (inline `$$y$$`, `$x$`, display), exemption keyed on
+the synthetic text: 0 with it, 70,656 (fix) and 60,416 (base) without it, all four
+mutators nonzero on both.
+
+**Residuals of the round, none opened by it.** The glyph (NRL-154). The quoted
+lazy-closer code span above, exclusion-only. Every remaining prose-loss cell in the carry
+corpus is identical on base.
 
 **NOT VERIFIED IN OBSIDIAN.** No deploy happened and no running Obsidian was touched;
 every verdict above is the reading-view parser and renderer executed in Node. Live

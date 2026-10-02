@@ -2538,6 +2538,32 @@ function opensHiddenComment(line: string, htmlClosesLater: boolean, dedentedByLi
  *
  * A lone `-` is matched by `TERM2_LONE_DASH` as well, and stays there on purpose.
  */
+/**
+ * A list marker ALONE on its line, at exactly the shape that interrupts a
+ * paragraph in Obsidian: the bare-marker half of `TERM2_LIST` (NRL-119 fix
+ * round 1). `interruptsParagraph` reads this beside `LIST_BULLET`, whose `\s+`
+ * tail needs whitespace after the marker and so never saw `*`, `+`, `1.` or
+ * `1)` alone. Without it `codeSpanClosesLater` and `bracketClosesLater` carried a
+ * soft-wrapped code span or label ACROSS a bare marker the renderer ends the
+ * paragraph at, and silenced displayed text: `A `xx` / `*` / `HIDDENE` /
+ * `yy` B.` renders `<p>A `xx</p><ul><li>HIDDENE<br>yy` B.</li></ul>` and spoke
+ * `"A B."`. That was pre-existing (NRL-154's symptom 2); widening `TERM2_LIST`
+ * unmasked it in the `<!--`-bearing shapes, because a narrower `<!--` block let
+ * the opener line reach the carry at all, which is how Verify found it.
+ *
+ * Deliberately the PRECISE rule rather than `LIST_BULLET`'s loose one. The
+ * cap (`^ {0,3}`) and the digit rule (`1` only) are load-bearing in the
+ * disclosure direction here: past three columns, or with `7.` or `01.`, the line
+ * is a lazy continuation, the renderer forms the image or link across it, and
+ * stopping the carry speaks its destination. Measured: `a ![x` / `7.` /
+ * `HIDDENE](dest.png) b` is one `<p>` with an `internal-embed`, and an arm with
+ * `\d+[.)]` here speaks `](dest.png)`. A lone `-` matches too, harmlessly: it is
+ * already `SETEXT`. A trailing `\r` is `\r?` for the CRLF reason on `TERM2_LIST`
+ * (it also already matched `LIST_BULLET`'s `\s+`).
+ *
+ * The marker GLYPH is still spoken; that is NRL-154's block-level strip.
+ */
+const BARE_LIST_MARKER = /^ {0,3}(?:[-*+]|1[.)])\r?$/;
 const TERM2_LIST = /^ {0,3}(?:[-*+]|1[.)])(?:[ \t]|\r?$)/;
 /**
  * A display-math opening line, at the EXACT shape Obsidian's own math block
@@ -3093,6 +3119,7 @@ function interruptsParagraph(line: string, htmlClosesLater: boolean, dedentedByL
 		SETEXT.test(line) ||
 		TABLE_ROW.test(line) ||
 		LIST_BULLET.test(line) ||
+		BARE_LIST_MARKER.test(line) ||
 		BLOCKQUOTE.test(line) ||
 		opensHiddenComment(line, htmlClosesLater, dedentedByList, htmlLeadIndented)
 	);

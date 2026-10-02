@@ -1804,6 +1804,79 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl119-bare-zero-padded-one-hidden", "Prose <!--\n01.\nHIDDENE\n--> t.", "Prose t."],
 		["guard-nrl119-bare-four-space-star-hidden", "Prose <!--\n    *\nHIDDENE\n--> t.", "Prose t."],
 		["guard-nrl119-bare-tab-star-hidden", "Prose <!--\n\t*\nHIDDENE\n--> t.", "Prose t."],
+		// NRL-119 FIX ROUND 1. Independent Verify found that widening `TERM2_LIST`
+		// alone newly LOST displayed prose: a soft-wrapped code span or link/image
+		// label whose opener line carries a mid-line `<!--` was carried ACROSS a bare
+		// marker line. Narrowing the term-2 scan made `opensHtmlBlock` answer false on
+		// the opener, so `codeSpanClosesLater` / `bracketClosesLater` went on to ask
+		// `interruptsParagraph` about the `*` line, and that predicate did not see a
+		// bare marker (`LIST_BULLET` needs `\s+`). Base's wider `<!--` block had
+		// masked it. The renderer ends the paragraph at the bare marker, so no span
+		// and no label forms: `A `xx <!--` / `*` / `HIDDENE` / `--> yy` B.` renders
+		// `<p>A `xx &#x3C;!--</p><ul><li>HIDDENE<br>--> yy` B.</li></ul>` (Obsidian
+		// 1.13.7 WT/GT out of obsidian.asar, app.js sha256 8efbf581...9898), so every
+		// word is DISPLAYED. On the pre-round PR head these spoke `"A B."` (code) and
+		// `"a xx * HIDDENE --> zz b"` (label, dropping the displayed `](dest.png)`);
+		// on base `"A xx yy B."` and `"a [xx zz](dest.png) b"`. All RED on the
+		// pre-round head. The fix gives `interruptsParagraph` the same bare-marker
+		// rule as `TERM2_LIST` (`BARE_LIST_MARKER`). The glyph is still spoken, and
+		// the backticks and the image `!` are dropped as they always were: NRL-154
+		// owns the glyph.
+		["pin-nrl119-code-span-across-bare-star", "A `xx <!--\n*\nHIDDENE\n--> yy` B.", "A xx <!-- * HIDDENE --> yy B."],
+		["pin-nrl119-code-span-across-bare-plus", "A `xx <!--\n+\nHIDDENE\n--> yy` B.", "A xx <!-- + HIDDENE --> yy B."],
+		["pin-nrl119-code-span-across-bare-one-dot", "A `xx <!--\n1.\nHIDDENE\n--> yy` B.", "A xx <!-- 1. HIDDENE --> yy B."],
+		["pin-nrl119-code-span-across-bare-one-paren", "A `xx <!--\n1)\nHIDDENE\n--> yy` B.", "A xx <!-- 1) HIDDENE --> yy B."],
+		["pin-nrl119-code-span-across-bare-star-three-space", "A `xx <!--\n   *\nHIDDENE\n--> yy` B.", "A xx <!-- * HIDDENE --> yy B."],
+		["pin-nrl119-link-label-across-bare-star", "a [xx <!--\n*\nHIDDENE --> zz](dest.png) b", "a [xx <!-- * HIDDENE --> zz](dest.png) b"],
+		["pin-nrl119-link-label-across-bare-plus", "a [xx <!--\n+\nHIDDENE --> zz](dest.png) b", "a [xx <!-- + HIDDENE --> zz](dest.png) b"],
+		["pin-nrl119-link-label-across-bare-one-dot", "a [xx <!--\n1.\nHIDDENE --> zz](dest.png) b", "a [xx <!-- 1. HIDDENE --> zz](dest.png) b"],
+		["pin-nrl119-link-label-across-bare-one-paren", "a [xx <!--\n1)\nHIDDENE --> zz](dest.png) b", "a [xx <!-- 1) HIDDENE --> zz](dest.png) b"],
+		["pin-nrl119-link-label-across-bare-star-three-space", "a [xx <!--\n   *\nHIDDENE --> zz](dest.png) b", "a [xx <!-- * HIDDENE --> zz](dest.png) b"],
+		["pin-nrl119-image-label-across-bare-star", "a ![xx <!--\n*\nHIDDENE --> zz](dest.png) b", "a [xx <!-- * HIDDENE --> zz](dest.png) b"],
+		["pin-nrl119-image-label-across-bare-plus", "a ![xx <!--\n+\nHIDDENE --> zz](dest.png) b", "a [xx <!-- + HIDDENE --> zz](dest.png) b"],
+		["pin-nrl119-image-label-across-bare-one-dot", "a ![xx <!--\n1.\nHIDDENE --> zz](dest.png) b", "a [xx <!-- 1. HIDDENE --> zz](dest.png) b"],
+		["pin-nrl119-image-label-across-bare-one-paren", "a ![xx <!--\n1)\nHIDDENE --> zz](dest.png) b", "a [xx <!-- 1) HIDDENE --> zz](dest.png) b"],
+		["pin-nrl119-image-label-across-bare-star-three-space", "a ![xx <!--\n   *\nHIDDENE --> zz](dest.png) b", "a [xx <!-- * HIDDENE --> zz](dest.png) b"],
+		// The same root WITHOUT a `<!--`: NRL-154's symptom 2, pre-existing on base
+		// and on the pre-round head alike (each spoke `"A B."`, `"a x * HIDDENE b"`
+		// and `"a x 1. HIDDENE b"`, silencing the displayed `xx`/`yy` and the
+		// displayed literal `](dest.png)`). It is folded in here because it is the
+		// identical predicate gap and closing one without the other is not possible.
+		["pin-nrl119-code-span-across-bare-star-no-comment", "A `xx\n*\nHIDDENE\nyy` B.", "A xx * HIDDENE yy B."],
+		["pin-nrl119-image-label-across-bare-star-no-comment", "a ![x\n*\nHIDDENE](dest.png) b", "a [x * HIDDENE](dest.png) b"],
+		["pin-nrl119-link-label-across-bare-one-dot-no-comment", "a [x\n1.\nHIDDENE](dest.png) b", "a [x 1. HIDDENE](dest.png) b"],
+		// GUARDS, green on base, on the pre-round head and on the fix, so not counted
+		// as evidence. A trailing `\r` already matched `LIST_BULLET`'s `\s+`, and a
+		// lone `-` was already `SETEXT`, so both always stopped the carry.
+		["guard-nrl119-code-span-across-bare-star-crlf", "A `xx <!--\n*\r\nHIDDENE\n--> yy` B.", "A xx <!-- HIDDENE --> yy B."],
+		["guard-nrl119-link-label-across-lone-dash", "a [xx <!--\n-\nHIDDENE --> zz](dest.png) b", "a [xx <!-- HIDDENE --> zz](dest.png) b"],
+		// GUARDS, same status, and these are the disclosure side. Past three columns
+		// of indent, or with a digit string other than `1`, the marker line is a
+		// lazy paragraph continuation and the renderer DOES form the image or link:
+		// `a ![x` / `7.` / `HIDDENE](dest.png) b` renders one `<p>` holding an
+		// `internal-embed` with `src="dest.png"`, so the destination is an attribute
+		// and must not be spoken. The carry must still cross these lines. Each is
+		// RED against a deliberately wrong `BARE_LIST_MARKER` arm, measured: the
+		// `\d+[.)]` arm stops at the three digit rows and speaks `](dest.png)`, the
+		// `^[ \t]*` arm does the same at the two indent rows.
+		["guard-nrl119-image-label-across-bare-seven-dot", "a ![x\n7.\nHIDDENE](dest.png) b", "a x 7. HIDDENE b"],
+		["guard-nrl119-image-label-across-bare-zero-padded-one", "a ![x\n01.\nHIDDENE](dest.png) b", "a x 01. HIDDENE b"],
+		["guard-nrl119-link-label-across-bare-seven-paren", "a [x\n7)\nHIDDENE](dest.png) b", "a x 7) HIDDENE b"],
+		["guard-nrl119-image-label-across-bare-four-space-star", "a ![x\n    *\nHIDDENE](dest.png) b", "a x * HIDDENE b"],
+		["guard-nrl119-image-label-across-bare-tab-star", "a ![x\n\t*\nHIDDENE](dest.png) b", "a x * HIDDENE b"],
+		// TRIPWIRE, green on base, on the pre-round head and on the fix. A quoted
+		// code span whose closer sits on a LAZY continuation line (no `>`) is not
+		// carried, because `codeSpanClosesLater` tests the raw opener line and
+		// `BLOCKQUOTE` stops it there (the code-span twin of NRL-88 root 1, which
+		// NRL-98 closed for labels only). The renderer makes `xx --> yy` one inline
+		// code span, so under `skipInlineCode` it should go silent and we speak it.
+		// Nothing hidden is spoken: the text is displayed, as code. Recorded because
+		// NRL-119's term-2 change UNMASKS it inside a `<!--` opener's paragraph, where
+		// base's wider comment hid it: the fix round's carry fuzz found
+		// `A `xx <!--` / `*` / `> A `zz` / `--> yy` B.`, base `"A xx yy B."`, PR
+		// `"A xx <!-- * A zz --> yy B."`, renderer `<code>zz --> yy</code>`. Change this
+		// on purpose when the code-span container class is closed.
+		["pin-nrl119-quoted-code-span-lazy-closer-not-carried", "> A `xx\n--> yy` B.", "A xx --> yy B."],
 		// MUST NOT WIDEN, three controls, all three green on BOTH sides of NRL-111.
 		// Each dash shape keeps the stop NRL-95 gave it, for three different reasons
 		// and none of them setext: `---` and longer are `thematicBreak`, which is in
