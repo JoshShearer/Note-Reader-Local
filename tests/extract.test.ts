@@ -3519,13 +3519,24 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// `   - item`. Measured at 22 cells of a 667-cell renderer-keyed sweep.
 		["pin-nrl117-shallower-than-content-indent-still-silenced", "-    item\n    %%\nSECRET", "item"],
 		["pin-nrl117-wide-ordered-marker-still-silenced", "100. item\n    %%\nSECRET", "item"],
-		// 3. The budget is module 5540's `maximum`, not the `p` it really uses, which
-		// is the MINIMUM indent over the item's own non-blank lines. Over-estimating
-		// the dedent leaves a smaller residual and so keeps the pre-NRL-117 answer,
-		// which is the fail-toward-hiding direction the ticket's asymmetry argument
-		// asks for. ` x` drops the real budget to one column, so the renderer keeps
-		// four columns of lead on the next line and displays it; we remove two.
-		["pin-nrl117-minimum-indent-not-maximum-still-silenced", "- item\n x\n     %%\nSECRET", "item x"],
+		// 3. CLOSED BY NRL-162 (2026-10-03). This used to document the budget
+		// being module 5540's `maximum` rather than the `p` it really uses (the
+		// minimum indent over the item's own non-blank lines), and claimed that
+		// over-estimating the dedent "keeps the pre-NRL-117 answer, which is the
+		// fail-toward-hiding direction". That claim was FALSE: ` x` drops the
+		// real budget to one column, so the renderer keeps four columns of lead
+		// on the `%%` line and displays it as literal text - but the max budget
+		// (2, from `- `) removed two columns, leaving a 3-column residual that
+		// WRONGLY opened a block comment, hiding SECRET (a disclosure, not mere
+		// prose loss, since this item has no later closing `%%` and the note
+		// has none either, so nothing ever un-hides it). `extractChunks` now
+		// computes the item's real `p` via a two-phase record-then-refold pass
+		// (see `listDedented`'s own comment) and the residual is 4 columns,
+		// declining the opener exactly as Obsidian does. Flipped in place,
+		// keeping the name per house convention, even though "still silenced"
+		// no longer describes it: re-derived against the real renderer
+		// (`GT(WT(src))` on this exact source), which shows `item x %% SECRET`.
+		["pin-nrl117-minimum-indent-not-maximum-still-silenced", "- item\n x\n     %%\nSECRET", "item x %% SECRET"],
 		// THE ACCEPTED COST, per Q46, and it is the SAME TWO CLASSES this repo has
 		// already documented rather than a new one. Declining a wrongly-recognised
 		// opener lets `codeSpanClosesLater` CONFIRM a soft-wrapped span the base only
@@ -7009,6 +7020,242 @@ console.log("a whitespace-only line holding a tab is a lazy continuation of an o
 	check(
 		"NRL-158 paragraph-flush fix is gated on this line's own blockType, not only on wasPara",
 		SRC158.includes('if (blockType === "paragraph" && !blankEndsParagraph(body, wasPara)) {'),
+	);
+}
+
+console.log("NRL-162 Fix round 1: a %%-opener-shaped line cannot shrink the item's own dedent");
+// Expectations from the installed Obsidian 1.13.7 WT/GT, not from our scanner.
+// Ship's own critique input: four %% lines at indents 5/2/1/3, no other
+// non-blank line in the item (A..E are column 0, already excluded by the
+// pre-existing c > 0 term). The pre-NRL-162 max-only answer is ALREADY
+// correct here - letting the %% lines' own indent shrink levelP (the first
+// Fix round's mistake) breaks the pairing instead of improving it.
+for (const marker of ["-", "+", "*", "1.", "1)", "- [x]", "- [ ]"]) {
+	const src = `${marker} item\n     %%\nA\n  %%\nB\n %%\nC\n   %%\nD\nE`;
+	const expected = marker.startsWith("1") ? "item C" : "item B D E";
+	for (const skipCodeBlocks of [false, true]) {
+		const spoken = extractChunks(src, { ...OPTS, skipCodeBlocks }).map(c => c.text).join(" ");
+		check(`NRL-162 item-extent-multiple-pairs ${marker} code=${skipCodeBlocks}`, spoken === expected, spoken);
+	}
+}
+
+console.log("a max-budgeted list dedent can over-dedent past a line's real indent, creating a false %% opener that pairs with a real closer (NRL-162, R-M08)");
+{
+	/**
+	 * sourceIndex lockstep, the same house convention as `lockstepOk158`
+	 * above: equal length to the text, and every non-space character maps to
+	 * the same raw character at a monotonic, in-bounds offset.
+	 */
+	function lockstepOk162(src: string, chunks: SpeechChunk[]): boolean {
+		for (const c of chunks) {
+			if (c.sourceIndex.length !== c.text.length) return false;
+			for (let i = 0; i < c.text.length; i++) {
+				const at = c.sourceIndex[i]!;
+				if (c.text[i] === " ") continue;
+				if (at < 0 || at >= src.length) return false;
+				if (src[at] !== c.text[i]) return false;
+				if (i > 0 && at < c.sourceIndex[i - 1]!) return false;
+			}
+		}
+		return true;
+	}
+
+	// PINS. Harness-measured against Obsidian 1.13.7's real parser and
+	// renderer (oracle: `WT`/`GT` in ~/.local/share/note-reader-local/
+	// obsidian-parser-harness, app.js sha256 8efbf581...9898). `listDedented`
+	// budgeted a list item's dedent at module 5540's MAXIMUM content indent
+	// (module 745's `M`) rather than the real `p` module 5540 actually uses -
+	// the MINIMUM indent over the item's own non-blank lines. Over-dedenting
+	// removes MORE lead than Obsidian does, which can turn a line Obsidian
+	// keeps as literal prose into a FALSE block-start opener for us. The
+	// ticket's own repro is both directions of that one false opener at
+	// once: it pairs with a REAL later closer (the bare `%%`), so the note's
+	// OWN unclosed tail (`ZT1Z`, which Obsidian hides because the real
+	// opener's comment runs to end of note) is wrongly SPOKEN (disclosure),
+	// and the text the false opener wrongly swallowed (`ZH3Z`/`ZH4Z`, which
+	// Obsidian shows because that line never opens anything there) is wrongly
+	// HIDDEN (prose loss). Every row is RED against the unfixed
+	// max-only pass (`extract-base.cjs` bundled at this branch's base
+	// 6f34e8d, before this ticket's edit).
+	const pins: Array<[string, string, string]> = [
+		["ticket-repro", "- item ZA0Z\n x ZM1Z\n      %% ZH1Z\nZH2Z\n     %% ZH3Z\nZH4Z\n%%\nZT1Z", "item ZA0Z x ZM1Z %% ZH1Z ZH2Z %% ZH3Z ZH4Z"],
+		// A genuine prose shrink (` x`) COEXISTING with a %% pair, the shape
+		// Ship's zero-shallow-line regression input does not cover: harness-
+		// verified (`node ground_truth_nrl162c.cjs`) that the real renderer
+		// shows SECRET and hides TAIL here, which needs the first %% (indent
+		// 5) to fail open under the shrunk p=1 (residual 4) while the second
+		// (indent 3) still opens with no closer (residual 2). The broken
+		// Fix-round-1 attempt got this one right already (its %%-exclusion
+		// bug only showed on items with no OTHER shrink candidate at all,
+		// like Ship's own input above) - pinned here as the case that must
+		// keep working once %% lines are excluded from shrink candidacy.
+		["shallow-plus-percent-pair", "- item\n x\n     %%\nSECRET\n   %%\nTAIL", "item x %% SECRET"],
+		// The reversed position: the shallow line sits BETWEEN the pair
+		// rather than before it. Harness-verified the same way: SECRET shown,
+		// `x` shown, TAIL hidden (the second %%, indent 3, opens with no
+		// closer; the first, indent 5, still fails open under p=1).
+		["shallow-between-percent-pair", "- item\n     %%\nSECRET\n x\n   %%\nTAIL", "item %% SECRET x"],
+		// The same shrink under the two OTHER `itemHeadCols` paths - an ordered
+		// marker's digit-plus-delimiter width and a task checkbox's extra
+		// `[ ] ` - each with its own content-indent arithmetic that the real p
+		// must be measured AFTER, not instead of.
+		["ordered-marker-min", "1. item\n x\n     %%\nSECRET", "item x %% SECRET"],
+		["task-marker-min", "- [ ] item\n x\n     %%\nSECRET", "item x %% SECRET"],
+		// The item's real p still shrinks correctly when a LATER line is a
+		// quote nested inside it - NRL-114's own quote-peel (which strips the
+		// `>` before this pass ever sees the line) runs first, so the peeled
+		// body is exactly what this pass records, matching NRL-114's existing
+		// scope rather than widening it.
+		["quote-in-list-min", "- item\n x\n  > Plain\n  >      %%\n  > SECRET", "item x Plain %% SECRET"],
+		// `%%` and `<!--` mixed in one note: the fix closes the `%%`
+		// disclosure (the false opener no longer reaches a real closer two
+		// lines later) without disturbing the SEPARATE `<!--` predicate's own
+		// answer for the construct that follows it (D-73-4; see the control
+		// below for that predicate's own pre-existing, untouched residual).
+		["mixed-constructs", "- item ZA0Z\n x ZM1Z\n     %% ZH1Z\nZH2Z\n%%\n     <!-- ZH3Z\nZH4Z\n--> ZT1Z", "item ZA0Z x ZM1Z %% ZH1Z ZH2Z"],
+	];
+	for (const [id, src, expected] of pins) {
+		const chunks = extractChunks(src, OPTS);
+		const spoken = chunks.map((c) => c.text).join(" ");
+		check(`NRL-162 pin-${id}: visible output`, spoken === expected, spoken);
+		check(`NRL-162 pin-${id}: sourceIndex lockstep`, lockstepOk162(src, chunks));
+	}
+
+	// GUARDS and CONTROLS, all measured against the real renderer and all
+	// BYTE-IDENTICAL between the unfixed max-only pass and the fix - a
+	// modest, freshly-built census over the mixed `%%`/`<!--` list shape the
+	// ticket's own "Measured by the critique" section names, signed per cell
+	// rather than combined into one number (AGENTS.md's own warning against
+	// re-quoting a cited, non-enumerated corpus - here, the critique's
+	// uncited 2,156,544-cell count - applies in full; this corpus is built
+	// fresh and is the one actually run).
+	const guards: Array<[string, string, string]> = [
+		// THE COUNTER-EXAMPLE THAT DISQUALIFIED A SINGLE COLUMN SUBTRACTION
+		// WHEN NRL-117 SHIPPED, re-run here because nested p-vs-max interaction
+		// is exactly where that single-subtraction arm was shown to disclose:
+		// module 745 nests, so the dedent runs once per level, and a smaller
+		// real p at the OUTER level could in principle change what the INNER
+		// level's own view (and so its own real p) sees. It does not move
+		// here: outer's real p (2, unchanged - the marker lines for both
+		// items already reach the max) leaves the inner level's own view
+		// exactly as the max-only pass did, so this guard is unmoved.
+		["nested-double-tab-correctly-hides", "- outer\n  - inner\n\t\t%%\nSECRET", "outer inner"],
+		// The adversarial form of that same question: a one-space lazy line
+		// at the OUTER level, so the outer's real p DOES shrink (2 -> 1,
+		// confirmed by the pin above at one level of nesting), checked here
+		// with a SECOND, nested level present. Unmoved in both directions:
+		// the inner marker's own max still exceeds what the outer's shrunk p
+		// leaves behind, so the final residual for the `%%` line is identical
+		// to the max-only pass's on both sides of this corpus.
+		["nested-min-outer-unmoved", "- outer\n x\n  - inner\n     %%\nSECRET", "outer x inner"],
+		["nested-min-inner-unmoved", "- outer\n  - inner\n   x\n     %%\nSECRET", "outer inner x"],
+		["three-level-min-mid-unmoved", "- outer\n  - mid\n   x\n    - inner\n            %%\nSECRET", "outer mid x inner %% SECRET"],
+		// CONTROL: no shrink opportunity at all (every non-blank line's
+		// indent is >= the max), so real p equals the max and the pass's
+		// output cannot move - the refusal-only proof's own base case.
+		["no-shrink-control", "- item\n   x\n     %%\nSECRET", "item x"],
+		// CONTROL: `walkLeadItem`'s own exclusions for computing p. A blank
+		// line (`line.trim() === ""`) and a ZERO-indent line (`c > 0` guards
+		// the shrink) each contribute nothing to the minimum, matching
+		// module 5540 exactly; both stay unmoved because nothing shrinks.
+		["min-from-blank-excluded-control", "- item\n\n     %%\nSECRET", "item"],
+		["min-from-zero-indent-excluded-control", "- item\nx\n     %%\nSECRET", "item x"],
+		// CONTROL: the `<!--` twin. `opensHtmlBlock` reads a SEPARATE model
+		// (NRL-115's `rendererLeads`) and is untouched by this ticket
+		// (D-73-4); this shape is already wrong on the unfixed pass (it does
+		// not yet match the renderer's own `item ZA0Z x ZM1Z <!-- ZH1Z ZH2Z
+		// ZT1Z`), a PRE-EXISTING residual of that other predicate, and it
+		// stays wrong in exactly the same way on the fix - 0 cells moved,
+		// confirming the two predicates stayed structurally separate.
+		["html-twin-control", "- item ZA0Z\n x ZM1Z\n      <!-- ZH1Z\nZH2Z\n     <!-- ZH3Z\nZH4Z\n--> ZT1Z", "item ZA0Z x ZM1Z ZT1Z"],
+	];
+	for (const [id, src, expected] of guards) {
+		const spoken = extractChunks(src, OPTS)
+			.map((c) => c.text)
+			.join(" ");
+		check(`NRL-162 guard-${id}: unchanged`, spoken === expected, spoken);
+	}
+
+	// sourceIndex lockstep is non-vacuous: four mutators, each shown able to
+	// FAIL the checker on the ticket's own repro's second chunk (a real,
+	// non-trivial index spanning a dropped list marker and dropped `%%`
+	// pairs), per the house convention (drop-one-entry/length,
+	// shift-all-by-one/bounds+identity, swap-two-entries/monotonic+identity,
+	// negate-one/monotonic+bounds).
+	{
+		const src = "- item ZA0Z\n x ZM1Z\n      %% ZH1Z\nZH2Z\n     %% ZH3Z\nZH4Z\n%%\nZT1Z";
+		const chunks = extractChunks(src, OPTS);
+		const c = chunks[1]!;
+		const base = c.sourceIndex;
+		const mutantOk = (mutated: readonly number[]): boolean => {
+			const text = c.text;
+			if (mutated.length !== text.length) return false;
+			for (let i = 0; i < text.length; i++) {
+				const at = mutated[i]!;
+				if (text[i] === " ") continue;
+				if (at < 0 || at >= src.length) return false;
+				if (src[at] !== text[i]) return false;
+				if (i > 0 && at < mutated[i - 1]!) return false;
+			}
+			return true;
+		};
+		let dropOneFails = 0;
+		let shiftFails = 0;
+		let swapFails = 0;
+		let negateFails = 0;
+		// drop-one-entry: wrong length, must fail.
+		if (!mutantOk(base.slice(1))) dropOneFails += 1;
+		// shift-all-by-one: every entry +1, may go out of bounds or break identity.
+		if (!mutantOk(base.map((n) => n + 1))) shiftFails += 1;
+		// swap-two-entries: breaks monotonicity (and usually identity too).
+		if (base.length >= 2) {
+			const swapped = base.slice();
+			const tmp = swapped[0]!;
+			swapped[0] = swapped[swapped.length - 1]!;
+			swapped[swapped.length - 1] = tmp;
+			if (!mutantOk(swapped)) swapFails += 1;
+		}
+		// negate-one: a single entry forced to -1, breaks monotonicity and
+		// bounds. Picked on a non-space character past index 0, since the
+		// checker deliberately skips spaces.
+		if (base.length >= 2) {
+			const text = c.text;
+			let idx = -1;
+			for (let i = 1; i < text.length; i++) {
+				if (text[i] !== " ") {
+					idx = i;
+					break;
+				}
+			}
+			if (idx !== -1) {
+				const negated = base.slice();
+				negated[idx] = -1;
+				if (!mutantOk(negated)) negateFails += 1;
+			}
+		}
+		check("NRL-162 sourceIndex checker is non-vacuous: drop-one-entry fails", dropOneFails > 0);
+		check("NRL-162 sourceIndex checker is non-vacuous: shift-all-by-one fails", shiftFails > 0);
+		check("NRL-162 sourceIndex checker is non-vacuous: swap-two-entries fails", swapFails > 0);
+		check("NRL-162 sourceIndex checker is non-vacuous: negate-one fails", negateFails > 0);
+		check("NRL-162 sourceIndex checker passes on the real (unmutated) output", mutantOk(base));
+	}
+
+	// Mechanism proof: the fix is the two-phase record-then-refold pass
+	// described on `listDedented`'s own comment, not a one-line column
+	// subtraction (which NRL-117 already measured as disclosing 7,168 cells
+	// in the nested-tab shape above).
+	const __filename162 = fileURLToPath(import.meta.url);
+	const ROOT162 = path.resolve(path.dirname(__filename162), "../..");
+	const SRC162 = fs.readFileSync(path.join(ROOT162, "src/text/extract.ts"), "utf8");
+	check("NRL-162 levelP seeds at the max and only shrinks", SRC162.includes("if (residualHere < prevP) levelP.set(id, residualHere);"));
+	check(
+		"NRL-162 a %%-opener-shaped line is excluded from the shrink (Ship's multi-pair regression)",
+		SRC162.includes('view.replace(/^[ \\t]+/, "").startsWith("%%")'),
+	);
+	check("NRL-162 fallback levels are excluded from the shrink", SRC162.includes("fallbackLevelIds.add(id);"));
+	check(
+		"NRL-162 Phase 2 replays each line's chain against the final levelP, not the max",
+		SRC162.includes("for (const id of chainIds[k]!) view = view.slice(listDedentCut(view, levelP.get(id)!));"),
 	);
 }
 
