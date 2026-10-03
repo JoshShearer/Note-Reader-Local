@@ -2036,6 +2036,18 @@ function splitOversized(chunk: SpeechChunk, ctx: SegmentContext): SpeechChunk[] 
 }
 
 const FENCE = /^\s*(```|~~~)/;
+/**
+ * `FENCE` narrowed to the three-space continuation cap (NRL-156, ADR 0025):
+ * `interruptsParagraphExceptBareMarker`'s own callers (`codeSpanClosesLater`,
+ * `bracketClosesLater`) only ever ask it of a line that, if it does not
+ * interrupt, continues a paragraph the OPENER line already left open, so
+ * `wasOpen` is always true there and `fenceOpensAt(lead, true)` collapses to
+ * this fixed cap. HEADING/BLOCKQUOTE/HR already carry the matching `{0,3}`
+ * cap in that function; only FENCE and LIST_BULLET did not, and LIST_BULLET
+ * stays untouched (a NARROWING one-term change to a shared predicate has
+ * measured a regression before, NRL-93; LIST_BULLET is NRL-109's).
+ */
+const FENCE_CONTINUATION = /^ {0,3}(```|~~~)/;
 const HEADING = /^\s{0,3}#{1,6}\s+/;
 /**
  * Any indent: inside a list, "    - item" is a nested item, and its marker
@@ -2976,7 +2988,7 @@ const TERM2_MATH = /^ {0,3}\$\$+[^$]*$/;
 function endsTerm2Block(line: string, paraLinesAbove: number): boolean {
 	return (
 		line.trim() === "" ||
-		FENCE.test(line) ||
+		(fenceOpensAt(line.match(/^[ \t]*/)![0], paraLinesAbove > 0) && FENCE.test(line)) ||
 		HEADING.test(line) ||
 		HR.test(line) ||
 		TERM2_LONE_DASH.test(line) ||
@@ -3393,6 +3405,36 @@ interface LineView {
 }
 
 /**
+ * The renderer's own fence-OPENER lead rule (NRL-156/NRL-132, ADR 0025): a
+ * continuation of an open paragraph (`wasOpen`) tolerates at most three spaces
+ * and no tab (module 8607's own interrupt-check cap), while a fresh block
+ * tolerates any lead but a leading four spaces or a tab, which module 134
+ * reads as indented code instead. This is the gate only, not the fence-char
+ * test: every call site still tests `FENCE` (or the capture it needs)
+ * separately, exactly as `containerViews` already did before this was pulled
+ * out of it.
+ *
+ * `wasOpen` is "a paragraph left open at this point by the line before":
+ * `containerViews`' own per-level signal, `wasPara`/`prevPara` at the
+ * document's top level, and `paraLinesAbove > 0` for term 2's forward scan.
+ * Reused rather than re-derived at the three call sites measured to need it;
+ * `interruptsParagraphExceptBareMarker`'s FENCE term always sees `wasOpen`
+ * true (a carry only ever continues a paragraph the opener line already
+ * started) and is narrowed to a fixed cap instead, not threaded through here.
+ * The other three `FENCE.test()` call sites in this file never see a
+ * non-empty lead at all and are proven no-ops, not touched.
+ *
+ * Do NOT collapse the two branches into one capped constant: the fresh-block
+ * branch legitimately admits a lead `MODULE134_INDENTED_CODE` would reject on
+ * its own terms were it tab-stop-aware (e.g. one space then a tab), because
+ * module 134 is literal rather than tab-stop-expanding (NRL-113). A single
+ * `{0,3}`-style cap would wrongly refuse that shape.
+ */
+function fenceOpensAt(lead: string, wasOpen: boolean): boolean {
+	return wasOpen ? /^ {0,3}$/.test(lead) : !/^(?: {4}|\t)/.test(lead);
+}
+
+/**
  * Where each line's INNERMOST container content starts in the raw line, written
  * into `out` by line number (NRL-136 Q3), so `htmlBlockLine` can measure the lead
  * the renderer's HTML tokenizer really sees. `views` are the lines as one level
@@ -3505,8 +3547,7 @@ function containerViews(
 			continue;
 		}
 		const fenceLead = t.match(/^[ \t]*/)![0];
-		const fence =
-			(wasOpen ? /^ {0,3}$/.test(fenceLead) : !/^(?: {4}|\t)/.test(fenceLead)) ? t.match(/^[ \t]*(`{3,}|~{3,})/) : null;
+		const fence = fenceOpensAt(fenceLead, wasOpen) ? t.match(/^[ \t]*(`{3,}|~{3,})/) : null;
 		if (fence) {
 			literal[views[n]!.k] = "code";
 			fences[views[n]!.k] = "open";
@@ -3768,6 +3809,15 @@ function isSetextContentLine(lines: readonly string[], k: number, lazyInListItem
  * the renderer's own behaviour, since module 8607 never ran the interrupt check
  * on such a line, and it was measured for disclosure over plain and container
  * shapes rather than assumed safe.
+ *
+ * FENCE is `FENCE_CONTINUATION` here, not the bare any-indent constant
+ * (NRL-156): every call in this family asks about a line that, if it does
+ * not interrupt, continues the carry's already-open paragraph, so `wasOpen`
+ * is always true and the three-space cap applies unconditionally. This
+ * NARROWS the predicate (fewer lines interrupt), matching HEADING/BLOCKQUOTE/
+ * HR's existing `{0,3}` caps, and is not the widening ADR 0019's F5 guard
+ * (HEADING/BLOCKQUOTE/LIST_BULLET/TABLE_ROW) exists to catch - FENCE is not
+ * in that enumeration.
  */
 function interruptsParagraph(line: string, htmlClosesLater: boolean, dedentedByList: boolean, htmlLeadIndented: boolean, listStrip: number): boolean {
 	return interruptsParagraphExceptBareMarker(line, htmlClosesLater, dedentedByList, htmlLeadIndented, listStrip) || BARE_LIST_MARKER.test(line);
@@ -3784,7 +3834,7 @@ function interruptsParagraph(line: string, htmlClosesLater: boolean, dedentedByL
 function interruptsParagraphExceptBareMarker(line: string, htmlClosesLater: boolean, dedentedByList: boolean, htmlLeadIndented: boolean, listStrip: number): boolean {
 	return (
 		line.trim() === "" ||
-		FENCE.test(line) ||
+		FENCE_CONTINUATION.test(line) ||
 		HEADING.test(line) ||
 		HR.test(line) ||
 		SETEXT.test(line) ||
@@ -5487,8 +5537,15 @@ export function extractChunks(
 			htmlParaOpen[k] = htmlOpen;
 			open = false;
 			if (literalAt[k]! || htmlLineAt[k]!) continue;
-			if (fenced || FENCE.test(view)) {
-				if (FENCE.test(view)) fenced = !fenced;
+			// Fence toggle, capped the same way containerViews' own fence test is
+			// (NRL-156): a line four-or-more-spaces or tab-led never opens a fence
+			// here either, consistent with the array `literalAt`/`fenceAt` that
+			// containerViews already built above and that the `continue` just
+			// above this one is meant to make this branch redundant with - this is
+			// the backstop for whatever containerViews did not reach (NRL_MAX_DEPTH).
+			const fenceHere = fenceOpensAt(view.match(/^[ \t]*/)![0], wasOpen) && FENCE.test(view);
+			if (fenced || fenceHere) {
+				if (fenceHere) fenced = !fenced;
 				continue;
 			}
 			// A heading as a list item's content (`- # Z2Q`) is a heading too, which
@@ -6215,9 +6272,27 @@ export function extractChunks(
 
 		// The fence line itself, including an info string like "js", is never
 		// spoken. Flushing at both fences paces a spoken block as one paragraph.
-		if (FENCE.test(raw)) {
+		//
+		// Opener and closer are tested separately (NRL-156/NRL-132, ADR 0025):
+		// an opener after an open paragraph is module 8607's continuation (at
+		// most three spaces, no tab), while a fresh-block opener is anything but
+		// a leading four spaces or a tab (module 134's indented code) - exactly
+		// containerViews' own fence test, reused here as `fenceOpensAt` rather
+		// than re-derived. A closer never depends on an open paragraph, so it
+		// keeps the renderer's plain three-space cap (`BLOCK_END_FENCE`)
+		// unconditionally; char/length pairing with the opener is a separate,
+		// pre-existing, out-of-scope simplification (NRL-132's own AC), not
+		// touched here.
+		if (!inFence) {
+			const fenceLead = raw.match(/^[ \t]*/)![0];
+			if (fenceOpensAt(fenceLead, wasPara) && FENCE.test(raw)) {
+				flushParagraph();
+				inFence = true;
+				continue;
+			}
+		} else if (BLOCK_END_FENCE.test(raw)) {
 			flushParagraph();
-			inFence = !inFence;
+			inFence = false;
 			continue;
 		}
 		if (inFence) {

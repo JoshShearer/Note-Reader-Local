@@ -6610,6 +6610,189 @@ console.log("NRL-114 the peel's quote marker rule and its loop invariant (R-M08)
 	);
 }
 
+console.log("fence opener/closer honour the renderer's three-space cap (NRL-156, NRL-132, R-M08)");
+{
+	/**
+	 * sourceIndex lockstep: equal length to the text, and every non-space
+	 * character maps to the same raw character at a monotonic, in-bounds
+	 * offset. Mirrors the house `unitsMatch`/lockstep convention used
+	 * throughout this file.
+	 */
+	function lockstepOk(src: string, chunks: SpeechChunk[]): boolean {
+		for (const c of chunks) {
+			if (c.sourceIndex.length !== c.text.length) return false;
+			for (let i = 0; i < c.text.length; i++) {
+				const at = c.sourceIndex[i]!;
+				if (c.text[i] === " ") continue;
+				if (at < 0 || at >= src.length) return false;
+				if (src[at] !== c.text[i]) return false;
+				if (i > 0 && at < c.sourceIndex[i - 1]!) return false;
+			}
+		}
+		return true;
+	}
+
+	const cases: Array<[string, string, string, Partial<typeof OPTS>?]> = [
+		// NRL-156's own repro: a 4-space-led ``` after an open paragraph is a
+		// lazy continuation for the renderer (module 8607: at most three spaces,
+		// no tab), not a fence, so the <!-- block beneath it is never swallowed
+		// as fence content and its HTML comment (HIDDENA) stays hidden. Base
+		// (pre-fix) speaks "Intro. <!-- === HIDDENA --> Tail." under default
+		// options - a disclosure.
+		["nrl156-headline-disclosure", "Intro.\n    ```\n \t<!--\n===\nHIDDENA\n-->\nTail.", "Intro. Tail."],
+		[
+			"nrl156-headline-disclosure-codeoff",
+			"Intro.\n    ```\n \t<!--\n===\nHIDDENA\n-->\nTail.",
+			"Intro. Tail.",
+			{ skipCodeBlocks: false },
+		],
+		// NRL-132's own three repro cases, folded in per the clarification: the
+		// opposite (prose-loss) face of the same root. Base speaks only the
+		// opening line in all three, because the wrongly-opened fence never
+		// finds a closer and swallows everything after it, VISIBLE1/VISIBLE2
+		// included.
+		["nrl132-4-space-lead", "Before x.\n    ```\nVISIBLE1\n\nVISIBLE2", "Before x. VISIBLE1 VISIBLE2"],
+		["nrl132-6-space-lead", "Before x.\n      ```\nVISIBLE1\n\nVISIBLE2", "Before x. VISIBLE1 VISIBLE2"],
+		["nrl132-8-space-lead-in-list-item", "- Item x.\n\n        ```\n  VISIBLE1\n\nVISIBLE2", "Item x. VISIBLE1 VISIBLE2"],
+		// Closer cap (NRL-132's own AC: "closer rule is also at most three
+		// spaces"): a 4-space-led ``` inside an already-open, zero-indent fence
+		// is fence CONTENT, not a closer, so it must not end the fence early.
+		// The real closer two lines later (zero indent) does end it.
+		[
+			"nrl132-closer-cap-four-space-is-content-not-closer",
+			"Before.\n```\ncode1\n    ```\ncode2\n```\nAfter.",
+			"Before. code1 ``` code2 After.",
+			{ skipCodeBlocks: false },
+		],
+		// The opener's two branches are asymmetric on purpose (fenceOpensAt):
+		// a FRESH block tolerates a lead that is not a leading four spaces or a
+		// tab, so a one-space-then-tab lead still opens a fresh-block fence -
+		// a shape a single `{0,3}`-style cap would wrongly reject. Confirmed
+		// against the real Obsidian 1.13.7 renderer (oracle111/parser.cjs,
+		// harness at ~/.local/share/note-reader-local/obsidian-parser-harness):
+		// " \t```" over "code1" over "```" at document start renders one
+		// <pre><code>code1</code></pre>.
+		["nrl156-fresh-block-space-tab-lead-still-opens", "\n \t```\ncode1\n```\nAfter.", "code1 After.", { skipCodeBlocks: false }],
+		// The CONTINUATION branch is strict (spaces only, 0-3): the same
+		// one-space-then-tab lead, after an open paragraph, must NOT open.
+		// Renderer-confirmed: the ``` line and "middle" stay in one <p>.
+		[
+			"nrl156-continuation-space-tab-lead-does-not-open",
+			"Before x.\n \t```\nmiddle\nAfter.",
+			"Before x. middle After.",
+			{ skipCodeBlocks: false },
+		],
+		// Controls: a zero-indent fence is unaffected by any of this.
+		["control-zero-indent-fence-codeoff", "Before.\n```\ncode1\ncode2\n```\nAfter.", "Before. code1 code2 After.", { skipCodeBlocks: false }],
+		["control-zero-indent-fence-codeon", "Before.\n```\ncode1\ncode2\n```\nAfter.", "Before. After."],
+	];
+	for (const [id, src, expected, overrides] of cases) {
+		const chunks = extractChunks(src, { ...OPTS, ...overrides });
+		const spoken = chunks.map((c) => c.text).join(" ");
+		check(`NRL-156/NRL-132 ${id}: visible output`, spoken === expected, spoken);
+		if (src.includes("HIDDENA")) {
+			check(`NRL-156/NRL-132 ${id}: hidden text not disclosed`, !spoken.includes("HIDDENA"));
+		}
+		check(`NRL-156/NRL-132 ${id}: sourceIndex lockstep`, lockstepOk(src, chunks));
+	}
+
+	// sourceIndex lockstep is non-vacuous: four mutators, each shown able to
+	// FAIL the checker on at least one of the fixtures above, so a green run
+	// above is not a checker that can never go red (the house convention:
+	// drop-one-entry/length, shift-all-by-one/bounds+identity,
+	// swap-two-entries/monotonic+identity, negate-one/monotonic+bounds).
+	{
+		const sample = cases[2]!; // nrl132-4-space-lead, has a real, non-trivial index
+		const chunks = extractChunks(sample[1], { ...OPTS, ...sample[3] });
+		const c = chunks[0]!;
+		let dropOneFails = 0;
+		let shiftFails = 0;
+		let swapFails = 0;
+		let negateFails = 0;
+		const base = c.sourceIndex;
+		const mutantOk = (mutated: number[]): boolean => {
+			const text = c.text;
+			if (mutated.length !== text.length) return false;
+			for (let i = 0; i < text.length; i++) {
+				const at = mutated[i]!;
+				if (text[i] === " ") continue;
+				if (at < 0 || at >= sample[1].length) return false;
+				if (sample[1][at] !== text[i]) return false;
+				if (i > 0 && at < mutated[i - 1]!) return false;
+			}
+			return true;
+		};
+		// drop-one-entry: wrong length, must fail.
+		if (!mutantOk(base.slice(1))) dropOneFails += 1;
+		// shift-all-by-one: every entry +1, may go out of bounds or break identity.
+		if (!mutantOk(base.map((n) => n + 1))) shiftFails += 1;
+		// swap-two-entries: breaks monotonicity (and usually identity too).
+		if (base.length >= 2) {
+			const swapped = base.slice();
+			const tmp = swapped[0]!;
+			swapped[0] = swapped[swapped.length - 1]!;
+			swapped[swapped.length - 1] = tmp;
+			if (!mutantOk(swapped)) swapFails += 1;
+		}
+		// negate-one: a single entry forced to -1, breaks monotonicity and bounds.
+		// Picked on a non-space character of the text, since the checker
+		// deliberately skips spaces (a synthesised space exists in neither
+		// input), so negating a space's own index would not move anything.
+		if (base.length >= 2) {
+			const text = c.text;
+			let idx = -1;
+			for (let i = 1; i < text.length; i++) {
+				if (text[i] !== " ") {
+					idx = i;
+					break;
+				}
+			}
+			if (idx !== -1) {
+				const negated = base.slice();
+				negated[idx] = -1;
+				if (!mutantOk(negated)) negateFails += 1;
+			}
+		}
+		check("NRL-156/NRL-132 sourceIndex checker is non-vacuous: drop-one-entry fails", dropOneFails > 0);
+		check("NRL-156/NRL-132 sourceIndex checker is non-vacuous: shift-all-by-one fails", shiftFails > 0);
+		check("NRL-156/NRL-132 sourceIndex checker is non-vacuous: swap-two-entries fails", swapFails > 0);
+		check("NRL-156/NRL-132 sourceIndex checker is non-vacuous: negate-one fails", negateFails > 0);
+		check("NRL-156/NRL-132 sourceIndex checker passes on the real (unmutated) output", mutantOk(base));
+	}
+
+	// Mechanism proof: the three sites the plan found to be proven no-ops
+	// (FENCE only ever reached at lead="" there) must still read the bare
+	// FENCE constant, not fenceOpensAt - if one of them starts reading
+	// fenceOpensAt, that is a deliberate change needing its own re-measurement,
+	// not a silent drift.
+	const __filename156 = fileURLToPath(import.meta.url);
+	const ROOT156 = path.resolve(path.dirname(__filename156), "../..");
+	const SRC156 = fs.readFileSync(path.join(ROOT156, "src/text/extract.ts"), "utf8");
+	const noOpSites: ReadonlyArray<readonly [string, string]> = [
+		["listItemContent/listDedented run-end", "(blankBefore || (!quoted && (HEADING.test(body) || FENCE.test(body) || HR.test(body))))"],
+		["main-loop list-end test", "(wasBlank || HEADING.test(raw) || FENCE.test(raw) || HR.test(raw) || BLOCKQUOTE.test(raw))"],
+	];
+	for (const [what, text] of noOpSites) {
+		check(`NRL-156 no-op site unchanged (still reads bare FENCE): ${what}`, SRC156.includes(text));
+	}
+	// The three sites that DO change must call the new shared predicate.
+	const fixedSites: ReadonlyArray<readonly [string, string]> = [
+		["containerViews fence detection", "const fence = fenceOpensAt(fenceLead, wasOpen) ? t.match(/^[ \\t]*(`{3,}|~{3,})/) : null;"],
+		["endsTerm2Block", "(fenceOpensAt(line.match(/^[ \\t]*/)![0], paraLinesAbove > 0) && FENCE.test(line)) ||"],
+		["main-loop opener", 'if (fenceOpensAt(fenceLead, wasPara) && FENCE.test(raw)) {'],
+	];
+	for (const [what, text] of fixedSites) {
+		check(`NRL-156 fixed site calls fenceOpensAt: ${what}`, SRC156.includes(text));
+	}
+	// The narrowing (interruptsParagraphExceptBareMarker) must use the capped
+	// constant, not the bare any-indent FENCE.
+	check(
+		"NRL-156 interruptsParagraphExceptBareMarker narrowed to FENCE_CONTINUATION",
+		SRC156.includes("FENCE_CONTINUATION.test(line) ||"),
+	);
+	check("NRL-156 FENCE_CONTINUATION is capped at three spaces", SRC156.includes("const FENCE_CONTINUATION = /^ {0,3}(```|~~~)/;"));
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);
