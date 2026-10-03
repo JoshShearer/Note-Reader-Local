@@ -6793,6 +6793,225 @@ console.log("fence opener/closer honour the renderer's three-space cap (NRL-156,
 	check("NRL-156 FENCE_CONTINUATION is capped at three spaces", SRC156.includes("const FENCE_CONTINUATION = /^ {0,3}(```|~~~)/;"));
 }
 
+console.log("a whitespace-only line holding a tab is a lazy continuation of an open paragraph (NRL-158, R-M08)");
+{
+	/**
+	 * sourceIndex lockstep, the same house convention `lockstepOk` already
+	 * establishes in the NRL-156 block above: equal length to the text, and
+	 * every non-space character maps to the same raw character at a
+	 * monotonic, in-bounds offset. Named distinctly only so a grep for this
+	 * ticket's own checks is unambiguous; the rule is identical.
+	 */
+	function lockstepOk158(src: string, chunks: SpeechChunk[]): boolean {
+		for (const c of chunks) {
+			if (c.sourceIndex.length !== c.text.length) return false;
+			for (let i = 0; i < c.text.length; i++) {
+				const at = c.sourceIndex[i]!;
+				if (c.text[i] === " ") continue;
+				if (at < 0 || at >= src.length) return false;
+				if (src[at] !== c.text[i]) return false;
+				if (i > 0 && at < c.sourceIndex[i - 1]!) return false;
+			}
+		}
+		return true;
+	}
+
+	// PINS. Harness-measured against Obsidian 1.13.7's real parser and
+	// renderer (oracle: `WT`/`GT` in ~/.local/share/note-reader-local/
+	// obsidian-parser-harness, app.js sha256 8efbf581...9898): module 8607
+	// reads ANY whitespace-only line holding a tab, anywhere in the run, as a
+	// lazy continuation of the paragraph it follows - never the blank line
+	// that would end it. Leading-space count before the tab does not matter,
+	// and a CR-terminated tab line behaves identically. Each note is the
+	// ticket's own repro (`Intro.` / a whitespace-only tab line / a tab-led
+	// `<!--` block whose `===`/`HIDDENA`/`-->` the renderer hides inside the
+	// one continuing paragraph) with the blank line's own shape varied. Every
+	// row is RED against base (speaks the hidden `=== HIDDENA --> t.` because
+	// the old unconditional `.trim() === ""` test flushes "Intro." on the
+	// blank line, which wrongly marks the following `\t<!--` line as following
+	// a blank line, misfiring the indented-code-open guard and reaching
+	// `opensHtmlBlock` as a fresh block, which never closes the comment and
+	// hides the rest of the note to end of input).
+	const pins: Array<[string, string, string]> = [
+		["bare-tab-blank-continues-paragraph", "Intro.\n\t\n\t<!--\n===\nHIDDENA\n--> t.", "Intro. t."],
+		["tab-space-blank-continues-paragraph", "Intro.\n\t \n\t<!--\n===\nHIDDENA\n--> t.", "Intro. t."],
+		["two-tabs-blank-continues-paragraph", "Intro.\n\t\t\n\t<!--\n===\nHIDDENA\n--> t.", "Intro. t."],
+		["cr-terminated-tab-blank-continues-paragraph", "Intro.\n\t\r\n\t<!--\n===\nHIDDENA\n--> t.", "Intro. t."],
+	];
+	for (const [id, src, expected] of pins) {
+		const chunks = extractChunks(src, OPTS);
+		const spoken = chunks.map((c) => c.text).join(" ");
+		check(`NRL-158 pin-${id}: visible output`, spoken === expected, spoken);
+		check(`NRL-158 pin-${id}: HIDDENA not disclosed`, !spoken.includes("HIDDENA"));
+		check(`NRL-158 pin-${id}: sourceIndex lockstep`, lockstepOk158(src, chunks));
+	}
+
+	// GUARDS, axis 1: no paragraph is open before the whitespace-only tab
+	// line, so module 8607's lazy-continuation rule never applies and the
+	// line is ordinary blank - exactly as the harness census found. Each is
+	// measured BYTE-IDENTICAL between base and the fix (same mechanism as the
+	// pre-existing `guard-nrl155-module134-*` rows: the `\t<!--` that follows
+	// is swallowed whole by our own INDENTED_CODE branch, a pre-existing,
+	// out-of-scope miss unrelated to the blank-line question this ticket
+	// answers). Counted as nothing; red on neither arm; present so a future
+	// change to the blank-line rule cannot silently start reaching into the
+	// "no paragraph open" axis without a test naming it.
+	const guardsNoParagraphOpen: Array<[string, string, string]> = [
+		["doc-start-bare-tab-blank", "\t\n\t<!--\n===\nHIDDENA\nmore", "=== HIDDENA more"],
+		["after-heading-bare-tab-blank", "# Head\n\t\n\t<!--\n===\nHIDDENA\nmore", "Head === HIDDENA more"],
+		["after-hr-bare-tab-blank", "Intro.\n\n***\n\t\n\t<!--\n===\nHIDDENA\nmore", "Intro. === HIDDENA more"],
+		["after-fence-bare-tab-blank", "```\ncode\n```\n\t\n\t<!--\n===\nHIDDENA\nmore", "=== HIDDENA more"],
+		["after-real-blank-bare-tab-blank", "Intro.\n\n\t\n\t<!--\n===\nHIDDENA\nmore", "Intro. === HIDDENA more"],
+	];
+	for (const [id, src, expected] of guardsNoParagraphOpen) {
+		const spoken = extractChunks(src, OPTS)
+			.map((c) => c.text)
+			.join(" ");
+		check(`NRL-158 guard-${id}: unchanged (no paragraph open)`, spoken === expected, spoken);
+	}
+
+	// GUARDS, axis 2: containers. The plan's own harness census found quote
+	// and list behaviour genuinely different from the top-level rule above (a
+	// bare line with no `>`/marker at all ends the container regardless of a
+	// tab, and a quote/list line carrying its OWN marker interacts with the
+	// renderer's setext/html precedence in ways the top-level rule does not
+	// model) and scoped it OUT: `wasPara` is only ever true for a top-level
+	// plain-paragraph line, never for a quote/list line, and the fix is
+	// additionally gated on this line's own `blockType === "paragraph"` so a
+	// fresh container marker can never be misread as a lazy continuation of
+	// whatever came before it. Every row here is measured BYTE-IDENTICAL
+	// between base and the fix - containers are untouched, not merely
+	// unbroken - and is not a claim that the value matches the renderer.
+	const guardsContainer: Array<[string, string, string]> = [
+		["quote-marker-tab-blank-no-comment", "Intro.\n> \t\n> more.", "Intro. more."],
+		["quote-tab-blank-then-comment", "Intro.\n> \t\n> <!--\n> ===\n> HIDDENA\n> --> t.", "Intro. <!-- === HIDDENA --> t."],
+		["list-tab-blank-then-comment", "Intro.\n- \t\n  <!--\n  ===\n  HIDDENA\n  --> t.", "Intro. t."],
+		["quote-real-paragraph-tab-blank-continues-plain", "> Before x.\n> \t\n> more.", "Before x. more."],
+	];
+	for (const [id, src, expected] of guardsContainer) {
+		const spoken = extractChunks(src, OPTS)
+			.map((c) => c.text)
+			.join(" ");
+		check(`NRL-158 guard-${id}: unchanged (container, out of scope)`, spoken === expected, spoken);
+	}
+
+	// PIN: two consecutive tab-only blank lines before the next real text.
+	// The joined TEXT alone cannot tell base from the fix here (both happen
+	// to read "Intro. Next.", since there is nothing between the two notes to
+	// speak differently) - what differs is the CHUNK STRUCTURE and the
+	// sourceIndex map, which is exactly why the plan called this shape out by
+	// name for the lockstep proof. Base flushes "Intro." at the first tab
+	// line (2 chunks); the fix keeps the paragraph open across BOTH swallowed
+	// lines and appends "Next." through the same join-space synthesis every
+	// other soft-wrapped continuation uses (1 chunk, one synthetic gap
+	// offset).
+	{
+		const src = "Intro.\n\t\n\t\nNext.";
+		const chunks = extractChunks(src, OPTS);
+		const spoken = chunks.map((c) => c.text).join(" ");
+		check("NRL-158 pin-double-tab-blank: visible output", spoken === "Intro. Next.", spoken);
+		check("NRL-158 pin-double-tab-blank: merges into exactly one chunk", chunks.length === 1, String(chunks.length));
+		check("NRL-158 pin-double-tab-blank: sourceIndex lockstep", lockstepOk158(src, chunks));
+	}
+
+	// sourceIndex lockstep is non-vacuous: four mutators, each shown able to
+	// FAIL the checker on the double-tab-blank chunk above (a real,
+	// non-trivial index with a synthetic gap in it), per the house convention
+	// (drop-one-entry/length, shift-all-by-one/bounds+identity,
+	// swap-two-entries/monotonic+identity, negate-one/monotonic+bounds).
+	{
+		const src = "Intro.\n\t\n\t\nNext.";
+		const chunks = extractChunks(src, OPTS);
+		const c = chunks[0]!;
+		const base = c.sourceIndex;
+		const mutantOk = (mutated: number[]): boolean => {
+			const text = c.text;
+			if (mutated.length !== text.length) return false;
+			for (let i = 0; i < text.length; i++) {
+				const at = mutated[i]!;
+				if (text[i] === " ") continue;
+				if (at < 0 || at >= src.length) return false;
+				if (src[at] !== text[i]) return false;
+				if (i > 0 && at < mutated[i - 1]!) return false;
+			}
+			return true;
+		};
+		let dropOneFails = 0;
+		let shiftFails = 0;
+		let swapFails = 0;
+		let negateFails = 0;
+		// drop-one-entry: wrong length, must fail.
+		if (!mutantOk(base.slice(1))) dropOneFails += 1;
+		// shift-all-by-one: every entry +1, may go out of bounds or break identity.
+		if (!mutantOk(base.map((n) => n + 1))) shiftFails += 1;
+		// swap-two-entries: breaks monotonicity (and usually identity too).
+		if (base.length >= 2) {
+			const swapped = base.slice();
+			const tmp = swapped[0]!;
+			swapped[0] = swapped[swapped.length - 1]!;
+			swapped[swapped.length - 1] = tmp;
+			if (!mutantOk(swapped)) swapFails += 1;
+		}
+		// negate-one: a single entry forced to -1, breaks monotonicity and
+		// bounds. Picked on a non-space character of the text past index 0,
+		// since the checker deliberately skips spaces (the synthesised gap
+		// exists in neither input), so negating a space's own index would not
+		// move anything.
+		if (base.length >= 2) {
+			const text = c.text;
+			let idx = -1;
+			for (let i = 1; i < text.length; i++) {
+				if (text[i] !== " ") {
+					idx = i;
+					break;
+				}
+			}
+			if (idx !== -1) {
+				const negated = base.slice();
+				negated[idx] = -1;
+				if (!mutantOk(negated)) negateFails += 1;
+			}
+		}
+		check("NRL-158 sourceIndex checker is non-vacuous: drop-one-entry fails", dropOneFails > 0);
+		check("NRL-158 sourceIndex checker is non-vacuous: shift-all-by-one fails", shiftFails > 0);
+		check("NRL-158 sourceIndex checker is non-vacuous: swap-two-entries fails", swapFails > 0);
+		check("NRL-158 sourceIndex checker is non-vacuous: negate-one fails", negateFails > 0);
+		check("NRL-158 sourceIndex checker passes on the real (unmutated) output", mutantOk(base));
+	}
+
+	// Mechanism proof, the same convention as the NRL-156 block's
+	// `fixedSites`/`noOpSites` checks: the fix is one named predicate shared
+	// by the three sites the plan identified, not three independent patches.
+	// If one of these call sites stops reading `blankEndsParagraph`, that is
+	// a deliberate change needing its own re-measurement, not a silent drift.
+	const __filename158 = fileURLToPath(import.meta.url);
+	const ROOT158 = path.resolve(path.dirname(__filename158), "../..");
+	const SRC158 = fs.readFileSync(path.join(ROOT158, "src/text/extract.ts"), "utf8");
+	check(
+		"NRL-158 shared predicate blankEndsParagraph is defined",
+		/function blankEndsParagraph\(line: string, paragraphOpen: boolean\): boolean \{/.test(SRC158),
+	);
+	const fixedSites158: ReadonlyArray<readonly [string, string]> = [
+		["htmlParaOpen precompute (site 1)", "blankEndsParagraph(view, wasOpen)"],
+		["main-loop blank test (site 2)", 'const blank = blankEndsParagraph(raw, wasPara);'],
+		["paragraph-flush test (site 3)", "blockType === \"paragraph\" && !blankEndsParagraph(body, wasPara)"],
+	];
+	for (const [what, text] of fixedSites158) {
+		check(`NRL-158 fixed site calls blankEndsParagraph: ${what}`, SRC158.includes(text));
+	}
+	// Confirms the plan's own invariant by construction rather than by luck:
+	// `prevPara` is never left true by this fix for a line whose OWN
+	// blockType is quote/list, so it can never disagree with `prevContainer`
+	// (set unconditionally for those blockTypes a few lines above this
+	// check). Measured byte-identical with and without this guard on every
+	// fixture in this file; kept anyway because the invariant should hold by
+	// construction, not by the corpus this ticket happened to try.
+	check(
+		"NRL-158 paragraph-flush fix is gated on this line's own blockType, not only on wasPara",
+		SRC158.includes('if (blockType === "paragraph" && !blankEndsParagraph(body, wasPara)) {'),
+	);
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);

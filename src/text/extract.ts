@@ -3435,6 +3435,41 @@ function fenceOpensAt(lead: string, wasOpen: boolean): boolean {
 }
 
 /**
+ * Is this whitespace-only line the blank line that ends an open paragraph
+ * (NRL-158, R-M08)? Harness-measured against Obsidian 1.13.7's real parser
+ * (`WT`/`GT`, app.js sha256 8efbf581...9898): a SPACES-ONLY whitespace line
+ * always ends an open paragraph, exactly like any other blank line. A
+ * whitespace line holding a TAB anywhere in its run, while a paragraph is
+ * open before it, is module 8607's lazy continuation instead - never the
+ * blank line that would end it. Leading-space count before the tab does not
+ * matter, and a CR-terminated tab line behaves identically (both are just
+ * `line.includes("\t")`). With no paragraph open the same tab-bearing line is
+ * ordinary blank, which is why `paragraphOpen` is a parameter rather than the
+ * function testing the line alone.
+ *
+ * This names a fact `walkLeadFrame`'s "para" state already tested inline
+ * (`blank && !view.includes("\t")`, a few hundred lines below) rather than
+ * inventing one; this is that fact promoted to a shared predicate, in the
+ * same two-argument, `wasOpen`-named house style `fenceOpensAt` established
+ * (NRL-156/NRL-132). The two are not the same question - this decides
+ * whether a WHITESPACE-ONLY line is blank, `fenceOpensAt` decides a FENCE
+ * opener's lead cap - and must not be threaded through one another.
+ *
+ * Containers are NOT the same rule and are deliberately not modelled here:
+ * the harness found a quote/list line carrying its OWN marker interacts with
+ * the renderer's setext/html precedence differently from a bare continuation
+ * line, and a bare line with no marker at all ends the container regardless
+ * of a tab. `paragraphOpen` is only ever `true` from a plain top-level
+ * paragraph line (`wasPara`/`prevPara`), never from a quote/list line
+ * (`wasContainer`/`prevContainer` takes that branch instead), so every call
+ * of this function from a quote/list line is a no-op that falls through to
+ * the plain `line.trim() === ""` answer - unchanged, not merely unbroken.
+ */
+function blankEndsParagraph(line: string, paragraphOpen: boolean): boolean {
+	return line.trim() === "" && (!paragraphOpen || !line.includes("\t"));
+}
+
+/**
  * Where each line's INNERMOST container content starts in the raw line, written
  * into `out` by line number (NRL-136 Q3), so `htmlBlockLine` can measure the lead
  * the renderer's HTML tokenizer really sees. `views` are the lines as one level
@@ -5553,7 +5588,7 @@ export function extractChunks(
 			// six-space line under it is indented code whose `-->` closes a browser
 			// comment, `%%` pair and all. Measured: `- <!----> <!-- Z1Q` / `- # Z2Q` /
 			// `      %%Z3Q --> Z4Q%% Z5Q` shows `Z4Q%% Z5Q` (Ship fuzz, NRL-136).
-			if (p.blockType === "heading" || HEADING.test(view) || view.trim() === "" || (!wasOpen && /^(?: {4}|\t)/.test(view))) continue;
+			if (p.blockType === "heading" || HEADING.test(view) || blankEndsParagraph(view, wasOpen) || (!wasOpen && /^(?: {4}|\t)/.test(view))) continue;
 			if (HR.test(view) || HR.test(lines[k]!) || (wasOpen && SETEXT_UNDERLINE_EXACT.test(view))) continue;
 			if (!setextLike[k]! && htmlBlockLine(view, 0, htmlOpen)) continue;
 			open = true;
@@ -6224,10 +6259,13 @@ export function extractChunks(
 			// ordinary line, with no comment open.
 		}
 
-		const blank = raw.trim() === "";
 		const wasBlank = prevBlank;
 		const wasPara = prevPara;
 		const wasContainer = prevContainer;
+		// NRL-158: read before computing `blank`, which needs to know whether
+		// a paragraph is open to tell a tab-bearing lazy continuation from
+		// the blank line that would end it (blankEndsParagraph).
+		const blank = blankEndsParagraph(raw, wasPara);
 		// Read before the list-end check below, which ends the list on this very
 		// "---" line and would otherwise hide that the paragraph was in it.
 		const wasInList = inList;
@@ -6384,6 +6422,22 @@ export function extractChunks(
 		const body = raw.slice(prefixChars);
 
 		if (body.trim() === "") {
+			// NRL-158: a tab-bearing whitespace-only line, with the top-level
+			// paragraph still open (wasPara), is module 8607's lazy
+			// continuation rather than the blank line that would end it.
+			// Gated on this line's OWN blockType === "paragraph", not only on
+			// wasPara, so a fresh quote/list marker (whose body also happens
+			// to be blank) is never misread as continuing whatever came
+			// before it - blockType === "quote"/"list" already took the
+			// prevContainer branch above regardless of what follows here.
+			// Nothing to speak and no sourceIndex entry of its own: the next
+			// real line's appendToParagraph call accounts for the swallowed
+			// line through the same join-space synthesis every other
+			// soft-wrapped continuation uses.
+			if (blockType === "paragraph" && !blankEndsParagraph(body, wasPara)) {
+				prevPara = true;
+				continue;
+			}
 			flushParagraph();
 			continue;
 		}

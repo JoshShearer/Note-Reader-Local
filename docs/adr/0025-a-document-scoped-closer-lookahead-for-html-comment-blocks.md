@@ -2978,3 +2978,182 @@ executed out of the installed asar (`app.js` sha256 `8efbf581...9898`). Live Pre
 not examined. R-M08 and the `2 of 16` MUST headline count are unaffected: this amendment
 closes residual (b) above with measurement rather than reasoning, it does not close a new
 requirement, and the pre-existing disclosure it surfaces is named, not fixed, here.
+
+### CLOSED by NRL-158 (2026-10-03): a whitespace-only line holding a tab is not blank while a paragraph is open
+
+**The defect, reproduced before any change** on `origin/main` `8d2b3f2`, bundling the
+real `extract.ts`: `"Intro.\n\t\n\t<!--\n===\nHIDDENA\n--> t."`, this file's own default
+options, spoke `"Intro. === HIDDENA --> t."` (under the test suite's `skipCodeBlocks:
+true`; with `{}` it spoke the `<!--` literally too). Obsidian renders the whole note as
+ONE paragraph - `<p>Intro.<br>\n<br>\n<!--\n===\nHIDDENA\n--> t.</p>` - because module
+8607 absorbs the whitespace-only `\t` line as a lazy continuation rather than the blank
+line that would end the paragraph, so the inline `<!--...-->` comment stays scoped to
+that one continuing paragraph and hides `===`/`HIDDENA`/`-->` inside it, leaving only
+`Intro. t.` visible. This is pre-existing and identical on NRL-155's own fix (`faf55a3`):
+NRL-155 narrowed a DIFFERENT, SPACES-ONLY block-position gate
+(`inSetextBlockPosition`/`:3243`) for an unrelated question (whether the line ABOVE a
+tab-led `<!--` sits in block-end position) and deliberately left this ticket's question -
+is a tab-bearing whitespace line itself blank - open, pinning it as the tripwire
+`pin-nrl155-tab-whitespace-line-is-not-blank`. That pin's own fixture happens to use a
+LEADING-SPACE lead on both the blank line and the `<!--` line (`" \t \n \t<!--"`), which
+is why it already passed before this ticket: `INDENTED_CODE` (`/^(?: {4}|\t)/`) does not
+match a space-led line, so the second-stage misfire this ticket closes was never
+reachable from that one fixture.
+
+**Harness census run FIRST, per the AC**, against Obsidian 1.13.7's real parser and
+renderer (`WT`/`GT`, `~/.local/share/note-reader-local/obsidian-parser-harness`, `app.js`
+sha256 `8efbf581...9898`, `selftest.cjs` 6 ok): a SPACES-ONLY whitespace line always ends
+an open paragraph, exactly like any other blank line. A whitespace line holding a TAB
+anywhere in its run - bare, tab-then-space, space-then-tab at one to four leading spaces,
+two tabs, or CR-terminated - while a paragraph is open before it, is swallowed as a lazy
+continuation instead, never the blank line that would end it; leading-space count before
+the tab does not matter, only "contains a tab" does. The identical tab-bearing line, with
+NO paragraph open before it (document start, right after a heading/HR/fence-close, or
+right after a REAL blank line), is ordinary blank - the rule is conditional on "is a
+paragraph currently open", not a property of the line alone. Containers are a GENUINELY
+DIFFERENT, more complex rule, not the same predicate with a container flag: a quote line
+carrying its OWN `>` marker interacts with the renderer's setext/HTML block precedence in
+ways the top-level rule does not (measured below), and a bare line with no marker at all
+ends the quote or list regardless of a tab (module 6234's own lazy/blank test, independent
+of module 8607's). Scoped out, per the plan, exactly as NRL-155 scoped the same axis out
+of its own gate.
+
+**Root cause: THREE sites independently test "is this line blank" with no reference to
+whether a paragraph is open, and a FOURTH already has the right rule, inline and
+un-shared.** `walkLeadFrame`'s "para" state (then `extract.ts:4497-4504`, now unmoved) already
+read `if (blank && !view.includes("\t")) { state = "fresh"; ... }` - exactly the fact the
+harness re-confirmed above, encoded once for NRL-115's own lead walk and never promoted.
+The three wrong sites, all unconditional `trim() === ""`: the `htmlParaOpen` precompute
+loop's own blank test (then `:5556`); the main per-line loop's `blank`/`wasBlank`
+computation (then `:6227`), which feeds the list-end check and the indented-code-open
+guard; and the paragraph-flush test (then `:6386`), the one that directly flushes
+`"Intro."` on the blank line in the repro. Traced with throwaway instrumentation before
+any fix: the flush at the third site sets `prevBlank = true` for the blank line (via the
+unconditional test at the second site, read before the reorder below), which then wrongly
+satisfies `!blank && !inList && wasBlank && INDENTED_CODE.test(raw)` for the following
+`"\t<!--"` line - `INDENTED_CODE` (`/^(?: {4}|\t)/`) matches a bare tab lead - opening it
+as a FRESH indented-code block that is never closed and crosses no `-->`. Both stages had
+to move together or the repro's own bare-tab shape still failed with only one fixed
+(confirmed directly: a scratch build with site 2 fixed alone already happens to speak the
+repro's right TEXT, "Intro. t.", but as two separate flushed chunks rather than Obsidian's
+one continuing paragraph - the right string for the wrong structural reason, and wrong
+`sourceIndex`/chunk-boundary shape; see the census note on chunk structure below).
+
+**The fix is one named predicate, styled after `fenceOpensAt` (NRL-156) and citing
+`walkLeadFrame`'s already-correct inline test as the fact it promotes rather than
+invents**: `blankEndsParagraph(line, paragraphOpen)` returns `line.trim() === "" &&
+(!paragraphOpen || !line.includes("\t"))`. Applied at the three sites:
+
+1. `htmlParaOpen` precompute loop - `view.trim() === ""` becomes
+   `blankEndsParagraph(view, wasOpen)` in its `||` chain. No other change: when it
+   returns `false` (tab-bearing, paragraph open), every other disjunct in the same `if`
+   also fails on whitespace content, so control falls through to `open = true` at the
+   loop's end - the continuation this predicate names.
+2. The main loop's `blank`/`wasBlank` computation - reordered so `wasPara` (`prevPara`,
+   already declared the same line) is read BEFORE `blank`, then `const blank =
+   blankEndsParagraph(raw, wasPara);`. This alone closes the indented-code-open misfire
+   traced above, for the FOLLOWING line.
+3. The paragraph-flush test - when `body.trim() === ""` but
+   `blankEndsParagraph(body, wasPara)` is `false`, the line is swallowed with no append
+   (`prevPara = true; continue;`) instead of flushing. **One addition beyond the plan's
+   literal text, kept for a reason measured rather than assumed**: this branch is
+   additionally gated on the CURRENT line's own `blockType === "paragraph"`. The plan's
+   own claim - "`wasPara` is never true for a container line, so this is a byte-identical
+   no-op for every quote/list line" - is about the PREVIOUS line's blockType, and is true
+   of every fixture measured; but a FRESH quote/list marker on the CURRENT line (its body
+   happening to be blank, e.g. `"Intro.\n> \t\n> more."`) can still see `wasPara === true`
+   from the plain paragraph before it, and `prevContainer` is already set unconditionally
+   for that blockType a few lines above this check regardless of what follows. Swallowing
+   such a line without the guard would leave `prevPara` and `prevContainer` both `true`
+   going into the next iteration, an invariant violation nothing downstream expects, even
+   though every measured case (the mutually-exclusive-flush-at-`blockType !== "paragraph"`
+   path downstream still produces the right output either way) happens not to show it. The
+   guard makes the plan's stated invariant true by construction instead of by the corpus
+   this ticket happened to try.
+
+**Position census, both directions, against the real renderer** (same harness, base =
+`8d2b3f2` copied not linked, fix = this tree): **486 cells** = 9 whitespace-line shapes
+(bare tab, tab-space, space-tab, 2sp-tab, 3sp-tab, 4sp-tab, tab-tab, spaces-only-3 as a
+control, CR-terminated bare tab) x 6 predecessor contexts (open plain paragraph; doc
+start; after a heading; after an HR; after a fence-close; after a real blank line) x 9
+follower shapes (tab-led `<!--` block, space-tab-led `<!--` block, 4-space-led `<!--`
+block, plain prose, ATX heading, HR, fence, list marker, table row).
+
+| direction | count | corpus |
+|---|---|---|
+| disclosure CLOSED (base spoke `HIDDENA`, fix does not) | 16 | 486 |
+| NEWLY LEAKING (fix speaks `HIDDENA` where base did not) | 0 | 486 |
+| matches the renderer's own visible text, both arms | 193 | 486 |
+| MISSES the renderer, both arms (pre-existing, unaffected) | 277 | 486 |
+| NEWLY MATCHES the renderer (fix correct, base was not) | 16 | 486 |
+| NEWLY MISSES the renderer (fix regressed, base matched) | 0 | 486 |
+| unchanged, base === fix byte for byte | 470 | 486 |
+
+The 16 closed/newly-matching cells are exactly the 8 tab-bearing whitespace shapes x the
+2 `<!--`-at-tab-or-4-space-lead followers, under the single "open plain paragraph"
+predecessor - 0 under any of the other 5 predecessors, confirming the "no paragraph open"
+axis is untouched, and 0 under the space-tab-led `<!--` follower, which NRL-155's own
+fixture already covered (not newly reachable, not newly broken). `spaces-only-3` closes
+nothing, as the harness census predicted. The 277 "both miss" cells are the pre-existing,
+out-of-scope `INDENTED_CODE`-masks-content miss this ticket's own `guard-nrl158-*no-
+paragraph-open` fixtures pin unchanged (`skipCodeBlocks: true` intentionally silences the
+`<!--` line itself; unrelated to the blank-line question here).
+
+**Container census, confirming unchanged rather than correct** (same harness, same two
+arms): **48 cells** = 8 tab-bearing whitespace shapes x 3 follower shapes (a `<!--`
+block, plain prose, an ATX heading) x 2 container kinds (quote, list), each with the
+container's own marker carried on every line including the whitespace-only one. **48 of
+48 unchanged, 0 differ.** One shape probed while building this census is worth recording
+because it contradicts a plausible generalisation of the harness's own top-level finding:
+inside a quote with REAL preceding paragraph content, a tab-bearing whitespace line DOES
+continue the quote's own paragraph when the next line is plain prose
+(`"> Before x.\n> \t\n> more."` renders one `<p>Before x.<br><br>more.</p>`) but does NOT
+when the next line is `"<!--"` specifically (`"> Before x.\n> \t\n> <!--\n> ===\n>
+HIDDENA\n> --> t."` renders the paragraph ending at the blank line, then a SEPARATE
+setext-heading block for `<!--`/`===`, with `HIDDENA`/`--> t.` in a further paragraph
+after it - all DISPLAYED, nothing hidden). This asymmetry is real, measured, and is
+precisely the kind of container-specific interaction the plan's own census flagged as
+needing its own model; it is not fixed here, and the guard fixtures pin the (unaffected)
+current behaviour rather than this renderer nuance.
+
+**sourceIndex lockstep**: the double-tab-blank shape the plan named by name
+(`"Intro.\n\t\n\t\nNext."`) is the one case where the joined TEXT cannot distinguish base
+from the fix at all - both read `"Intro. Next."`, since there is nothing between the two
+swallowed lines to speak differently. What differs is chunk STRUCTURE: base flushes
+`"Intro."` at the first tab line (2 chunks, clean per-chunk `sourceIndex`); the fix keeps
+the paragraph open across BOTH swallowed lines and appends `"Next."` through the same
+join-space synthesis (`sourceOffsetOfSpace`) every other soft-wrapped continuation uses (1
+chunk, one synthetic gap offset at the raw newline immediately before `"Next."`). Checked
+numerically by UTF-16 code-unit index (length, bounds, identity modulo the synthetic-space
+exemption, monotonicity) on the merged chunk, with the house four-mutator proof (drop-one-
+entry, shift-all-by-one, swap-two-entries, negate-one) each shown able to fail the checker
+on this exact chunk before confirming it passes on the real, unmutated output -
+`tests/extract.test.ts`'s own new block, not a one-off script.
+
+**`interruptsParagraph`, `codeSpanClosesLater`, `bracketClosesLater`, `labelClose`,
+`opensMathBlock`, `opensObsidianBlock`, `opensHtmlBlock`, `fenceOpensAt`,
+`inlineContainerClose`, `wikiTargetClose`, `peelQuotes` and `containerPrefix` are
+unchanged** - the full `npm test` run (25 suites, 6,815 pre-existing checks) passes
+byte-for-byte identically before and after this diff, with only the 14 new NRL-158 checks
+moving from red to green; `pin-nrl155-tab-whitespace-line-is-not-blank` and the full
+`guard-nrl155-*`/`pin-nrl115-*`/`pin-nrl120-*`/`pin-nrl136-*` families (364 `ok` lines
+total across both runs) are confirmed intact and unmodified.
+
+**Residuals, named rather than silently left.** (a) Containers (quote/list paragraph
+continuation across a tab-bearing whitespace line, including the asymmetric `<!--`-vs-
+plain-prose shape measured above) stay exactly as found - genuinely out of scope, not a
+smaller version of the same defect. (b) The pre-existing `INDENTED_CODE`-masks-content
+miss on the "no paragraph open" axis (277 of 486 top-level census cells) is unaffected,
+not fixed, by this ticket; it is NRL-93/NRL-115's family, unrelated to the blank-line
+question here. (c) The `blockType === "paragraph"` guard at site 3 is a defensive
+addition proven unobservable on every fixture tried (base and fix agree whether or not
+it is present); it is kept for the invariant it makes true by construction, not because
+a failing fixture demanded it.
+
+**NOT VERIFIED IN OBSIDIAN.** No deploy and no CDP session happened for this ticket; both
+censuses are bare Node, bundling the real `src/text/extract.ts` from this tree and from
+`8d2b3f2` with the repo's own esbuild, graded against Obsidian 1.13.7's reading-view
+parser and renderer executed out of the installed asar. Live Preview was not examined.
+R-M08 is still NOT met and the `2 of 16` MUST headline count does not move: this closes
+the blank-line-with-a-tab disclosure NRL-155 pinned and deferred, not the requirement;
+the container axis and the pre-existing `INDENTED_CODE` miss both stay open against it.
