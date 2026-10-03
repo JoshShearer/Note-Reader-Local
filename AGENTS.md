@@ -1778,10 +1778,66 @@ class, not a new one - against **155,392 losses closed**. **8 quote-in-list cell
 NRL-114** with 4 closing here, because `BLOCKQUOTE` is peeled before the budget is applied so `at` is
 0 and no indent model can see the tab; 4 further q4 cells that read as disclosures are byte-identical
 on both arms and so pre-existing. The **`<!--` twin was NOT fixed here** - `opensHtmlBlock` had no dedent
-term at all; NRL-115 closed it later with a separate model, and both `pin-nrl117-html-twin-*` rows moved. And **three deliberate over-dedenting approximations**, all failing toward HIDING:
-module 5540's `maximum` standing in for the real `p`, `interruptList` unmodelled, and an unparseable
-item head taking a whole-lead budget - 22 cells of a 667-cell renderer-keyed sweep, identical on both
-sides. The refusal-only property is exhaustive rather than sampled: **0 violations over 11,438,076
+term at all; NRL-115 closed it later with a separate model, and both `pin-nrl117-html-twin-*` rows moved.
+And **three deliberate over-dedenting approximations, all failing toward HIDING: module 5540's
+`maximum` standing in for the real `p`, `interruptList` unmodelled, and an unparseable item head taking
+a whole-lead budget - 22 cells of a 667-cell renderer-keyed sweep, identical on both sides.** **That
+first clause is CORRECTED by NRL-162 (2026-10-03): the max-vs-p approximation does NOT uniformly fail
+toward hiding.** An over-dedent can also create a FALSE block-start opener that pairs with a REAL later
+closer, producing simultaneous disclosure (text after the real closer wrongly spoken) and prose loss
+(text between the false opener and the real closer wrongly hidden) - NRL-162's own repro,
+`- item ZA0Z` / ` x ZM1Z` / `      %% ZH1Z` / `ZH2Z` / `     %% ZH3Z` / `ZH4Z` / `%%` / `ZT1Z`, where the
+max budget (2, from `- `) over-dedents past the item's real minimum (1, from ` x ZM1Z`), turning
+`     %% ZH3Z`'s residual from 4 columns (declines, matching Obsidian) into 3 (wrongly accepts), so the
+bare `%%` two lines later wrongly closes a comment that was never really open and `ZT1Z` is spoken where
+Obsidian hides it. `extractChunks` now computes each list level's real `p` (module 5540's own minimum
+over the item's non-blank lines) via a two-phase record-then-refold pass kept local to the `listDedented`
+walk, LOCAL rather than reusing `containerViews`'s own `listStrip`/`viewStart` arrays at runtime (D-73-4).
+
+**A first attempt at this regressed, and the regression is worth recording because the root cause is
+not obvious.** A Ship-phase critique found that letting a `%%`-opener-shaped line's OWN indent count as
+a `p`-shrink candidate breaks any item containing MORE than one `%%` pair: `- item` / `     %%` / `A` /
+`  %%` / `B` / ` %%` / `C` / `   %%` / `D` / `E` has no non-`%%` content line with positive indent at
+all (`A`..`E` are column 0, already excluded by the pre-existing `c > 0` term), so the pre-NRL-162
+max-only answer is ALREADY correct there - "item B D E", paired exactly as Obsidian pairs the four
+markers - and a `p` shrunk from the third `%%` line's own indent (1) breaks the FIRST pair's residual
+(3 under the max, 4 under that shrunk `p`), making it literal and cascading into "item %% A C": a
+regression that both discloses (`A`, `C`) and silences (`B`, `D`, `E`) relative to the renderer. The fix
+is to EXCLUDE a `%%`-opener-shaped line (its own peeled view starts with `%%`) from `p`-shrink candidacy
+entirely - CommonMark's module 5540 has no notion of `%%` and empirically does not need the exclusion to
+get Ship's exact input right, but OUR two-phase pass, computing `p` from every line it calls "item
+content", does. The ticket's own repro is unaffected by the exclusion, because its shrink comes from a
+genuine PROSE line (` x ZM1Z`), never a `%%` line.
+
+The narrowing is refusal-only BY CONSTRUCTION, not only by measurement: `levelP` is seeded at the max and
+only ever shrinks, so real-p <= max always, and `listDedentCut`'s cut length is monotone non-decreasing
+in its budget, so a smaller real-p can only remove LESS, leaving a residual `leadReachesBlockStart`
+cannot newly accept - `listDedented[k]` can only move true -> false, never false -> true. A targeted
+census of 240 cells (3 marker shapes x a shallow prose line present/absent/positioned before-or-between
+the `%%` pair x 4x4 open/close indents), built fresh rather than re-quoting the prior critique's cited,
+unenumerated 2,156,544-cell count, found 44 cells where the fix's output differs from the pre-NRL-162
+max-only baseline and 0 where it differs from the real rendered Obsidian 1.13.7 output on the 5 of those
+44 spot-checked directly against it (`node ground_truth_nrl162c.cjs` against the installed harness) -
+every one of the 5 showed the max-only baseline either disclosing text Obsidian hides or silencing text
+it shows, and the fix matching the renderer exactly in both directions on the same input. Ship's own
+multi-pair regression input, and the ticket's own `ZA0Z`/`ZM1Z` repro, are both in the green set
+simultaneously - the `%%`-exclusion closes the regression without reopening the original defect. The
+three fixtures the regression had broken (`pin-nrl93-quote-inside-list-still-silenced`,
+`pin-nrl114-quote-tab-in-list-item-still-silenced`, `pin-nrl117-note-scope-parity-discloses`) are
+confirmed restored to their pre-ticket, origin/main values, and the nested-double-tab counter-example
+(`guard-nrl117-nested-double-tab-correctly-hides`) stays unmoved, re-checked for the same reason NRL-117's
+own single-column-subtraction arm was shown to disclose on it.
+
+**The OTHER two approximations named in this paragraph - `interruptList` unmodelled, and an unparseable
+item head taking a whole-lead budget - are UNCHANGED by NRL-162** and still documented as failing toward
+hiding on their own; the old combined "22 cells of a 667-cell sweep" figure no longer has a clean
+attribution once the max-vs-p term is fixed, and no fresh count for those two alone was re-measured here
+(`pin-nrl117-shallower-than-content-indent-still-silenced` and `pin-nrl117-wide-ordered-marker-still-silenced`
+are unchanged, confirmed empirically). NOT VERIFIED IN OBSIDIAN: the census above is bare Node against
+the real Obsidian 1.13.7 reading-view parser and renderer executed in Node (the house's standard oracle
+for this file), not a live deploy+CDP session. R-M08 is still **NOT** met and the `2 of 16` MUST headline
+count does not move: this closes one named sub-root of an already-open gap, not the requirement.
+The refusal-only property is exhaustive rather than sampled: **0 violations over 11,438,076
 line cells**, with the pre-NRL-117 array recomputed from the base tree rather than re-implemented.
 
 **One NRL-118 pin became a closure rather than a tripwire.**

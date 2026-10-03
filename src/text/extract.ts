@@ -5256,16 +5256,28 @@ export function extractChunks(
 	//
 	// Three things about the walk are load-bearing.
 	//
-	// The budget at each level is the item's content indent, which is module
-	// 5540's `maximum` rather than the `p` it actually uses - `p` is the MINIMUM
-	// indent over the item's own non-blank lines, capped by that maximum. Using
-	// the cap over-estimates the dedent, which leaves a SMALLER residual, which
-	// makes this term `true` more often, which is the pre-NRL-117 answer. So the
-	// one approximation in here fails toward hiding, which is the direction the
-	// ticket's own asymmetry argument asks for: an under-estimate speaks text the
-	// author hid, an over-estimate keeps a prose loss that was already there.
-	// Measured cost, 22 cells of a 667-cell renderer-keyed sweep, every one of
-	// them identical on both sides of this change.
+	// NRL-162 CORRECTION (2026-10-03): this comment used to end with "the
+	// budget at each level is the item's content indent, which is module
+	// 5540's `maximum` rather than the `p` it actually uses ... Using the cap
+	// over-estimates the dedent ... So the one approximation in here fails
+	// toward hiding ... Measured cost, 22 cells of a 667-cell renderer-keyed
+	// sweep, every one of them identical on both sides of this change." That
+	// claim was FALSE: an over-dedent can also create a FALSE block-start
+	// opener that pairs with a REAL later closer, producing simultaneous
+	// disclosure (text after the real closer wrongly spoken) and prose loss
+	// (text between the false opener and the real closer wrongly hidden). See
+	// NRL-162's own repro - `- item ZA0Z` / ` x ZM1Z` / `      %% ZH1Z` /
+	// `ZH2Z` / `     %% ZH3Z` / `ZH4Z` / `%%` / `ZT1Z` - where the max budget
+	// (2, from `- `) over-dedents past the item's real minimum (1, from
+	// ` x ZM1Z`), turning `     %% ZH3Z`'s residual from 4 columns (declines,
+	// matching Obsidian) into 3 (wrongly accepts). The mechanism that replaces
+	// the max with the item's real `p` - a two-phase record-then-refold pass,
+	// the refusal-only proof, and the Fix-round correction that keeps a
+	// `%%`-opener-shaped line itself from shrinking the budget - is on the
+	// pass's own declarations a few lines down (`levelP`, `fallbackLevelIds`,
+	// `chainIds`), not repeated here. See docs/adr/0006's NRL-162 amendment
+	// for the re-measured census and the nested-tab counter-example this
+	// proof was checked against (`guard-nrl117-nested-double-tab-correctly-hides`).
 	//
 	// A line SHALLOWER than the current level's budget stops the walk only when it
 	// is itself a marker, because that is a new item at this level and module 745
@@ -5287,10 +5299,43 @@ export function extractChunks(
 	// quote-peel narrowing; 8 such cells stay divergent and 4 close here.
 	const listItemContent: boolean[] = new Array<boolean>(lines.length).fill(false);
 	const listDedented: boolean[] = new Array<boolean>(lines.length).fill(false);
+	// Phase 1: the structural walk, UNCHANGED - which lines belong to which
+	// level, when a level pushes or pops, is still decided by the max budget
+	// (`itemHeadCols`), mirroring `walkLeadList`'s own membership rule. What
+	// is new is a side record, per pushed level (keyed by a STABLE id so a
+	// later push reusing the same stack depth is never confused with an
+	// earlier, already-popped one): `levelP`, seeded at the max and shrunk by
+	// `walkLeadItem`'s own rule (`c > 0 && c < p`) from the residual each
+	// content line sees BEFORE that level's own cut, and `chainIds[k]`, the
+	// ordered list of level ids line `k` was cut through, so Phase 2 can
+	// replay the identical sequence of cuts once every level's `p` is final.
+	//
+	// A `%%`-opener-shaped line is EXCLUDED from candidacy for the shrink,
+	// deliberately, and this is the one term the prior round's attempt
+	// lacked. CommonMark's own module 5540 has no notion of `%%` at all, but
+	// empirically (`node ground_truth_nrl162b.cjs` against the installed
+	// 1.13.7 bundle; see docs/adr/0006's NRL-162 amendment) letting a `%%`
+	// line's OWN indent shrink its enclosing level's `p` breaks exactly the
+	// multi-pair shape Ship's critique found: `- item` / `     %%` / `A` /
+	// `  %%` / `B` / ` %%` / `C` / `   %%` / `D` / `E` has no non-`%%` content
+	// line with positive indent at all (`A`..`E` are column 0, already
+	// excluded by the `c > 0` term below), so the max-budget answer is
+	// already correct there - "item B D E", `%%`-paired exactly as the
+	// renderer pairs them - and a `p` shrunk from the `%%` lines' own indent
+	// (1, from the third one) breaks the FIRST pair's own residual (3 under
+	// the max, 4 under that shrunk `p`), making it literal and cascading into
+	// "item %% A C". The ticket's own repro keeps working under this
+	// exclusion because its shrink comes from a genuine PROSE line (` x
+	// ZM1Z`, not a `%%` line) that this exclusion never touches.
+	const levelP = new Map<number, number>();
+	const fallbackLevelIds = new Set<number>();
+	const chainIds: number[][] = new Array(lines.length);
 	{
 		let inItem = false;
 		let blankBefore = true;
 		let levels: number[] = [];
+		let levelIds: number[] = [];
+		let nextLevelId = 0;
 		for (let k = 0; k < lines.length; k++) {
 			const raw = lines[k]!;
 			const body = raw.replace(BLOCKQUOTE, "");
@@ -5306,20 +5351,37 @@ export function extractChunks(
 			) {
 				inItem = false;
 				levels = [];
+				levelIds = [];
 			}
 			let view = body;
 			let depth = 0;
+			const chain: number[] = [];
 			for (; depth < levels.length; depth++) {
-				if (leadStops(view).indent < levels[depth]! && ITEM_HEAD.test(view)) break;
+				const residualHere = leadStops(view).indent;
+				if (residualHere < levels[depth]! && ITEM_HEAD.test(view)) break;
+				const id = levelIds[depth]!;
+				chain.push(id);
+				if (!blank && residualHere > 0 && !fallbackLevelIds.has(id)) {
+					const isPercentLine = view.replace(/^[ \t]+/, "").startsWith("%%");
+					if (!isPercentLine) {
+						const prevP = levelP.get(id)!;
+						if (residualHere < prevP) levelP.set(id, residualHere);
+					}
+				}
 				view = view.slice(listDedentCut(view, levels[depth]!));
 			}
 			levels.length = depth;
+			levelIds.length = depth;
+			chainIds[k] = chain;
 			listItemContent[k] = inItem && !marker;
-			listDedented[k] = listItemContent[k]! && leadReachesBlockStart(view);
 			if (marker) inItem = true;
 			let head = ITEM_HEAD.exec(view);
 			if (head === null && marker) {
+				const id = nextLevelId++;
 				levels.push(Number.MAX_SAFE_INTEGER);
+				levelIds.push(id);
+				levelP.set(id, Number.MAX_SAFE_INTEGER);
+				fallbackLevelIds.add(id);
 			} else {
 				for (let rest = view; head !== null; head = ITEM_HEAD.exec(rest)) {
 					if (levels.length >= LIST_LEVEL_CAP) {
@@ -5328,15 +5390,49 @@ export function extractChunks(
 						// level is a whole-lead budget rather than a truncation: a stack
 						// SHALLOWER than the renderer's under-dedents and can speak hidden
 						// text, where a whole-lead budget reproduces the pre-NRL-117 answer.
+						const id = nextLevelId++;
 						levels.push(Number.MAX_SAFE_INTEGER);
+						levelIds.push(id);
+						levelP.set(id, Number.MAX_SAFE_INTEGER);
+						fallbackLevelIds.add(id);
 						break;
 					}
-					levels.push(itemHeadCols(head));
+					const id = nextLevelId++;
+					const budget = itemHeadCols(head);
+					levels.push(budget);
+					levelIds.push(id);
+					levelP.set(id, budget);
 					rest = rest.slice(head[0].length);
 				}
 			}
 			blankBefore = blank;
 		}
+	}
+	// Phase 2: every level's real `p` is now final (it can only have
+	// shrunk, never grown, from the max each was seeded at), so replay each
+	// line's own recorded chain of level ids against `levelP` instead of the
+	// max to get its real residual. This is refusal-only BY CONSTRUCTION, not
+	// only by measurement: `levelP` only ever shrinks
+	// (`if (residualHere < prevP) levelP.set(id, residualHere)`), so real-p
+	// <= max always, for every level on every input. `listDedentCut`'s cut
+	// length is monotone non-decreasing in its budget (`Math.min(budgetCols,
+	// indent)` and `stops[s]` are both non-decreasing in `budgetCols`), so
+	// cutting with the smaller real-p can only remove LESS than cutting with
+	// the max, which leaves a residual with >= as much leading whitespace as
+	// before. `leadReachesBlockStart` tests "indent <= 3, no tab", a property
+	// a GROWING residual cannot newly satisfy - so `listDedented[k]` can only
+	// move true -> false under this pass, never false -> true. The two
+	// `MAX_SAFE_INTEGER` fallback pushes (an unparseable item head;
+	// `LIST_LEVEL_CAP` overflow) are excluded from the shrink by
+	// `fallbackLevelIds`, so Phase 2's cut for one is unchanged from the
+	// pre-NRL-162, max-only answer. See docs/adr/0006's NRL-162 amendment for
+	// the re-measured census and the nested-tab counter-example this proof
+	// was checked against (`guard-nrl117-nested-double-tab-correctly-hides`).
+	for (let k = 0; k < lines.length; k++) {
+		if (!listItemContent[k]) continue;
+		let view = lines[k]!.replace(BLOCKQUOTE, "");
+		for (const id of chainIds[k]!) view = view.slice(listDedentCut(view, levelP.get(id)!));
+		listDedented[k] = leadReachesBlockStart(view);
 	}
 	// `setextContent[k]` is "line k is the one content line of a setext heading,
 	// so a `<!--` at its start is heading TEXT and not an HTML block opener"
