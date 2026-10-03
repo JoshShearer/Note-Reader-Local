@@ -134,6 +134,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		const contentEl = detailsEl.createDiv();
 
 		this.renderEngineSection(contentEl);
+		if (this.plugin.getBridge()) this.renderBridgeSection(contentEl);
 		if (this.plugin.activeEngine()?.id === "kokoro") {
 			this.renderKokoroRuntime(contentEl);
 			this.renderKokoroInstall(contentEl);
@@ -204,6 +205,69 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	}
 
 	/**
+	 * Read Me Offline's bridge (NRL-130): port, pairing token, and what the
+	 * bridge says about itself right now.
+	 *
+	 * Only drawn where the engine exists (Android). The token field is a
+	 * password input and is written to this device's local storage, never to
+	 * data.json (main.ts `getBridgeToken`, docs/adr/0036).
+	 */
+	private renderBridgeSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Read Me Offline bridge").setHeading();
+
+		const status = new Setting(containerEl).setName("Status").setDesc("Checking...");
+		const refresh = (): void => {
+			const bridge = this.plugin.getBridge();
+			if (!bridge) return;
+			status.setDesc("Checking...");
+			void bridge.isAvailable().then((availability) => {
+				if (!containerEl.isConnected) return;
+				const health = bridge.lastHealth();
+				if (availability.available && health) {
+					const voice = health.voice ? `, voice ${health.voice}` : "";
+					status.setDesc(`Connected: ${health.engine || "speech engine"}${voice}.`);
+				} else {
+					status.setDesc(availability.available ? "Connected." : availability.reason);
+				}
+			});
+		};
+		status.addButton((button) => button.setButtonText("Check again").onClick(refresh));
+		refresh();
+
+		new Setting(containerEl)
+			.setName("Pairing token")
+			.setDesc(
+				"Copy it from Read Me Offline's Settings and paste it here. Kept on this device only; " +
+					"it is not saved with the vault.",
+			)
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text.inputEl.autocomplete = "off";
+				text.setPlaceholder("Paste the token");
+				text.setValue(this.plugin.getBridgeToken());
+				text.onChange((value) => {
+					this.plugin.setBridgeToken(value);
+				});
+				text.inputEl.addEventListener("blur", refresh);
+			});
+
+		new Setting(containerEl)
+			.setName("Port")
+			.setDesc("Must match the port shown in Read Me Offline's Settings. Default 8787.")
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text.setValue(String(this.plugin.settings.bridgePort));
+				text.onChange(async (value) => {
+					const port = Number(value);
+					if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+					this.plugin.settings.bridgePort = port;
+					await this.plugin.saveSettings();
+				});
+				text.inputEl.addEventListener("blur", refresh);
+			});
+	}
+
+	/**
 	 * What can honestly be claimed about network use, keyed to the RESOLVED
 	 * engine (`activeEngine()?.id`, the same idiom as line 102 above and
 	 * renderVoiceSection below), not a single static sentence covering all
@@ -225,6 +289,8 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				return "This engine runs entirely on this device; it never sends your notes anywhere.";
 			case "speechd":
 				return "This engine speaks through a local daemon, but it cannot report whether a given voice's synthesis needs the network (see the voice list below).";
+			case "readme":
+				return "This engine hands each sentence to Read Me Offline on this device, over a connection nothing outside the device can reach, and Read Me speaks it with this device's own voices. Read Me Offline only offers voices that need no network.";
 			case "webspeech":
 				return "This engine uses your operating system's installed voices. A voice marked \"needs network\" below sends the text being read to a remote service to synthesize it; pick a local voice to keep everything on this device.";
 			default:

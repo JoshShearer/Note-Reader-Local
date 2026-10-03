@@ -7,7 +7,7 @@
  * precision up front via `EngineCapabilities.timing`.
  */
 
-export type EngineId = "kokoro" | "espeak" | "speechd" | "webspeech";
+export type EngineId = "kokoro" | "espeak" | "speechd" | "webspeech" | "readme";
 
 /**
  * The result of `SpeechEngine.isAvailable()`.

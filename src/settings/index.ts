@@ -93,6 +93,14 @@ export interface Settings {
 	 * playback.
 	 */
 	kokoroWeights: "auto" | "gpu" | "fast" | "small";
+	/**
+	 * Loopback port of Read Me Offline's bridge (NRL-130). The host is fixed
+	 * at 127.0.0.1 in the engine and is deliberately not a setting. The
+	 * pairing token is NOT here: plugin data is vault-synced, and the token
+	 * belongs to one device's bridge, so it lives in that device's local
+	 * storage instead (docs/adr/0036).
+	 */
+	bridgePort: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -137,6 +145,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	// responsive while a note is being read.
 	kokoroThreads: 4,
 	kokoroWeights: "auto",
+	bridgePort: 8787,
 };
 
 const RATE_MIN = 0.5;
@@ -159,7 +168,14 @@ function bool(value: unknown, fallback: boolean): boolean {
  * kokoroDevice/kokoroWeights checks below: there is no runtime list of
  * `EngineId`'s members to iterate, since it is a type, not a value.
  */
-const VALID_ENGINE_SELECTIONS: EngineSelection[] = ["auto", "kokoro", "espeak", "speechd", "webspeech"];
+const VALID_ENGINE_SELECTIONS: EngineSelection[] = [
+	"auto",
+	"kokoro",
+	"espeak",
+	"speechd",
+	"webspeech",
+	"readme",
+];
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -243,5 +259,6 @@ export function normaliseSettings(raw: unknown): Settings {
 			data.kokoroWeights === "gpu"
 				? data.kokoroWeights
 				: DEFAULT_SETTINGS.kokoroWeights,
+		bridgePort: Math.round(clampNumber(data.bridgePort, 1, 65535, DEFAULT_SETTINGS.bridgePort)),
 	};
 }

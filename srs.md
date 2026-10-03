@@ -14,6 +14,8 @@ The central product promise is:
 
 > Notes should be readable aloud without an account, subscription, API key, external TTS API, or companion application.
 
+Amended 2026-10-02 (NRL-130, `docs/adr/0036`): on Android an **optional** companion app, Read Me Offline, MAY add an engine that speaks through the device's own TTS over a loopback bridge. Nothing may *require* it: the plugin installs and runs without it.
+
 The plugin itself MUST NOT transmit note content to an external TTS service.
 
 A system-provided TTS engine MAY internally use networking if the user has configured such a voice. Therefore, the plugin does not promise that every system voice is offline.
@@ -109,6 +111,8 @@ It MUST NOT require:
 
 - A companion Android APK.
 - A separately running local server.
+
+An optional engine MAY use one (the Read Me Offline bridge, `docs/adr/0036`), provided the plugin installs, loads and offers its other engines without it, and the engine reports itself unavailable, with where to get the app, when nothing answers.
 - An account.
 - A subscription.
 - An API key.
@@ -142,7 +146,7 @@ See ADR 0028 (0028-bundle-executable-runtime.md), which supersedes ADR 0024 (ort
 
 Quality gates run before any release:
 - `npm run typecheck` (TypeScript must compile).
-- `npm test` (all 24 test suites must pass).
+- `npm test` (all 25 test suites must pass).
 - `npm run build` (production esbuild must succeed).
 
 `.github/workflows/release.yml` enforces these gates on tagged commits, and `.github/workflows/ci.yml` enforces them on every push and pull request. Only tagged commits that pass all gates are released to GitHub.
@@ -204,6 +208,23 @@ Installed Android TTS Engine
 The existence of a supported native bridge from an ordinary Obsidian Community Plugin to Android `TextToSpeech` MUST NOT be assumed.
 
 It MUST first be demonstrated by an implementation spike.
+
+Resolved 2026-10-02 (NRL-130, `docs/adr/0036`). No in-process bridge exists (NRL-35, re-confirmed on Chromium 154), so the native bridge is a loopback HTTP service in a separate, optional Android app:
+
+```text
+ReadMeBridgeEngine (Android app only)
+       │  POST http://127.0.0.1:<port>/synthesize?rate=1.0, text in the body, Bearer token
+       ▼
+Read Me Offline's bridge (its own repo owns the contract, "Bridge contract (v1)")
+       │
+       ▼
+android.speech.tts.TextToSpeech
+       │
+       ▼
+Installed Android TTS Engine  ──►  WAV  ──►  the plugin's Player applies the rate
+```
+
+The host is fixed at `127.0.0.1`; only the port is configurable. The engine always requests rate 1.0 and the Player applies the user's rate. It declares no word timings, so the word highlight is unavailable on it (R-S03; the sentence highlight remains). The pairing token is stored per device, never in vault-synced plugin data.
 
 ---
 
@@ -922,7 +943,7 @@ The MVP SHALL NOT provide:
 - User accounts.
 - Subscription management.
 - Cloud synchronization.
-- Companion Android APK.
+- Companion Android APK, as a requirement or as something this plugin ships. An optional, separately distributed companion (Read Me Offline) MAY be used by an optional engine (`docs/adr/0036`).
 - Modified Obsidian APK.
 - Bundled large neural models.
 - PDF reading.

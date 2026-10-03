@@ -35,6 +35,28 @@ export interface FallbackHooks {
 	 * this - only the first attempted engine ever falls back).
 	 */
 	onFallback?: (from: FallbackCandidate, to: FallbackCandidate, err: Error) => void;
+	/**
+	 * A candidate failed with an error that ends the read rather than moving
+	 * to the next engine (`stopsFallback`). The error has already been shown
+	 * by the Player's "error" listener, so this exists to let the caller skip
+	 * its generic "no engine is available" notice, which would be untrue.
+	 */
+	onStop?: (candidate: FallbackCandidate, err: Error) => void;
+}
+
+/**
+ * Whether a failure should end the read instead of trying the next engine.
+ *
+ * For a condition the user is expected to resolve in a moment, where a
+ * different engine would be the wrong answer: Read Me Offline answering
+ * `503 busy` because it is reading aloud itself (NRL-130). Falling back
+ * there means Kokoro, which on the measured phone is a 72 s cold load and
+ * 3-4x slower than real time, to work around a pause button. Marked by a
+ * `noFallback: true` property rather than a class, so this module stays free
+ * of any engine's types.
+ */
+export function stopsFallback(err: Error): boolean {
+	return (err as { noFallback?: unknown }).noFallback === true;
 }
 
 /**
@@ -111,6 +133,10 @@ export async function playWithFallback(
 		const load = await raceAbort(work, signal);
 		if (load.kind === "aborted") return null;
 		if (load.kind === "failed") {
+			if (stopsFallback(load.error)) {
+				hooks?.onStop?.(candidate, load.error);
+				return null;
+			}
 			if (isLast) return null;
 			hooks?.onFallback?.(candidate, candidates[i + 1]!, load.error);
 			continue;
@@ -126,6 +152,10 @@ export async function playWithFallback(
 		if (outcome.kind === "aborted") return null;
 
 		// outcome.kind === "failed"
+		if (stopsFallback(outcome.error)) {
+			hooks?.onStop?.(candidate, outcome.error);
+			return null;
+		}
 		if (isLast) return null;
 		hooks?.onFallback?.(candidate, candidates[i + 1]!, outcome.error);
 	}

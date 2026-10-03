@@ -256,6 +256,38 @@ export interface KokoroOptions {
 const DEFAULT_OPTIONS: KokoroOptions = { device: "auto", threads: 4, weights: "fast" };
 
 /**
+ * The smallest module using a SIMD instruction (`v128.const` plus an
+ * `i8x16.popcnt`-class op), the same probe wasm-feature-detect uses.
+ * `WebAssembly.validate` compiles nothing and fetches nothing.
+ */
+const SIMD_PROBE = new Uint8Array([
+	0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11,
+]);
+
+/**
+ * Whether this runtime can run the bundled ONNX Runtime at all.
+ *
+ * Every build packed into main.js is a SIMD build, the WebGPU one included
+ * (`ort-wasm-simd-threaded.jsep.*`), so without SIMD there is no backend to
+ * fall to, and NRL-62 decided against shipping a non-SIMD one. Measured on a
+ * Huawei MatePad (VRD-W09, `com.huawei.webview`): this returns false, and
+ * before this check `isAvailable()` said yes, the load took about 2.5 s and
+ * then failed with "WebAssembly SIMD is not supported in the current
+ * environment" on every read.
+ */
+export function wasmSimdSupported(): boolean {
+	try {
+		return typeof WebAssembly === "object" && WebAssembly.validate(SIMD_PROBE);
+	} catch {
+		return false;
+	}
+}
+
+export const KOKORO_NO_SIMD =
+	"This device's web view has no WebAssembly SIMD support, which Kokoro needs, so Kokoro cannot run here. " +
+	"On Android, Read Me Offline's bridge uses the device's own voices instead.";
+
+/**
  * Vault-relative path of the style vector for a voice id like `kokoro:af_heart`.
  *
  * Null when the id is empty or carries another engine's prefix
@@ -431,6 +463,8 @@ export class KokoroEngine implements SpeechEngine {
 	constructor(
 		private readonly store: ModelStore,
 		options: Partial<KokoroOptions> = {},
+		/** Injectable so the suite can stand in for a non-SIMD WebView. */
+		private readonly simdSupported: () => boolean = wasmSimdSupported,
 	) {
 		this.options = { ...DEFAULT_OPTIONS, ...options };
 		this.requestedThreads = this.options.threads;
@@ -544,6 +578,10 @@ export class KokoroEngine implements SpeechEngine {
 	}
 
 	async isAvailable(): Promise<EngineAvailability> {
+		// First, before the file checks: on a device that cannot run Kokoro,
+		// "download the model" would send the user after 150 MB that can
+		// never be used.
+		if (!this.simdSupported()) return { available: false, reason: KOKORO_NO_SIMD };
 		try {
 			for (const file of REQUIRED_FILES) {
 				if (!(await this.store.exists(file))) {

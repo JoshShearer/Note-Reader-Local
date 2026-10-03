@@ -46,6 +46,11 @@ export interface RankedCandidate {
  *
  * Fixed rank order, never derived from the probes, only gated by them:
  *
+ *   0. readme, Read Me Offline's bridge to the phone's own speech engine
+ *      (NRL-130). Constructed only on Android, so on desktop this slot can
+ *      never fill. On Android it is the only engine measured to sustain 2x
+ *      playback offline (RTF 0.116 to 0.169 at rate 1.0, AGENTS.md
+ *      "Android playback throughput"), where Kokoro misses 1x by 3-4x.
  *   1. kokoro, but only when `kokoroGpuFp32Live` - the GPU/fp32 path measured
  *      at 0.10-0.13x wall/audio on this machine, clearly the best available
  *      voice when it is real.
@@ -68,8 +73,16 @@ export function rankEngines(probes: EngineProbe[]): RankedCandidate[] {
 	const speechd = byId.get("speechd");
 	const espeak = byId.get("espeak");
 	const webspeech = byId.get("webspeech");
+	const readme = byId.get("readme");
 
 	const out: RankedCandidate[] = [];
+
+	if (readme?.available) {
+		out.push({
+			id: "readme",
+			reason: "Read Me Offline's bridge is running, so this device's own offline speech engine is used.",
+		});
+	}
 
 	if (kokoro?.available && kokoro.kokoroGpuFp32Live) {
 		out.push({
@@ -105,6 +118,17 @@ export function rankEngines(probes: EngineProbe[]): RankedCandidate[] {
 export function selectEngine(probes: EngineProbe[]): RankedCandidate {
 	const ranked = rankEngines(probes);
 	if (ranked.length > 0) return ranked[0]!;
+	// A readme probe exists only where the bridge engine is constructed, the
+	// Android app. There, "download Kokoro, or install espeak-ng" is the wrong
+	// advice: espeak-ng cannot exist and Kokoro may not be able to run
+	// (NRL-130, docs/adr/0036).
+	if (probes.some((p) => p.id === "readme")) {
+		return {
+			id: "readme",
+			reason:
+				"No speech engine is ready yet. Turn on Read Me Offline's Obsidian bridge and paste its pairing token in settings.",
+		};
+	}
 	return {
 		id: "kokoro",
 		reason:
