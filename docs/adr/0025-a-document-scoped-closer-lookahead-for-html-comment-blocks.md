@@ -2725,3 +2725,256 @@ censuses after the fixes: Q1-Q3 unchanged, the port census's closed disclosures 
 28,763 -> 29,303, the nested census 41,513, each still 0 new in both directions.
 Measured with the same harness (app.js sha256 `8efbf581...`), reading view only; NOT
 VERIFIED IN OBSIDIAN.
+
+### CLOSED by NRL-156/NRL-132 (2026-10-03): `FENCE` accepted any indent, in both directions
+
+**The defect, reproduced before any change** on `origin/main` `01a2caa`, bundling the
+real `extract.ts`: `const FENCE = /^\s*(\`\`\`|~~~)/;` tested a fence opener and closer
+against ANY leading whitespace, where the renderer caps both at the same rule every
+other interrupter in this file already honours (`HEADING`/`BLOCKQUOTE`/`HR`'s `{0,3}`).
+Disclosure direction (NRL-156): `"Intro.\n    \`\`\`\n \t<!--\n===\nHIDDENA\n-->\nTail."`,
+default options - a four-space-led \`\`\` after an open paragraph is module 8607's lazy
+continuation, not a fence, so Obsidian shows `Intro. \`\`\` Tail.` with HIDDENA hidden
+inside the `<!--...-->` block the renderer opens on the line beneath it; we spoke
+`"Intro. <!-- === HIDDENA --> Tail."`, disclosing HIDDENA. Prose-loss direction
+(NRL-132, folded into this ticket's census and fix per the owner's 2026-10-02 review -
+NRL-132's own branch had no commits): three repro notes with a 4-space, 6-space and
+8-space-in-a-list-item lead before a never-closed \`\`\`, all of which we read as a fence
+opener with no closer, so everything after it - VISIBLE1/VISIBLE2, the repro's own
+sentinels - was swallowed to end of document/container. All four reproduced unchanged
+on `01a2caa` before any edit.
+
+**Ground truth already existed and was reused, not re-derived.** `containerViews`
+(NRL-136's model) already computed a renderer-faithful fence-opener test for its own
+per-container fence tracking: a lead that passes `wasOpen ? /^ {0,3}$/.test(lead) :
+!/^(?: {4}|\t)/.test(lead)` gates whether a `` ` `` or `~` run at that lead opens a
+fence. That expression is now the named predicate `fenceOpensAt(lead, wasOpen)`,
+extracted verbatim (same two branches, same two regexes) rather than rewritten, and
+`containerViews` itself now calls it instead of its own inline copy. `wasOpen` is "a
+paragraph left open at this point by the line before": `containerViews`' own signal at
+its level, `wasPara`/`prevPara` at the document's top level (the main per-line loop),
+and `paraLinesAbove > 0` for term 2's forward scan (`endsTerm2Block`) - the same meaning,
+read from three different places that already tracked it for other reasons.
+
+**Deliberately NOT a single capped constant.** The fresh-block branch
+(`!/^(?: {4}|\t)/.test(lead)`) admits a lead `MODULE134_INDENTED_CODE` would reject if it
+were tab-stop-aware - a single space then a tab still opens a FRESH-BLOCK fence, because
+module 134 is literal rather than tab-stop-expanding (NRL-113). Measured directly against
+the executed Obsidian 1.13.7 parser/renderer: `"\n \t\`\`\`\ncode1\n\`\`\`\nAfter."` (fresh
+block, document start) renders one `<pre><code>code1\n</code></pre>` - the space-then-tab
+lead DOES open a fence there - while the identical lead after an open paragraph
+(`"Before x.\n \t\`\`\`\nmiddle\nAfter."`) does not: one `<p>` showing the literal \`\`\`.
+A blind `{0,3}`-style narrowing of the fresh-block branch would have wrongly rejected the
+first case.
+
+**Three call sites change, two are proven no-ops** (not six/three as the Start-phase
+plan enumerated 1:1 - the plan's own site `f`, the `htmlParaOpen` loop, is measured below
+to be reachable-in-principle but a verified NO-OP over this ticket's whole position
+census, since `containerViews` already marks every fence line's `literalAt`/`htmlLineAt`
+before that loop's own FENCE check is ever reached; it is fixed anyway, consistently with
+the model it mirrors, costing nothing measured):
+
+1. **`containerViews`'s own fence detection** (NRL-136's model) - extraction only, see above.
+2. **`endsTerm2Block`** - `FENCE.test(line)` gated on `fenceOpensAt(lead, paraLinesAbove > 0)`.
+3. **The main per-line loop's fence toggle** - split into an OPEN test (gated `!inFence`,
+   `fenceOpensAt(lead, wasPara) && FENCE.test(raw)`) and a CLOSE test (gated `inFence`,
+   the EXISTING `BLOCK_END_FENCE` constant - `/^ {0,3}(?:\`{3,}|~{3,})/` - unconditionally,
+   because a closer never depends on an outer open paragraph). `BLOCK_END_FENCE` already
+   existed (NRL-155) for an unrelated predecessor-line question and is reused rather than
+   duplicated; it does no char/length pairing with the opener, which is deliberately NOT
+   added here (a pre-existing, out-of-scope simplification NRL-132's own AC names and
+   declines to fix).
+4. **The `htmlParaOpen` loop's fence toggle** (plan site `f`) - both `FENCE.test(view)`
+   occurrences gated the same way, threading the loop's own already-computed `wasOpen`
+   local through `fenceOpensAt`. Measured NO-OP: reverting just this one site and
+   re-running the full 576-cell position census below produces a byte-for-byte identical
+   JSON output, confirming `literalAt[k] || htmlLineAt[k]` (containerViews' own answer,
+   computed earlier in the same function) already short-circuits this loop's FENCE check
+   for every cell. Kept anyway for consistency with the model it mirrors; it is a genuine
+   backstop for whatever `containerViews` does not reach (`RL_MAX_DEPTH`), just unexercised
+   by this corpus.
+
+**Two sites are genuine no-ops, confirmed by their own guard conditions, not re-derived
+by differential**: the `listItemContent`/`listDedented` run-end test and the main-loop
+list-end test each only reach `FENCE.test()` after a preceding `!/^\s/.test(raw)` (or
+equivalent `!indented`) guard already established the line's lead is empty - the
+`{0,3}` cap and the unconditional any-indent test agree by construction at lead `""`.
+Left untouched.
+
+**`interruptsParagraphExceptBareMarker` is narrowed, not widened.** Every call in this
+family (`codeSpanClosesLater`, `bracketClosesLater`) asks about a line that, if it does
+not interrupt, continues a paragraph the OPENER line already left open - `wasOpen` is
+always `true` there - so the term collapses to a fixed cap: `FENCE_CONTINUATION =
+/^ {0,3}(\`\`\`|~~~)/`, matching HEADING/BLOCKQUOTE/HR's existing `{0,3}` caps in the
+same function (only FENCE and LIST_BULLET lacked one; LIST_BULLET is NRL-109's, untouched).
+Confirmed NOT a widening of ADR 0019's F5 guard: that guard's own enumeration
+(`tests/extract.test.ts`'s `HEADING`/`BLOCKQUOTE`/`LIST_BULLET`/`TABLE_ROW` loop) does not
+name FENCE at all, and the full `npm test` run after this change leaves the F5 guard
+block and all of NRL-64's own fixtures green (`fence-interrupt` and
+`opening-line-is-heading`/`-quote`/`-list` cases are all zero-indent, so the cap never
+fires on them; see below for the subsumption claim this rests on).
+
+**`interruptsParagraph`, `codeSpanClosesLater`, `labelClose`, `opensMathBlock`,
+`opensObsidianBlock`, `opensHtmlBlock`, `inlineContainerClose`, `wikiTargetClose` and
+`peelQuotes` are unchanged** - `npm test`'s full suite (24 suites, 6,699 checks) passes
+unmodified, including every NRL-64 fixture (`guard-nrl64-*`) and ADR 0019's own F5 guard
+block, none of which were edited.
+
+**`NRL-151` is explicitly out of scope and was checked, not assumed, to be untouched.**
+NRL-151 records that the main-loop opener tests `raw` rather than a container-peeled
+body, so a QUOTED fence is never recognised at all; this ticket's plan said to leave that
+mechanism alone and not change which string any site tests. It was not touched: the main
+loop's `fenceLead` and `FENCE.test(raw)` both still read `raw` verbatim, only the GATING
+boolean changed. The position census below independently surfaces the SAME mechanism in
+LIST items too (not only quotes, as NRL-151's own title names): 10 of 576 cells, all with
+a tab in a list-item fence lead, are wrong IDENTICALLY on base and on this fix (both
+speak only the item's opening line, where the renderer shows the fence line literally)
+- 0 newly regressed, 0 newly fixed, confirming this specific defect predates and is
+unaffected by this change. Left for NRL-151, as instructed.
+
+**Two additional raw FENCE.test() call sites exist that neither this ticket's plan nor
+its "six call sites" count named**: inside `containerViews`'s own quote-run detection
+(deciding whether a non-quote-marked line continues or ends a blockquote run) and its
+list-run detection (the analogous question for a list item's lazy continuation). Reading
+each: the quote-run site is only ever reached at a lead of 0-3 spaces, because an
+EARLIER arm of the same `||` chain (`/^(?: {4}|\t)/.test(u)`) already breaks the run for
+any 4-space-or-tab lead, so FENCE's own any-indent reach is moot there - a fence-shaped
+line always interrupts a blockquote at 0-3 spaces or less regardless of `wasOpen`,
+matching HEADING/HR in the same chain. The list-run site is reached at `indent <= 4`
+(wider than the quote site), and was NOT differentially tested against a capped
+alternative - it is left as found, because the plan did not name it and no measured
+cell in the position census below attributes a wrong output to it. Recorded here as an
+HONEST GAP in this ticket's own coverage rather than silently matched to the plan's
+"six sites, three fixed three no-op" framing, which undercounted by two.
+
+**Position census**, all 576 cells graded against the real Obsidian 1.13.7
+parser/renderer (`oracle111.cjs`/`parser.cjs`/`render.cjs`, `app.js` sha256
+`8efbf581...9898`, `selftest.cjs` 6 ok), base = `01a2caa` (pre-fix, copied not linked),
+fix = this tree: 12 positions (after an open paragraph; fresh block at document start,
+after a blank line, after a heading, after an HR, after a fence-close; inside a quote
+after a quoted paragraph and fresh-in-quote; inside a list item after item-content and
+fresh-in-item; nested list-in-quote and quote-in-list) x 12 leads (0-6 spaces, a bare
+tab, space-then-tab x1-3, tab-then-space) x 2 content kinds (a plain VISIBLE1 sentinel;
+a `<!--HIDDEN1-->` sentinel) x 2 option masks (`skipCodeBlocks` true/false) = 576 cells.
+Each fence marker is SINGLE, with no closer anywhere in the note (matching both repro
+shapes exactly), which is load-bearing: an earlier revision of this same census used a
+symmetric closer at the matching lead and reported 37 false "regressions", all of which
+were CommonMark correctly re-pairing the two markers as an INLINE code span (governed by
+`skipInlineCode`, a different, untested axis) rather than a block fence - a genuine
+renderer construct, not a defect, discovered only by cross-checking the raw HTML. The
+grading oracle for the prose-loss axis was likewise corrected to classify a sentinel
+genuinely inside a real `<pre><code>`/`<code>` element as CODE (correctly excludable
+under `skipCodeBlocks: true`) rather than lost prose, which an earlier pass over this
+census conflated (reporting 54 false residuals before the correction, 10 real ones
+after).
+
+| axis | newly fixed | newly regressed | unchanged-correct | unchanged-still-wrong |
+|---|---|---|---|---|
+| disclosure (`HIDDEN1`) | 31 | 0 | 252 | 5 |
+| prose-loss (`VISIBLE1`/`Tail.`) | 31 | 0 | 252 | 5 |
+
+0 `sourceIndex` lockstep failures on either arm, checked numerically by UTF-16 code-unit
+index (length, bounds, identity, monotonicity) over all 576 cells on both arms. All 10
+`unchanged-still-wrong` cells (5 per axis, since the disclosure and loss rows of the same
+cell move together) are the NRL-151-adjacent list-item-plus-tab shape named above,
+identical on base and fix. The closer-cap edge case (NRL-132's own AC: "a 4-space-led
+\`\`\` inside an already-open, zero-indent fence is content, not a closer") was checked
+separately against the real renderer rather than folded into the 576-cell grid, because a
+symmetric closer at the SAME lead as the opener reopens the inline-code-span ambiguity
+above: `"Before.\n\`\`\`\ncode1\n    \`\`\`\ncode2\n\`\`\`\nAfter."` renders
+`<pre><code>code1\n    \`\`\`\ncode2\n</code></pre>` - the 4-space-led line stays CODE
+content, confirmed matching this fix's own output (`"Before. code1 \`\`\` code2 After."`
+under `skipCodeBlocks: false`).
+
+**Fuzz/mutator evidence for the `sourceIndex` checker's own soundness**: four mutators
+(drop-one-entry, shift-all-by-one, swap-two-entries, negate-one), each shown to FAIL the
+checker on a real fixture from this ticket's own corpus before confirming the checker
+passes on the real, unmutated output - `tests/extract.test.ts`'s new block, not a
+one-off script.
+
+**Residuals, named rather than silently left.** (a) NRL-151's mechanism, in BOTH quote
+and list-item contexts (the latter not named in NRL-151's own title), 10 of 576 census
+cells, unaffected by this fix in either direction. (b) The two un-enumerated
+`containerViews`-internal FENCE.test() sites (quote-run and list-run detection), neither
+differentially tested against a capped alternative; the quote-run site is reasoned (not
+measured) to already be equivalent in practice because an earlier OR-branch already caps
+its reachable lead at 0-3 spaces, and the list-run site (reachable at `indent <= 4`) is
+an open question this ticket does not resolve. (c) Fence character/length pairing (a
+`\`\`\`` opener closed by a `~~~` run) remains unchecked everywhere, per NRL-132's own
+AC, which asks only for the indent cap. (d) The `htmlParaOpen` loop fix (site f above) is
+unexercised by this corpus; it is a provable no-op here, not a provable fix.
+
+**NOT VERIFIED IN OBSIDIAN.** No deploy and no CDP session happened for this ticket; the
+renderer side is Obsidian 1.13.7's own reading-view parser and renderer executed in Node
+out of the installed asar (stronger than a transcription, still not the application).
+Live Preview was not examined. R-M08 is still NOT met and the `2 of 16` MUST headline
+count does not move: this closes two named leftovers (NRL-156's disclosure, NRL-132's
+prose loss), not the requirement, and NRL-151 plus the two un-enumerated containerViews
+sites above stay open against the same requirement.
+
+**SHIP REVIEW MEASURED BOTH un-enumerated `containerViews` sites rather than accepting
+residual (b) above as a closed question.** The implement phase's own honesty - "reasoned
+(not measured)" for the quote-run site, "an open question this ticket does not resolve"
+for the list-run site - is the right call to flag, and ship review resolves both with the
+real Obsidian 1.13.7 parser/renderer and the real bundled extractor, not by reading.
+
+*Quote-run site* (`if (u.trim() === "" || /^(?: {4}|\t)/.test(u) || FENCE.test(u) || ...)
+break;`, inside the `>`-prefixed run collection): the structural argument is a genuine
+proof, not a hunch, and it is now ALSO measured. Base (`01a2caa`, pre-fix) and this tree
+produce **byte-identical spoken text and `sourceIndex`** over a 24-cell corpus (12 leads
+from `""` through `"    \t"` x 2 shapes: a fence-shaped interrupt line followed by a
+`<!--HIDDEN-->` block, and the same line followed by plain `VISIBLE1`/`VISIBLE2`
+sentinels inside a quote). Separately checked against the real renderer: 0 disclosures,
+0 prose loss across all 24 cells. One cell is worth naming because it looked wrong before
+being checked against the renderer rather than against expectation: a one-space-led fence
+inside a quote, after the quote ends, opens a genuine fresh TOP-LEVEL fence with no
+closer, so a trailing `<!--HIDDEN-->` becomes literal FENCE CONTENT and is correctly
+spoken, exactly matching `GT(WT(...))`'s own `<pre><code>&#x3C;!--\nHIDDENX\n-->\n...`
+output - not a leak, the designed-literal class ADR 0019 already names.
+
+*List-run site* (`if (prevBlank || HEADING.test(v) || FENCE.test(v) || HR.test(v) || ...)
+break;`, inside the list-item membership loop): measured, not reasoned, because unlike
+the quote-run site there is no equivalent OR-short-circuit proof available (`indent <=
+4` admits a bare tab, which the continuation cap and the fresh-block cap both reject, so
+no single prior term caps it the way `/^(?: {4}|\t)/.test(u)` does for quotes). Base vs.
+this tree, 252 cells (markers `-`, `1.`, `12.`, `123.`, `1234.`, `12345.` x 14 leads
+(`""` through two-tab and tab-then-space forms) x 3 shapes: a hidden `<!--...-->` right
+after the fence-shaped candidate line, plain `VISIBLE1`/`VISIBLE2` prose after it, and the
+same nested inside a blockquote): **0 of 252 cells differ**, in spoken text or
+`sourceIndex`, between base and this tree. Leaving this site exactly as the implement
+phase left it is therefore a measured no-op for this diff, not an assumed one.
+
+**One genuine, PRE-EXISTING disclosure was found while probing this site, and it is named
+rather than silently folded into the "0 differ" count above.** `- A` / `  \t\`\`\`` /
+`  \t<!--` / `HIDDENX` / `-->` / `AFTERX` (bullet marker, a 2-or-3-space-then-tab lead)
+speaks `"A <!-- HIDDENX --> AFTERX"` on **both base and this tree, byte-identical**, where
+the renderer hides `HIDDENX` inside a genuine comment. Traced, not merely observed to
+match: with `indent >= contentIndent` for a narrow bullet, this line never reaches the
+list-run FENCE check being audited here at all (it takes the earlier `cur.push` branch
+unconditionally); the disclosure is instead a property of the item's uniform minimum-
+indent dedent (`p` in the list-item content loop) cutting a shared amount off every line
+in the item, which leaves a bare tab at the front of the dedented `<!--` line, and
+`containerViews`' OWN (unchanged, already-fixed-before-this-ticket, byte-identical on
+base and fix) fence/comment-eligibility test at that nested recursion level - the
+`fenceOpensAt` call this ticket extracted from inline code, not the FENCE.test() sites
+under audit - declines to treat a tab-led lead as eligible for either a fence OR a
+browser-comment opener once it is judged a paragraph continuation (`wasOpen: true`),
+regardless of which parallel dedent pipeline produced that tab. Confirmed independent of
+the fence shape specifically: replacing the `` ``` `` line with a heading, with ordinary
+prose at the identical lead, or removing it outright, closes the disclosure (each speaks
+only the expected sentinels); the fence shape is what reproduces it, but the ROOT is the
+dedent/eligibility interaction, not either of the two audited FENCE.test() sites. **This
+is out of scope for NRL-156**: it is identical on base (not introduced or widened by this
+diff), and fixing it would mean reconciling container-item dedent with paragraph-
+continuation eligibility inside nested list content, a different mechanism from the fence
+indent cap this ticket is about. Recorded here rather than filed, in the tradition of
+this file's other named-but-unticketed residuals (root 3, root 5, the `heading-tracking`
+`%%` divergence); revisit if a second independent report of the same shape surfaces.
+
+**NOTHING WAS OBSERVED IN OBSIDIAN for this amendment either.** Both censuses are bare
+Node, bundling the real `src/text/extract.ts` from this tree and from `01a2caa` with the
+repo's own esbuild, graded against Obsidian 1.13.7's reading-view parser and renderer
+executed out of the installed asar (`app.js` sha256 `8efbf581...9898`). Live Preview was
+not examined. R-M08 and the `2 of 16` MUST headline count are unaffected: this amendment
+closes residual (b) above with measurement rather than reasoning, it does not close a new
+requirement, and the pre-existing disclosure it surfaces is named, not fixed, here.
