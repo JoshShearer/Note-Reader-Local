@@ -94,6 +94,9 @@ src/
 │   ├── registry.ts             createEngines(), probeEngines(), findEngine()
 │   ├── selection.ts            rankEngines()/selectEngine()/resolveSelection(): automatic quality-ranked pick (ADR 0010)
 │   ├── webspeech.ts            browser speechSynthesis
+│   ├── platform.ts             which platform constructs which engines (Linux desktop, Android app)
+│   ├── bridge/
+│   │   └── readMe.ts           Read Me Offline's loopback bridge, Android only (ADR 0036)
 │   ├── system/
 │   │   ├── spawn.ts            ProcessRunner; the only child_process touch point
 │   │   ├── espeak.ts           espeak-ng → WAV

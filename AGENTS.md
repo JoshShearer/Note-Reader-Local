@@ -681,6 +681,39 @@ to logcat; Play and F-Droid distribution are unexplored; and nothing here amends
 adds an ADR, both of which a shipped companion-app engine will need under the deviation rule
 at the top of this file. The `2 of 16` count does not move.
 
+**The plugin side shipped as NRL-130** (PR #213, squash `5b3f963`, `docs/adr/0036`, `srs.md`'s
+product promise, R-M01, Won't Have and R-M03 amended). The paragraph above describes the
+**prototype**, which is retired; its bridge-side gaps (single accept thread, no foreground
+service, token in logcat) belong to Read Me Offline (`github.com/JoshShearer/Read-Me`, its
+R-M12), which owns the contract now. `ReadMeBridgeEngine` (`src/engines/bridge/readMe.ts`) is
+constructed on the Android app only (`shouldConstructBridgeEngine`) and ranked first by
+Automatic. Four parts are load-bearing. **It always requests `rate=1.0`** and returns a buffer
+(`ownsPlayback: false`), so the Player applies the user's rate once; `tests/bridge.test.ts` B1
+fails if any other rate is sent. Note that B4 (2.0 x 1.0 through the real Player) stays green
+when the engine forwards `req.rate`, because the Player hands buffer engines `rate: 1`, so B1
+is the check that catches it. **Requests are serialized** inside the engine: the Player's
+parallel prefetch sent 8 at once on the MatePad and Read Me's queue answered 5 with
+`503 {"error":"busy","reason":"queue"}`. **Only `busy`/`playback` ends a read without
+fallback** (`stopsFallback` in `src/audio/fallback.ts`, the error carrying
+`noFallback: true`); a full queue is an ordinary failure. **The pairing token is in
+`App.loadLocalStorage`, never `data.json`**, which is vault-synced. The host is the constant
+`127.0.0.1`; only `bridgePort` is a setting. Kokoro's `isAvailable()` also checks WebAssembly
+SIMD first now (`wasmSimdSupported`), because every packed ORT build is a SIMD build.
+
+Measured on a Huawei MatePad (VRD-W09, Android 10, `com.huawei.webview`), Read Me at
+`01eeefa`, Google TTS: `fetch` from Obsidian's WebView reaches the bridge (Read Me logged
+`/health` 200, preflight 204, `/synthesize` 200); a 2.0 read reached `playing` in 1.3 s with
+element `playbackRate` exactly 2 and advanced chunks 0-9 every 3.0-3.4 s; synthesis took
+812-856 ms per ~100-character sentence for ~276 KB of WAV. **Huawei PowerGenie freezes Read Me
+about 12 s after it leaves the foreground** (`Pged-Freezer: Freeze process <pid>`; every thread
+in `D` state, a `freezer` cgroup), despite its `mediaPlayback` foreground service and a
+`deviceidle` whitelist; the read failed at chunk 10. The user has to enable App launch -> Run in
+background for Read Me, and that guidance belongs in Read Me. **NOT established**, and the
+issue was closed with them open: an offline 41-chunk read to `finished` with no stall over
+300 ms, the sentence highlight and NRL-72 scroll during a bridge read, any run on the Pixel, and
+desktop observed live (deployed, no CDP). R-M03 is not recorded as met and the `2 of 16` MUST
+count does not move.
+
 **Supertonic 3 was evaluated and rejected for Android.** `Supertone/supertonic-3` on
 Hugging Face: four ONNX graphs totalling **398,075,273 bytes** (`vector_estimator`
 256,534,781, `vocoder` 101,424,195, `text_encoder` 36,416,150, `duration_predictor`
