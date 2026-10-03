@@ -15,8 +15,10 @@ import {
 	KokoroEngine,
 	KOKORO_WEIGHTS,
 	KOKORO_MODEL_METADATA,
+	KOKORO_NO_SIMD,
 	KOKORO_RELOAD_REQUIRED,
 	VOICE_FILE_SIZE_BYTES,
+	wasmSimdSupported,
 	probeGpu,
 	voiceFilePath,
 } from "../src/engines/onnx/kokoro.ts";
@@ -103,6 +105,31 @@ let weightsMissingReason = "";
 		weightsMissingReason === "Kokoro weights are missing. Download them from settings.",
 		weightsMissingReason,
 	);
+}
+
+console.log("NRL-130: a WebView without WASM SIMD is not available, before any file check");
+{
+	// Every packed ORT build is a SIMD build, so without SIMD Kokoro cannot
+	// run at all. Before this check isAvailable() said yes on such a device
+	// (the Huawei MatePad) and every read failed after a ~2.5 s load.
+	const everything = [...CORE, FAST, SMALL];
+	const noSimd = new KokoroEngine(fakeStore(everything), { device: "wasm", weights: "fast" }, () => false);
+	const result = await noSimd.isAvailable();
+	check("SIMD-less runtime: not available, even with every file present", result.available === false);
+	check(
+		"SIMD-less runtime: says why, and names the alternative",
+		!result.available && result.reason === KOKORO_NO_SIMD && /SIMD/.test(result.reason) && /Read Me/.test(result.reason),
+		!result.available ? result.reason : "available:true",
+	);
+	const missing = await new KokoroEngine(fakeStore([]), { device: "wasm", weights: "fast" }, () => false).isAvailable();
+	check(
+		"SIMD-less runtime: the SIMD reason wins over 'download the model' (no 150 MB that can never run)",
+		!missing.available && missing.reason === KOKORO_NO_SIMD,
+		!missing.available ? missing.reason : "available:true",
+	);
+	const withSimd = new KokoroEngine(fakeStore(everything), { device: "wasm", weights: "fast" }, () => true);
+	check("guard: SIMD present and files present is still available", (await withSimd.isAvailable()).available);
+	check("guard: this Node runtime validates the SIMD probe module", wasmSimdSupported() === true);
 }
 
 console.log("missing core files are not papered over by weights (NRL-25: distinguishable reason)");

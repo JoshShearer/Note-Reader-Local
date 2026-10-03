@@ -1,6 +1,7 @@
 import { Platform } from "obsidian";
 import type { EngineId, SpeechEngine } from "../audio/types";
-import { shouldConstructLinuxDesktopEngines } from "./platform";
+import { shouldConstructBridgeEngine, shouldConstructLinuxDesktopEngines } from "./platform";
+import { ReadMeBridgeEngine, type BridgeConfig } from "./bridge/readMe";
 import { EspeakEngine } from "./system/espeak";
 import { SpeechDispatcherEngine } from "./system/speechd";
 import { getProcessRunner } from "./system/spawn";
@@ -29,8 +30,15 @@ export interface EngineStatus {
 export function createEngines(
 	kokoroStore: ModelStore,
 	kokoroOptions: Partial<KokoroOptions> = {},
+	bridgeConfig: () => BridgeConfig = () => ({ port: 8787, token: "" }),
 ): SpeechEngine[] {
 	const engines: SpeechEngine[] = [new KokoroEngine(kokoroStore, kokoroOptions)];
+
+	// Read Me Offline is an Android app; nowhere else can its bridge be
+	// listening (NRL-130, docs/adr/0036).
+	if (shouldConstructBridgeEngine(Platform)) {
+		engines.push(new ReadMeBridgeEngine(bridgeConfig));
+	}
 
 	// espeak-ng and spd-say are Linux-only system binaries: constructing
 	// these engines on macOS/Windows desktop would only produce `which`

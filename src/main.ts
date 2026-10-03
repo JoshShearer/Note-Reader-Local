@@ -18,6 +18,10 @@ import { platformSegmenters } from "./text/segment";
 import { resolveStoredVoice } from "./audio/voiceChoice";
 import { applySelectionReadGate, clipChunksToSelection, type SelectionReadPort } from "./audio/clip";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
+import { ReadMeBridgeEngine } from "./engines/bridge/readMe";
+
+/** Local-storage key for the Read Me bridge pairing token (see getBridgeToken). */
+const BRIDGE_TOKEN_KEY = "local-tts-reader:bridge-token";
 import {
 	KokoroEngine,
 	KOKORO_WEIGHTS,
@@ -155,7 +159,10 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			this.settings.kokoroModelPath,
 		);
 
-		this.engines = createEngines(this.modelStore, this.kokoroOptions());
+		this.engines = createEngines(this.modelStore, this.kokoroOptions(), () => ({
+			port: this.settings.bridgePort,
+			token: this.getBridgeToken(),
+		}));
 
 		// Which backend the engine settled on, and why the faster ones were
 		// rejected, is the single most useful thing in a performance report.
@@ -622,7 +629,17 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			candidates = await this.rankedCandidates();
 			t("automatic candidates resolved", candidates.map((c) => c.id).join(","));
 			if (candidates.length === 0) {
-				new Notice("Local TTS Reader: no speech engine is available; check settings.", 8000);
+				// On Android the only engine that can speak on many devices is
+				// the Read Me bridge, so say how to get it answering rather than
+				// "check settings" (NRL-130). Elsewhere the message is unchanged.
+				new Notice(
+					this.getBridge()
+						? "Local TTS Reader: Read Me Offline's bridge is not answering. Open Read Me Offline and check its " +
+								"Obsidian bridge is on. If it keeps stopping when you switch apps, allow Read Me Offline to run " +
+								"in the background in Android's battery settings."
+						: "Local TTS Reader: no speech engine is available; check settings.",
+					12000,
+				);
 				return;
 			}
 		} else {
@@ -670,9 +687,17 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			t("resume from stored position", `${filePath} @ ${startAtSource}`);
 		}
 
+		// Set when a candidate ended the read on purpose (Read Me busy,
+		// NRL-130). Its own message has already been shown by the player's
+		// error handler, so the generic "no engine" notice below would be untrue.
+		let stopped = false;
 		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: (candidate) =>
 				this.prepareCandidate(candidate, isAutomatic, current.filePath, scope.signal),
+			onStop: (candidate) => {
+				stopped = true;
+				t("read stopped by engine", candidate.id);
+			},
 			onFallback: (from, to, err) => {
 				t("fallback", `${from.id} -> ${to.id}: ${errText(err)}`);
 				new Notice(
@@ -691,6 +716,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		}
 
 		if (!result) {
+			if (stopped) return;
 			t("no candidate succeeded", candidates.map((c) => c.id).join(","));
 			new Notice("Local TTS Reader: no speech engine is available; check settings.", 8000);
 			return;
@@ -1259,6 +1285,31 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * which every UI caller already handles by treating a null engine as "no
 	 * capabilities to gate on yet" (main.ts, affordances.ts).
 	 */
+	/**
+	 * The Read Me bridge's pairing token, from THIS device's local storage.
+	 *
+	 * Not in `data.json`: plugin data is vault-synced (LiveSync, Obsidian Sync,
+	 * a git vault), and a token belongs to one phone's bridge. Synced, it would
+	 * travel to every device and be wrong on all but one, and it would sit in
+	 * whatever the vault is synced to (docs/adr/0036). `loadLocalStorage` is
+	 * scoped to this vault on this device. Never logged (non-negotiable 1).
+	 */
+	getBridgeToken(): string {
+		const stored: unknown = this.app.loadLocalStorage(BRIDGE_TOKEN_KEY);
+		return typeof stored === "string" ? stored : "";
+	}
+
+	setBridgeToken(token: string): void {
+		const trimmed = token.trim();
+		this.app.saveLocalStorage(BRIDGE_TOKEN_KEY, trimmed === "" ? null : trimmed);
+	}
+
+	/** The bridge engine on this platform, or null where it is not constructed. */
+	getBridge(): ReadMeBridgeEngine | null {
+		const engine = findEngine(this.engines, "readme");
+		return engine instanceof ReadMeBridgeEngine ? engine : null;
+	}
+
 	activeEngine(): SpeechEngine | null {
 		if (this.settings.engine !== "auto") return findEngine(this.engines, this.settings.engine) ?? null;
 		if (!this.autoResolution) return null;

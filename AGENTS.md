@@ -23,7 +23,7 @@ script and no git hook, so nothing runs the gates at the moment you commit: CI i
 backstop, not a substitute. Run them locally first.
 
 ```bash
-npm test          # 24 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, modelStore, adrNumbers, vaultPersistence, loadingNotice, suiteRegistry
+npm test          # 25 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, modelStore, adrNumbers, vaultPersistence, loadingNotice, suiteRegistry, bridge
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run build     # typecheck + esbuild production (main.js only; the worker and ONNX runtime are inlined into it)
 ```
@@ -577,7 +577,7 @@ LAN-exposed, and was uninstalled.
 16,797-byte APK built without gradle (Android build-tools 34.0.0 and platform android-34 in
 `~/Android/Sdk`; Temurin JDK 21.0.12.1 in `~/Android/tools`, because this machine had a JRE
 and no `javac`). **Source, build script and measurement script are in
-`companion/android/`** (README there). It declares the `TTS_SERVICE` query, binds
+`companion/android/`** (README there). **Retired by NRL-130** in favour of Read Me Offline (`docs/adr/0036`); the source, build script and measurement script are recoverable from `591ce17`. It declares the `TTS_SERVICE` query, binds
 **127.0.0.1 only**, requires a random 32-hex token on every route but `/health`, and takes
 text in a **POST body, never a query string** (non-negotiable 2's reasoning: a URL lands in
 logs the way argv lands in `ps`). Result: `queriesIntents=[Intent { act=android.intent.action.TTS_SERVICE }]`,

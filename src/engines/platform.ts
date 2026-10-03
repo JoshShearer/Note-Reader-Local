@@ -26,3 +26,15 @@ export interface PlatformFlags {
 export function shouldConstructLinuxDesktopEngines(platform: PlatformFlags): boolean {
 	return platform.isDesktopApp && platform.isLinux;
 }
+
+/**
+ * Only the Android app gets the Read Me Offline bridge engine (NRL-130).
+ *
+ * Read Me Offline is an Android app, so on any other platform nothing can be
+ * listening and the engine would only add a failing loopback probe to every
+ * automatic selection. Keeping it off desktop is also what keeps desktop
+ * behaviour unchanged, which NRL-130 requires. iOS is out of scope there.
+ */
+export function shouldConstructBridgeEngine(platform: { isAndroidApp: boolean }): boolean {
+	return platform.isAndroidApp;
+}

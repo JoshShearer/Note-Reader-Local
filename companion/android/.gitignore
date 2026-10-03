@@ -1,4 +1,0 @@
-# Build output and the local debug signing key. The key is generated on first
-# build and is machine-local; a release key never belongs in this repo.
-build/
-debug.keystore
