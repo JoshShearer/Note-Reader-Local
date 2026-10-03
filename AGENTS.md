@@ -3669,6 +3669,51 @@ rediscover them:
   lost (13 base-defused, 2 N10) over 338,716 cells; ADR 0025's Ship addendum has the detail.
   **NOT VERIFIED IN OBSIDIAN**: reading view only, no deploy,
   rule 11 applies. R-M08 is still **NOT** met and the `2 of 16` count does not move.
+- **A whitespace-only line holding a tab is not blank while a paragraph is open, as of
+  NRL-158** (`docs/adr/0025`'s NRL-158 section). This is the ticket NRL-155's own tripwire
+  pin, `pin-nrl155-tab-whitespace-line-is-not-blank`, was waiting on - that pin's own
+  fixture happened to use a leading SPACE before the tab (`" \t \n \t<!--"`), which
+  `INDENTED_CODE` never matched, so it passed before this landed without exercising the
+  defect it names. Three sites in `extract.ts` independently tested `line.trim() === ""`
+  with no reference to whether a paragraph was open - the `htmlParaOpen` precompute loop,
+  the main loop's `blank`/`wasBlank` computation, and the paragraph-flush test - while
+  `walkLeadFrame`'s "para" state already had the right rule inline
+  (`blank && !view.includes("\t")`). All three now call one named predicate,
+  `blankEndsParagraph(line, paragraphOpen)`, styled after `fenceOpensAt` (NRL-156):
+  `line.trim() === "" && (!paragraphOpen || !line.includes("\t"))`. Harness-measured: a
+  SPACES-ONLY line always ends an open paragraph; a TAB-bearing one, anywhere in its
+  whitespace run, continues one instead - never the blank line that would end it - and is
+  ordinary blank only when no paragraph is open. Containers are explicitly OUT OF SCOPE,
+  the same axis NRL-155 scoped out of its own gate: a quote/list line carrying its own
+  marker interacts with the renderer's setext/HTML precedence differently (measured: a
+  tab-blank quote line continues a real preceding quote paragraph when followed by plain
+  prose, but not when followed by `<!--` specifically, which instead opens a fresh setext
+  block), and a bare line with no marker ends the container regardless of a tab.
+  Position census against the real renderer, both directions: **486 cells** (9
+  whitespace-line shapes x 6 predecessor contexts x 9 follower shapes), **16 disclosures
+  closed, 0 newly leaking, 0 newly regressed against the renderer**, 470 byte-identical to
+  base. Container census, confirming unchanged rather than correct: **48 cells**, **48 of
+  48 identical**. The double-tab-blank shape (`"Intro.\n\t\n\t\nNext."`) is the one case
+  the joined TEXT alone cannot distinguish base from the fix on - both read
+  `"Intro. Next."` - because chunk STRUCTURE is what differs: base flushes two chunks,
+  the fix merges one continuing paragraph through the same join-space `sourceIndex`
+  synthesis every other soft-wrapped continuation uses. Full `npm test` (25 suites, 6,815
+  pre-existing checks) passes byte-for-byte identically before and after; only the 14 new
+  NRL-158 checks move from red to green, and `pin-nrl155-tab-whitespace-line-is-not-blank`
+  plus the full `guard-nrl155-*`/`pin-nrl115-*`/`pin-nrl120-*`/`pin-nrl136-*` families
+  (364 `ok` lines) are confirmed intact and unmodified. One deliberate addition beyond the
+  plan's literal predicate: the paragraph-flush site also gates on the CURRENT line's own
+  `blockType === "paragraph"`, so a fresh quote/list marker (whose body also happens to be
+  blank) can never be misread as continuing whatever preceded it - proven unobservable on
+  every fixture tried (base and fix agree with or without it) and kept anyway because the
+  invariant it enforces (`prevPara`/`prevContainer` mutual exclusivity) should hold by
+  construction, not by the corpus this ticket happened to try. **NOT VERIFIED IN
+  OBSIDIAN** - no deploy, no CDP session; both censuses are bare Node against Obsidian
+  1.13.7's reading-view parser and renderer executed out of the installed asar. R-M08 is
+  still NOT met and the `2 of 16` MUST count does not move: this closes the blank-line
+  disclosure NRL-155 pinned and deferred, not the requirement; the container axis and the
+  pre-existing `INDENTED_CODE`-masks-content miss on the "no paragraph open" axis both
+  stay open against it.
 - R-C02's Context table named three gaps: three of five install-time fields missing (language,
   installed size, license), and no remove action at all, so up to 573 MB across three Kokoro
   builds plus the ~31 MB ORT runtime could accumulate in a directory deliberately hidden from
