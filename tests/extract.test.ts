@@ -3683,17 +3683,14 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// to us (NRL-93 / NRL-115's divergence, not fixed here). The refusal must
 		// not reach inside it: SECRETH and HIDDENA are both hidden.
 		["guard-nrl120-no-refusal-inside-tab-led-block", " \t<!--\n<!-- SECRETH\n--\nHIDDENA", ""],
-		// UNMASKED, NOT OPENED: the pre-existing disclosure this ticket newly
-		// exposes, pinned as a tripwire. A line that starts an HTML comment block
-		// and closes it on the same line (`<!-- y -->`) ends that block at the end of
-		// the line, so a further unclosed `<!--` on it is RAW HTML that hides the
-		// rest of the note in the reading view. We treat the second `<!--` as a
-		// mid-line opener and, with no closer in its paragraph, speak what follows.
-		// The control row below shows base does exactly this with nothing masking
-		// it. Before NRL-120 an earlier line-start `<!--` over an underline opened
-		// OUR comment and happened to hide the same text; the refusal removes that
-		// mask. The fuzz found this as its only remaining newly-spoken class. When
-		// the same-line reopen is fixed, both expectations change on purpose.
+		// CLOSED BY NRL-136, replaced in place with the names kept (the NRL-66/NRL-67
+		// convention). These were NRL-120's tripwires for the pre-existing same-line
+		// reopen disclosure: a line that starts an HTML comment block and closes it
+		// on the same line (`<!-- y -->`) ends that block at the end of the line, so
+		// a further unclosed `<!--` on it is RAW HTML that hides the rest of the note
+		// in the reading view. NRL-136 now hides it. Renderer verdicts (parser
+		// harness, oracle111): `<!-- SECRETH` / `---` / ... renders an `<h2>` showing
+		// `<!-- SECRETH` and hides HIDDENA; `SEEN` / `---` / ... shows SEEN only.
 		// NRL-120 Verify blockers. The `$$` stop kept the `<!--` literal, which
 		// let the line after it be read as a setext underline, and skipHeadings
 		// then dropped the displayed paragraph. Obsidian 1.13.7's MarkdownRenderer
@@ -3704,8 +3701,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// pins is that VISIBLED is spoken.
 		["pin-nrl120-setext-needs-exact-underline", "Prose VISIBLEP <!--\n ===\n$$\nVISIBLEM --> t.", "Prose VISIBLEP <!-- === $$ VISIBLEM --> t.", { skipHeadings: true }],
 		["pin-nrl120-setext-needs-one-content-line", "<div>\nVISIBLED\n<div><!--\n===\n$$\nHIDDENM --> t.", "VISIBLED <!-- === $$ HIDDENM --> t.", { skipHeadings: true }],
-		["pin-nrl120-unmasked-same-line-reopen", "<!-- SECRETH\n---\n<!-- y --> <!--\nHIDDENA", "<!-- SECRETH <!-- HIDDENA"],
-		["guard-nrl120-same-line-reopen-on-base", "SEEN\n---\n<!-- y --> <!--\nHIDDENA", "SEEN <!-- HIDDENA"],
+		["pin-nrl120-unmasked-same-line-reopen", "<!-- SECRETH\n---\n<!-- y --> <!--\nHIDDENA", "<!-- SECRETH"],
+		["guard-nrl120-same-line-reopen-on-base", "SEEN\n---\n<!-- y --> <!--\nHIDDENA", "SEEN"],
 		// Three more unmaskings, found by NRL-120's Ship census (73,728 newly
 		// speaking cells over 144 rows x 512 content-key combinations, every one of
 		// them reproduced on base by replacing the heading's `<!--` with plain text,
@@ -3718,8 +3715,15 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// (3) A `<div>` raw HTML block holding a mid-line `<!--`. (2) and (3) are a
 		// pre-existing raw-HTML-block class, not a comment-rule defect. When either
 		// is fixed, these expectations change on purpose.
-		["pin-nrl120-unmasked-reopen-by-math-stop", "<!-- y --> <!--\nHIDDENA\n$$\n--> t.", "<!-- HIDDENA $$ --> t."],
-		["guard-nrl120-reopen-blank-stop-on-base", "<!-- y --> <!--\nHIDDENA\n\n--> t.", "<!-- HIDDENA --> t."],
+		//
+		// (1) is CLOSED BY NRL-136 and its pair is replaced in place, names kept: the
+		// reopened `<!--` is a browser comment that runs to the next `-->` in the
+		// document, so HIDDENA is hidden whether a `$$` or a blank line sits between
+		// (renderer: both show only `t.`). `pin-nrl136-reopen-blank-stop` pins the
+		// blank-line form again under NRL-136's own name. (2) and (3) are NRL-137's
+		// and are deliberately unchanged.
+		["pin-nrl120-unmasked-reopen-by-math-stop", "<!-- y --> <!--\nHIDDENA\n$$\n--> t.", "t."],
+		["guard-nrl120-reopen-blank-stop-on-base", "<!-- y --> <!--\nHIDDENA\n\n--> t.", "t."],
 		["pin-nrl120-unmasked-processing-instruction", "<!--\n===\n<?x\nHIDDENP", "<!-- <?x HIDDENP"],
 		["guard-nrl120-processing-instruction-on-base", "SEEN\n===\n<?x\nHIDDENP", "SEEN <?x HIDDENP"],
 		["pin-nrl120-unmasked-div-block-comment", "<!--\n===\n<div>\nProse <!-- HIDDEND", "<!-- Prose <!-- HIDDEND"],
@@ -4268,6 +4272,148 @@ console.log("Obsidian comment exclusion (NRL-38)");
 					unitsMatch(k.text, k.sourceIndex, src, (text) => text === "equation"),
 			),
 		);
+	}
+	// NRL-136 (R-M08, disclosure direction). A line whose FIRST `<!--` starts an
+	// HTML block and closes on that line, with a LATER `<!--` that does not, is
+	// raw HTML for the renderer: Obsidian 1.13.7's own WT parser and GT renderer
+	// turn `x` / blank / `<!-- y --> <!-- Q1Z` / `TAIL` into
+	// `<p>x</p>\n<!-- y --> <!-- Q1Z\n<p>TAIL</p>`, and the second, unclosed
+	// `<!--` becomes a BROWSER comment that hides the rendered output up to the
+	// next `-->` anywhere later. Reworked after the first draft's Verify found three
+	// disclosure classes (Q1-Q3 below).
+	//
+	// Every expectation was decided against real rendered HTML (the parser
+	// harness, app.js sha256 8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898,
+	// oracle111.rendererHides), not by hand. Reading view only; NOT OBSERVED IN
+	// A RUNNING OBSIDIAN (rule 11).
+	//
+	// CORE rows are red on origin/main 844b7f6 and green after.
+	const nrl136: Array<[string, string, string, Partial<typeof OPTS>?]> = [
+		// CORE, the ticket's base-reproducing rows and the same class in the other shapes and positions it reaches.
+		["pin-nrl136-same-line-reopen", "x\n\n<!-- y --> <!-- Q1Z\nTAIL", "x"],
+		["pin-nrl136-reopen-blank-stop", "<!-- y --> <!--\nHIDDENA\n\n--> t.", "t."],
+		["pin-nrl136-text-between-openers", "<!-- y --> x <!-- H1\n\nT2", "x"],
+		["pin-nrl136-empty-first-comment", "<!----> <!-- Q2Z\nTAIL", ""],
+		// `html` is in interruptParagraph, so the line ends the paragraph above it.
+		["pin-nrl136-paragraph-continuation", "Para\n<!-- y --> <!-- Q1Z\nTAIL", "Para"],
+		["pin-nrl136-in-quote", "> <!-- y --> <!-- Q1Z\n> TAIL", ""],
+		["pin-nrl136-list-marker", "- <!-- y --> <!-- Q1Z\nTAIL", ""],
+		["pin-nrl136-list-continuation", "- item\n  <!-- y --> <!-- Q1Z\nTAIL", "item"],
+		["pin-nrl136-task", "- [ ] <!-- y --> <!-- Q1Z\nTAIL", ""],
+		// The closing line of a top-level HTML block is raw too, so an unclosed `<!--` anywhere on it opens a browser comment.
+		["pin-nrl136-html-block-remainder-text", "<!-- a\nb --> x <!-- Q1Z\nTAIL", "x"],
+		// The markdown under a browser comment is still parsed. A `-->` inside a fence's code closes it (GT emits `>` raw in `<pre>`), the rest of that line is code, and the fence's own closer must not be read as an opener.
+		["pin-nrl136-fence-closer", "<!-- y --> <!-- Q4Z\n```\nco --> de\n```\nTAIL", "TAIL"],
+		["pin-nrl136-fence-closer-spoken", "<!-- y --> <!-- Q4Z\n```\nco --> de\n```\nTAIL", "de TAIL", { skipCodeBlocks: false }],
+		// What follows a browser comment's `-->` on an ordinary line is inline, so a `<!--` there is not a line-start opener.
+		["pin-nrl136-browser-close-remainder-inline", "<!-- y --> <!-- Q1Z\nmid --> <!-- R2\nTAIL", "<!-- R2 TAIL"],
+		// A `%%` block under a browser comment is removed by the parser, `-->` and all, so the browser comment closes at the NEXT `-->`.
+		["pin-nrl136-pct-block-under-comment", "<!-- y --> <!-- Q1Z\n%%\nmid --> M2\n%%\nN3 --> after.", "after."],
+		// A `-->` on an ATX heading closes inside its `data-heading` attribute, which GT writes before the heading text, so the reader sees the rest of the raw line (`line">`) and then the whole heading.
+		["pin-nrl136-heading-closer", "<!-- y --> <!-- Q1Z\n# Head --> line\nTAIL", "line Head --> line TAIL"],
+		// The line is an HTML block, so it interrupts the paragraph and a code span cannot cross it.
+		["pin-nrl136-code-carry-refused", "A `x\n<!-- y --> <!-- Q1Z\nz` B\nTAIL", "A x", { skipInlineCode: false }],
+		// CORE, Q1. An inline `%%...%%` pair is removed by the parser before rendering, so a `-->` inside one does not close the browser comment; the first draft spoke the content of the user's `%%` comment (Verify, 60 fuzz cells). Paired on the same line, non-greedy, after code spans and complete inline HTML comments, never on a fence, raw HTML or heading line.
+		["pin-nrl136-q1-pct-pair-after-blank", "<!-- y --> <!-- Q1Z\n\nA %%x --> SECRETZ%% B\nTAIL", ""],
+		["pin-nrl136-q1-pct-pair-list", "x\n\n<!-- y --> <!-- Q1Z\n- A %%note --> SECRETZ%% B", "x"],
+		["pin-nrl136-q1-pct-pair-quote", "x\n\n<!-- y --> <!-- Q1Z\n> A %%note --> SECRETZ%% B\n\nTAIL", "x"],
+		["pin-nrl136-q1-pct-pair-table", "x\n\n<!-- y --> <!-- Q1Z\n\n| A %%n --> SECRETZ%% B | c |\n| - | - |\n\nTAIL", "x", { skipTables: false }],
+		["pin-nrl136-q1-pct-pair-same-paragraph", "<!-- y --> <!-- Q1Z\nA %%x --> SECRETZ%% B\nTAIL", ""],
+		["pin-nrl136-q1-pct-triple", "<!-- y --> <!-- Q1Z\nA %%%x --> SECRETZ%% B\nTAIL", ""],
+		// A heading's raw text, pair and all, is in `data-heading`, so its `-->` closes there and the rest of the raw line is shown before the heading. Closes the residual the first draft pinned as `pin-nrl136-residual-inline-pct-closer`.
+		["pin-nrl136-q1-heading-attribute-rest", "<!-- y --> <!-- Q1Z\n# A %%x --> S%% B\nTAIL", "S%% B A B TAIL"],
+		["pin-nrl136-q1-setext-attribute-rest", "<!-- y --> <!-- Z0Q\nA %%x --> Z1Q%% Z2Q\n===\nZ8Q TAIL", "Z1Q%% Z2Q A Z2Q Z8Q TAIL"],
+		// CORE, Q2. A line-start `<!--` that opens a markdown HTML block while the browser comment is open: every line of that block is raw HTML (no heading, fence or `%%`), and the block ends at its `-->` or with its container, not at a blank line. The first draft read `# Z2Q --> Z3Q` there as a heading and spoke Z2Q (Verify).
+		["pin-nrl136-q2-heading-inside-block", "<!-- a --> <!-- Z0Q\n<!-- Z1Q\n# Z2Q --> Z3Q", "Z3Q"],
+		["pin-nrl136-q2-blank-inside-block", "<!-- a --> <!-- Z0Q\n<!-- Z1Q\n\n# Z2Q --> Z3Q", "Z3Q"],
+		["pin-nrl136-q2-after-paragraph", "<!-- a --> <!-- Z0Q\nP\n<!-- Z1Q\n# Z2Q --> Z3Q", "Z3Q"],
+		["pin-nrl136-q2-list", "<!-- a --> <!-- Z0Q\n\n- <!-- Z1Q\n  # Z2Q --> Z3Q", "Z3Q"],
+		["pin-nrl136-q2-quote", "<!-- a --> <!-- Z0Q\n\n> <!-- Z1Q\n> # Z2Q --> Z3Q", "Z3Q"],
+		["pin-nrl136-q2-raw-remainder", "<!-- a --> <!-- Z0Q\n<!-- Z1Q\nZ2Q --> Z3Q <!-- Z4Q\nZ5Q", "Z3Q"],
+		["pin-nrl136-q2-fence-inside-block", "<!-- a --> <!-- Z0Q\n<!-- Z1Q\n```\nZ2Q --> Z3Q\n```\nZ4Q", "Z3Q"],
+		["pin-nrl136-q2-fence-inside-block-spoken", "<!-- a --> <!-- Z0Q\n<!-- Z1Q\n```\nZ2Q --> Z3Q\n```\nZ4Q", "Z3Q Z4Q", { skipCodeBlocks: false }],
+		// Four spaces is indented code, not a block, so the heading after it is a heading and shows its attribute's rest.
+		["pin-nrl136-q2-four-space-not-a-block", "<!-- a --> <!-- Z0Q\n    <!-- Z1Q\n# Z2Q --> Z3Q", "Z3Q Z2Q --> Z3Q"],
+		// A lazy `<!--` line ends a quote (and any list in it), because `html` is in interruptBlockquote, so the block is top-level.
+		["pin-nrl136-q2-lazy-html-leaves-quote", "> - <!-- y --> <!-- S2Z\n<!-- S3Z\n# S4Z --> S6Z\nS7Z", "S6Z S7Z"],
+		// CORE, Q3. List-item content is stripped by module 5540 (the smallest positive indent over the bullet pad and the item's lines) before the HTML tokenizer sees it, so the lead is measured on the stripped view. The first draft's fixed `<= 4 spaces or one tab` rule disclosed (Verify).
+		["pin-nrl136-q3-list-five-space-content", "- item\n     <!-- y --> <!-- Q1Z\nTAIL", "item"],
+		["pin-nrl136-q3-ordered-six-space", "1. item\n      <!-- y --> <!-- Q1Z\nTAIL", "item"],
+		["pin-nrl136-q3-ordered-seven-space", "1. item\n       <!-- y --> <!-- Q1Z\nTAIL", "item"],
+		["pin-nrl136-q3-nested-seven-space", "- A\n  - B\n       <!-- y --> <!-- Q1Z\nTAIL", "A B"],
+		["pin-nrl136-q3-tab", "- item\n\t<!-- y --> <!-- Q1Z\nTAIL", "item"],
+		["pin-nrl136-q3-quoted-list-six-space", "> - A\n>      <!-- y --> <!-- Q1Z\n> TAIL", "A"],
+		// CORE, found by Ship's fuzz on the rebased tree. The app's `%%` block tokenizer skips SPACES only, so a `%%` led by spaces then a tab is paragraph text (renderer: `  \t%% Z0Q` displays `%% Z0Q`). `containerViews` took it for a `%%` block, swallowed the list below it and left the reopening line unstripped, so the first row newly spoke `<!-- Z7Q` against origin/main (which says `x`), and the second spoke Z7Q and Z8Q on main and on the fix alike. Red before the tab test, green after. The second row's missing `%% Z0Q` under default options is NRL-93's pre-existing tab-led `%%` loss (origin/main drops it too), not this change.
+		["pin-nrl136-tab-led-pct-is-not-a-block", "  \t%% Z0Q\n1. <!-- a --> x <!-- Z6Q\n    <!-- y --> <!-- Z7Q", "%% Z0Q x", { skipCodeBlocks: false, skipInlineCode: false, skipTables: false }],
+		// Rebase onto main 20d9da1: `%% Z0Q` is now spoken because NRL-113 narrowed INDENTED_CODE to module 134's literal rule, so ` \t%% Z0Q` is paragraph text, which the renderer displays (`%% Z0Q A`). Only that half moved; Z7Q and Z8Q stay hidden.
+		["pin-nrl136-tab-led-pct-list-strip", " \t%% Z0Q\n\n- A\n     <!-- y --> <!-- Z7Q\nZ8Q", "%% Z0Q A"],
+		// CORE, also from Ship's fuzz. A lazy `=` under a quoted line underlines it only while it stays in the quote run; when an exact underline follows it, the quote ends there and `=` is the content of its own `<h1>`. Renderer: the first row shows `Z2Q B`, `=` and TAIL and hides Z1Q, which the pre-Ship tree spoke by reading the quoted line as a heading; the second hides everything, which origin/main and the pre-Ship tree both spoke.
+		["pin-nrl136-quote-lazy-underline-left-quote", "<!-- y --> <!-- Z0Q\n> A Z1Q --> Z2Q B\n=\n===\nTAIL", "Z2Q B = === TAIL"],
+		["pin-nrl136-quote-block-lazy-underline-left-quote", "> <!-- y --> <!-- S2Z\n=\n===\nS3Z", ""],
+		// CORE, from Ship's fuzz after the rebase onto NRL-131. A `%%` straight after a callout marker is title text, not a block, so the next line's `-->` closes the browser comment (renderer: empty title, Z5Q and Z6Q shown). The pre-Ship tree read it as a block and hid the rest; NRL-131's peel of `- > [!note]` is what brought the nested form into reach.
+		["pin-nrl136-callout-title-pct-not-a-block", "<!-- a --> x <!-- Z2Q\n> [!note] %%\n Z4Q --> Z5Q\n  Z6Q", "x Z5Q Z6Q"],
+		["pin-nrl136-nested-callout-title-pct-not-a-block", "- > [!note] <!-- a --> x <!-- Z2Q\n- > [!note] %%\n Z4Q --> Z5Q\n  Z6Q\n1. %%Z7Q --> Z8Q%% Z9Q", "x Z5Q Z6Q Z9Q"],
+		// Red on an arm that drops the `%%` block test for every quoted line: a `%%` on a callout BODY line is still a block, removed by the parser, so the comment closes only at the `-->` after it.
+		["guard-nrl136-callout-body-pct-is-a-block", "<!-- a --> x <!-- Z2Q\n> [!note] t\n> %%\n> Z4Q --> Z5Q\n> %%\nZ6Q --> Z7Q", "x Z7Q"],
+		// CORE, Ship fuzz. A heading as a list item's content leaves no paragraph open, so a six-space line under it is indented code and its `-->` closes the browser comment, `%%` pair and all (renderer shows `Z4Q%% Z5Q`); the pre-Ship tree kept the paragraph open, skipped the pair and hid the rest. The `- Z2Q` twin, a real paragraph, stays hidden.
+		["pin-nrl136-item-heading-then-code", "- <!----> <!-- Z1Q\n- # Z2Q\n      %%Z3Q --> Z4Q%% Z5Q\nTAIL", "Z4Q%% Z5Q TAIL", { skipCodeBlocks: false }],
+		["guard-nrl136-item-paragraph-then-continuation", "- <!----> <!-- Z1Q\n- Z2Q\n      %%Z3Q --> Z4Q%% Z5Q\nTAIL", ""],
+		// CORE, Ship fuzz. A line that leaves the quote above it starts a block, so over an exact underline it is setext content and its raw text, pair and all, is in `data-heading` (renderer shows `Z9Q%% Z10Q">A Z10Q TAIL`). The pre-Ship tree read it as continuing the quote's paragraph and hid everything.
+		["pin-nrl136-setext-after-quote", "<!-- a --> <!-- Z6Q\n> Z7Q\nA %%x --> Z9Q%% Z10Q\n===\nTAIL", "Z9Q%% Z10Q A Z10Q TAIL"],
+		// Red on an arm that refuses every lazy underline: with no second underline the lazy `=` does underline the quoted line, so its raw text is in `data-heading` and shown.
+		["guard-nrl136-quote-lazy-underline-holds", "<!-- y --> <!-- Z0Q\n> A Z1Q --> Z2Q B\n=\nTAIL", "Z2Q B A Z1Q --> Z2Q B = TAIL"],
+		// Green on origin/main, on the pre-Ship tree and on an arm that refuses any `%%` led by whitespace (measured), so it pins only that spaces alone still open the block and hide the rest of the note; it is not evidence for the tab test.
+		["guard-nrl136-space-led-pct-is-a-block", "  %% Z0Q\n1. <!-- a --> x <!-- Z6Q\n    <!-- y --> <!-- Z7Q", ""],
+		// GUARDS: green on origin/main and on the fix, so evidence of nothing on their own. Each names what breaks it: `old` is the first NRL-136 draft (d021898); the others are scratch arms of this fix with one mechanism removed or widened.
+		// Red on wrong-q1-noinline: a complete inline comment binds before a `%%` pair inside it.
+		["guard-nrl136-q1-inline-comment-binds-first", "<!-- y --> <!-- Q1Z\nA <!-- %%x --> SEENZ%% B\nTAIL", "SEENZ%% B TAIL"],
+		// Red on `old`: Verify's third disclosure, a five-space line in a list item after a two-space sibling.
+		["guard-nrl136-q3-sibling-indent-reopen", "- <!-- y --> <!-- Z0Q\n  Z1Q\n     <!----> <!-- Z2Q\n  Z3Q", ""],
+		// Red on `old`: setext runs before html, including under a lazy `=` underline.
+		["guard-nrl136-setext-lazy-underline", "> <!-- y --> <!-- S2Z\n===\nS3Z", "<!-- S2Z === S3Z"],
+		["guard-nrl136-setext-beats-block", "<!-- y --> <!-- Q\n===\nTAIL", "<!-- Q TAIL"],
+		// Red on `old`: a callout marker is one only on the first line of its quote.
+		["guard-nrl136-late-callout-is-text", "> x\n> [!note] <!-- y --> <!-- Z1Q\nZ2Q", "x <!-- Z1Q Z2Q"],
+		// Red on abl-browsermodel: display math content is literal, so its `-->` closes and the line is not a heading.
+		["guard-nrl136-math-is-literal", "- <!--> <!-- Z0Q\n\n# Z2Q\n   $$\n---\n=\n> # Z6Q --> Z7Q", "Z7Q"],
+		// Red on `old`: `BLOCKQUOTE` takes a tab after `>`, module 6234 does not, so the line is indented code.
+		["guard-nrl136-quote-tab-is-code", ">\t<!-- y --> <!-- S2Z\nS3Z TAIL", "<!-- S2Z S3Z TAIL"],
+		// Red on wrong-q3-anylead, which drops the lead cap: four columns after the strip is lazy prose or code.
+		["guard-nrl136-lazy-four-space", "Para\n    <!-- y --> <!-- Q1Z\nTAIL", "Para <!-- Q1Z TAIL"],
+		["guard-nrl136-q3-six-space-shown", "- item\n      <!-- y --> <!-- Q1Z\nTAIL", "item <!-- Q1Z TAIL"],
+		["guard-nrl136-q3-ordered-eight-space-shown", "1. item\n        <!-- y --> <!-- Q1Z\nTAIL", "item <!-- Q1Z TAIL"],
+		["guard-nrl136-q3-nested-eight-space-shown", "- A\n  - B\n        <!-- y --> <!-- Q1Z\nTAIL", "A B <!-- Q1Z TAIL"],
+		["guard-nrl136-q3-two-space-tab-shown", "- item\n  \t<!-- y --> <!-- Q1Z\nTAIL", "item <!-- Q1Z TAIL"],
+		// Red on wrong-q1-nocode / wrong-q1-noescape: a code span or an escape is paired before `%%`.
+		["guard-nrl136-q1-code-span-closes", "<!-- y --> <!-- Q1Z\nA `%%x --> SEENZ%%` B\nTAIL", "SEENZ%% B TAIL"],
+		["guard-nrl136-q1-code-span-pct-closes", "<!-- y --> <!-- Q1Z\nA `%%`x --> SEENZ%% B\nTAIL", "SEENZ%% B TAIL"],
+		["guard-nrl136-q1-escaped-pct-closes", "<!-- y --> <!-- Q1Z\nA \\%%x --> SEENZ%% B\nTAIL", "SEENZ%% B TAIL"],
+		// Inherited from the first draft, where each was red on the wrong arm its own comment named there.
+		["guard-nrl136-html-block-remainder", "<!-- a\nb --> <!-- Q1Z\nTAIL", ""],
+		["guard-nrl136-closer-line-is-inline", "<!-- y --> <!-- Q6Z\nmid --> M2 <!-- Q7Z\nTAIL", "M2 <!-- Q7Z TAIL"],
+		["guard-nrl136-fresh-four-space-is-code", "x\n\n    <!-- y --> <!-- Q1Z\nTAIL", "x TAIL"],
+		["guard-nrl136-heading-is-inline", "# <!-- y --> <!-- Q1Z\nTAIL", "<!-- Q1Z TAIL"],
+		["guard-nrl136-term2-remainder-inline", "Prose <!-- a\nb --> <!-- y --> <!-- Q1Z\nTAIL", "Prose <!-- Q1Z TAIL"],
+		["guard-nrl136-list-marker-five-spaces-is-code", "-     <!-- y --> <!-- Q1Z\nTAIL", "<!-- Q1Z TAIL"],
+		["guard-nrl136-closed-second-comment", "<!-- y --> V1Z\nTAIL", "V1Z TAIL"],
+		["guard-nrl136-inline-code-closer", "x\n\n<!-- y --> <!-- Q5Z\nA `c --> d` E\nTAIL", "x d E TAIL"],
+		["guard-nrl136-container-block-remainder", "- [ ] <!-- Q3\n```\n x --> y <!-- Z9\n```\nTAIL", "y <!-- Z9 TAIL", { skipCodeBlocks: false }],
+		["guard-nrl136-q1-pct-quad-pairs-first-two", "<!-- y --> <!-- Q1Z\nA %%%% x --> SEENZ B\nTAIL", "SEENZ B TAIL"],
+		["guard-nrl136-q1-multiline-pct-closes", "<!-- y --> <!-- Q1Z\nA %%x --> SEENZ\nB%% C\nTAIL", "SEENZ B%% C TAIL"],
+		["guard-nrl136-q1-raw-line-closes", "<!-- y --> <!-- Q1Z\n<!-- %%x --> SEENZ%% B\nTAIL", "SEENZ%% B TAIL"],
+		// TRIPWIRE, a residual NOT closed and pinned at today's output: a non-comment HTML block start (`<div>`) followed by `<!--` hides TAIL in the renderer too. NRL-137's class.
+		["pin-nrl136-residual-div-opener", "<div> <!-- Q1Z\nTAIL", "<!-- Q1Z TAIL"],
+	];
+	for (const [id, src, expected, overrides] of nrl136) {
+		const chunks = extractChunks(src, { ...OPTS, ...overrides });
+		check(`NRL-136 ${id}: visible output`, chunks.map((c) => c.text).join(" ") === expected, `got: ${chunks.map((c) => c.text).join(" ")}`);
+		check(`NRL-136 ${id}: sourceIndex lockstep by UTF-16 unit`, chunks.every((k) =>
+			k.sourceIndex.length === k.text.length &&
+			k.sourceStart === k.sourceIndex[0] &&
+			k.sourceEnd === k.sourceIndex[k.text.length - 1]! + 1 &&
+			k.sourceIndex.every((at, i) => at >= 0 && at < src.length && (i === 0 || at >= k.sourceIndex[i - 1]!)) &&
+			unitsMatch(k.text, k.sourceIndex, src),
+		));
 	}
 	const paced = extractChunks("Before.\n\n%%\nhidden\n%%\n\nafter.", OPTS);
 	check("NRL-38 paragraph boundaries retained", paced.length === 2);

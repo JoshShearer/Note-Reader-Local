@@ -2537,3 +2537,191 @@ NRL-161; and the consumption path still reads a tab after `>` as the optional sp
 **NOT VERIFIED IN OBSIDIAN.** No deploy happened; every verdict above is the reading-view
 parser and renderer executed in Node, and Live Preview has never been read. Rule 11
 applies to every number. R-M08 is still NOT met and the `2 of 16` count does not move.
+
+### CLOSED by NRL-136 (2026-10-01): a closed comment and a reopened one on an HTML-block line
+
+**The defect, reproduced before any change** on `origin/main` `844b7f6` with the
+real `extract.ts` bundled by the repo's esbuild and copied (not linked) into a scratch
+arm, against Obsidian 1.13.7's own WT parser and GT renderer through the durable
+harness (`app.js` sha256 `8efbf581...9898` re-derived from the installed asar with
+`asar2.mjs`, `selftest.cjs` 6 ok, `oracle-selftest.cjs` 9 ok). All four of the
+ticket's rows spoke text the renderer hides: `x` / blank / `<!-- y --> <!-- Q1Z` /
+`TAIL` said `x <!-- Q1Z TAIL` where only `x` is shown, and the `$$` and setext rows
+that NRL-120 had unmasked reproduced on `main` now that it is merged. Module 8776
+opens an HTML block at the line-start `<!--`, ends it on the same line at its
+`-->`, and passes the WHOLE line through raw, so the second, unclosed `<!--`
+becomes a comment in the browser's parse of the rendered output. Its scope is the
+document, not the paragraph, so neither existing term could see it.
+
+**The first draft (PR #186, `d021898`) was blocked at Verify** for three new
+disclosure classes, each reproduced here on that build before the rework: a `-->`
+inside an inline `%%...%%` pair closed the browser comment and spoke the pair's
+content (60 of 79 newly disclosing fuzz cells); a heading line inside a markdown
+HTML block opened under the browser comment was read as a heading; and a fixed
+"at most four spaces or one tab" rule for list-item content disclosed where the
+renderer's real strip differs. Its fuzz also left 41 newly lost cells unexplained.
+The rework is a rebase onto NRL-120 by hand rather than a cherry-pick (run 205531
+decision Q0).
+
+**Decisions.**
+
+1. **A third term, decided by the caller.** `cleanLine` takes a 13th argument,
+   `htmlContext`: `"block"` when the caller has established that the view is an
+   HTML-block line, `"raw"` for the remainder of an HTML block's closing line,
+   `"inline"` for what follows a browser comment's `-->` on an ordinary line, and
+   `"none"` otherwise. A later unclosed `<!--` in a `"block"` or `"raw"` view opens a
+   browser comment (`Cleaned.openCommentBrowser`); a first `<!--` that starts the
+   block opens our own block comment as before (`openCommentBlock`). `opensHtmlBlock`,
+   `opensObsidianBlock`, `endsTerm2Scan`, `endsTerm2Block`, `labelClose`,
+   `opensMathBlock`, `isSetextContentLine`, `rawHtmlBlockEnd` and `containerPrefix`
+   are byte-identical to `844b7f6` (sha256 of each top-level body).
+2. **Setext wins (run 205531 plan decision).** A line that is setext heading content
+   never gets `"block"`. NRL-120's own refusal (`setextContent`) is unchanged and is
+   not widened; the block term additionally refuses a line over an `=` underline,
+   lazy or not, and over a `-` underline outside any list (`setextLike`). Measured:
+   `> <!-- y --> <!-- S2Z` / `===` renders an `<h1>` showing `<!-- S2Z`.
+3. **`opensHiddenComment` pairs in sequence (plan decision).** When the first comment
+   on the line closes, a trailing unclosed opener is asked the block question, so
+   `Para` / `<!-- y --> <!-- Q` ends the paragraph for the code-span and label
+   lookaheads. The setext refusal stays out of it, for NRL-120's reason.
+4. **Q1, reversing run 180051's decision 1.** The first draft left a `-->` inside an
+   inline `%%` pair unmodelled and pinned it as a residual. It is now modelled
+   (`browserCloserAt`): on the same line, non-greedy as `/^%%(.*?)%%/`, after backtick
+   code spans (a `-->` in code closes), backslash escapes and complete inline HTML
+   comments (module 4839's `.T` binds first, so `<!-- %%x --> S%% B` closes at that
+   comment and shows S). It does not apply on a fence or literal line, a raw HTML
+   line, or an ATX or setext heading line. An inline `<!--` left open on an earlier
+   line of the same paragraph, with its `-->` later in the paragraph, suppresses
+   pairing until that `-->` (`browserInline`): the pair is comment text there.
+5. **Headings close inside `data-heading`, and the rest of the line is spoken.** The
+   plan kept the first draft's "read the heading whole" and pinned the attribute's
+   rest as a residual (`# A %%x --> S%% B` lost S). **Deviation:** the rest of the raw
+   line after the `-->` is now spoken as its own chunk, then the heading, which is
+   what the reader sees (`S%% B">A B`); a `<!--` in that rest opens a comment that
+   runs to the heading text's own first `-->`, after which the heading text is shown
+   inline. Setext content lines take the same path.
+6. **Q2 and Q3 became one parse, `containerViews`.** The plan described a separate Q2
+   state and a list-only `listStrip` pass. Both are now read off one recursive parse
+   of quote runs and list items (module 6234's lazy-line rule with its interrupters;
+   module 745's item collection, bullet pad and its interrupters including the app's
+   comment tokenizer, spaces-only lead and no further `%`; module 5540's strip through
+   6058's stops), which also marks literal lines (fences by character and length,
+   display math by its closing `$` run, frontmatter) and markdown HTML-block lines
+   (comment and types 1 to 6, with setext precedence), each scoped to its container
+   by recursion. Under a browser comment an HTML-block line is raw: its `-->` closes
+   with a raw remainder, nothing else on it is markdown. A separate Q2 state was built
+   first and became redundant with this, **0 differing outputs over 50,725 notes x 2
+   option sets**, so it was removed. Fences and `%%` blocks opened under the browser
+   comment end with their container (`blockHome`, `browserBlockHolds`).
+7. **The lead test depends on the paragraph above.** `htmlBlockLine(view, listStrip,
+   paraOpen)`: at most three spaces and no tab when a paragraph is open (module 8607),
+   anything but a leading four spaces or tab on a fresh block (module 134 claims only
+   those). A line with no `>` after a quote line is a fresh block here, because `html`
+   is in `interruptBlockquote`. A callout marker counts only on its quote's first
+   line; on a later line `[!note]` is text.
+8. **`<!-->` and `<!--->` end the markdown block on their own line**, 8776's end test
+   matching the opener's own `-->`, so what they leave open is a browser comment.
+
+**Reconciliation.** All 29 first-draft rows are ported; three expectations moved on
+purpose, each against rendered HTML: `pin-nrl136-heading-closer` now `line Head -->
+line TAIL` (decision 5), the residual `%%`-pair row became
+`pin-nrl136-q1-heading-attribute-rest` and core rows, and the list five-space residual
+is now core (`pin-nrl136-q3-list-five-space-content`, `item`). NRL-120's four rows that
+named NRL-136 were replaced in place with names kept: `pin-nrl120-unmasked-same-line-reopen`
+`<!-- SECRETH`, `guard-nrl120-same-line-reopen-on-base` `SEEN`,
+`pin-nrl120-unmasked-reopen-by-math-stop` and `guard-nrl120-reopen-blank-stop-on-base`
+`t.`. The NRL-137 rows did not move. Tests: 68 NRL-136 rows; **40 core rows red on
+`844b7f6` and green after**, plus the four reconciled NRL-120 rows; 27 guards green on
+both sides; one tripwire (`pin-nrl136-residual-div-opener`, NRL-137).
+
+**Censuses**, oracle-keyed per cell via `oracle111.rendererHides` at the cell's own
+sentinel, two option sets (test defaults; everything spoken), loss judged on the
+second only, fix against `844b7f6`:
+
+| corpus | cells | base disc | fix disc | new disc | new loss | fixed disc / loss | wrong arm |
+|---|---|---|---|---|---|---|---|
+| Q1 (`%%` placement x line kind x position, setext twins) | 8,792 | 1,728 | 0 | 0 | 0 | 1,728 / 30 | no skip: 576 disclosed vs fix; skip everywhere: 144 lost |
+| Q2 (opener container x closer kind x container exit) | 20,640 | 5,456 | 0 | 0 | 0 | 5,456 / 92 | no raw lines: 648 disclosed, 288 lost |
+| Q3 (marker x lead x sibling x first comment x shape) | 75,582 | 12,768 | 0 | 0 | 0 | 12,768 / 2,097 | no strip: 7,416 disclosed; first-draft rule: 4,986; any lead: 5,781 lost vs base |
+| port (22 positions x 9 variants x 10 indents x 18 followers) | 323,460 | 37,664 | 8,901 | 0 | 0 | 28,763 / 888 | no third term: 29,643 disclosed vs fix |
+
+The port census's followers include `===`, `---`, `$$`, a `%%` pair, a Q2 block and
+code-span and label carries (destination sentinel `zdestz`), so the narrowed
+`codeSpanClosesLater` and `bracketClosesLater` are covered. Its 8,901 residual
+disclosures are all on base too (0 new).
+
+**Fuzz**, `fuzz2.cjs`, seeds 90210, 424242, 1234567 (the first draft's) and 777001,
+31337, 2718281, 16180339, 4,000 notes x 2 option sets each, 338,716 cells: **21
+newly disclosing**, every one reproducing on base once the reopen is defused (19:
+replaced by a plain opener, removed, or its line blanked) or with its own line alone
+after a paragraph (2, NRL-137's `<div>`); **49 newly lost**, every one reproducing on
+base defused (32) or attributed to a pre-existing misread proven by a named control
+that loses on base at the same construct (17): math in a list item read as markdown
+(N1, N7), a callout title `%%` (N3, N4), `%%` inside list-item indented code (N8), and
+term 2 crossing a `%%` comment line, its stop set lacking one (N10), plus 4 where the
+sentinel's own line with a `%%` or `<!--` opener already loses on base. 21,676
+disclosures and 459 losses closed. Default-options losses: 527, of which 481 are
+`skipCodeBlocks`/`skipInlineCode` excluding code the base misread as prose and 46 are
+the all-options losses above. Every newly changed cell was attributed by ablation (a
+rebuild with exactly one of: the third term, Q1, the raw-line model, the list strip,
+the raw remainder, the literal/fence/`%%` model, disabled). **The first draft's 41
+unexplained loss cells**, classified individually: all 41 are spoken by this fix.
+
+**`sourceIndex`** checked by numeric UTF-16 code unit over every census note x 2
+option sets (50,128 notes): `844b7f6` 198,154 chunks / 1,658,186 units and the fix
+178,534 / 1,348,380, both clean; drop-one, shift-all, swap-two and negate-one each
+fire on both arms. 0 lockstep failures in any fuzz seed.
+
+**Residuals, named and not closed.** (a) NRL-137's raw HTML blocks spoken as prose
+(`<div> <!-- Q1Z`), pinned. (b) Term 2 crossing a `%%` comment line (N10): a
+pre-existing gap in the term-2 stop set, which this ticket deliberately leaves
+byte-identical. (c) Math and fences inside list items, callout titles and `%%` inside
+item code are read by the per-line loop as it always has; where NRL-136's new
+behaviour meets them, the controls above show base mishandles the same construct.
+(d) `<!-->` follows oracle111, which treats it as an opener; a browser treats it as an
+empty comment, and nothing here was read in one. (e) The model is container-aware but
+approximate (callout titles, nested quote laziness, tab stops beyond those measured).
+**Reading view only. NOT VERIFIED IN OBSIDIAN**: no deploy, no running app, Live
+Preview never read; rule 11 applies to every number here. R-M08 is still NOT met and
+the `2 of 16` count does not move.
+
+**Ship addendum (2026-10-01): rebased onto NRL-131, four more fixes.** The numbers
+above were measured against `844b7f6`. Ship rebased onto `2c4e2ca`, which carries
+NRL-131's peel of a quote nested in a list item (ADR 0035, `containerPrefix` now peels
+`- > `, `- - > ` and their alternations), and re-measured against that base. The four
+censuses above came out cell-for-cell identical (0 newly disclosing, 0 newly lost), and
+a fifth, the port census plus ten nested-container positions (`- > `, `- - > `,
+`> - > `, `- > - > `, a nested continuation and lazy line, `- - `, a nested callout,
+`-    > ` and `-     > `), 56,700 notes / 439,740 cells, also 0 and 0. A fuzz with
+nested-container leads added (`fuzz3.cjs`, same seven seeds, 338,716 cells) then found
+four defects in this ticket's own model, all fixed with a core row red on the pre-Ship
+tree and green after:
+
+- A `%%` led by spaces then a tab is paragraph text (the app's comment tokenizer skips
+  spaces only), but `containerViews` took it for a `%%` block, swallowed the list under
+  it and left a reopening line unstripped. `  \t%% Z0Q` / `1. <!-- a --> x <!-- Z6Q` /
+  `    <!-- y --> <!-- Z7Q` newly spoke `<!-- Z7Q` against `2c4e2ca`. Present before the
+  rebase too; the earlier fuzz's leads did not reach it.
+- A lazy `=` under a quoted line underlines it only while it stays in the quote run; an
+  exact underline after it ends the quote there (NRL-120's run break) and makes `=` the
+  content of its own heading. `setextLike` and `browserSetextText` now ask whether the
+  next line left the quote. `<!-- y --> <!-- Z0Q` / `> A Z1Q --> Z2Q B` / `=` / `===`
+  newly spoke Z1Q; `> <!-- y --> <!-- S2Z` / `=` / `===` / `S3Z`, spoken by base too,
+  is now hidden.
+- A `%%` straight after a callout marker is title text, not a block, so under a browser
+  comment the next line's `-->` still closes it. NRL-131's peel of `- > [!note]` is what
+  brought the nested form into the fuzz's reach.
+- A heading as a list item's content (`- # Z2Q`) leaves no paragraph open, so a
+  six-space line under it is indented code and its `-->` closes, `%%` pair and all; and
+  a line that left a quote run starts a block, so over an exact underline it is setext
+  content. Both were prose loss in the pre-Ship tree.
+
+After those, the same fuzz: **14 newly disclosing**, 8 reproducing on base defused and 6
+in two notes holding a `<div> <!--` line, which `2c4e2ca` speaks with the line alone
+(NRL-137); **15 newly lost**, 13 reproducing on base defused and 2 in one note where
+term 2 crosses a `%%` comment line (N10 above, whose control still loses on `2c4e2ca`);
+23,901 disclosures and 430 losses closed; 0 `sourceIndex` failures on either arm. The
+censuses after the fixes: Q1-Q3 unchanged, the port census's closed disclosures rose
+28,763 -> 29,303, the nested census 41,513, each still 0 new in both directions.
+Measured with the same harness (app.js sha256 `8efbf581...`), reading view only; NOT
+VERIFIED IN OBSIDIAN.
