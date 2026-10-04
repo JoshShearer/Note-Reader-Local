@@ -231,7 +231,7 @@ and each unpacked runtime file as same-origin blob URLs. The worker code arrives
 `globalThis.KOKORO_WORKER_CODE` string and the runtime as a lazy `readBundledRuntime()`
 call - different mechanisms, same reason.
 
-**Weights live outside the plugin folder** (`.obsidian/local-tts/kokoro`) so a plugin
+**Weights live outside the plugin folder** (`<configDir>/local-tts/kokoro`, `.obsidian` by default; `resolveKokoroModelPath` in `src/settings/index.ts`) so a plugin
 update does not discard hundreds of megabytes, and out of the file tree so they do not
 clutter the vault. Weights are the only thing this plugin downloads, and only on an
 explicit click. `paths.ts` still exposes `ortFile()` for one reason: an install upgrading

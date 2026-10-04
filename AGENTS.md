@@ -16,11 +16,20 @@ Code and opencode read the same rules.
 
 ## Quality gates
 
-`.github/workflows/ci.yml` runs `npm ci`, then `npm run typecheck`, then `npm run build`,
-then `npm test` on every push and every pull request, and
-`.github/workflows/release.yml` gates tagged commits as well. There is still no lint
-script and no git hook, so nothing runs the gates at the moment you commit: CI is a
-backstop, not a substitute. Run them locally first.
+`.github/workflows/ci.yml` runs `npm ci`, then `npm run typecheck`, then `npm run lint`,
+then `npm run build`, then `npm test` on every push and every pull request, and
+`.github/workflows/release.yml` gates tagged commits as well (it does not lint). There is
+no git hook, so nothing runs the gates at the moment you commit: CI is a backstop, not a
+substitute. Run them locally first.
+
+`npm run lint` is `eslint src` with `eslint-plugin-obsidianmd`'s `recommended` config
+(`eslint.config.mjs`, PR #217), the closest public approximation of the community
+directory's automated source review. **Errors fail CI; warnings are tolerated**, and the 71
+present at #217 are deliberate: `window.setTimeout` would crash the bare-Node suites and
+does not exist in the worker, `obsidianBlocks.ts` is a near-verbatim parser copy, and
+`spawn.ts`'s call-time `require` must stay (ADR 0033). The result depends on the
+TypeScript version: `no-unnecessary-type-assertion` flagged a different set under 5.4 than
+under the project's 5.9, so the directory's own scanner may disagree by a few findings.
 
 ```bash
 npm test          # 25 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, modelStore, adrNumbers, vaultPersistence, loadingNotice, suiteRegistry, bridge
@@ -726,7 +735,18 @@ ORT already bundled, but on Android it would hit the same single-thread ceiling,
 `vector_estimator` reads like an iterative sampler (a hypothesis from file names and sizes,
 not measured).
 
-### Community-directory submission state (measured 2026-09-30)
+### Community-directory submission state (measured 2026-09-30, updated 2026-10-03)
+
+**Updated by PR #217 (`ce6aef6`), 0.2.0.** Both gaps below are closed: `npm run lint` gives
+0 errors, and `THIRD_PARTY_NOTICES.md` is appended to `main.js` by the production build.
+That file also corrects the paragraph below, which missed a component: `phonemizer@1.2.1`
+(pulled in by `kokoro-js`) carries **eSpeak NG compiled to WebAssembly, which is
+GPL-3.0-or-later**, so the owner decided (2026-10-03) that the source stays MIT and the
+bundled `main.js` as a whole is distributed under GPL-3.0-or-later, notice-only. PR #217 also
+raised `minAppVersion` to 1.8.7 (`App.loadLocalStorage`, `getLanguage`), made the Kokoro model
+directory default resolve under `Vault#configDir` (a saved path is kept as-is), and added
+the README's network-use disclosure. Submission itself, at community.obsidian.md, needs the
+owner's account. Read the paragraph below as the 2026-09-30 baseline.
 
 Submission now happens at community.obsidian.md with a linked GitHub account, reading
 `manifest.json` from the default branch HEAD; the old pull request to `obsidian-releases`
