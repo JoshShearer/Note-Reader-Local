@@ -46,6 +46,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # eslint-plugin-obsidianmd, the closest public approximation of the
+      # community directory's automated source review. Errors fail the run;
+      # warnings are printed and tolerated (see eslint.config.mjs).
+      - name: Lint
+        run: npm run lint
+
       - name: Build
         run: npm run build
 

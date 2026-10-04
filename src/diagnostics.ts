@@ -5,10 +5,13 @@ const writes = new WeakMap<App, Promise<void>>();
 
 /** Local diagnostic metadata only; never log note text. */
 export function trace(app: App, manifestDir: string, step: string, detail?: unknown): void {
+	// Typed unknown so String() takes the value as given; `detail ?? ""` alone
+	// would type as `{}`, which the linter reads as a possible [object Object].
+	const fallback: unknown = detail ?? "";
 	const error = detail instanceof Error
 		? [detail.stack ?? detail.message,
 			(detail as Error & { workerStack?: string }).workerStack].filter(Boolean).join("\n")
-		: String(detail ?? "");
+		: String(fallback);
 	const body = `[${new Date().toISOString()}] ${manifestDir}: ${step}\n${error}\n\n`;
 	// Serialize read-modify-write operations so simultaneous trace events do not
 	// overwrite each other. Keep the log bounded across long reading sessions.

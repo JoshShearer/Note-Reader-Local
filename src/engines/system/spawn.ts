@@ -60,6 +60,7 @@ export interface ProcessRunner {
  * if main.js holds an `import()` of any node builtin.
  */
 function loadChildProcess(): typeof import("child_process") {
+	// eslint-disable-next-line @typescript-eslint/no-require-imports -- mobile safety (AGENTS.md rule 7, docs/adr/0033): a call-time CJS require is the only form that resolves a builtin in Obsidian's renderer, is never evaluated on mobile, and import() must never replace it
 	return require("child_process") as typeof import("child_process");
 }
 

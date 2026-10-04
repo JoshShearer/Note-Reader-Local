@@ -194,6 +194,26 @@ globalThis.KOKORO_WORKER_CODE = "${workerBase64}";
 	}
 }
 
+/**
+ * Append THIRD_PARTY_NOTICES.md to main.js as one trailing comment.
+ *
+ * main.js is the only code file Obsidian installs, and it carries
+ * Apache-2.0, MIT and GPL-3.0 code (kokoro-js, transformers.js, phonemizer's
+ * eSpeak NG build, ONNX Runtime) whose licenses require the notice to travel
+ * with every copy. None of those packages ship license comments of their own
+ * that survive minification, so without this the bundle carried none at all.
+ * A comment terminator in the notices would end the comment early and turn license
+ * text into code, so that is refused rather than escaped.
+ */
+async function appendThirdPartyNotices() {
+	const notices = await readFile("THIRD_PARTY_NOTICES.md", "utf8");
+	if (notices.includes("*/")) {
+		throw new Error("THIRD_PARTY_NOTICES.md must not contain a comment terminator");
+	}
+	const mainCode = await readFile("main.js", "utf8");
+	await writeFile("main.js", `${mainCode}\n/*!\n${notices}*/\n`, "utf8");
+}
+
 if (production) {
 	// Read the published ORT files and pack them in. No weights are fetched at
 	// any point: only what is already in node_modules.
@@ -201,6 +221,7 @@ if (production) {
 	await build(mainConfig);
 	await build(workerConfig);
 	await inlineWorkerIntoMain();
+	await appendThirdPartyNotices();
 } else {
 	// Development carries the same packed assets as production on purpose. If
 	// dev read the files from disk instead, a load path broken only in the

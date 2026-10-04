@@ -201,8 +201,20 @@ function parseVoiceList(output: string): VoiceInfo[] {
 }
 
 function toArrayBuffer(data: Uint8Array): ArrayBuffer {
-	if (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) {
-		return data.buffer as ArrayBuffer;
+	// Narrowed with instanceof rather than asserted, because whether
+	// `Uint8Array#buffer` is typed `ArrayBuffer` or `ArrayBufferLike` depends on
+	// the TypeScript version, so an assertion is required under one and flagged
+	// as unnecessary by the linter under the other.
+	const buffer = data.buffer;
+	if (buffer instanceof ArrayBuffer) {
+		if (data.byteOffset === 0 && data.byteLength === buffer.byteLength) {
+			return buffer;
+		}
+		return buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
 	}
-	return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+	// Not a plain ArrayBuffer (a SharedArrayBuffer, or one from another realm):
+	// copy the bytes into one.
+	const out = new ArrayBuffer(data.byteLength);
+	new Uint8Array(out).set(data);
+	return out;
 }

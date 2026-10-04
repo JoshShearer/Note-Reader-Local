@@ -170,7 +170,7 @@ export class ControlBar {
 	 */
 	private apply(el: HTMLElement, affordance: Affordance, alsoDisabled = false): void {
 		const disabled = !affordance.enabled || alsoDisabled;
-		if (el instanceof HTMLButtonElement) el.disabled = disabled;
+		if (el.instanceOf(HTMLButtonElement)) el.disabled = disabled;
 		el.toggleClass("is-unavailable", !affordance.enabled);
 		// Spelled out rather than toggled: aria-disabled is a true/false token,
 		// and a bare `aria-disabled=""` is read as false, which is the opposite

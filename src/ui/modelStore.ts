@@ -9,7 +9,7 @@ import {
 import type { EngineSelection } from "../engines/selection";
 import type { SpeechEngine, VoiceInfo } from "../audio/types";
 import { resolveStoredVoice } from "../audio/voiceChoice";
-import { modelStorePaths, normaliseVaultPath, pluginVaultPath } from "./paths";
+import { modelStorePaths, normaliseVaultPath } from "./paths";
 
 export { modelStorePaths, normaliseVaultPath, pluginVaultPath } from "./paths";
 
@@ -45,7 +45,7 @@ export function createModelStore(
 	pluginDir: string,
 	modelDir: string,
 ): VaultModelStore {
-	const paths = modelStorePaths(pluginDir, modelDir);
+	const paths = modelStorePaths(pluginDir, modelDir, app.vault.configDir);
 	const dir = paths.modelDir;
 
 	const full = paths.modelFile;

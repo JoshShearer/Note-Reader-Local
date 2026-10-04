@@ -630,7 +630,7 @@ class BlockScanner {
 			if (!v && !p.trim()) break;
 			if (!v && this.interrupts(this.interruptBlockquote, t.slice(D))) break;
 			if (f === 0) {
-				const P = p.match(/^\[!([^\]]+)\]([+\-]?)(?:\s|$)/);
+				const P = p.match(/^\[!([^\]]+)\]([+-]?)(?:\s|$)/);
 				if (P) {
 					callout = true;
 					D += P[0].length;
@@ -1177,7 +1177,7 @@ class BlockScanner {
 	}
 
 	private blockid(t: string, silent: boolean): number {
-		const m = /^\^([a-zA-Z0-9\-]+)(?=$|\n$|\n\n)/.exec(t);
+		const m = /^\^([a-zA-Z0-9-]+)(?=$|\n$|\n\n)/.exec(t);
 		if (!m) return 0;
 		return silent ? 1 : m[0].length;
 	}

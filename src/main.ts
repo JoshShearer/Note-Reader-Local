@@ -37,7 +37,7 @@ import {
 	type EngineSelection,
 	type RankedCandidate,
 } from "./engines/selection";
-import { DEFAULT_SETTINGS, type Settings } from "./settings";
+import { DEFAULT_SETTINGS, resolveKokoroModelPath, type Settings } from "./settings";
 import { loadPluginData, serialisePluginData, type PluginData } from "./settings/data";
 import { PositionThrottle } from "./settings/positionThrottle";
 import { SaveQueue } from "./settings/saveQueue";
@@ -156,7 +156,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.modelStore = createModelStore(
 			this.app,
 			this.manifest.dir!,
-			this.settings.kokoroModelPath,
+			this.kokoroModelPath(),
 		);
 
 		this.engines = createEngines(this.modelStore, this.kokoroOptions(), () => ({
@@ -1427,6 +1427,11 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			threads: this.settings.kokoroThreads,
 			weights: resolveWeights(this.settings.kokoroWeights),
 		};
+	}
+
+	/** Vault path of the Kokoro model directory, honouring `Vault#configDir`. */
+	kokoroModelPath(): string {
+		return resolveKokoroModelPath(this.settings.kokoroModelPath, this.app.vault.configDir);
 	}
 
 	/** Which weights build the engine would load, for the settings tab. */

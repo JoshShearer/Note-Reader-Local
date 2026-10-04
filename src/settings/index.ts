@@ -135,10 +135,12 @@ export const DEFAULT_SETTINGS: Settings = {
 	speakEmbeds: false,
 	offlinePreferred: false,
 	bufferAhead: 2,
-	// Kept outside the plugin folder so a plugin update does not discard the
-	// downloaded weights. Hidden from the file tree so 90MB of blobs does not
-	// clutter the vault.
-	kokoroModelPath: ".obsidian/local-tts/kokoro",
+	// Empty means the default location, `local-tts/kokoro` inside the vault's
+	// configuration folder, resolved at runtime by `resolveKokoroModelPath`
+	// because that folder is user-configurable (`Vault#configDir`) and is not
+	// necessarily `.obsidian`. A non-empty saved path is used as-is, which is
+	// what every install that predates this default stored.
+	kokoroModelPath: "",
 	kokoroDevice: "auto",
 	// Four is a deliberate default rather than "all cores": Kokoro stops
 	// scaling well before that, and the rest of the machine still has to feel
@@ -147,6 +149,18 @@ export const DEFAULT_SETTINGS: Settings = {
 	kokoroWeights: "auto",
 	bridgePort: 8787,
 };
+
+/**
+ * Vault path of the Kokoro model directory.
+ *
+ * Kept outside the plugin folder so a plugin update does not discard the
+ * downloaded weights, and inside the configuration folder so 90MB of blobs is
+ * hidden from the file tree. `configDir` is `Vault#configDir`, passed in so
+ * this stays free of any Obsidian import.
+ */
+export function resolveKokoroModelPath(saved: string, configDir: string): string {
+	return saved.length > 0 ? saved : `${configDir}/local-tts/kokoro`;
+}
 
 const RATE_MIN = 0.5;
 const RATE_MAX = 2;

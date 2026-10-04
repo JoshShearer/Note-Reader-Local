@@ -18,23 +18,26 @@ export function normaliseVaultPath(path: string): string {
 		.replace(/\/+$/, "");
 }
 
-const PLUGINS_PREFIX = ".obsidian/plugins/";
-
 /**
  * Vault path of a plugin's own folder.
  *
  * `manifest.dir` is documented as a vault path to the plugin folder, and
- * Obsidian populates it as `.obsidian/plugins/local-tts-reader` rather than the
- * bare folder name. Older builds and hand-written manifests may still give just
- * the name, so accept either and normalise to the full path. Being idempotent
- * matters: blindly prefixing an already-prefixed value produced
+ * Obsidian populates it as `<configDir>/plugins/local-tts-reader` rather than
+ * the bare folder name. Older builds and hand-written manifests may still give
+ * just the name, so accept either and normalise to the full path. Being
+ * idempotent matters: blindly prefixing an already-prefixed value produced
  * `.obsidian/plugins/.obsidian/plugins/local-tts-reader`, which resolves to
  * nothing and is not an error the adapter reports clearly.
+ *
+ * `configDir` is `Vault#configDir`, passed in rather than assumed to be
+ * `.obsidian` because the user can configure it, and passed rather than read
+ * so this module stays free of any Obsidian import.
  */
-export function pluginVaultPath(manifestDir: string): string {
+export function pluginVaultPath(manifestDir: string, configDir: string): string {
 	const dir = normaliseVaultPath(manifestDir);
-	if (dir.startsWith(PLUGINS_PREFIX)) return dir;
-	return normaliseVaultPath(PLUGINS_PREFIX + dir);
+	const prefix = `${normaliseVaultPath(configDir)}/plugins/`;
+	if (dir.startsWith(prefix)) return dir;
+	return normaliseVaultPath(prefix + dir);
 }
 
 export interface ModelStorePaths {
@@ -43,7 +46,7 @@ export interface ModelStorePaths {
 	/** Vault path of the model directory. */
 	modelDir: string;
 	/** Full vault path of one model file. */
-	modelFile(relative: string): string;
+	modelFile: (relative: string) => string;
 	/** Vault path of the bundled worker script. */
 	workerPath: string;
 	/**
@@ -56,7 +59,7 @@ export interface ModelStorePaths {
 	 * than quietly shrinking. Delete this once no supported upgrade path
 	 * reaches back to ADR 0024.
 	 */
-	ortFile(name: string): string;
+	ortFile: (name: string) => string;
 }
 
 /**
@@ -70,8 +73,12 @@ export interface ModelStorePaths {
  * dependency management, which the community-plugin policies prohibit
  * (ADR 0028). See `ortFile` above for why the path survives anyway.
  */
-export function modelStorePaths(manifestDir: string, modelDir: string): ModelStorePaths {
-	const pluginRoot = pluginVaultPath(manifestDir);
+export function modelStorePaths(
+	manifestDir: string,
+	modelDir: string,
+	configDir: string,
+): ModelStorePaths {
+	const pluginRoot = pluginVaultPath(manifestDir, configDir);
 	const dir = normaliseVaultPath(modelDir);
 
 	return {

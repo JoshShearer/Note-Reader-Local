@@ -8,6 +8,7 @@
  */
 
 import { modelStorePaths, pluginVaultPath } from "../src/ui/paths.ts";
+import { DEFAULT_SETTINGS, resolveKokoroModelPath } from "../src/settings/index.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = ""): void {
@@ -23,7 +24,7 @@ console.log("the plugin folder is addressed from the vault root");
 	// manifest.dir is just the folder name. Using it directly is the bug this
 	// guards: `.obsidian/plugins` is required or the adapter looks in the wrong
 	// place and the worker script is never found.
-	const dir = pluginVaultPath("local-tts-reader");
+	const dir = pluginVaultPath("local-tts-reader", ".obsidian");
 	check("has .obsidian/plugins prefix", dir.startsWith(".obsidian/plugins/"), dir);
 	check("keeps the folder name", dir.endsWith("/local-tts-reader"), dir);
 	check("uses forward slashes", !dir.includes("\\"), dir);
@@ -35,15 +36,15 @@ console.log("plugin path handles the value Obsidian actually supplies");
 	// `manifest.dir` is a vault path, not a bare folder name. Prefixing it
 	// again yields `.obsidian/plugins/.obsidian/plugins/local-tts-reader`,
 	// which does not exist, so this must be idempotent.
-	const fromObsidian = pluginVaultPath(".obsidian/plugins/local-tts-reader");
+	const fromObsidian = pluginVaultPath(".obsidian/plugins/local-tts-reader", ".obsidian");
 	check("already-prefixed dir is not doubled",
 		fromObsidian === ".obsidian/plugins/local-tts-reader", fromObsidian);
 	check("contains the prefix exactly once",
 		fromObsidian.split(".obsidian/plugins/").length === 2, fromObsidian);
 	check("matches the bare-name form",
-		fromObsidian === pluginVaultPath("local-tts-reader"), fromObsidian);
+		fromObsidian === pluginVaultPath("local-tts-reader", ".obsidian"), fromObsidian);
 
-	const store = modelStorePaths(".obsidian/plugins/local-tts-reader", ".obsidian/local-tts/kokoro");
+	const store = modelStorePaths(".obsidian/plugins/local-tts-reader", ".obsidian/local-tts/kokoro", ".obsidian");
 	check("plugin root is not doubled", !store.pluginRoot.includes(".obsidian/plugins/.obsidian"),
 		store.pluginRoot);
 	check("worker path is not doubled", !store.workerPath.includes(".obsidian/plugins/.obsidian"),
@@ -55,7 +56,7 @@ console.log("plugin path handles the value Obsidian actually supplies");
 
 console.log("model files sit outside the plugin folder");
 {
-	const store = modelStorePaths("local-tts-reader", ".obsidian/local-tts/kokoro");
+	const store = modelStorePaths("local-tts-reader", ".obsidian/local-tts/kokoro", ".obsidian");
 	check("plugin root resolved", store.pluginRoot.startsWith(".obsidian/plugins/"), store.pluginRoot);
 
 	// A plugin update replaces the plugin folder, so anything downloaded there
@@ -78,7 +79,7 @@ console.log("model files sit outside the plugin folder");
 
 console.log("model paths are built per file");
 {
-	const store = modelStorePaths("local-tts-reader", ".obsidian/local-tts/kokoro");
+	const store = modelStorePaths("local-tts-reader", ".obsidian/local-tts/kokoro", ".obsidian");
 	check("weights path", store.modelFile("onnx/model_quantized.onnx")
 		=== ".obsidian/local-tts/kokoro/onnx/model_quantized.onnx", store.modelFile("onnx/model_quantized.onnx"));
 	check("voice path", store.modelFile("voices/af_heart.bin")
@@ -91,12 +92,34 @@ console.log("a leading or trailing slash in settings does not break paths");
 {
 	// These come from user-editable settings, so sloppy input has to be
 	// normalised rather than producing `.obsidian/plugins/local-tts-reader//ort`.
-	const store = modelStorePaths("local-tts-reader", "/.obsidian/local-tts/kokoro/");
+	const store = modelStorePaths("local-tts-reader", "/.obsidian/local-tts/kokoro/", ".obsidian");
 	check("model dir normalised", store.modelDir === ".obsidian/local-tts/kokoro", store.modelDir);
 	check("no doubled separators in worker path", !store.workerPath.includes("//"), store.workerPath);
 	check("no doubled separators in ort path",
 		!store.ortFile("ort-wasm-simd-threaded.jsep.mjs").includes("//"),
 		store.ortFile("ort-wasm-simd-threaded.jsep.mjs"));
+}
+
+console.log("a configured config folder is honoured rather than assuming .obsidian");
+{
+	// Vault#configDir is user-configurable. A bare plugin name has to be
+	// prefixed with the configured folder, and an already-prefixed one left
+	// alone, or the worker path points at a folder that does not exist.
+	check("bare name prefixed with configDir",
+		pluginVaultPath("local-tts-reader", ".config") === ".config/plugins/local-tts-reader",
+		pluginVaultPath("local-tts-reader", ".config"));
+	check("prefixed name kept",
+		pluginVaultPath(".config/plugins/local-tts-reader", ".config") === ".config/plugins/local-tts-reader",
+		pluginVaultPath(".config/plugins/local-tts-reader", ".config"));
+	check("default model dir follows configDir",
+		resolveKokoroModelPath(DEFAULT_SETTINGS.kokoroModelPath, ".config") === ".config/local-tts/kokoro",
+		resolveKokoroModelPath(DEFAULT_SETTINGS.kokoroModelPath, ".config"));
+	check("default model dir unchanged for the default configDir",
+		resolveKokoroModelPath(DEFAULT_SETTINGS.kokoroModelPath, ".obsidian") === ".obsidian/local-tts/kokoro",
+		resolveKokoroModelPath(DEFAULT_SETTINGS.kokoroModelPath, ".obsidian"));
+	check("a saved model dir is used as-is",
+		resolveKokoroModelPath(".obsidian/local-tts/kokoro", ".config") === ".obsidian/local-tts/kokoro",
+		resolveKokoroModelPath(".obsidian/local-tts/kokoro", ".config"));
 }
 
 if (failures > 0) {

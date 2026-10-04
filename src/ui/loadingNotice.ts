@@ -121,6 +121,7 @@ function invoke<T>(work: () => Promise<T>): Promise<T> {
 	try {
 		return work();
 	} catch (err) {
+		// eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- converts a synchronous throw into a rejection carrying the identical value, so raceAbort sees the same failure either way; wrapping it would change it
 		return Promise.reject(err);
 	}
 }
