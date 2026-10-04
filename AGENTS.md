@@ -748,6 +748,16 @@ directory default resolve under `Vault#configDir` (a saved path is kept as-is), 
 the README's network-use disclosure. Submission itself, at community.obsidian.md, needs the
 owner's account. Read the paragraph below as the 2026-09-30 baseline.
 
+**0.2.0 was released on 2026-10-03**, tag `0.2.0` at `origin/main`, `release.yml` run
+`37178292931`: all six jobs `success`, so the NRL-104 `softprops/action-gh-release`
+configuration and NRL-105's tag-matches-version guard have now each run once on a real
+runner. The Release is public, not a prerelease, and carries `main.js` (13,752,624 bytes),
+`manifest.json`, `styles.css` and `multiple.intoto.jsonl`. The three plugin files downloaded
+from it are **byte-identical by sha256** to the build deployed into the Notes vault and
+exercised over CDP the same day (Kokoro read to `playing`, word highlight advancing, rate
+applied once). Still unobserved: installing it through Obsidian's own installer, which only
+becomes possible once the directory lists it.
+
 Submission now happens at community.obsidian.md with a linked GitHub account, reading
 `manifest.json` from the default branch HEAD; the old pull request to `obsidian-releases`
 is no longer the route. The id `local-tts-reader` is free. No release and no tag exist on
