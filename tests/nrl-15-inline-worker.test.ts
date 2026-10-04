@@ -114,7 +114,13 @@ console.log("Worker inlining verification");
 		"require() list only contains safe modules",
 		unique.every(
 			(m) =>
-				m === "obsidian" || m === "@codemirror/view" || m === "@codemirror/state",
+				m === "obsidian" ||
+				m === "@codemirror/view" ||
+				m === "@codemirror/state" ||
+				// The call-time require in src/engines/system/spawn.ts, reached only
+				// on Linux desktop (ADR 0033). This list predated it; CI's
+				// require-list step has carried the same four since NRL-135.
+				m === "child_process",
 		),
 		`found: ${unique.join(", ")}`,
 	);

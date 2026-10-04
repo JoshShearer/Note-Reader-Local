@@ -47,6 +47,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Both only for `Attest build provenance` below: id-token mints the OIDC
+      # token Sigstore signs against, attestations stores the result.
+      id-token: write
+      attestations: write
     outputs:
       hashes: ${{ steps.hash.outputs.hashes }}
     steps:
@@ -244,6 +248,21 @@ jobs:
           fi
           echo "hashes=$HASHES" >> "$GITHUB_OUTPUT"
 
+      # GitHub artifact attestations, which Obsidian's community-directory
+      # review checks for (it flagged their absence on 0.2.0). This is IN
+      # ADDITION to the SLSA generator job below, not instead of it: that job's
+      # `multiple.intoto.jsonl` is the provenance ADR 0011 records and
+      # NRL-79 verified, while this one is what `gh attestation verify` and the
+      # directory look for. Same three files as `Generate checksums`, so the two
+      # attest the identical set. Pinned by commit; `4d101475...` is v4.2.2.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -323,6 +342,10 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           name: Release ${{ github.ref_name }}
+          # Lists the pull requests merged since the previous tag. The
+          # directory review recommends release notes; this needs no
+          # hand-written body that could drift from what actually shipped.
+          generate_release_notes: true
           draft: false
           prerelease: false
           fail_on_unmatched_files: true

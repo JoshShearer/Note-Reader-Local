@@ -417,7 +417,7 @@ function enqueue(msg: SpeakMessage): void {
  * for: measured at 45s of abandoned work before a cancel took effect.
  */
 function yieldToMessages(): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, 0));
+	return new Promise((resolve) => self.setTimeout(resolve, 0));
 }
 
 async function drain(): Promise<void> {

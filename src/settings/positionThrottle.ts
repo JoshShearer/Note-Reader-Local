@@ -50,8 +50,8 @@ export class PositionThrottle {
 	constructor(private readonly options: PositionThrottleOptions) {
 		this.intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
 		this.timers = options.timers ?? {
-			setTimeout: (fn, ms) => setTimeout(fn, ms),
-			clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+			setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+			clearTimeout: (handle) => window.clearTimeout(handle as number),
 		};
 	}
 

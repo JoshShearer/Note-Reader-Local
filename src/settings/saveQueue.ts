@@ -137,8 +137,8 @@ export class SaveQueue {
 
 	constructor(private readonly options: SaveQueueOptions) {
 		this.timers = options.timers ?? {
-			setTimeout: (fn, ms) => setTimeout(fn, ms),
-			clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+			setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+			clearTimeout: (handle) => window.clearTimeout(handle as number),
 		};
 		this.maxAttempts = options.retry?.maxAttempts ?? DEFAULT_MAX_RETRIES;
 		this.baseBackoffMs = options.retry?.baseBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS;

@@ -8,8 +8,8 @@
  * Do not register Symbol.for('onnxruntime'): Transformers 3.8's override branch
  * skips initializing its supportedDevices list altogether.
  */
-if ("process" in globalThis) {
-	if (!Reflect.defineProperty(globalThis, "process", {
+if ("process" in self) {
+	if (!Reflect.defineProperty(self, "process", {
 		value: undefined,
 		configurable: true,
 		writable: true,

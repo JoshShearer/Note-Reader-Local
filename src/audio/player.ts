@@ -91,7 +91,7 @@ export class Player {
 	private rate = 1;
 	private pitch = 0;
 	private timerMs: number = 0;
-	private timerInterval: NodeJS.Timeout | null = null;
+	private timerInterval: number | null = null;
 	private timerStartedAt: number = 0;
 
 	private index = 0;
@@ -466,7 +466,7 @@ export class Player {
 			}
 		}
 
-		this.frame = requestAnimationFrame(this.tick);
+		this.frame = window.requestAnimationFrame(this.tick);
 	};
 
 	private clearWordState(): void {
@@ -723,7 +723,7 @@ export class Player {
 	setTimer(ms: number): void {
 		// Cancel existing timer
 		if (this.timerInterval !== null) {
-			clearInterval(this.timerInterval);
+			window.clearInterval(this.timerInterval);
 			this.timerInterval = null;
 		}
 
@@ -738,7 +738,7 @@ export class Player {
 		this.emitter.emit("timer", ms);
 
 		// Update countdown every 100ms
-		this.timerInterval = setInterval(() => {
+		this.timerInterval = window.setInterval(() => {
 			const remaining = Math.max(0, this.timerStartedAt + this.timerMs - Date.now());
 			this.emitter.emit("timer", remaining);
 
@@ -756,7 +756,7 @@ export class Player {
 
 	private expireTimer(): void {
 		if (this.timerInterval !== null) {
-			clearInterval(this.timerInterval);
+			window.clearInterval(this.timerInterval);
 			this.timerInterval = null;
 		}
 		this.timerMs = 0;
@@ -906,7 +906,7 @@ export class Player {
 		this.clearWordState();
 		// Clear timer
 		if (this.timerInterval !== null) {
-			clearInterval(this.timerInterval);
+			window.clearInterval(this.timerInterval);
 			this.timerInterval = null;
 		}
 		this.timerMs = 0;
