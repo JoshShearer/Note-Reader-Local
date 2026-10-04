@@ -754,7 +754,7 @@ export class KokoroEngine implements SpeechEngine {
 	 */
 	private async getWorkerBlobUrl(): Promise<string> {
 		// Check if the inlined worker code is available
-		const globalWithWorker = typeof globalThis !== "undefined" ? (globalThis as Record<string, unknown>) : {};
+		const globalWithWorker = window as unknown as Record<string, unknown>;
 		const workerCodeBase64 = globalWithWorker.KOKORO_WORKER_CODE as string | undefined;
 
 		if (workerCodeBase64) {

@@ -359,7 +359,7 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 			// autospawn still surfaces as a non-zero exit or a thrown run().
 			let result = await this.runner.run("spd-say", ["-O"]);
 			if (result.code !== 0 && result.signal === null && isAutospawnRaceLoss(result.stderr)) {
-				await new Promise<void>((resolve) => setTimeout(resolve, this.raceRetryDelayMs));
+				await new Promise<void>((resolve) => window.setTimeout(resolve, this.raceRetryDelayMs));
 				result = await this.runner.run("spd-say", ["-O"]);
 			}
 			const { code, stdout } = result;
@@ -423,7 +423,7 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 	 */
 	private async probeAttribution(): Promise<Map<string, true> | null> {
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), this.probeTimeoutMs);
+		const timer = window.setTimeout(() => controller.abort(), this.probeTimeoutMs);
 		try {
 			const modulesRun = await this.runner.run("spd-say", ["-O"], undefined, controller.signal);
 			// The exit code cannot report the deadline. Aborting SIGKILLs the child,
@@ -516,12 +516,12 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 			// clause alone would survive deletion while the guard only looked pinned.
 			// Cases M5 and M7 in tests/engine.test.ts hold the two halves apart.
 			const closingScope = new AbortController();
-			const closingTimer = setTimeout(() => closingScope.abort(), this.closingTimeoutMs);
+			const closingTimer = window.setTimeout(() => closingScope.abort(), this.closingTimeoutMs);
 			let againRun: RunResult;
 			try {
 				againRun = await this.runner.run("spd-say", ["-O"], undefined, closingScope.signal);
 			} finally {
-				clearTimeout(closingTimer);
+				window.clearTimeout(closingTimer);
 			}
 			if (closingScope.signal.aborted || againRun.signal !== null || againRun.code !== 0) {
 				return null;
@@ -564,7 +564,7 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 			// signal checks above, not here: it does not surface as a rejection.
 			return null;
 		} finally {
-			clearTimeout(timer);
+			window.clearTimeout(timer);
 		}
 	}
 
@@ -721,16 +721,16 @@ export class SpeechDispatcherEngine implements SpeechEngine {
 		const pending = this.cancelInFlight;
 		if (!pending) return;
 		this.cancelInFlight = null;
-		let timer: ReturnType<typeof setTimeout> | undefined;
+		let timer: number | undefined;
 		try {
 			await Promise.race([
 				pending,
 				new Promise<void>((resolve) => {
-					timer = setTimeout(resolve, CANCEL_TIMEOUT_MS);
+					timer = window.setTimeout(resolve, CANCEL_TIMEOUT_MS);
 				}),
 			]);
 		} finally {
-			if (timer !== undefined) clearTimeout(timer);
+			if (timer !== undefined) window.clearTimeout(timer);
 		}
 	}
 

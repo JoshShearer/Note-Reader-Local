@@ -54,7 +54,7 @@ export function isAcceptableColourInput(value: string, supports?: Supports): boo
 }
 
 function defaultSupports(): Supports | null {
-	const css = (globalThis as { CSS?: { supports?: Supports } }).CSS;
+	const css = (window as { CSS?: { supports?: Supports } }).CSS;
 	return typeof css?.supports === "function" ? (p, v) => css.supports!(p, v) : null;
 }
 

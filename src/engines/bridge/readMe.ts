@@ -112,7 +112,7 @@ export interface BridgeHealth {
  */
 export const fetchTransport: BridgeTransport = async (req) => {
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), req.timeoutMs);
+	const timer = window.setTimeout(() => controller.abort(), req.timeoutMs);
 	const onAbort = (): void => controller.abort();
 	req.signal?.addEventListener("abort", onAbort, { once: true });
 	try {
@@ -129,7 +129,7 @@ export const fetchTransport: BridgeTransport = async (req) => {
 		const body = await res.arrayBuffer();
 		return { status: res.status, header: (name) => res.headers.get(name), body };
 	} finally {
-		clearTimeout(timer);
+		window.clearTimeout(timer);
 		req.signal?.removeEventListener("abort", onAbort);
 	}
 };

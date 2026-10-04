@@ -54,6 +54,11 @@ To install manually, download `main.js`, `manifest.json` and `styles.css` from t
 Settings → Community plugins. There is nothing else to install; the ONNX runtime is inside
 `main.js`.
 
+**Obsidian Sync Standard cannot sync this plugin.** `main.js` is about 13.8 MB, because the ONNX
+speech runtime is packed inside it rather than downloaded (plugins may not fetch code at
+runtime), and Sync Standard skips files over 5 MB. Install the plugin on each device instead,
+or use Sync Plus.
+
 ## Usage
 
 1. Open any note in Obsidian
@@ -335,6 +340,13 @@ Full notices and license texts are in `THIRD_PARTY_NOTICES.md`, and are also app
 `main.js` itself.
 
 ## Changelog
+
+### 0.2.1
+
+- Releases now carry GitHub artifact attestations and generated release notes
+- Timers and frame callbacks go through `window`, for popout-window compatibility
+- Build no longer depends on `builtin-modules`; dependency list corrected
+- README notes that Obsidian Sync Standard cannot sync the plugin
 
 ### 0.2.0
 

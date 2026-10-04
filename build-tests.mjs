@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import process from "process";
-import builtins from "builtin-modules";
+import { builtinModules } from "node:module";
 
 /**
  * Bundle the test files so node runs plain JS.
@@ -24,7 +24,7 @@ await build({
 	platform: "node",
 	target: "es2022",
 	packages: "external",
-	external: [...builtins],
+	external: [...builtinModules, ...builtinModules.map((m) => `node:${m}`)],
 	logLevel: "warning",
 	sourcemap: "inline",
 	// src/engines/system/spawn.ts loads child_process with a plain require(),
@@ -32,6 +32,12 @@ await build({
 	// (NRL-135, docs/adr/0033). An ESM bundle has no `require`, and esbuild's
 	// __require shim throws without one, so give it the real thing.
 	banner: {
-		js: 'import { createRequire as __nrlCreateRequire } from "node:module";\nconst require = __nrlCreateRequire(import.meta.url);',
+		js:
+			'import { createRequire as __nrlCreateRequire } from "node:module";\nconst require = __nrlCreateRequire(import.meta.url);\n' +
+			// src/ reaches timers and frame callbacks through `window.*` (the
+			// community directory's popout-window rule). Bare Node has no
+			// `window`, so alias it to the global object: a test that patches
+			// `globalThis.requestAnimationFrame` is then seen through `window` too.
+			"if (typeof globalThis.window === \"undefined\") globalThis.window = globalThis;",
 	},
 });

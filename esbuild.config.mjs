@@ -3,7 +3,7 @@ import process from "process";
 import { readFile, writeFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import builtins from "builtin-modules";
+import { builtinModules } from "node:module";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 
@@ -70,7 +70,11 @@ function createMainConfig(ortAssets = null) {
 			"@lezer/common",
 			"@lezer/highlight",
 			"@lezer/lr",
-			...builtins,
+			// Every Node builtin in both spellings, so a `node:`-prefixed import is
+			// left external too. Replaces the `builtin-modules` package, which the
+			// directory review flags; this list comes from the running Node itself.
+			...builtinModules,
+			...builtinModules.map((m) => `node:${m}`),
 		],
 		logLevel: "info",
 		sourcemap: production ? false : "inline",
