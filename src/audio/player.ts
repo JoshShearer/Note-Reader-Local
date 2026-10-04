@@ -315,7 +315,7 @@ export class Player {
 
 		if (token === this.runToken) {
 			this.setState("finished");
-			this.emitter.emit("finished", undefined as never);
+			this.emitter.emit("finished", undefined);
 		}
 	}
 
@@ -761,7 +761,7 @@ export class Player {
 		}
 		this.timerMs = 0;
 		this.emitter.emit("timer", 0);
-		this.emitter.emit("timerExpired", undefined as never);
+		this.emitter.emit("timerExpired", undefined);
 		// Stop playback at current chunk boundary
 		if (this.state === "playing") {
 			this.stop();

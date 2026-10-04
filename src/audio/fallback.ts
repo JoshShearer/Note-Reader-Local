@@ -127,6 +127,7 @@ export async function playWithFallback(
 		try {
 			work = hooks?.beforeAttempt?.(candidate);
 		} catch (err) {
+			// eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- converts a synchronous throw into a rejection carrying the identical value, which raceAbort then normalises into an Error
 			work = Promise.reject(err);
 		}
 
@@ -192,12 +193,11 @@ function raceAbort(work: Promise<void> | undefined, signal?: AbortSignal): Promi
 	if (work === undefined) return Promise.resolve(signal?.aborted ? ABORTED : { kind: "loaded" });
 
 	const settled: Promise<LoadOutcome> = Promise.resolve(work).then(
-		() => ({ kind: "loaded" }) as LoadOutcome,
-		(err: unknown) =>
-			({
-				kind: "failed",
-				error: err instanceof Error ? err : new Error(String(err)),
-			}) as LoadOutcome,
+		() => ({ kind: "loaded" }),
+		(err: unknown) => ({
+			kind: "failed",
+			error: err instanceof Error ? err : new Error(String(err)),
+		}),
 	);
 	if (!signal) return settled;
 	if (signal.aborted) return Promise.resolve(ABORTED);

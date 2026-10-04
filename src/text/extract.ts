@@ -22,8 +22,12 @@ import {
 const MAX_CHUNK_CHARS = 220;
 const MIN_CHUNK_CHARS = 40;
 
+// U+FE0F (variation selector 16) is a lone alternative rather than a class
+// member: inside a class lint reads it as a combining mark that could merge with
+// a neighbour. With the `u` flag both forms match exactly the same single code
+// points, checked over every code point and every lone UTF-16 code unit.
 const EMOJI =
-	/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/u;
+	/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]|\u{FE0F}/u;
 
 type CommentCloser = "-->" | "%%";
 
@@ -917,7 +921,7 @@ function cleanLine(
 	// toggle's name says and what a single-line span already does, and it is the
 	// safe direction - a silenced region cannot disclose anything.
 	const carrying = incomingCode !== undefined;
-	const closerRun = carrying ? firstRunOfLength(raw, incomingCode!, 0) : -1;
+	const closerRun = carrying ? firstRunOfLength(raw, incomingCode, 0) : -1;
 	const literalCodeEnd = !carrying ? -1 : closerRun === -1 ? raw.length : closerRun;
 
 	const emit = (ch: string, srcOffset: number): void => {
@@ -2697,7 +2701,7 @@ const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
  * whole soft-wrap family needs.
  */
 const LINK_REF_DEF =
-	/^ {0,3}\[(?!\^)(?:[^\[\]\\]|\\.)+\]:[ \t]*(?:<(?:[^<>\\\n]|\\.)*>|[^\s<][^\s]*)(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
+	/^ {0,3}\[(?!\^)(?:[^[\]\\]|\\.)+\]:[ \t]*(?:<(?:[^<>\\\n]|\\.)*>|[^\s<][^\s]*)(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
 
 /**
  * Does this line leave a comment open, so that the lines after it are hidden?
@@ -4714,7 +4718,7 @@ function walkLeadQuote(frame: readonly LeadFrameLine[], start: number, depth: nu
 		if (content.startsWith(" ")) content = content.slice(1);
 		if (j === start) {
 			// A callout title is tokenized on its own, before the rest.
-			const c = /^\[!([^\]]+)\]([+\-]?)(?:\s|$)/.exec(content);
+			const c = /^\[!([^\]]+)\]([+-]?)(?:\s|$)/.exec(content);
 			if (c) {
 				title = { view: content.slice(c[0].length), id };
 				continue;
@@ -5329,7 +5333,7 @@ export function extractChunks(
 	// ZM1Z`, not a `%%` line) that this exclusion never touches.
 	const levelP = new Map<number, number>();
 	const fallbackLevelIds = new Set<number>();
-	const chainIds: number[][] = new Array(lines.length);
+	const chainIds: number[][] = new Array<number[]>(lines.length);
 	{
 		let inItem = false;
 		let blankBefore = true;
@@ -5624,7 +5628,7 @@ export function extractChunks(
 			setextLike[k] = setextContent[k]!;
 			continue;
 		}
-		const nextView = next.replace(BLOCKQUOTE, "").slice(listStrip[k + 1]!);
+		const nextView = next.replace(BLOCKQUOTE, "").slice(listStrip[k + 1]);
 		setextLike[k] =
 			setextContent[k]! ||
 			(!underlineLeftQuote(k) && (/^=+\r?$/.test(nextView) || (!lazyList[k]! && /^-+\r?$/.test(nextView))));
@@ -5662,7 +5666,7 @@ export function extractChunks(
 			const p = containerPrefix(lines[k]!);
 			// A marker line's content starts a new block, the item; its own lead is
 			// containerLeadOk's question, and listStrip is zero there.
-			const view = lines[k]!.slice(p.chars).slice(listStrip[k]!);
+			const view = lines[k]!.slice(p.chars).slice(listStrip[k]);
 			const wasOpen = open && p.blockType !== "list";
 			const htmlOpen = wasOpen && !(k > 0 && leftAQuote(k));
 			htmlParaOpen[k] = htmlOpen;
@@ -5691,7 +5695,6 @@ export function extractChunks(
 		}
 	}
 	const segmentCtx: SegmentContext = { locale: opts.locale, src };
-	let chunkSequence = 0;
 
 	// Per-line raw offsets, because a math block skips ahead several lines at
 	// once and every sourceIndex entry must still be a true raw offset.
@@ -5934,7 +5937,7 @@ export function extractChunks(
 		htmlBlockLineAt(raw, lineNo) || (htmlLineAt[lineNo]! && !literalAt[lineNo]!) ? "raw" : "inline";
 
 	/** The line as its innermost container's block tokenizers see it (NRL-136). */
-	const blockView = (raw: string, lineNo: number): string => raw.slice(containerPrefix(raw).chars).slice(listStrip[lineNo]!);
+	const blockView = (raw: string, lineNo: number): string => raw.slice(containerPrefix(raw).chars).slice(listStrip[lineNo]);
 
 	/**
 	 * The container stack a block opened on this line lives in, for a block
@@ -5968,7 +5971,7 @@ export function extractChunks(
 	const browserSetextText = (lineNo: number): boolean => {
 		const next = lines[lineNo + 1];
 		if (next === undefined) return false;
-		const nextView = next.replace(BLOCKQUOTE, "").slice(listStrip[lineNo + 1]!);
+		const nextView = next.replace(BLOCKQUOTE, "").slice(listStrip[lineNo + 1]);
 		if (!SETEXT_UNDERLINE_EXACT.test(nextView)) return false;
 		if (underlineLeftQuote(lineNo)) return false;
 		const raw = lines[lineNo]!;
@@ -5980,7 +5983,7 @@ export function extractChunks(
 		if (nextView.startsWith("-") && (cur.blockType !== "paragraph" || lazyList[lineNo]! || BLOCKQUOTE.test(raw) || BLOCKQUOTE.test(next))) {
 			return false;
 		}
-		if (!/^ {0,3}\S/.test(raw.slice(cur.chars).slice(listStrip[lineNo]!))) return false;
+		if (!/^ {0,3}\S/.test(raw.slice(cur.chars).slice(listStrip[lineNo]))) return false;
 		// A line that left the quote run the line above it was in cannot continue
 		// that quote's paragraph, so it starts a block: measured, `- - Z3Q` / ... /
 		// `> Z7Q` / `      %%%Z8Q --> Z9Q%% Z10Q` / `=` renders that line as an
@@ -6093,9 +6096,9 @@ export function extractChunks(
 			undefined,
 			undefined,
 			undefined,
-			htmlClosesLaterAt[lineNo]!,
+			htmlClosesLaterAt[lineNo],
 			0,
-			listDedented[lineNo]!,
+			listDedented[lineNo],
 			false,
 			false,
 			false,

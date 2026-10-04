@@ -11,12 +11,12 @@ export class Emitter<Events extends Record<string, unknown>> {
 			set = new Set();
 			this.handlers.set(event, set);
 		}
-		set.add(fn as Listener<never>);
+		set.add(fn);
 		return () => this.off(event, fn);
 	}
 
 	off<K extends keyof Events>(event: K, fn: Listener<Events[K]>): void {
-		this.handlers.get(event)?.delete(fn as Listener<never>);
+		this.handlers.get(event)?.delete(fn);
 	}
 
 	emit<K extends keyof Events>(event: K, payload: Events[K]): void {

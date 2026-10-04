@@ -130,7 +130,7 @@ export class SaveQueue {
 	 * scheduled retry, so a later, unrelated failure starts a fresh budget. */
 	private retryAttempt = 0;
 	/** The armed backoff timer, if a retry is currently scheduled. */
-	private retryTimer: unknown | null = null;
+	private retryTimer: unknown = null;
 	private readonly timers: NonNullable<SaveQueueOptions["timers"]>;
 	private readonly maxAttempts: number;
 	private readonly baseBackoffMs: number;
@@ -216,6 +216,7 @@ export class SaveQueue {
 			// other rejection, or `running` would stay true and wedge the queue.
 			result = this.options.write(payload);
 		} catch (err) {
+			// eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- re-raises the caught value unchanged so reportError sees exactly what write threw; wrapping it in a new Error would change what is reported
 			result = Promise.reject(err);
 		}
 		void result.then(

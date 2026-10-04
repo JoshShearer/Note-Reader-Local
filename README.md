@@ -17,22 +17,39 @@ Read your notes aloud with on-device text-to-speech and word highlighting. No cl
 - **Customizable Playback** - Speed, voice, highlight colour, look-ahead sizing
 - **Reading Position Memory** - Resume from where you left off
 
-## Privacy
+## Privacy and network use
 
-Your notes never leave your device. No telemetry, no crash reporting, no analytics. The plugin is entirely offline-first.
+Your notes never leave your device. No telemetry, no crash reporting, no analytics, no
+accounts and no API keys. There is no cloud speech engine, and nothing falls back to one.
 
-The one thing it will ever download is Kokoro model weights and a voice file, and only after you
-click Download. Expect roughly 92 MB to 326 MB for the weights depending on the build you
-choose, plus about 510 KB for the voice. The speech runtime itself is part of the plugin: there
-is no runtime download, no CDN, and nothing fetched in the background or on first read. If you
-never click "Download", nothing is ever fetched.
+What the plugin does touch, all of it disclosed here:
+
+- **huggingface.co, only when you click Download.** Kokoro's model weights and a voice file are
+  fetched from `https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX` the first time you
+  press Download in the Kokoro settings, and never at any other time - not on load, not on
+  first read, not in the background. Expect roughly 92 MB to 326 MB for the weights depending
+  on the build you choose, plus about 510 KB per voice. They are stored in your vault's config
+  folder (`<config folder>/local-tts/`) and can be removed from the same settings card. No note
+  text is sent; this is a plain file download. If you never press Download, nothing is fetched.
+- **127.0.0.1 on Android, if you install the Read Me Offline app.** On the Android app the
+  plugin checks for the optional [Read Me Offline](https://github.com/JoshShearer/Read-Me)
+  companion on the phone's own loopback address (`127.0.0.1`, port 8787 by default) and, if it
+  is there, sends each sentence to it for the phone's built-in speech engine to read. That
+  traffic never leaves the device; the host is fixed to loopback and is not configurable.
+- **System speech programs on Linux desktop.** The Speech Dispatcher and eSpeak NG engines run
+  the `spd-say` and `espeak-ng` programs already installed on your system. Text is passed to
+  them on standard input, never on the command line.
+
+The speech runtime (ONNX Runtime) is part of the plugin itself: there is no runtime download
+and no CDN.
 
 ## Installation
 
-**Not yet available through Community Plugins Browse.** This release has not been submitted to
-or accepted into the Obsidian community directory, so searching for it will not find anything.
+From Obsidian: Settings → Community plugins → Browse, search for **Local TTS Reader**, install,
+then enable it.
 
-To install it manually, copy three files - `main.js`, `manifest.json` and `styles.css` - into
+To install manually, download `main.js`, `manifest.json` and `styles.css` from the
+[latest release](https://github.com/JoshShearer/Note-Reader-Local/releases/latest) into
 `<your vault>/.obsidian/plugins/local-tts-reader/`, then restart Obsidian and enable it under
 Settings → Community plugins. There is nothing else to install; the ONNX runtime is inside
 `main.js`.
@@ -47,8 +64,8 @@ Settings → Community plugins. There is nothing else to install; the ONNX runti
 
 ## System Requirements
 
-- **Desktop** (Linux, macOS, Windows): Obsidian 1.8.0+ declared in the manifest
-- **Android**: Obsidian 1.8.0+ declared in the manifest
+- **Desktop** (Linux, macOS, Windows): Obsidian 1.8.7+ declared in the manifest
+- **Android**: Obsidian 1.8.7+ declared in the manifest
 
 These minimums are the plugin's declared floor, not a tested matrix. Desktop has been exercised
 on Obsidian 1.13.7 on Linux. Android has been exercised on a Pixel 9 Pro XL running Android 17,
@@ -56,7 +73,8 @@ whose WebView (`app.vanium.webview`, Chromium 154) has WebAssembly SIMD and
 `DecompressionStream`; the bundle loads there, inflates the runtime, and speaks. It is also
 noticeably slower than desktop, for a reason the plugin cannot change - see
 [Android](#android) below. Older Android WebViews remain unmeasured, and the declared floor of
-1.8.0 is not a claim that 1.8.0 works.
+1.8.7 is not a claim that 1.8.7 works. (1.8.7 is the first release with
+`App.loadLocalStorage` and `getLanguage`, which the plugin calls.)
 
 ### Linux
 
@@ -81,13 +99,23 @@ Uses your system's built-in voice synthesis (Siri, Cortana, or equivalent).
 
 ### Android
 
-Kokoro is the only engine available on Android. The device's native TTS engine is not
-reachable: Obsidian exposes no TTS facility of its own, its bundled Capacitor bridge has no
-`TextToSpeech` plugin compiled in, and Obsidian's Android WebView does not implement
-`window.speechSynthesis` at all. This was confirmed by measurement on real hardware rather
-than assumed. A diagnostic command, **Test Android native TTS**, reports the details and
-lands on `BLOCKED_BY_HOST`; it exists so the finding can be rechecked, not because the path
-works.
+Obsidian gives Android plugins no route to the phone's own speech engine: it exposes no TTS
+facility, its Capacitor bridge has no `TextToSpeech` plugin, and its WebView does not implement
+`window.speechSynthesis`. That was measured on real hardware, and the diagnostic command
+**Test Android native TTS** rechecks it.
+
+So there are two engines on Android:
+
+- **Read Me Offline (recommended).** Install the free
+  [Read Me Offline](https://github.com/JoshShearer/Read-Me) app, open it once and pair it with
+  the plugin. The plugin then reads through the phone's built-in speech engine over the
+  on-device loopback bridge described under [Privacy and network use](#privacy-and-network-use),
+  which is fast enough for 2x playback. Automatic engine selection prefers it when it is
+  running. There is no word-level highlight with this engine (the phone's engine reports no
+  word timings); the sentence highlight still works. Some vendors, Huawei for example, freeze
+  background apps; allow Read Me Offline to run in the background if reads stop part-way.
+- **Kokoro.** Runs inside Obsidian with no companion app, but is much slower on a phone (see
+  below).
 
 Kokoro on Android requires a WebView with **WebAssembly SIMD** support. Devices whose WebView
 predates roughly 2021, or that ship a vendor-frozen WebView component with no Play Store
@@ -298,9 +326,25 @@ This is a personal project maintained for the Obsidian community. Contributions 
 
 ## License
 
-MIT - See LICENSE for details.
+The plugin's source code is MIT - see `LICENSE`.
+
+The released `main.js` bundles third-party code: kokoro-js, transformers.js and phonemizer.js
+(Apache-2.0), ONNX Runtime (MIT), and eSpeak NG (GPL-3.0-or-later, compiled into phonemizer).
+Because of eSpeak NG, the bundled `main.js` as a whole is distributed under GPL-3.0-or-later.
+Full notices and license texts are in `THIRD_PARTY_NOTICES.md`, and are also appended to
+`main.js` itself.
 
 ## Changelog
+
+### 0.2.0
+
+- First release submitted to the Obsidian community directory
+- Android: speak through the optional Read Me Offline companion app, using the phone's own
+  speech engine over an on-device loopback bridge
+- Model files are stored under the vault's configured config folder rather than a hardcoded
+  `.obsidian`
+- Minimum Obsidian version corrected to 1.8.7, the first version with APIs the plugin uses
+- Third-party license notices are now included in the release and inside `main.js`
 
 ### 0.1.0 (Initial Release)
 

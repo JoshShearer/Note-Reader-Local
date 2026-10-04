@@ -11,7 +11,6 @@ import type LocalTtsReaderPlugin from "../main";
 import type { VoiceInfo } from "../audio/types";
 import {
 	KOKORO_MODEL_METADATA,
-	KOKORO_VOICES,
 	KOKORO_WEIGHTS,
 	VOICE_FILE_SIZE_BYTES,
 	probeGpu,
@@ -426,7 +425,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			// reported as though it matched the table.
 			const installedMb = await getInstalledSizeMb(
 				this.app.vault.adapter,
-				this.plugin.settings.kokoroModelPath,
+				this.plugin.kokoroModelPath(),
 				this.plugin.resolvedWeights(),
 			);
 			const installedNote = installedMb !== null ? ` (${installedMb.toFixed(1)} MB installed)` : "";
@@ -462,7 +461,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 							const choice = await this.plugin.resolveKokoroDownloadVoice();
 							const result = await downloadModel(
 								this.app,
-								this.plugin.settings.kokoroModelPath,
+								this.plugin.kokoroModelPath(),
 								wanted.path,
 								choice.file,
 								({ file, loaded, total }) => {
@@ -476,7 +475,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 							// Only once the voice file is on disk, so the stored
 							// id never names a voice that is not there.
 							if (result.ok && choice.persist) await this.plugin.setVoice(choice.voiceId);
-							if (result.ok) setTimeout(() => notice.hide(), choice.notice ? 8000 : 3000);
+							if (result.ok) window.setTimeout(() => notice.hide(), choice.notice ? 8000 : 3000);
 							if (described.modelInstalled) {
 								// The engine may be holding an older build open.
 								await this.plugin.reloadKokoro();
@@ -521,7 +520,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			.setDesc("Computing...");
 		void getTotalUsage(
 			this.app.vault.adapter,
-			this.plugin.settings.kokoroModelPath,
+			this.plugin.kokoroModelPath(),
 			// The full list, not an empty array. The runtime is bundled now
 			// (ADR 0028), so on a fresh install every one of these stats is 0 -
 			// but an install upgrading from the on-demand layout still has that
@@ -533,7 +532,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			const totalMb = Math.round(usage.totalBytes / 1_000_000);
 			totalUsage.setDesc(
 				`${totalMb} MB across every downloaded build, voice, and the ONNX runtime, ` +
-					`in ${this.plugin.settings.kokoroModelPath}.`,
+					`in ${this.plugin.kokoroModelPath()}.`,
 			);
 		});
 	}
@@ -559,7 +558,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		try {
 			const result = await removeModelBuild(
 				this.app.vault.adapter,
-				this.plugin.settings.kokoroModelPath,
+				this.plugin.kokoroModelPath(),
 				this.plugin.resolvedWeights(),
 			);
 			if (!result.ok) {
@@ -741,20 +740,20 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		try {
 			const result = await downloadVoice(
 				this.app,
-				this.plugin.settings.kokoroModelPath,
+				this.plugin.kokoroModelPath(),
 				file,
 				() => undefined,
 			);
 			if (!result.ok) {
 				notice.setMessage(`Voice download failed: ${result.error}`);
-				setTimeout(() => notice.hide(), 6000);
+				window.setTimeout(() => notice.hide(), 6000);
 				return false;
 			}
 			notice.hide();
 			return true;
 		} catch (err) {
 			notice.setMessage(`Voice download failed: ${errText(err)}`);
-			setTimeout(() => notice.hide(), 6000);
+			window.setTimeout(() => notice.hide(), 6000);
 			return false;
 		}
 	}
@@ -851,15 +850,16 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 
 		// Timer countdown display
 		const timerDisplayEl = containerEl.createDiv({ cls: "local-tts-timer-display" });
-		timerDisplayEl.style.display = "none";
+		// Obsidian's toggle(): display none, or back to the stylesheet's block.
+		timerDisplayEl.toggle(false);
 		const timerLabel = timerDisplayEl.createSpan();
 
 		// Update timer display on timer event
 		const updateTimerDisplay = (remaining: number) => {
 			if (remaining <= 0) {
-				timerDisplayEl.style.display = "none";
+				timerDisplayEl.toggle(false);
 			} else {
-				timerDisplayEl.style.display = "block";
+				timerDisplayEl.toggle(true);
 				const minutes = Math.floor(remaining / 60000);
 				const seconds = Math.floor((remaining % 60000) / 1000);
 				timerLabel.setText(`Time remaining: ${minutes}:${seconds.toString().padStart(2, "0")}`);
@@ -874,7 +874,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		// Listen to player state to hide countdown when not playing
 		this.offTimerState = this.plugin.getPlayer().on("state", (state) => {
 			if (state === "idle" || state === "finished") {
-				timerDisplayEl.style.display = "none";
+				timerDisplayEl.toggle(false);
 			}
 		});
 	}

@@ -42,9 +42,15 @@ if (
 	typeof ReadableStream !== "undefined" &&
 	!(Symbol.asyncIterator in ReadableStream.prototype)
 ) {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	(ReadableStream.prototype as any)[Symbol.asyncIterator] = async function* (
-		this: ReadableStream,
+	// The lib set in tsconfig does not declare async iteration on
+	// ReadableStream, so describe the one member this polyfill adds.
+	const proto = ReadableStream.prototype as ReadableStream<unknown> & {
+		[Symbol.asyncIterator]?: (
+			this: ReadableStream<unknown>,
+		) => AsyncGenerator<unknown, void, undefined>;
+	};
+	proto[Symbol.asyncIterator] = async function* (
+		this: ReadableStream<unknown>,
 	) {
 		const reader = this.getReader();
 		try {

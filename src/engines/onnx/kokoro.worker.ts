@@ -114,7 +114,7 @@ function resolveLocal(url: string): ArrayBuffer | null {
 
 function installFetchShim(): void {
 	const realFetch = ctx.fetch.bind(ctx);
-	ctx.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+	ctx.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
 		const url =
 			typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 		const local = resolveLocal(url);
@@ -135,8 +135,8 @@ function installFetchShim(): void {
 		if (isRemote(url)) {
 			throw new Error(`Refused a network request for a local TTS engine: ${url}`);
 		}
-		return realFetch(input as RequestInfo, init);
-	}) as typeof fetch;
+		return realFetch(input, init);
+	};
 }
 
 /**
@@ -198,12 +198,11 @@ globalTarget.addEventListener("error", (event) => {
 	});
 });
 globalTarget.addEventListener("unhandledrejection", (event) => {
-	const reason = (event as { reason?: unknown }).reason as
-		| { message?: string; stack?: string }
-		| undefined;
+	const raw: unknown = (event as { reason?: unknown }).reason;
+	const reason = raw as { message?: string; stack?: string } | undefined;
 	post({
 		type: "error",
-		message: `Unhandled rejection at step ${lastStep}: ${reason?.message ?? String(reason)}`,
+		message: `Unhandled rejection at step ${lastStep}: ${reason?.message ?? String(raw)}`,
 		stack: reason?.stack ?? "",
 	});
 });
@@ -382,7 +381,7 @@ async function speak(msg: SpeakMessage, generation: number): Promise<void> {
 	// promise, so posting it would only be noise.
 	if (generation !== currentGeneration) return;
 
-	const pcm = result.audio as Float32Array;
+	const pcm = result.audio;
 	sampleRate = result.sampling_rate ?? sampleRate;
 
 	// Copy so the buffer can be transferred rather than structured-cloned.
