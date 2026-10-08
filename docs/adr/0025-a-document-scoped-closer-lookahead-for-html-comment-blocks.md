@@ -2689,9 +2689,10 @@ Where the transcription has no answer (a lone CR, deep nesting), a stand-in read
 without the block parser (`fallbackHtmlHidden`) hides the markup of every line
 that starts an HTML block by the renderer's own table (a block name, a processing
 instruction, a declaration, CDATA, or a whole tag alone on its line), and after an
-attribute such a line leaves open, on to the next such quote. Only that first
-line: which later lines the block holds, and whether their `>` is a quote marker
-or HTML, needs the parser.
+attribute such a line leaves open, on to the next such quote. The block is read
+through the line before the next blank one, on the renderer's lines (a lone CR
+breaks one), less each line's container prefix; where a later line's `>` is
+literal text rather than a quote marker this hides more than the renderer does.
 
 Every range is hidden by construction, so the drop cannot disclose. The `%%`
 starts also give our opener a renderer answer: our block opener stands only on a
@@ -2768,10 +2769,20 @@ rows, and an open attribute now ends at a blank line once its quote has closed,
 since the next block's own opening tag ends it there. N3, the apostrophe class
 above, is left as stated.
 
+**/critique on `2d44f59`: CONCERNS, 68, no disclosure against `main`.** It found
+two places where that commit reopened disclosures `db55516` had closed (equal to
+`main`): a closing quote taken from a footnote definition, which the page moves or
+drops, ended an open attribute at the next blank line (F1; such a quote no longer
+counts), and the lone-CR stand-in had stopped reading a block's later lines (F2;
+it reads the block again). Pinned by the `nrl166-r2f` rows, RED on `2d44f59`. Its
+LOW findings stay as stated: the blank-line stop fires only on a `\n` blank line,
+not at a lone-CR one or a heading or list that ends the paragraph (F3, losses),
+and the apostrophe class (F4, the third critique's N3).
+
 **Census** of the final tree, harness 1.13.7, Verify 2's judge (`run3.cjs`/`rfz.cjs`),
 masks ALL and DEF (F2 also SKIPALL), newly disclosing / newly lost. Lockstep: 0
 failures this tree has and `main` does not; the only failures at all are notes
-whose `$$` block's synthetic `equation` word merges into a chunk, 3,549 here
+whose `$$` block's synthetic `equation` word merges into a chunk, 3,541 here
 against 4,145 on `main`, all in the second critique's generators.
 
 | corpus | cells | vs `9132c3b` | vs `e2afbfe` | vs `44a037a` |
@@ -2779,8 +2790,10 @@ against 4,145 on `main`, all in the second critique's generators.
 | Verify 2's `gen2.cjs`, 1,215,000 shapes | 13,122,000 | 1,800 / 0 (was 50,982 / 0) | **0 / 11,097** (was 112 / 36,014) | 0 / 0 |
 | reviewers' fuzz, seeds 1-8 x 8,000 | 489,270 | 20 / 63 | **0 / 14** (was 2 / 29) | 0 / 0 (was 0 / 9) |
 | extended fuzz, seeds 501-512 x 6,000 | 724,310 | 105 / 57 | **0 / 126** | 0 / 21 |
-| first critique's generator, seeds 1-2 x 48,000 | 833,216 | 83 / 619 | **0 / 499** | 0 / 431 |
-| second critique's two generators, 40,000 each | 684,678 | 45 / 366 | **0 / 263** | 0 / 238 |
+| first critique's generator, seeds 1-2 x 48,000 | 833,216 | 83 / 969 | **0 / 851** | 0 / 783 |
+| second critique's two generators, 40,000 each | 684,678 | 44 / 546 | **0 / 444** | 0 / 419 |
+| third critique's generator, three modes x 6,000 | 170,216 | 6 / 811 | **0 / 811** | 0 / 811 |
+| fourth critique's generator, 12,000 | 125,350 | 5 / 5,016 | **0 / 5,033** | 0 / 5,031 |
 | Verify 1's `own-gen.cjs` | 1,481,472 | 0 / 0 | 0 / 0 | 0 / 0 |
 | its de-callout twins | 972,864 | 0 / 0 | 0 / 0 | 0 / 0 |
 | F1 `callout-census.cjs` | 2,496 | 0 / 0 | 0 / 0 | 0 / 0 |
@@ -2789,7 +2802,8 @@ against 4,145 on `main`, all in the second critique's generators.
 
 Closed against `44a037a` (disclosing / lost): `gen2` 374,998 / 1,534,782, the base
 fuzz 26,207 / 8,305, the extended 72,788 / 10,781, the first critique's generator
-171,823 / 524, the second's 87,836 / 239, F2 823 / 199, F3 3,262 / 18,906; own-gen
+172,320 / 524, the second's 88,075 / 239, the third's 30,878 / 0, the fourth's
+60,199 / 2, F2 823 / 199, F3 3,262 / 18,906; own-gen
 and twins close 9,819 and 9,894 lost cells.
 
 - **`newly disclosing against e2afbfe` is 0 on every corpus**, and against
@@ -2812,21 +2826,27 @@ and twins close 9,819 and 9,894 lost cells.
   transcribe. The other 132 are a footnote-definition line right after the item's
   code line (`... > \t--> c` / `[^1]: f`), where the walker stays unsure.
 - Losses against `44a037a` remain in two fail-closed classes, both siblings of
-  class 1's HTML-block disclosures. (i) An HTML block leaving an attribute value
-  open: we hide to the next matching quote in the NOTE, while a quote the renderer
-  writes into its own markup (`data-heading="`, `alt="`) can end the value sooner.
-  (ii) A lone-CR note, which the transcription cannot read, where the stand-in
-  hides the markup of each line that starts an HTML block. Across the critique
-  generators (1,517,894 cells) that is 669 cells against `44a037a`: 452 in 157
-  notes of class (i), 199 in 85 notes of class (ii), and 18 in 7 notes not
-  classified; parse5 says a browser shows 591 of the 669. Class (i) includes an
-  apostrophe inside an UNQUOTED attribute value (`<div title=it's>`), which a
-  browser does not read as a quote and our reader and the judge both do (the third
-  critique's N3); reading quotes only after `=` would follow the browser but
-  disagree with the judge. The extended fuzz adds 21
-  cells (8 notes) of class (i), of which parse5 shows 11. The trade is deliberate:
-  both close disclosures `main` has (`1. a [^1]` + CR + ... + `- <div title='QIQ`
-  spoke QIQ).
+  class 1's HTML-block disclosures, and the four critique generators, which aim
+  at exactly these, are where they show: 7,044 of 1,813,460 cells (parse5 says a
+  browser shows 6,725 of them). (i) An HTML block leaving an attribute value open
+  (3,524 cells, 1,166 notes): we hide to the next matching quote in the NOTE and
+  the `>` after it, stopping at a blank line only when that quote is in the
+  block's own text, while a quote the renderer writes into its own markup
+  (`data-heading="`, `alt="`) can end the value sooner, and an apostrophe in an
+  UNQUOTED value (`<div title=it's>`) is no quote for a browser but is one for us
+  and for the judge (the third critique's N3). (ii) A lone-CR note, which the
+  transcription cannot read, where the stand-in hides each HTML block's markup
+  through its blank line (3,112 cells, 973 notes). 408 cells (116 notes) were not
+  classified. The extended fuzz adds 21 cells (8 notes) of class (i). The trade
+  is deliberate: both classes close disclosures `main` has (`1. a [^1]` + CR +
+  ... + `- <div title='QIQ` spoke QIQ), 351,472 closed cells across the four
+  generators.
+- In those same classes, earlier commits of this round hid some cells that `main`
+  also speaks and the renderer hides; the final tree speaks them as `main` does
+  (against `db55516`: 8, 4, 60 and 422 cells in the four generators). Each round
+  traded such cells against losses; the final one leans to hiding, and closing
+  the rest needs the browser's own tokenizer over the rendered page, which this
+  round does not transcribe.
 - The base fuzz's 14 and F2's 34 against `e2afbfe` are the accepted rows of the
   port; the extended fuzz's 126 are all lost on `44a037a`.
 

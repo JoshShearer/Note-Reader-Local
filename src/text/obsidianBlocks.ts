@@ -1489,16 +1489,28 @@ export function percentBlockEnds(source: string, lineCount: number): Map<number,
  * value sooner (a quote the renderer writes into its own markup), so this errs
  * toward hiding.
  */
-function openQuoteEnd(source: string, from: number, quote: string): number {
+function openQuoteEnd(source: string, from: number, quote: string, elsewhere?: (at: number) => boolean): number {
+	// A quote in text the page does not place here (a footnote definition, moved
+	// to the page's end or dropped) does not close the value (/critique on
+	// 2d44f59, F1: `<div title="x` / blank / `[^1]: "` / blank / `QAQ` hides QAQ).
 	let k = source.indexOf(quote, from);
+	while (k !== -1 && elsewhere !== undefined && elsewhere(k)) k = source.indexOf(quote, k + 1);
 	if (k === -1) return source.length;
+	// Whether the closing quote is still in the block's own raw text, before any
+	// blank line: only then is it a quote the page receives as written. Past a
+	// blank line it sits in some later block the renderer may rewrite (math, a
+	// link definition, code), where the value's true end is unknown.
+	const sameBlock = !/(?:\r\n?|\n)[ \t]*(?:\r\n?|\n)/.test(source.slice(from, k));
 	for (k++; k < source.length && source[k] !== ">"; k++) {
-		// Past the closing quote the tag still runs, now through attribute names,
-		// to the next `>`; at a blank line the next block begins, and every block
-		// the renderer writes opens with a tag whose `>` ends this one, so its
-		// content is displayed (/critique on db55516, N1: `a` + CR + `b` /
-		// `<div title="x` / `<div title="y` / blank / `QAQ` displays QAQ).
-		if (source[k] === "\n" && /^\n[ \t]*\r?(?:\n|$)/.test(source.slice(k, k + 64))) return k;
+		// Past a closing quote in the block's own text the tag still runs, now
+		// through attribute names, to the next `>`; at a blank line the next block
+		// begins, and every block the renderer writes opens with a tag whose `>`
+		// ends this one, so its content is displayed (/critique on db55516, N1:
+		// `a` + CR + `b` / `<div title="x` / `<div title="y` / blank / `QAQ`
+		// displays QAQ). A quote found past a blank line gets no such stop: the
+		// final census against the earlier commits found it speaking text a
+		// rewritten block's quote had not really closed.
+		if (sameBlock && (source[k] === "\n" || source[k] === "\r") && /^(?:\r\n?|\n)[ \t]*(?:\r\n?|\n|$)/.test(source.slice(k, k + 64))) return k;
 		const c = source[k];
 		if (c === '"' || c === "'") {
 			const close = source.indexOf(c, k + 1);
@@ -1810,6 +1822,12 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	// tag of its own, and skipping it keeps the scans disjoint and linear.
 	let quoteEnd = -1;
 	let footnotesSwallowed = false;
+	let lineCursor = 0;
+	const onFootnoteLine = (at: number): boolean => {
+		while (lineCursor + 1 < lineCount && lineStart[lineCursor + 1]! <= at) lineCursor++;
+		while (lineCursor > 0 && lineStart[lineCursor]! > at) lineCursor--;
+		return footnoteLines[lineCursor]!;
+	};
 	for (const o of [...scanner.openQuotes].sort((x, y) => offset(x.at) - offset(y.at))) {
 		// A tag inside a definition the renderer drops is not on the page at all.
 		if (offset(o.at) < quoteEnd || droppedFootnoteLines[o.at.line]) continue;
@@ -1830,7 +1848,7 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 			}
 			continue;
 		}
-		quoteEnd = openQuoteEnd(source, offset(o.end), o.quote);
+		quoteEnd = openQuoteEnd(source, offset(o.end), o.quote, onFootnoteLine);
 
 		ranges.push([offset(o.at), quoteEnd]);
 	}
@@ -1850,9 +1868,10 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
  * renderer, and an old over-hiding comment may have been all that kept its
  * attribute values silent (`1. a [^1]` + CR + `<!-->` / ... / `- <div title='QIQ`
  * spoke QIQ on `main` too). So this is a stand-in read without the block
- * parser: a line whose content (after any `>`, list marker and indent) starts
- * an HTML block is read as raw HTML, its markup is hidden (`htmlMarkup`), and an
- * attribute value it leaves open hides on to the next such quote.
+ * parser: from a line whose content (after any `>`, list marker and indent)
+ * starts an HTML block, through the line before the next blank one, is read as
+ * raw HTML, its markup is hidden (`htmlMarkup`), and an attribute value it leaves
+ * open hides on to the next such quote.
  * Comments are left to `extractChunks`' own comment state.
  */
 export function fallbackHtmlHidden(source: string): Array<readonly [number, number]> {
@@ -1861,19 +1880,22 @@ export function fallbackHtmlHidden(source: string): Array<readonly [number, numb
 	// The renderer's lines: a lone CR breaks one too, which is the reason this
 	// runs at all (/critique on db55516, N2: `a` + CR + `b` / `</div>` + CR + CR +
 	// `<b title="QAQ` read the `<b` line as part of a `</div>` line).
-	const BREAK = /\r\n|\r|\n/g;
-	let openUntil = -1;
-	for (let at = 0; at <= source.length; ) {
+	const lines: Array<{ start: number; text: string }> = [];
+	for (let at = 0, BREAK = /\r\n|\r|\n/g; at <= source.length; ) {
 		BREAK.lastIndex = at;
 		const m = BREAK.exec(source);
 		const end = m === null ? source.length : m.index;
-		const line = source.slice(at, end);
-		const next = m === null ? source.length + 1 : m.index + m[0].length;
+		lines.push({ start: at, text: source.slice(at, end) });
+		at = m === null ? source.length + 1 : m.index + m[0].length;
+	}
+	let openUntil = -1;
+	for (let k = 0; k < lines.length; ) {
+		const { start, text: line } = lines[k]!;
 		// A line inside an attribute value an earlier line left open is that
 		// value's text, not a tag of its own (/critique on db55516, N1), and
 		// skipping it keeps the quote scans disjoint and linear (N4).
-		if (at < openUntil) {
-			at = next;
+		if (start < openUntil) {
+			k++;
 			continue;
 		}
 		const lead = LEAD.exec(line)![0].length;
@@ -1883,23 +1905,43 @@ export function fallbackHtmlHidden(source: string): Array<readonly [number, numb
 		// processing instruction, a declaration, CDATA, or a whole tag alone on
 		// its line. A line merely led by a tag is paragraph text (/critique on
 		// 996e8a7, F1: `a` + CR + `b` / `<b title="QAQ` / ... spoke nothing).
-		// Only that first line is read: without the parser, which later lines the
-		// block holds, and whether their `>` is a quote marker or HTML, is not
-		// known (`1. <![CDATA[ a` / `> b` shows b: that `>` ends the bogus
-		// comment). An attribute the line leaves open still runs on below.
 		const content = line.slice(lead);
-		if (!/^(?: {4}|\t)/.test(line) && HTML_KINDS.some((kind, i) => i !== 1 && kind[0].test(content))) {
-			const { spans, left } = htmlMarkup(content);
-			const base = at + lead;
-			for (const [a, b] of spans) if (!content.startsWith("<!--", a)) out.push([base + a, base + b]);
-			// An attribute value left open runs on to the next such quote in the
-			// note and the `>` after it, as in `rendererHiddenText`.
-			if (left?.kind === "tag" && left.quote !== undefined) {
-				openUntil = openQuoteEnd(source, end, left.quote);
-				out.push([base + left.at, openUntil]);
+		if (/^(?: {4}|\t)/.test(line) || !HTML_KINDS.some((kind, i) => i !== 1 && kind[0].test(content))) {
+			k++;
+			continue;
+		}
+		// The block runs to the line before the next blank one, read less each
+		// line's container prefix: a construct its first line opens may close on a
+		// later one, or hide it (/critique on 2d44f59, F2: `- > <!X QEQ` + CR +
+		// `> > <b title="QFQ` hides QFQ). Where a later line's `>` is literal text
+		// rather than a quote marker, this hides more than the renderer does.
+		let e = k;
+		while (e + 1 < lines.length && lines[e + 1]!.text.trim() !== "") e++;
+		const text: string[] = [];
+		const from: number[] = [];
+		for (let j = k; j <= e; j++) {
+			const cut = j === k ? lead : LEAD.exec(lines[j]!.text)![0].length;
+			if (j > k) {
+				text.push("\n");
+				from.push(lines[j]!.start - 1);
+			}
+			for (let c = cut; c < lines[j]!.text.length; c++) {
+				text.push(lines[j]!.text[c]!);
+				from.push(lines[j]!.start + c);
 			}
 		}
-		at = next;
+		const html = text.join("");
+		const blockEnd = lines[e]!.start + lines[e]!.text.length;
+		const map = (p: number): number => (p < from.length ? from[p]! : blockEnd);
+		const { spans, left } = htmlMarkup(html);
+		for (const [a, b] of spans) if (!html.startsWith("<!--", a)) out.push([map(a), b >= html.length ? blockEnd : map(b)]);
+		// An attribute value left open runs on to the next such quote in the note
+		// and the `>` after it, as in `rendererHiddenText`.
+		if (left?.kind === "tag" && left.quote !== undefined) {
+			openUntil = openQuoteEnd(source, blockEnd, left.quote);
+			out.push([map(left.at), openUntil]);
+		}
+		k = e + 1;
 	}
 	return out;
 }

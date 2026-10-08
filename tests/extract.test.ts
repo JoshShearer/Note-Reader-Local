@@ -4497,6 +4497,14 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// attribute ends at the next blank line once its quote has closed.
 		["pin-nrl166-r2e-n1-closing-quote-line-is-not-a-new-tag", "a\rb\n<div title=\"x\n<div title=\"y\n\nQAQ", "a b QAQ"],
 		["pin-nrl166-r2e-n2-lone-cr-breaks-the-stand-in-line", "a\rb\n</div>\r\r<b title=\"QAQ\n\nQBQ", "a b <b title=\"QAQ QBQ"],
+		// /critique on 2d44f59 (CONCERNS, 68): disclosures equal to main that db55516
+		// had closed and 2d44f59 reopened, each RED on 2d44f59: a quote in a footnote
+		// definition closes no attribute (F1), and the lone-CR stand-in reads a block
+		// through to its blank line again (F2).
+		["pin-nrl166-r2f-f1-quote-in-footnote-does-not-close-attribute", "<div title=\"x\n\n[^1]: \"\n\nQAQ", ""],
+		["pin-nrl166-r2f-f1-quote-in-kept-footnote-does-not-close-attribute", "<div title=\"x\n\n[^1]: a \" b\n\nQAQ\n\nQBQ [^1]", ""],
+		["pin-nrl166-r2f-f2-lone-cr-stand-in-reads-the-whole-block", "- > <!X QEQ\r> > <b title=\"QFQ", ""],
+		["pin-nrl166-r2f-f2-lone-cr-stand-in-block-bogus-comment", "<details><summary>QAQ</summary>\r\tQBQ\">\r    <!X QCQ>\r\n", "QAQ QBQ\">"],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
