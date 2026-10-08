@@ -3015,6 +3015,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl166-r1-declaration-block-before-code-stop", "P <!-- QAAQ\n><!X QBAQ\n    QDAQ\n> \tQEAQ --->", "P", { skipCodeBlocks: false }],
 		["guard-nrl166-r1-image-label-before-code-stop", "![!x <!-- QBAQ\nQCAQ](a.png)\n>\t]] -->", "[!x", { skipCodeBlocks: false }],
 		["guard-nrl166-r1-walker-code-line-over-image-label", "> > QAAQ\n>\t[r]: \"<!-- QCAQ\n![QDAQ\nQEAQ -->](a.png)", "QAAQ r : \" ](a.png)", { skipCodeBlocks: false }],
+		// /critique round 3, Q1: a `---` block extractChunks does not take as
+		// frontmatter is still `pre.frontmatter` for the renderer; a note whose first
+		// line is `---` keeps main's answer.
+		["guard-nrl166-r1-unrecognised-frontmatter-keeps-old-answer", "---\nk: v\nP <!-- QAQ -- QBQ\nQCQ --> QDQ\n---\nQEQ", "k: v P QDQ QEQ"],
 		["guard-nrl166-r1-footnote-under-comment", "P <!-- QAAQ\n> \t<div>\n[^1]: QBAQ --> QCAQ\n- QDAQ -->", "P QCAQ QDAQ -->", { skipCodeBlocks: false }],
 		// Class B: `- > \t` opens indented code inside the item's quote, so its
 		// `<!--` is code. A `%%` line below ends the list uncertainly and the walker
@@ -7558,6 +7562,28 @@ console.log("a max-budgeted list dedent can over-dedent past a line's real inden
 		"NRL-162 Phase 2 replays each line's chain against the final levelP, not the max",
 		SRC162.includes("for (const id of chainIds[k]!) view = view.slice(listDedentCut(view, levelP.get(id)!));"),
 	);
+}
+
+console.log("NRL-166 fix round 1: the new per-line gates stay linear");
+{
+	// The fix round's gates run on EVERY line of every note, so a backtracking
+	// pattern there is a hang in Obsidian. Measured on a49b94d (before this guard):
+	// LEADING_CALLOUT_MARKER's `[ \t]+[ \t>]*` was exponential on `-  -  -  ...`
+	// (382 ms at 24 markers, doubling per marker), and the footnote-shape regex
+	// was quadratic on a callout line of many `[^` (7.7 s at 80,000). Generous
+	// bounds: each must finish far under one second. The plain `"[^".repeat(n)`
+	// note is a separate, pre-existing quadratic on main and is NOT tested here.
+	const timed: Array<[string, string]> = [
+		["many-list-markers-before-callout", "- > a <!-- b\n" + "-  ".repeat(28) + "x\n> c -->"],
+		["many-footnote-openers-in-callout", "- > a <!-- b\n> [!tip] " + "[^".repeat(80000) + "\n> c -->"],
+		["long-callout-label", "- > a <!-- b\n> [!" + "a".repeat(80000) + "\n> c -->"],
+	];
+	for (const [id, src] of timed) {
+		const t0 = performance.now();
+		extractChunks(src, OPTS);
+		const ms = performance.now() - t0;
+		check(`NRL-166 ${id}: extractChunks finishes under 1000 ms`, ms < 1000, `${ms.toFixed(0)} ms`);
+	}
 }
 
 console.log("");

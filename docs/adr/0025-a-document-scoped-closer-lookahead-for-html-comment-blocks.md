@@ -2579,7 +2579,27 @@ by `(`, `[` or `:`) and every `<!--`.
   opener line's text before and after the `<!--`.
 - `RendererLeads.refine`: a note holding any footnote-definition shape (`[^x]:`) or
   any inline-construct shape gets neither walker refinement, and so none of this
-  round's changes. In such a note `main`'s answer stands.
+  round's changes. In such a note `main`'s answer stands. The same applies to a
+  note whose first line is `---`. Round 3 (82, PASS) noted that a `---` block
+  `extractChunks` does not take as frontmatter is still `pre.frontmatter` for the
+  renderer, while the walker reads it as paragraph text.
+
+**Linear by construction.** These gates run on every line of every note, so a
+backtracking pattern in them is a hang. A background security review caught two
+on `a49b94d`, both measured with the bundled `extractChunks`:
+- `LEADING_CALLOUT_MARKER`'s `[ \t]+[ \t>]*` was EXPONENTIAL on `-  -  -  ...`:
+  382 ms at 24 markers, doubling per marker, and 17.8 s in the 28-marker guard.
+- The footnote-shape regex `/\[\^[^\]]*\]:/` was quadratic on a callout line of
+  many `[^`: 7.7 s at 80,000.
+
+The marker step is now `[ \t][ \t>]*`, which describes the same strings. A check
+of all 8.1 million strings up to length 6 over the relevant alphabet found 0
+differences. The footnote test is now `footnoteShaped`, an indexOf scan that
+accepts exactly the old regex's language. Three timing rows bound
+`extractChunks` at 1,000 ms; two of them were RED on `a49b94d`. The orchestrator's
+probe now runs in 2 to 98 ms at n = 80,000, except the markers note, which takes
+722 ms against `main`'s 683 ms. A plain note of `"[^".repeat(n)` is a separate,
+pre-existing quadratic on `main` and is not this round's.
 
 Sixteen guard rows pin the critique inputs. Each is RED on the commit it blocked
 (or on an arm without its gate) and green now. With the walker refinements off in
@@ -2589,13 +2609,13 @@ and they are unchanged from `main`.
 **Adversarial fuzz on the final tree** (the reviewers' `fz.cjs`, masks ALL and DEF,
 with 0 lockstep failures in both runs):
 - Base line set, seeds 1 to 8 at 8,000 notes each (64,000 notes): **0 newly
-  disclosing** against `e2afbfe` and `44a037a`. 6,060 lost cells are closed. 9 cells
+  disclosing** against `e2afbfe` and `44a037a`. 6,051 lost cells are closed. 9 cells
   are newly lost against both bases, and 20 against `e2afbfe` only, which
   `44a037a` already lost.
 - Extended set adding the critique's constructs, seeds 501 to 512 and 601 to 608 at
   6,000 notes each (120,000 notes): **0 newly disclosing**. 0 cells are newly lost
   against both bases, and 211 against `e2afbfe` only, which `44a037a` already lost.
-  4,877 lost cells are closed.
+  4,845 lost cells are closed.
 
 The census table above was re-run on this final tree. The fuzz row now closes 166
 lost cells and F3 closes 18,676. Those are the costs of the wider gates; the newly

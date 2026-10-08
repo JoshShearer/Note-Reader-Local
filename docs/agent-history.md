@@ -1988,6 +1988,12 @@ exactly the accepted 90 (fuzz 34 + F3 56), the same rows as `44a037a`. Against
   the paragraph above, on the line, or in the body up to the OLD bound's `-->`
   withholds both term-2 refinements. Any `[^x]:` or inline-construct shape anywhere
   in the note turns the walker refinements off.
+- ReDoS trap: these gates run on every line. `[ \t]+[ \t>]*` inside a repeated
+  group was exponential (17.8 s on 28 list markers), and `/\[\^[^\]]*\]:/` was
+  quadratic. Write any new per-line pattern so adjacent quantifiers cannot share
+  characters, and keep the timing rows in `tests/extract.test.ts`.
+- A note whose first line is `---` also takes no refinements, because of
+  unrecognised frontmatter (critique round 3).
 - Lesson: an old over-hiding comment can be covering text that a DIFFERENT
   construct hides. Before un-hiding anything, run an adversarial fuzz that
   includes inline HTML, labels, titles, code spans and footnotes. On the final

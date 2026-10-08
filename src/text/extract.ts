@@ -626,8 +626,13 @@ const INLINE_CONSTRUCT_MAY_HOLD = /<|`|\[|\]\(/;
  * A callout marker at the start of a line, behind its quote and list prefix:
  * `[!x]` there is no label, so it is taken out before the test above. Not when a
  * `(`, `[` or `:` follows it, which would make it a link or a definition.
+ *
+ * Each list-marker step is ONE space or tab and then `[ \t>]*`, never `[ \t]+`
+ * then `[ \t>]*`: the two describe the same strings, but the second lets every
+ * run of spaces split two ways, which is exponential on `-  -  -  ...` (measured
+ * 382 ms at 24 markers, doubling per marker) and this runs on every line.
  */
-const LEADING_CALLOUT_MARKER = /^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+[ \t>]*)*\[![^\]]*\][+-]?(?![([:])/;
+const LEADING_CALLOUT_MARKER = /^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t][ \t>]*)*\[![^\]]*\][+-]?(?![([:])/;
 /**
  * `INLINE_CONSTRUCT_MAY_HOLD` on `text`, a whole line or a line's leading part,
  * with a leading callout marker and every `<!--` taken out first. A `<!--` opens
@@ -4569,14 +4574,32 @@ interface RendererLeads {
 	 * holding any inline-construct shape (`inlineConstructMayHold`): a comment the
 	 * refinements correctly drop could be covering text that a tag attribute, a
 	 * link title or an image label hides (`> > a` / `>\t[r]: "<!-- b` / `![c` /
-	 * `d -->](a.png)` spoke c and d, the embed's `alt`). The old answer stands.
+	 * `d -->](a.png)` spoke c and d, the embed's `alt`). And false for a note
+	 * whose first line is `---`: a block extractChunks does not take as
+	 * frontmatter is still the renderer's `pre.frontmatter` there, which the walker
+	 * reads as paragraph text (/critique round 3, Q1). The old answer stands.
 	 */
 	refine: boolean;
 	pending: { frame: LeadFrameLine[]; depth: number }[];
 }
 
-/** Anything shaped like a footnote definition's label, anywhere on a line. */
-const FOOTNOTE_SHAPED = /\[\^[^\]]*\]:/;
+/**
+ * Anything shaped like a footnote definition's label, anywhere on a line: a `[^`
+ * whose first `]` after it is followed by `:` (the language of
+ * `/\[\^[^\]]*\]:/`). A scan rather than that regex, which backtracks
+ * quadratically on a line of many `[^` with no `]` and runs on every line of
+ * every note here. Every `[^` before the same first `]` shares its answer, so
+ * the scan resumes after that `]` and stays linear.
+ */
+function footnoteShaped(line: string): boolean {
+	for (let i = line.indexOf("[^"); i !== -1; ) {
+		const close = line.indexOf("]", i + 2);
+		if (close === -1) return false;
+		if (line.charCodeAt(close + 1) === 58) return true;
+		i = line.indexOf("[^", close + 1);
+	}
+	return false;
+}
 
 function startsIndentedCode(view: string): boolean {
 	return view.startsWith("\t") || view.startsWith("    ");
@@ -5086,7 +5109,7 @@ function rendererLeads(lines: readonly string[], from: number): RendererLeads {
 		closerInPara: new Array<boolean>(lines.length).fill(false),
 		unsureFresh: new Array<boolean>(lines.length).fill(false),
 		para: new Array<boolean>(lines.length).fill(false),
-		refine: !lines.some((l) => FOOTNOTE_SHAPED.test(l) || inlineConstructMayHold(l)),
+		refine: !/^---[ \t]*\r?$/.test(lines[0] ?? "") && !lines.some((l) => footnoteShaped(l) || inlineConstructMayHold(l)),
 		pending: [],
 	};
 	const frame: LeadFrameLine[] = [];
