@@ -1928,7 +1928,11 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// Lazy and partially lazy lines, NBSP and lone CR (/critique 1, the census): RED
 		// on r1, d1 or d2 as recorded in ADR 0025; the NBSP-led lazy line was a
 		// round-1 leak against base that Verify's corpora never generated.
-		["guard-nrl119-r2-partially-lazy-tab-equals", "> > A ![ZXZ\n>\t=\n> > ZYZ](zdestz.png) ZBZ.", "A ZXZ = ZYZ ZBZ."],
+		// NRL-166 fix round 1: the tab-led `>\t=` ENDS the inner quote as indented
+		// code of the outer one (the walker now records it as fresh code), so the
+		// label never closes and the renderer displays `](zdestz.png)` as text:
+		// `A ![ZXZ = ZYZ](zdestz.png) ZBZ.`. Expectation moved to that text.
+		["guard-nrl119-r2-partially-lazy-tab-equals", "> > A ![ZXZ\n>\t=\n> > ZYZ](zdestz.png) ZBZ.", "A [ZXZ = ZYZ](zdestz.png) ZBZ."],
 		["guard-nrl119-r2-lazy-space-tab-star-percent-closer", "> A ![ZXZ %%\n \t*\n>\t%% ZYZ](zdestz.png) ZBZ.", "A ZXZ %% * %% ZYZ ZBZ."],
 		["guard-nrl119-r2-lazy-space-tab-seven-dot-is-text", "> A [ZXZ\n \t7.\n> ZYZ](zdestz.png) ZBZ.", "A ZXZ 7. ZYZ ZBZ."],
 		["guard-nrl119-r2-nbsp-led-lazy-line-is-text", "> > ZPZ A ![xx\n\u00a0>*\n> > yy](zdestz.png) B.", "ZPZ A xx * yy B."],
@@ -1958,7 +1962,9 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// 9522c11, whose tab-eating peel stood in for the item's de-indent).
 		["pin-nrl119-r2-quoted-code-opener-residual", ">\tA ![ZXZ\n>\tZYZ](zdestz.png) ZBZ.", "A [ZXZ ZYZ](zdestz.png) ZBZ."],
 		["pin-nrl119-r2-quoted-code-opener-after-blank-quote-line-residual", ">\n>\tA [ZXZ\n>\tZYZ](zdestz.png) ZBZ.", "A [ZXZ ZYZ](zdestz.png) ZBZ."],
-		["pin-nrl119-r2-partially-lazy-indented-line-residual", "> > A [ZXZ\n>\tfoo\n> > ZYZ](zdestz.png) ZBZ.", "A ZXZ foo ZYZ ZBZ."],
+		// CLOSED by NRL-166 fix round 1 (the walker records `>\tfoo` as fresh code
+		// of the outer quote): now the renderer's `A [ZXZ foo ZYZ](zdestz.png) ZBZ.`.
+		["pin-nrl119-r2-partially-lazy-indented-line-residual", "> > A [ZXZ\n>\tfoo\n> > ZYZ](zdestz.png) ZBZ.", "A [ZXZ foo ZYZ](zdestz.png) ZBZ."],
 		["pin-nrl119-r2-lazy-space-tab-star-residual", "> A [ZXZ\n \t*\n> ZYZ](zdestz.png) ZBZ.", "A ZXZ * ZYZ ZBZ."],
 		["pin-nrl119-r2-quoted-list-tab-star-residual", "> - A [ZXZ\n>\t*\n>  ZYZ](zdestz.png) ZBZ.", "A ZXZ * ZYZ ZBZ."],
 		["pin-nrl119-r2-quoted-list-five-space-dash-residual", "> - A [ZXZ\n>     -\n>   ZYZ](zdestz.png) ZBZ.", "A ZXZ - ZYZ ZBZ."],
@@ -2093,7 +2099,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// opener and closer makes the construct literal and the renderer shows
 		// everything. We detect dash-ONLY lines. Declared out of scope by NRL-111's
 		// own PR before Verify measured it.
-		["tripwire-nrl111-f2-midline-dashes-between-opener-and-closer", "A <!--\nmore\n===\nHIDDENE\nB <!--\nmore2\n--> t.", "A t."],
+		// NRL-166 fix round 1: the first `<!--`'s body holds the second `<!--`, so
+		// it is no inline comment; the second one is, and hides only `more2`. Now
+		// the renderer's text, `A <!-- more === HIDDENE B t.`.
+		["tripwire-nrl111-f2-midline-dashes-between-opener-and-closer", "A <!--\nmore\n===\nHIDDENE\nB <!--\nmore2\n--> t.", "A <!-- more === HIDDENE B t."],
 		// F3, 3,072 cells over 6 of 21 shapes (room 3,072, saturated):
 		// `TERM2_SETEXT_EQ` is anchored at column 0 and the renderer peels the
 		// container prefix first, so an `=` run inside a list item or an ordered item
@@ -2165,7 +2174,11 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// skipTables positions.
 		["guard-nrl95-table-row-closer", "Prose <!--\n| a |\nHIDDENT\n--> t.", "Prose t."],
 		["guard-nrl95-table-row-closer-spoken", "Prose <!--\n| a |\nHIDDENT\n--> t.", "Prose t.", { skipTables: false }],
-		["guard-nrl95-real-gfm-table-closer", "Prose <!--\n| a | b |\n| --- | --- |\nHIDDENT\n--> t.", "Prose t."],
+		// NRL-166 fix round 1: `| --- | --- |` puts `--` in the comment's body, so the
+		// renderer has no comment and displays HIDDENT (`Prose <!-- | a | b | |
+		// --- | --- | HIDDENT --> t.`). The table-shaped lines stay silent under
+		// skipTables, a pre-existing loss.
+		["guard-nrl95-real-gfm-table-closer", "Prose <!--\n| a | b |\n| --- | --- |\nHIDDENT\n--> t.", "Prose <!-- HIDDENT --> t."],
 		// THE LIST HALF, corrected at ship review. `LIST_BULLET` is REPLACED by
 		// `TERM2_LIST`, not dropped, because it is right for bullets and wrong for
 		// ordered markers, and the earlier "a list re-offers its lines as one
@@ -2941,6 +2954,50 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// (iii) An unreferenced footnote definition the renderer hides (NRL-163).
 		// Control, mask ALL: the unquoted twin; mask DEF: the `-->` defused.
 		["pin-nrl166-min-unreferenced-footnote-spoken", ">\t     <!--\n [^1]:  QBQ -->", "<!-- : QBQ -->"],
+		// NRL-166 fix round 1: Verify's own F1-structure census (199,584 shapes)
+		// found three classes NEWLY LOST against main e2afbfe once the callout line
+		// is read as lazy, each a pre-existing main loss on its de-callout twin.
+		// Every row is the executed renderer's visible text (harness 1.13.7), and
+		// every pin is RED on 44a037a (fix round 0).
+		// Class A: an INLINE comment may not hold `--` (CommonMark's comment rule,
+		// module 4839), so a term-2 opener whose body up to its `-->` holds one is
+		// literal text and the next `<!--` is the comment.
+		["pin-nrl166-r1-a-callout-body-holds-opener", "- > Plain QAQ <!-- QXQ\n> [!tip] QBQ <!--\n> QCQ -->", "Plain QAQ <!-- QXQ QBQ"],
+		["pin-nrl166-r1-a-decallout-twin", "- > Plain QAQ <!-- QXQ\n> Tip QBQ <!--\n> QCQ -->", "Plain QAQ <!-- QXQ Tip QBQ"],
+		["pin-nrl166-r1-a-plain-paragraph", "Plain QAQ <!-- QXQ\nQBQ <!--\nQCQ -->\nTAIL QDQ", "Plain QAQ <!-- QXQ QBQ TAIL QDQ"],
+		["pin-nrl166-r1-a-quoted-dash-pair", "> P <!-- QXQ\n> -- QBQ --> Z", "P <!-- QXQ -- QBQ --> Z"],
+		["pin-nrl166-r1-a-body-ends-in-dash", "P <!-- QXQ\nQBQ ---> Z", "P <!-- QXQ QBQ ---> Z"],
+		["pin-nrl166-r1-a-abrupt-opener", "P <!--> QXQ\nQBQ --> Z", "P <!--> QXQ QBQ --> Z"],
+		// Valid bodies stay hidden: a dash at a line end is not `--` across the
+		// line break, and `->` after the line break is not at the body's start.
+		// A line-start `<!--` is an HTML block, where `--` does not matter.
+		["guard-nrl166-r1-a-dash-before-break-hidden", "P <!-- QXQ -\n--> Z", "P Z"],
+		["guard-nrl166-r1-a-arrow-after-break-hidden", "P <!--\n-> QXQ --> Z", "P Z"],
+		["guard-nrl166-r1-a-block-comment-ignores-dashes", "<!-- QXQ\n-- QBQ -->\nZ", "Z"],
+		// Class C: a lazy line led by indented code ENDS a quote (`indentedCode` is
+		// in `interruptBlockquote`), so `>\t-->` after a deeper quote's paragraph is a
+		// code block of the outer quote and closes nothing. We speak that code line
+		// as prose, as main does: displayed text either way.
+		["pin-nrl166-r1-c-item-quote-callout-code-closer", "- >> Plain QAQ <!-- QXQ\n> [!x]\n>\t--> QCQ", "Plain QAQ <!-- QXQ --> QCQ"],
+		["pin-nrl166-r1-c-nested-callout-code-closer", "- > > Plain QAQ <!-- QXQ\n> [!tip] QBQ\n>\t--> QCQ", "Plain QAQ <!-- QXQ QBQ --> QCQ"],
+		["pin-nrl166-r1-c-decallout-twin", "> > P <!-- QXQ\n> QBQ\n>\t--> QCQ", "P <!-- QXQ QBQ --> QCQ"],
+		// The same `>\t-->` at the paragraph's own depth is a lazy line, and a tab
+		// under a list item's quote is the item's indent: both still close.
+		["guard-nrl166-r1-c-same-depth-tab-closer-hidden", "> P <!-- QXQ\n>\t--> Z", "P Z"],
+		["guard-nrl166-r1-c-item-indent-tab-closer-hidden", "- > P <!-- QXQ\n\t--> Z", "P Z"],
+		["guard-nrl166-r1-c-three-columns-closer-hidden", "> > P <!-- QXQ\n>    --> Z", "P Z"],
+		// The code-line stop is for a PARAGRAPH opener only. Here the trailing
+		// `<!--` follows a raw HTML line, so it is a browser comment that runs on
+		// through the rendered code block and hides QBQ and QCQ. RED on an arm that
+		// applied the stop to every opener (minimised from the seed-31337 fuzz).
+		["guard-nrl166-r1-c-browser-comment-crosses-code-line", "1. ><!-- y --> QAQ <!--\n>>> \tQBQ\n>> QCQ\n> >\t --> QDQ", "QAQ QDQ"],
+		// Class B: `- > \t` opens indented code inside the item's quote, so its
+		// `<!--` is code. A `%%` line below ends the list uncertainly and the walker
+		// skipped the whole last item; its FIRST line does not depend on where the
+		// item ends. We speak the code line as prose, as main does.
+		["pin-nrl166-r1-b-item-quote-code-opener-then-pct", "- > \tPlain QAQ <!-- QXQ\n> [!tip] QBQ -->\n%%", "Plain QAQ <!-- QXQ QBQ -->"],
+		["pin-nrl166-r1-b-item-quote-code-opener-then-pct-tail", "- > \tPlain QAQ <!-- QXQ\n> [!tip] QBQ -->\n%%\nTAIL QDQ", "Plain QAQ <!-- QXQ QBQ -->"],
+		["pin-nrl166-r1-b-decallout-twin", "- > \tPlain QAQ <!-- QXQ\n> Tip QBQ -->\n%%", "Plain QAQ <!-- QXQ Tip QBQ -->"],
 		// F3. Three UNMASKING classes Verify's 808,704-shape structured census found
 		// NEWLY LOST against base and no ADR row named. Each is fail-closed (we hide
 		// text the renderer displays), each was hidden on base only because the wide
@@ -2953,10 +3010,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl114-f3a-vt-led-html-opener-unmasked", "> Plain ZPZ prose\n>\v<!-- ZAZ\n>\t===\n> ZBZ\nTAIL ZDZ", "Plain ZPZ prose"],
 		["guard-nrl114-f3a-control", "> Plain ZPZ prose\n> \v<!-- ZAZ\n> \t===\n> ZBZ\nTAIL ZDZ", "Plain ZPZ prose"],
 		// (b) an inline comment may not contain `--`, so `<!-- ZAZ` / `---` / `ZBZ -->`
-		// in one paragraph is NOT a comment for the renderer; term 2 does not check
-		// the body (64 cells).
-		["pin-nrl114-f3b-comment-body-holding-dashes-unmasked", "> Plain ZPZ prose\n>\t<!-- ZAZ\n>\t---\n> ZBZ -->\nTAIL ZDZ", "Plain ZPZ prose TAIL ZDZ"],
-		["guard-nrl114-f3b-control", "> Plain ZPZ prose\n> \t<!-- ZAZ\n> \t---\n> ZBZ -->\nTAIL ZDZ", "Plain ZPZ prose TAIL ZDZ"],
+		// in one paragraph is NOT a comment for the renderer (64 cells). CLOSED by
+		// NRL-166 fix round 1, which checks the body on lines the walker is sure
+		// are paragraph text: both rows now speak the renderer's text (its `---`
+		// is a lazy line; we drop the dashes).
+		["pin-nrl114-f3b-comment-body-holding-dashes-unmasked", "> Plain ZPZ prose\n>\t<!-- ZAZ\n>\t---\n> ZBZ -->\nTAIL ZDZ", "Plain ZPZ prose <!-- ZAZ ZBZ --> TAIL ZDZ"],
+		["guard-nrl114-f3b-control", "> Plain ZPZ prose\n> \t<!-- ZAZ\n> \t---\n> ZBZ -->\nTAIL ZDZ", "Plain ZPZ prose <!-- ZAZ ZBZ --> TAIL ZDZ"],
 		// (c) the shared `FENCE` is `^\s*`, so a tab-led ``` is read as a fence where
 		// module 134 makes it indented code (208 cells).
 		// NRL-166 port (2026-10-08): CLOSED on main by NRL-156 (#214), which caps
@@ -4418,6 +4477,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["fence-drop-list-item", "- ~~~ QFQ\n- after ZAZ"],
 		["fence-drop-callout-title", "> [!note] \t%% QBQ\n1. >    ~~~ QDQ\nAfter ZAZ.", { skipCodeBlocks: false }],
 		["fence-drop-callout-title-tab", "-     <!--\n> [!note]\t~~~   QFQ -->\nAfter ZAZ.", { skipCodeBlocks: false }],
+		// Fix round 1: a literal `<!--` now spoken mid-paragraph, the code-line
+		// stop, and the first line of an uncertainly-ended item.
+		["r1-a-literal-opener-then-comment", "- > Plain QAQ <!-- QXQ\n> [!tip] QBQ <!--\n> QCQ -->\nAfter ZAZ."],
+		["r1-a-dash-pair-body", "> P <!-- QXQ\n> -- QBQ --> Z"],
+		["r1-c-code-line-stop", "- >> Plain QAQ <!-- QXQ\n> [!x]\n>\t--> QCQ", { skipCodeBlocks: false }],
+		["r1-b-item-quote-code-opener", "- > \tPlain QAQ <!-- QXQ\n> [!tip] QBQ -->\n%%"],
 	];
 	for (const [id, src, overrides] of nrl166Lockstep) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -7375,7 +7440,10 @@ console.log("a max-budgeted list dedent can over-dedent past a line's real inden
 		// ZT1Z`), a PRE-EXISTING residual of that other predicate, and it
 		// stays wrong in exactly the same way on the fix - 0 cells moved,
 		// confirming the two predicates stayed structurally separate.
-		["html-twin-control", "- item ZA0Z\n x ZM1Z\n      <!-- ZH1Z\nZH2Z\n     <!-- ZH3Z\nZH4Z\n--> ZT1Z", "item ZA0Z x ZM1Z ZT1Z"],
+		// NRL-166 fix round 1 closed that residual from the comment side: the first
+		// `<!--`'s body holds the second, so only the second is a comment, and the
+		// output is now the renderer's own text.
+		["html-twin-control", "- item ZA0Z\n x ZM1Z\n      <!-- ZH1Z\nZH2Z\n     <!-- ZH3Z\nZH4Z\n--> ZT1Z", "item ZA0Z x ZM1Z <!-- ZH1Z ZH2Z ZT1Z"],
 	];
 	for (const [id, src, expected] of guards) {
 		const spoken = extractChunks(src, OPTS)

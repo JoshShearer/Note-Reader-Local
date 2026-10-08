@@ -2149,7 +2149,7 @@ new 180-cell class (e) that moved at `8d2b3f2` and is byte-identical on `main`
 | class | cells | why the renderer displays it | pinned (red on base) / control (green on base) |
 |---|---|---|---|
 | (a) a VT- or NBSP-led `<!--` after `>`, then `>\t===`, `>\t=`, `>\t---` or `>\t-` | 2,464 | module 8776 skips spaces and tabs only, so this is no HTML block; our term 1's `.trim()` takes the lead | `pin-nrl114-f3a-vt-led-html-opener-unmasked` / `guard-nrl114-f3a-control` |
-| (b) a tab- or tab-space-led lazy `<!--`, then `>\t---`, then `-->` | 64 | an inline comment may not contain `--`, so this is no comment; term 2 does not check the body | `pin-nrl114-f3b-comment-body-holding-dashes-unmasked` / `guard-nrl114-f3b-control` |
+| (b) a tab- or tab-space-led lazy `<!--`, then `>\t---`, then `-->` | 64 (**0 after NRL-166 fix round 1**, which checks the body) | an inline comment may not contain `--`, so this is no comment; term 2 did not check the body | `pin-nrl114-f3b-comment-body-holding-dashes-unmasked` / `guard-nrl114-f3b-control` |
 | (c) a `%%` after `>` + tab, NBSP or VT, then an UNQUOTED `\t```` or ` \t```` | 208 | a tab-led ```` ``` ```` is module 134 indented code; the shared `FENCE` is `^\s*` | `pin-nrl114-f3c-tab-led-fence-unmasked` / `guard-nrl114-f3c-control` |
 
 Base hid each only because its wide peel ate the tab in the line under the opener.
@@ -2458,6 +2458,114 @@ The generator copies are kept in the NRL-166 run's scratch directory (`gens/`):
 `mins.json`. They are temporary.
 
 **NOT VERIFIED IN OBSIDIAN.** Everything above was run in bare Node against the 1.13.7
+reading-view renderer. Live Preview was not run, and nothing was deployed. R-M08 is
+NOT met.
+
+### NRL-166 fix round 1 (2026-10-08): three loss classes F1's lazy reading exposed, closed in the model
+
+PR #219 (the port above) merged at `44a037a` after its independent Verify had failed
+it, so this round ships as a follow-up PR on top. Verify's own F1-structure generator
+(`own-gen.cjs`: 12 item-quote prefixes x 7 opener lines x 8 callout prefixes x 9
+callout bodies x 11 third lines x 3 tails = 199,584 shapes, masks ALL and DEF,
+1,481,472 sentinel-cells) found **3,609 cells newly lost against `e2afbfe`** and 0
+newly disclosing. On every one of them `main` loses the same sentinel on the
+de-callout twin (`[!tip]` written as `Tip`). So these were `main`'s own loss
+mechanisms. The port's correct lazy reading of the callout line reached them,
+where `main` had been right only because it stopped at the callout line. Three
+classes, each closed by fixing the model on both the callout shape and its twin:
+
+- **(A) The comment body holds `--` (2,772 cells).** This is class (b) above, through
+  the F1 path. `- > Plain QAQ <!-- QXQ` / `> [!tip] QBQ <!--` / `> QCQ -->` renders
+  `Plain QAQ <!-- QXQ [!tip] QBQ`. Module 4839 takes an inline comment only when its
+  body, up to the first `-->`, does not start with `>` or `->`, does not hold `--`
+  and does not end with `-`. Measured with the harness: `P <!-- a -- b --> Z` and
+  `P <!-- a` / `-- b --> Z` display everything, `P <!-- a -` / `--> Z` and `P <!--` /
+  `-> a --> Z` hide the body, and `P <!--> a` / `b --> Z` is literal. Term 2 now
+  applies that rule to an opener on a line the walker is SURE is paragraph text.
+  `rendererLeads` gains `para`, set on a paragraph's first line and its
+  continuations when the paragraph's first line is trusted, and cleared everywhere
+  else. The opener line's share of the body is `inlineCommentBodyStartOk`. The later
+  lines' share is `commentBodyOkAheadOf`, one backward pass on the same bound as
+  `htmlClosesLaterAt`. An opener that fails is literal, and the scan goes on, so the
+  next `<!--` can be the comment. A line-start `<!--` that is not on a sure paragraph
+  line keeps hiding: it is an HTML block, whose browser comment ignores the rule.
+  An arm that checked every line spoke the body of an HTML node inside a footnote
+  (`> [^1]: foot ZFZ` / `>\t<!-- ZCZ` / `> ---`). The test suite caught it, and the
+  `para` gate is the fix.
+- **(C) A closer inside indented code after a quote-depth drop (540 cells, not
+  named before).** `- >> Plain QAQ <!-- QXQ` / `> [!x]` / `>\t--> QCQ` renders
+  `--> QCQ` as an indented-code block of the outer quote. `indentedCode` is in
+  module 6234's `interruptBlockquote`, so a lazy line led by indented code ends the
+  inner quote. Two changes close it. First, `walkLeadFrame` now takes the line that
+  ended a quote by `startsIndentedCode` as a FRESH block rather than `unknown`. The
+  other interrupters stay `unknown`, because `mayInterruptQuote` over-approximates
+  them. Second, a line `htmlLeadCode` marks becomes a term-2 stop for an opener on a
+  sure paragraph line. That gate is load-bearing too: an arm that stopped every
+  opener at such a line spoke QBQ and QCQ in fuzz note n376
+  (`1. ><!-- y --> QAQ <!--` / `>>> \tQBQ` / `>> QCQ` / `> >\t --> QDQ`). There the
+  trailing `<!--` follows a raw HTML line, so it is a BROWSER comment that runs
+  through the rendered code block (`guard-nrl166-r1-c-browser-comment-crosses-code-line`).
+- **(B) A tab-led item-quote opener, then a `%%` line (297 cells, not named before).**
+  `- > \tPlain QAQ <!-- QXQ` / `> [!tip] QBQ -->` / `%%` renders the first line as
+  indented code inside the item's quote and `[!tip] QBQ -->` as text. Without the
+  `%%` line, the fix was already right. With it, `walkLeadList` saw the list end at
+  a line that MAY interrupt it, and it skipped the whole last item. So no code mask
+  reached the opener, and term 2 hid `QBQ -->`. Now the last item's FIRST line is
+  still walked. `p` reaches only the lines after the marker line, and a frame's
+  first line is a fresh block whose record nothing below it changes.
+
+**Rows that moved, all to the renderer's text.** Each changed row is RED on `44a037a`:
+19 failures, listed in the run's scratch `red-on-44a037a.txt`. Twelve are new
+`pin-nrl166-r1-` rows. Seven new `guard-nrl166-r1-` rows are green on both; the
+browser-comment guard is RED on an arm without the `para` gate on the stop. Four
+new lockstep rows check the new spoken spans. Seven existing rows moved:
+`pin-nrl114-f3b-...` and its control (class (b), now closed);
+`tripwire-nrl111-f2-midline-dashes-...`; `guard-nrl95-real-gfm-table-closer` (its
+`| --- |` puts `--` in the body); NRL-162's `html-twin-control`, a recorded
+pre-existing residual that is now the renderer's text; and NRL-119's
+`guard-...-partially-lazy-tab-equals` and `pin-...-partially-lazy-indented-line-residual`.
+The last two speak `](zdestz.png)`, which the renderer displays as text, because
+the label never closes across the code line.
+
+**Censuses.** All are bare Node against the 1.13.7 harness, with Verify's
+classification. "fix" is this tree. `44a037a` is fix round 0, which is the port and
+is now `main`. sourceIndex was checked on every fix output with Verify's checker:
+**0 lockstep failures in every corpus**.
+
+| corpus | cells | vs `9132c3b` (newly disc / lost) | vs `e2afbfe` | vs `44a037a` | closed vs `e2afbfe` (disc / loss) |
+|---|---|---|---|---|---|
+| Verify's `own-gen.cjs`, 199,584 shapes x ALL, DEF | 1,481,472 | 0 / 0 | **0 / 0** (was 0 / 3,609) | 0 / 0 | 20,250 / 6,174 |
+| its de-callout twins (`[!tip]`, `[!tip]-`, `[!x]` -> `Tip`, deduplicated), 177,408 shapes | 1,311,936 | 0 / 0 | **0 / 0** | 0 / 0 | 0 / 11,466 |
+| F1 `callout-census.cjs`, 288 shapes x 2 | 2,496 | 0 / 0 | 0 / 0 | 0 / 0 | 832 / 0 |
+| F2 fuzz `SEED=31337 N=4000`, ALL, DEF, SKIPALL | 48,741 | 73 / 10 | **0 / 34** | 0 / 0 | 90 / 368 |
+| F3 `gen.cjs`, 808,704 shapes x 2 | 6,514,560 | 0 / 2,292 | **0 / 56** | 0 / 0 | 60 / 19,426 |
+
+- Against `e2afbfe`, the only newly lost cells are the 90 accepted at the port. The
+  fuzz's 34 cells (11 notes) and the F3's 56 cells (all one lone-CR shape) are the
+  same rows, id for id, as on `44a037a`.
+- Against `9132c3b`, the fuzz's 83 moved cells are the same set as on `44a037a`. F3's
+  2,292 newly lost cells are class (a) at 2,112 cells and class (e) at 180. All 704
+  groups in class (a) have the peel-equalising control. Class (e)'s 120 groups have
+  none and are byte-identical on `main`, as recorded above. Class (b) is 0.
+- `own-gen.cjs` still has 6,966 cells that BOTH `main` and the fix lose. These are
+  pre-existing and did not move. A 1-in-97 sample found 58 such cells: 34 with a
+  `<!--` on the first line, 10 with a `%%` there, and 14 with neither. They were not
+  classified further. One example is `- > Plain QAQ <!-- QXQ` / `>> QBQ -->` / `%%`
+  (QXQ).
+
+**What remains, and why.** The 9 class-(b) fuzz cells inside the accepted 34 (n618,
+n2147) stay lost. In both notes, a quote above the item ends at its `- >` line,
+`mayInterruptQuote`'s list term leaves the frame `unknown`, and the walker records
+nothing, so the `para` gate stays shut. That is the fail-closed side. Opening it
+means modelling module 6234's list interrupt exactly, which this round does not do.
+A same-line `<!-- a -- b -->` in a paragraph is still hidden where the renderer
+displays it. The body rule is applied only where term 2 opens a comment across
+lines. Both are losses, not disclosures.
+
+**Oracle.** This round's Verify found that the running Obsidian is 1.13.7. That
+matches the harness, so the 1.14.4 note in the port's section above is superseded.
+
+**NOT VERIFIED IN OBSIDIAN.** Everything here is bare Node against the 1.13.7
 reading-view renderer. Live Preview was not run, and nothing was deployed. R-M08 is
 NOT met.
 

@@ -1944,6 +1944,45 @@ Re-measured with Verify's three generators against both `9132c3b` and `e2afbfe`.
 
 NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
 
+**NRL-166 fix round 1 (2026-10-08): three loss classes behind F1, closed in the
+model, with evidence in ADR 0025's "NRL-166 fix round 1" section.** PR #219 merged
+at `44a037a` although Verify had failed it: Verify's own 199,584-shape F1-structure
+generator found 3,609 cells newly lost against `e2afbfe`. Every one was `main`'s own
+loss on the de-callout twin. This round ships as a follow-up PR on
+`fix/nrl-166-round2-callout-lazy-closer-losses`.
+- (A) A comment body that holds `--` (2,772 cells, class (b) through F1). Term 2 now
+  applies module 4839's inline-comment rule to an opener on a line the walker is sure
+  is paragraph text (`rendererLeads.para`). The rule: the body must not start with
+  `>` or `->`, hold `--`, or end with `-`. It is checked by
+  `inlineCommentBodyStartOk` on the opener line and `commentBodyOkAheadOf` on the
+  later lines.
+- (C) `>\t-->` after a deeper quote is indented code of the outer quote (540
+  cells). The walker now takes a quote ended by `startsIndentedCode` as fresh, and
+  an `htmlLeadCode` line is a term-2 stop for a sure-paragraph opener.
+- (B) A tab-led item-quote opener, then a `%%` line (297 cells). `walkLeadList` now
+  walks the first line of an uncertainly-ended last item.
+
+Result: 0 newly lost and 0 newly disclosing against `e2afbfe` on `own-gen.cjs` and
+its de-callout twins. On the three original generators, against `e2afbfe`, it is
+exactly the accepted 90 (fuzz 34 + F3 56), the same rows as `44a037a`. Against
+`44a037a` it is 0 / 0 everywhere. Lockstep failures: 0.
+
+**Traps.**
+- Both gates are load-bearing, and each was found by running real input, not by
+  reading. An arm without the `para` gate on the body check spoke a footnote's HTML
+  node (an existing NRL-114 row). An arm without it on the code-line stop spoke a
+  browser comment's body in fuzz note n376.
+- Never apply the body rule to a line-start `<!--` or to a line the walker did not
+  record.
+- The walker change also moves two NRL-119 rows, to the renderer's literal
+  `](zdestz.png)`. That is displayed text, not a destination disclosure.
+- Remaining: 9 class-(b) fuzz cells (n618, n2147) where the walker records nothing
+  after a quote ended by a list line, and the same-line `<!-- a -- b -->`, which is
+  still hidden. Both are losses.
+- Verify found that the running Obsidian is 1.13.7, matching the harness.
+
+NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
+
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
 commit: a `$$` display-math block between a label's opener and closer silenced the alt text

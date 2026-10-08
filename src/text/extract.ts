@@ -602,6 +602,19 @@ function opensHtmlBlock(view: string, at: number, closesLater: boolean, setextCo
 }
 
 /**
+ * The opener line's share of an inline comment's body rule (NRL-166 fix round
+ * 1): `after` is what follows `<!--` on that line, which holds no `-->`. The
+ * body may not start with `>` or `->` (so `<!-->` and `<!--->` are literal) and
+ * may not hold `--`. Measured with the 1.13.7 parser: `P <!-- a -- b --> Z` and
+ * `P <!-- a` / `-- b --> Z` display every character, `P <!-- a -` / `--> Z`
+ * and `P <!--` / `-> a --> Z` hide the body, since the line break sits between
+ * the dashes. The later lines' share is `commentBodyOkAheadOf` in extractChunks.
+ */
+function inlineCommentBodyStartOk(after: string): boolean {
+	return !/^-?>/.test(after) && !after.includes("--");
+}
+
+/**
  * Is this line an HTML BLOCK for the renderer, because its FIRST `<!--` starts
  * one (NRL-136)? Asked about a line whose first comment CLOSES on it and whose
  * later `<!--` does not, a shape neither of opensHtmlBlock's terms can see: the
@@ -908,6 +921,7 @@ function cleanLine(
 	htmlLeadIndented = false,
 	containerCodeLine = false,
 	htmlContext: HtmlContext = "none",
+	htmlBodyOkLater: boolean | undefined = undefined,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -1354,7 +1368,31 @@ function cleanLine(
 			// advances past them, mirroring the two-and-two above. Emitting only
 			// `<` would re-enter the loop at `!--` and risk another branch (the
 			// autolink or raw-HTML one) claiming it.
-			const blockOpens = htmlContext === "inline" ? htmlClosesLater : opensHtmlBlock(raw, i, htmlClosesLater, setextContent, htmlLeadIndented);
+			let blockOpens = htmlContext === "inline" ? htmlClosesLater : opensHtmlBlock(raw, i, htmlClosesLater, setextContent, htmlLeadIndented);
+			// On a line the walker is sure is paragraph text, a `<!--` is INLINE for
+			// the renderer: a paragraph line's content never starts a block, and a
+			// lazy line led by a tab or four columns never reaches module 8776. An
+			// inline comment exists only when its body - everything up to the first
+			// `-->` - neither starts with `>` or `->` nor holds `--` nor ends with
+			// `-` (CommonMark's comment rule, module 4839; NRL-166 fix round 1).
+			// Otherwise `<!--` is literal text and the scan goes on, so a LATER
+			// `<!--` may be the comment. This line's share of the body is checked
+			// here; the later lines' share arrives as `htmlBodyOkLater`, on the same
+			// bound as `htmlClosesLater`, and is undefined - nothing is checked -
+			// on any line the walker is not sure of. Only a comment that term 2
+			// says closes later is judged: one with no `-->` ahead keeps hiding.
+			if (
+				close === -1 &&
+				htmlComment &&
+				blockOpens &&
+				blockComments &&
+				!htmlRawLine &&
+				htmlClosesLater &&
+				htmlBodyOkLater !== undefined &&
+				!(htmlBodyOkLater && inlineCommentBodyStartOk(raw.slice(i + 4)))
+			) {
+				blockOpens = false;
+			}
 			if (close === -1 && htmlComment && blockComments && !blockOpens && !htmlRawLine) {
 				for (let k = 0; k < 4; k++) emit(raw[i + k]!, rawStart + i + k);
 				i += 4;
@@ -4473,6 +4511,14 @@ interface RendererLeads {
 	 * code mask must not trust it (`htmlLeadCode` in extractChunks).
 	 */
 	unsureFresh: boolean[];
+	/**
+	 * A line the walker put in a PARAGRAPH whose first line it trusts (NRL-166
+	 * fix round 1): that first line or one of its continuations. Its content
+	 * never starts a block, so a `<!--` on it is inline for the renderer, which
+	 * is what lets cleanLine apply the inline comment's body rule. False for
+	 * every line the walker did not record, or recorded as anything else.
+	 */
+	para: boolean[];
 	pending: { frame: LeadFrameLine[]; depth: number }[];
 }
 
@@ -4581,6 +4627,7 @@ function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: Rend
 		out.lead[id] = /^[ \t]*/.exec(view)![0];
 		out.cont[id] = cont;
 		out.nested[id] = nested;
+		out.para[id] = cont && paraTrusted;
 	};
 	let i = 0;
 	while (i < frame.length) {
@@ -4724,7 +4771,12 @@ function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: Rend
 		// thematicBreak, list, setextHeading, html, ..., paragraph.
 		if (RL_QUOTE.test(view)) {
 			i = walkLeadQuote(frame, i, depth, out);
-			state = i < frame.length && frame[i]!.view.trim() === "" ? "fresh" : "unknown";
+			// A line that ended the quote by starting indented code is a FRESH block
+			// here, not a maybe (NRL-166 fix round 1): `indentedCode` is in module
+			// 6234's `interruptBlockquote`, and `startsIndentedCode` is module 134's
+			// literal test on the same view `mayInterruptQuote` read. The other
+			// interrupters stay `unknown`, since that test over-approximates them.
+			state = i < frame.length && (frame[i]!.view.trim() === "" || startsIndentedCode(frame[i]!.view)) ? "fresh" : "unknown";
 			continue;
 		}
 		if (RL_HEADING.test(view) || RL_HR.test(view)) {
@@ -4764,6 +4816,7 @@ function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: Rend
 		state = "para";
 		paraStart = i;
 		paraTrusted = ambiguousAt !== i - 1;
+		out.para[frame[i]!.id] = paraTrusted;
 		i++;
 	}
 }
@@ -4927,9 +4980,17 @@ function walkLeadList(frame: readonly LeadFrameLine[], start: number, depth: num
 	 * at `$$`, used 3 and left a bare tab, claimed indented code and spoke the
 	 * comment body (implement-phase fuzz). So the last item is not walked then,
 	 * and its lines keep the old answer.
+	 *
+	 * Except its FIRST line (NRL-166 fix round 1). `p` reaches only the lines
+	 * after the marker line, whose content is the marker's own remainder, and a
+	 * frame's first line is a fresh block whose record nothing below it changes.
+	 * Skipping it left `- > \t<!-- QXQ` / `> QBQ -->` / `%%` with no record, so
+	 * the code mask never saw that the `<!--` is indented code in the item's
+	 * quote, and the comment hid `QBQ -->`, which the renderer displays.
 	 */
 	const walkable = state === "unknown" ? items.slice(0, -1) : items;
 	if (depth < RL_MAX_DEPTH) for (const it of walkable) walkLeadItem(frame, it.lines, depth, out);
+	if (depth < RL_MAX_DEPTH && state === "unknown" && items.length > 0) walkLeadItem(frame, [items[items.length - 1]!.lines[0]!], depth, out);
 	return { end, state };
 }
 
@@ -4968,6 +5029,7 @@ function rendererLeads(lines: readonly string[], from: number): RendererLeads {
 		nested: new Array<boolean>(lines.length).fill(false),
 		closerInPara: new Array<boolean>(lines.length).fill(false),
 		unsureFresh: new Array<boolean>(lines.length).fill(false),
+		para: new Array<boolean>(lines.length).fill(false),
 		pending: [],
 	};
 	const frame: LeadFrameLine[] = [];
@@ -5265,6 +5327,37 @@ export function extractChunks(
 	};
 	const htmlCloserAhead = closerAheadOf(term2Stop);
 	const htmlCloserAheadRaw = closerAheadOf(term2StopRaw);
+	// For each line, whether the lines AFTER it, up to the first `-->` inside the
+	// same term-2 bound, keep an inline comment's body valid: none of them holds
+	// `--`, and the closing line does not put `-` right before its `-->`
+	// (NRL-166 fix round 1; module 4839's rule, see `inlineCommentBodyStartOk`).
+	// Raw lines are read, prefix and all. A container prefix holds no `-`, and a
+	// list marker starts an item, which ends the paragraph and is a stop, so a
+	// `--` here is a `--` in the renderer's paragraph text whenever the
+	// renderer's closer is this one. When the bound runs past the renderer's
+	// paragraph, the renderer has no closer in it and displays the text, so a
+	// "not valid" here cannot hide what it shows nor show what it hides. A line
+	// break joins lines, so dashes either side of one never pair.
+	const commentBodyOkAheadOf = (stops: readonly boolean[]): boolean[] => {
+		const out: boolean[] = new Array<boolean>(lines.length).fill(true);
+		let ok = true;
+		for (let k = lines.length - 1; k >= 0; k--) {
+			out[k] = ok;
+			if (stops[k]!) {
+				ok = true;
+				continue;
+			}
+			const line = lines[k]!;
+			const close = line.indexOf("-->");
+			if (close !== -1) {
+				const before = line.slice(0, close);
+				ok = !before.includes("--") && !before.endsWith("-");
+			} else if (line.includes("--")) {
+				ok = false;
+			}
+		}
+		return out;
+	};
 	// `listDedented[n]` is "line n is the content of a list item AND the dedent
 	// Obsidian applies to that item leaves its lead at the block start a `%%`
 	// opener needs" (NRL-93 for the first half, NRL-117 for the second). It is the
@@ -5991,7 +6084,38 @@ export function extractChunks(
 	// holds an html node `<!-- SECRETH` inside the footnote), after a
 	// table-shaped one a plain paragraph, and the walker models neither, so
 	// neither the quoted stop nor the code mask may decide such a line.
-	const htmlClosesLaterAt = htmlCloserAhead.map((v, k) => (leads.unsureFresh[k]! || crAbove[k]! ? htmlCloserAheadRaw[k]! : v && !htmlLeadCode[k]!));
+	//
+	//
+	// A line `htmlLeadCode` marks is also a term-2 STOP for an opener above it on
+	// a line the walker is sure is paragraph text (NRL-166 fix round 1). The
+	// walker calls the code line a FRESH block, so that paragraph does not run
+	// into it, and a `-->` on it or past it closes nothing up there:
+	// `> > P <!-- a` / `> b` / `>\t--> Z` displays `<!-- a` and puts `--> Z` in an
+	// indented-code block of the outer quote, because `indentedCode` is in module
+	// 6234's `interruptBlockquote`. Only for a PARAGRAPH opener, whose comment is
+	// inline and so paragraph-scoped: an opener the walker does not place in a
+	// paragraph may be a browser comment trailing a raw HTML line, which runs
+	// through the rendered document and does not stop at a code block
+	// (`1. ><!-- y --> QAQ <!--` / `>>> \t| a |` / `>> QCQ` hides QCQ), and an
+	// arm without this condition spoke it in the 4,000-note fuzz.
+	const term2StopOrCode = term2Stop.map((s, k) => s || htmlLeadCode[k]!);
+	const htmlCloserAheadCode = closerAheadOf(term2StopOrCode);
+	const paraSure = leads.para.map((v, k) => v && !leads.unsureFresh[k]! && !crAbove[k]!);
+	const htmlClosesLaterAt = htmlCloserAhead.map((v, k) =>
+		leads.unsureFresh[k]! || crAbove[k]! ? htmlCloserAheadRaw[k]! : (paraSure[k]! ? htmlCloserAheadCode[k]! : v) && !htmlLeadCode[k]!,
+	);
+	// The later lines' share of an inline comment's body rule, on the SAME bound
+	// as `htmlClosesLaterAt` (see `inlineCommentBodyStartOk`), and only on a line
+	// the walker is SURE is paragraph text (`leads.para`); anywhere else it is
+	// undefined and the comment keeps hiding as before. That is not caution for
+	// its own sake: after a definition-shaped line the renderer may hold the
+	// `<!--` as an HTML node inside a footnote (`> [^1]: foot` / `>\t<!-- x` /
+	// `> ---`), where the body rule does not apply, and an arm that checked
+	// every line spoke x there. Read by cleanLine's comment branch only: the
+	// carries keep the unchecked answer, which ends their paragraph sooner, the
+	// fail-closed side for them.
+	const bodyOkLater = commentBodyOkAheadOf(term2StopOrCode);
+	const htmlBodyOkLaterAt: (boolean | undefined)[] = bodyOkLater.map((v, k) => (paraSure[k]! ? v : undefined));
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,
@@ -6261,6 +6385,7 @@ export function extractChunks(
 			false,
 			false,
 			htmlContext,
+			htmlBodyOkLaterAt[lineNo],
 		);
 		inComment = cleaned.openComment;
 		scopeComment(lineNo);
@@ -6774,6 +6899,7 @@ export function extractChunks(
 		 * wholly inside an already-carried span.
 		 */
 		const htmlClosesLater = htmlClosesLaterAt[lineNo]!;
+		const htmlBodyOkLater = htmlBodyOkLaterAt[lineNo]!;
 		const dedentedByList = listDedented[lineNo]!;
 		const isSetextContent = setextContent[lineNo]!;
 		// A refused `<!--` line still STARTS a block: `html` fires on it in the
@@ -6812,7 +6938,7 @@ export function extractChunks(
 			htmlBlockLine(body, listStrip[lineNo]!, htmlParaOpen[lineNo]!)
 				? "block"
 				: "none";
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext);
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
@@ -6820,7 +6946,7 @@ export function extractChunks(
 			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlClosesLaterAt, listDedented, htmlLeadIndented, listStrip)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -6878,6 +7004,7 @@ export function extractChunks(
 				leadIndented,
 				codeLine,
 				htmlContext,
+				htmlBodyOkLater,
 			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the
