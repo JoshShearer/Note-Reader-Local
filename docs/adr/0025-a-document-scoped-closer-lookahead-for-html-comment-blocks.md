@@ -2514,18 +2514,15 @@ classes, each closed by fixing the model on both the callout shape and its twin:
   still walked. `p` reaches only the lines after the marker line, and a frame's
   first line is a fresh block whose record nothing below it changes.
 
-**Rows that moved, all to the renderer's text.** Each changed row is RED on `44a037a`:
-19 failures, listed in the run's scratch `red-on-44a037a.txt`. Twelve are new
-`pin-nrl166-r1-` rows. Seven new `guard-nrl166-r1-` rows are green on both; the
-browser-comment guard is RED on an arm without the `para` gate on the stop. Four
-new lockstep rows check the new spoken spans. Seven existing rows moved:
-`pin-nrl114-f3b-...` and its control (class (b), now closed);
-`tripwire-nrl111-f2-midline-dashes-...`; `guard-nrl95-real-gfm-table-closer` (its
-`| --- |` puts `--` in the body); NRL-162's `html-twin-control`, a recorded
-pre-existing residual that is now the renderer's text; and NRL-119's
-`guard-...-partially-lazy-tab-equals` and `pin-...-partially-lazy-indented-line-residual`.
-The last two speak `](zdestz.png)`, which the renderer displays as text, because
-the label never closes across the code line.
+**Rows that moved, all to the renderer's text.** Each changed row is RED on `44a037a`
+(listed in the run's scratch `red-on-44a037a.txt`). There are 12 new `pin-nrl166-r1-`
+rows, and 23 new `guard-nrl166-r1-` rows (16 of them for the critique rounds below).
+Four new lockstep rows check the newly spoken spans. Five existing rows moved:
+- `pin-nrl114-f3b-...` and its control, because class (b) is now closed;
+- `tripwire-nrl111-f2-midline-dashes-...`;
+- `guard-nrl95-real-gfm-table-closer`, whose `| --- |` puts `--` in the body;
+- NRL-162's `html-twin-control`, a recorded pre-existing residual that now matches
+  the renderer's text.
 
 **Censuses.** All are bare Node against the 1.13.7 harness, with Verify's
 classification. "fix" is this tree. `44a037a` is fix round 0, which is the port and
@@ -2537,8 +2534,8 @@ is now `main`. sourceIndex was checked on every fix output with Verify's checker
 | Verify's `own-gen.cjs`, 199,584 shapes x ALL, DEF | 1,481,472 | 0 / 0 | **0 / 0** (was 0 / 3,609) | 0 / 0 | 20,250 / 6,174 |
 | its de-callout twins (`[!tip]`, `[!tip]-`, `[!x]` -> `Tip`, deduplicated), 177,408 shapes | 1,311,936 | 0 / 0 | **0 / 0** | 0 / 0 | 0 / 11,466 |
 | F1 `callout-census.cjs`, 288 shapes x 2 | 2,496 | 0 / 0 | 0 / 0 | 0 / 0 | 832 / 0 |
-| F2 fuzz `SEED=31337 N=4000`, ALL, DEF, SKIPALL | 48,741 | 73 / 10 | **0 / 34** | 0 / 0 | 90 / 290 |
-| F3 `gen.cjs`, 808,704 shapes x 2 | 6,514,560 | 0 / 2,292 | **0 / 56** | 0 / 0 | 60 / 19,426 |
+| F2 fuzz `SEED=31337 N=4000`, ALL, DEF, SKIPALL | 48,741 | 73 / 10 | **0 / 34** | 0 / 0 | 90 / 166 |
+| F3 `gen.cjs`, 808,704 shapes x 2 | 6,514,560 | 0 / 2,292 | **0 / 56** | 0 / 0 | 60 / 18,676 |
 
 - Against `e2afbfe`, the only newly lost cells are the 90 accepted at the port. The
   fuzz's 34 cells (11 notes) and the F3's 56 cells (all one lone-CR shape) are the
@@ -2553,37 +2550,56 @@ is now `main`. sourceIndex was checked on every fix output with Verify's checker
   classified further. One example is `- > Plain QAQ <!-- QXQ` / `>> QBQ -->` / `%%`
   (QXQ).
 
-**The `/critique` round: two disclosures found, both closed fail-closed.** The
-first commit of this round (`6e79fd6`) was blocked by its own `/critique`. That
-review found six newly disclosing inputs, and none of them were in any census
-above.
+**Two `/critique` rounds: disclosures the censuses never generated, all closed fail-closed.**
+Neither round's inputs appear in any census above, because those generators hold
+no inline HTML, link titles, image labels or footnotes.
 
-First, an inline construct can still be open around the `<!--`. In
-`Note <span title="<!-- QAQ -- secret` / `QBQ -->">QCQ</span>` the renderer
-displays only `Note QCQ`, because the opener sits in an attribute value. The same
-happens in a link title, in a tag opened a line above, in `<img alt=`, in CDATA
-and in `<!DOCTYPE`. One more case was found on re-probing: an image label, whose
-text becomes the embed's `alt`. The body rule is now withheld whenever a `<`, a
-backtick, a `[` not followed by `!`, or a `](` comes before the opener. That covers
-the opener's line and every earlier line back to the last blank line
-(`inlineConstructMayHold`). An opener's own `<!--` text is left out of that test.
+- **Round 1 blocked `6e79fd6`.** The body rule made a `<!--` literal while it sat
+  inside a tag's attribute value, a link title, CDATA or a declaration. The
+  renderer displays none of those (`Note <span title="<!-- QAQ -- secret` /
+  `QBQ -->">QCQ</span>` shows only `Note QCQ`). Re-running that review's fuzz also
+  found 24 notes holding an UNREFERENCED footnote definition. The renderer hides
+  such a definition and `extractChunks` does not model it (`main` already speaks
+  `P` / blank / `[^1]: QBQ`), and an old over-hiding comment had been masking it.
+- **Round 2 blocked `14984fa`.** That commit gated only the text BEFORE the opener,
+  and its callout exemption also skipped `![!x`. Round 2 found constructs that open
+  inside the would-be body or between the opener and the `-->`: a `<?x`, `<!X` or
+  CDATA block line, a tag, a link title, or an image label. Re-probing found the
+  walker refinement doing the same thing: in `> > a` / `>\t[r]: "<!-- b` / `![c` /
+  `d -->](a.png)` the `<!--` really is code, and dropping the comment spoke the
+  embed's `alt`.
 
-Second, a re-run of the review's 64,000-note fuzz (`fz.cjs`, seeds 1 to 8, 8,000
-notes each, masks ALL and DEF) found 24 more disclosing notes. All 24 hold an
-UNREFERENCED footnote definition. The renderer hides such a definition, and
-`extractChunks` does not model that. `main` already speaks `P` / blank /
-`[^1]: QBQ`. An old over-hiding comment had been masking the definition. So in a
-note with any `[^x]:` shape, every refinement in this round is off
-(`RendererLeads.refine`, which also gates `paraSure`). In that note the old answer
-stands. Nine guard rows pin these cases. Each is RED on an arm without its gate.
+**The rule now, in one place.** `inlineConstructMayHold` matches a `<`, a backtick,
+a `[` or a `](`. Before it tests, it drops a leading callout marker (one not followed
+by `(`, `[` or `:`) and every `<!--`.
+- `refineAt[k]`: on line k, the body rule and the code-line stop apply only when
+  `paraSure` holds and no line matches `inlineConstructMayHold` in the line itself,
+  in any line back to the last blank line, or in any line ahead up to the OLD
+  bound's `-->` (`constructInBodyAheadOf(term2Stop)`). cleanLine also checks the
+  opener line's text before and after the `<!--`.
+- `RendererLeads.refine`: a note holding any footnote-definition shape (`[^x]:`) or
+  any inline-construct shape gets neither walker refinement, and so none of this
+  round's changes. In such a note `main`'s answer stands.
 
-On the final tree, that fuzz finds **0 newly disclosing** against both `e2afbfe`
-and `44a037a`. It also finds 8,573 lost cells closed. 27 cells in 11 notes are
-newly lost against both bases, and 14 more against `e2afbfe` only. The examples
-are top-level indented code holding `<!-->` and `%%` lines, and every one is a
-loss. Every census in the table above was re-run on this final tree. The fuzz row
-now closes 290 lost cells where the first commit closed 368. That difference is
-the cost of the wider gate. All other figures are unchanged.
+Sixteen guard rows pin the critique inputs. Each is RED on the commit it blocked
+(or on an arm without its gate) and green now. With the walker refinements off in
+notes holding a `[`, NRL-119's two label rows keep their original expectations,
+and they are unchanged from `main`.
+
+**Adversarial fuzz on the final tree** (the reviewers' `fz.cjs`, masks ALL and DEF,
+with 0 lockstep failures in both runs):
+- Base line set, seeds 1 to 8 at 8,000 notes each (64,000 notes): **0 newly
+  disclosing** against `e2afbfe` and `44a037a`. 6,060 lost cells are closed. 9 cells
+  are newly lost against both bases, and 20 against `e2afbfe` only, which
+  `44a037a` already lost.
+- Extended set adding the critique's constructs, seeds 501 to 512 and 601 to 608 at
+  6,000 notes each (120,000 notes): **0 newly disclosing**. 0 cells are newly lost
+  against both bases, and 211 against `e2afbfe` only, which `44a037a` already lost.
+  4,877 lost cells are closed.
+
+The census table above was re-run on this final tree. The fuzz row now closes 166
+lost cells and F3 closes 18,676. Those are the costs of the wider gates; the newly
+moved counts are unchanged.
 
 **What remains, and why.** The 9 class-(b) fuzz cells inside the accepted 34 (n618,
 n2147) stay lost. In both notes, a quote above the item ends at its `- >` line,

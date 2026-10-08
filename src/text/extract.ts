@@ -611,26 +611,33 @@ function opensHtmlBlock(view: string, at: number, closesLater: boolean, setextCo
  * the dashes. The later lines' share is `commentBodyOkAheadOf` in extractChunks.
  */
 /**
- * Text before an inline `<!--` that may leave an inline construct open around it
- * (NRL-166 fix round 1): a raw tag, declaration, processing instruction or CDATA
- * (`<`), a link or image label (`[`, which also covers `![`), a link destination
- * or title (`](`), or a code span (a backtick). Deliberately wide; a false yes
- * only keeps the comment hidden. Measured with the harness: an image label's
- * `<!-- x -- y` / `z -->` becomes the embed's `alt` attribute, which displays
- * nothing, and a tag's attribute value or a link title displays nothing either.
- * A `[` directly followed by `!` is a callout marker, not a label, and is left
- * out so a callout title line does not withhold the rule from the line below.
+ * Text around an inline `<!--` that may hold an inline construct the renderer
+ * displays as NOTHING (NRL-166 fix round 1): a raw tag, declaration, processing
+ * instruction or CDATA (`<`; on a line of its own `<?`, `<!X` and `<![CDATA[` also
+ * start an HTML block that interrupts the paragraph), a link or image label
+ * (`[`), a link destination or title (`](`), or a code span (a backtick).
+ * Deliberately wide; a yes only withholds the body rule, which keeps the comment
+ * hidden. Measured with the harness: a `<!--` in a tag's attribute value, a link
+ * title or an image label (which becomes the embed's `alt`) displays nothing,
+ * whether the construct opens before the `<!--` or inside its would-be body.
  */
-const INLINE_CONSTRUCT_MAY_HOLD = /<|`|\[(?!!)|\]\(/;
+const INLINE_CONSTRUCT_MAY_HOLD = /<|`|\[|\]\(/;
 /**
- * `INLINE_CONSTRUCT_MAY_HOLD` on `text` with every `<!--` taken out first. A
- * `<!--` opens no tag, declaration (that needs `<!` and a letter) or CDATA, and
- * a comment that really holds a later opener means our own comment state already
- * owns that line, so counting it would only withhold the rule from a second
- * literal opener (`P <!--> a` / `\tP <!--> b` / `--> c` lost b).
+ * A callout marker at the start of a line, behind its quote and list prefix:
+ * `[!x]` there is no label, so it is taken out before the test above. Not when a
+ * `(`, `[` or `:` follows it, which would make it a link or a definition.
+ */
+const LEADING_CALLOUT_MARKER = /^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+[ \t>]*)*\[![^\]]*\][+-]?(?![([:])/;
+/**
+ * `INLINE_CONSTRUCT_MAY_HOLD` on `text`, a whole line or a line's leading part,
+ * with a leading callout marker and every `<!--` taken out first. A `<!--` opens
+ * no tag, declaration (that needs `<!` and a letter) or CDATA, and a comment that
+ * really holds a later opener means our own comment state already owns that
+ * line, so counting it would only withhold the rule from a second literal opener
+ * (`P <!--> a` / `\tP <!--> b` / `--> c` lost b).
  */
 function inlineConstructMayHold(text: string): boolean {
-	return INLINE_CONSTRUCT_MAY_HOLD.test(text.replaceAll("<!--", ""));
+	return INLINE_CONSTRUCT_MAY_HOLD.test(text.replace(LEADING_CALLOUT_MARKER, "").replaceAll("<!--", ""));
 }
 
 function inlineCommentBodyStartOk(after: string): boolean {
@@ -1421,6 +1428,7 @@ function cleanLine(
 				htmlClosesLater &&
 				htmlBodyOkLater !== undefined &&
 				!inlineConstructMayHold(raw.slice(0, i)) &&
+				!inlineConstructMayHold(raw.slice(i + 4)) &&
 				!(htmlBodyOkLater && inlineCommentBodyStartOk(raw.slice(i + 4)))
 			) {
 				blockOpens = false;
@@ -4557,7 +4565,11 @@ interface RendererLeads {
 	 * walked). False for a note holding a footnote-definition shape (`[^x]:`):
 	 * the renderer hides an unreferenced definition, which nothing here models,
 	 * and those refinements newly spoke one in the fuzz
-	 * (`> > ```` / `> \t<!-- x` / `> > [^1]: y` spoke y). The old answer stands.
+	 * (`> > ```` / `> \t<!-- x` / `> > [^1]: y` spoke y). Also false for a note
+	 * holding any inline-construct shape (`inlineConstructMayHold`): a comment the
+	 * refinements correctly drop could be covering text that a tag attribute, a
+	 * link title or an image label hides (`> > a` / `>\t[r]: "<!-- b` / `![c` /
+	 * `d -->](a.png)` spoke c and d, the embed's `alt`). The old answer stands.
 	 */
 	refine: boolean;
 	pending: { frame: LeadFrameLine[]; depth: number }[];
@@ -5074,7 +5086,7 @@ function rendererLeads(lines: readonly string[], from: number): RendererLeads {
 		closerInPara: new Array<boolean>(lines.length).fill(false),
 		unsureFresh: new Array<boolean>(lines.length).fill(false),
 		para: new Array<boolean>(lines.length).fill(false),
-		refine: !lines.some((l) => FOOTNOTE_SHAPED.test(l)),
+		refine: !lines.some((l) => FOOTNOTE_SHAPED.test(l) || inlineConstructMayHold(l)),
 		pending: [],
 	};
 	const frame: LeadFrameLine[] = [];
@@ -5383,6 +5395,26 @@ export function extractChunks(
 	// paragraph, the renderer has no closer in it and displays the text, so a
 	// "not valid" here cannot hide what it shows nor show what it hides. A line
 	// break joins lines, so dashes either side of one never pair.
+	// The same bound again, for whether the would-be body holds an inline construct
+	// (`inlineConstructMayHold`) from the next line up to the `-->`: then the body
+	// rule is withheld and the comment keeps hiding, since the `-->` may sit in an
+	// attribute or a title the renderer displays as nothing
+	// (`P <!-- a -- <b title="x` / `y -->">z</b>` shows only `P <!-- a -- z`).
+	const constructInBodyAheadOf = (stops: readonly boolean[]): boolean[] => {
+		const out: boolean[] = new Array<boolean>(lines.length).fill(false);
+		let seen = false;
+		for (let k = lines.length - 1; k >= 0; k--) {
+			out[k] = seen;
+			if (stops[k]!) {
+				seen = false;
+				continue;
+			}
+			const line = lines[k]!;
+			const close = line.indexOf("-->");
+			seen = close !== -1 ? inlineConstructMayHold(line.slice(0, close)) : seen || inlineConstructMayHold(line);
+		}
+		return out;
+	};
 	const commentBodyOkAheadOf = (stops: readonly boolean[]): boolean[] => {
 		const out: boolean[] = new Array<boolean>(lines.length).fill(true);
 		let ok = true;
@@ -6155,8 +6187,29 @@ export function extractChunks(
 	// Document-wide and shape-only on purpose: the fail-closed side. The walker's
 	// own refinements take the same gate (`RendererLeads.refine`).
 	const paraSure = leads.para.map((v, k) => v && !leads.unsureFresh[k]! && !crAbove[k]! && leads.refine);
+	// Both refinements are also withheld from a line where an inline construct
+	// (`inlineConstructMayHold`) may be open around its `<!--` or may sit between
+	// it and the old bound's `-->`: on the line itself, on any earlier line back to
+	// the last blank line, or on a later line up to that `-->`. There the old
+	// over-hiding comment was also covering text that a DIFFERENT construct hides:
+	// a tag's attribute value, a link title, an image label (the embed's `alt`), or
+	// an `<!X` / `<?` / CDATA HTML block on a line of its own. Making the `<!--`
+	// literal, by the body rule or by the code-line stop, spoke that text, which
+	// the renderer does not display (/critique, two rounds:
+	// `Note <span title="<!-- a -- b` / `c -->">d</span>` and
+	// `P <!-- a` / `><!X b` / `    c` / `> \td --->` both spoke b). The old bound,
+	// `term2Stop`, reaches at least as far as the code-stopped one, so it covers
+	// both. Reset at a blank line only above, the fail-closed side.
+	const inlineMayHoldAbove: boolean[] = new Array<boolean>(lines.length).fill(false);
+	for (let k = 0, seen = false; k < lines.length; k++) {
+		if (lines[k]!.trim() === "") seen = false;
+		inlineMayHoldAbove[k] = seen;
+		if (inlineConstructMayHold(lines[k]!)) seen = true;
+	}
+	const constructInBody = constructInBodyAheadOf(term2Stop);
+	const refineAt = paraSure.map((v, k) => v && !inlineMayHoldAbove[k]! && !inlineConstructMayHold(lines[k]!) && !constructInBody[k]!);
 	const htmlClosesLaterAt = htmlCloserAhead.map((v, k) =>
-		leads.unsureFresh[k]! || crAbove[k]! ? htmlCloserAheadRaw[k]! : (paraSure[k]! ? htmlCloserAheadCode[k]! : v) && !htmlLeadCode[k]!,
+		leads.unsureFresh[k]! || crAbove[k]! ? htmlCloserAheadRaw[k]! : (refineAt[k]! ? htmlCloserAheadCode[k]! : v) && !htmlLeadCode[k]!,
 	);
 	// The later lines' share of an inline comment's body rule, on the SAME bound
 	// as `htmlClosesLaterAt` (see `inlineCommentBodyStartOk`), and only on a line
@@ -6169,18 +6222,7 @@ export function extractChunks(
 	// carries keep the unchecked answer, which ends their paragraph sooner, the
 	// fail-closed side for them.
 	const bodyOkLater = commentBodyOkAheadOf(term2StopOrCode);
-	// An inline construct opened on an EARLIER line of the paragraph may still hold
-	// this line's `<!--` (`P <abbr` / `title="<!-- x -- y"` / `data-x="z -->">`),
-	// so a `<` or `](` anywhere above since the last blank line withholds the rule
-	// too. Reset only at a blank line, which over-approximates the paragraph: the
-	// fail-closed side.
-	const inlineMayHoldAbove: boolean[] = new Array<boolean>(lines.length).fill(false);
-	for (let k = 0, seen = false; k < lines.length; k++) {
-		if (lines[k]!.trim() === "") seen = false;
-		inlineMayHoldAbove[k] = seen;
-		if (inlineConstructMayHold(lines[k]!)) seen = true;
-	}
-	const htmlBodyOkLaterAt: (boolean | undefined)[] = bodyOkLater.map((v, k) => (paraSure[k]! && !inlineMayHoldAbove[k]! ? v : undefined));
+	const htmlBodyOkLaterAt: (boolean | undefined)[] = bodyOkLater.map((v, k) => (refineAt[k]! ? v : undefined));
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,

@@ -1928,11 +1928,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// Lazy and partially lazy lines, NBSP and lone CR (/critique 1, the census): RED
 		// on r1, d1 or d2 as recorded in ADR 0025; the NBSP-led lazy line was a
 		// round-1 leak against base that Verify's corpora never generated.
-		// NRL-166 fix round 1: the tab-led `>\t=` ENDS the inner quote as indented
-		// code of the outer one (the walker now records it as fresh code), so the
-		// label never closes and the renderer displays `](zdestz.png)` as text:
-		// `A ![ZXZ = ZYZ](zdestz.png) ZBZ.`. Expectation moved to that text.
-		["guard-nrl119-r2-partially-lazy-tab-equals", "> > A ![ZXZ\n>\t=\n> > ZYZ](zdestz.png) ZBZ.", "A [ZXZ = ZYZ](zdestz.png) ZBZ."],
+		["guard-nrl119-r2-partially-lazy-tab-equals", "> > A ![ZXZ\n>\t=\n> > ZYZ](zdestz.png) ZBZ.", "A ZXZ = ZYZ ZBZ."],
 		["guard-nrl119-r2-lazy-space-tab-star-percent-closer", "> A ![ZXZ %%\n \t*\n>\t%% ZYZ](zdestz.png) ZBZ.", "A ZXZ %% * %% ZYZ ZBZ."],
 		["guard-nrl119-r2-lazy-space-tab-seven-dot-is-text", "> A [ZXZ\n \t7.\n> ZYZ](zdestz.png) ZBZ.", "A ZXZ 7. ZYZ ZBZ."],
 		["guard-nrl119-r2-nbsp-led-lazy-line-is-text", "> > ZPZ A ![xx\n\u00a0>*\n> > yy](zdestz.png) B.", "ZPZ A xx * yy B."],
@@ -1962,9 +1958,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// 9522c11, whose tab-eating peel stood in for the item's de-indent).
 		["pin-nrl119-r2-quoted-code-opener-residual", ">\tA ![ZXZ\n>\tZYZ](zdestz.png) ZBZ.", "A [ZXZ ZYZ](zdestz.png) ZBZ."],
 		["pin-nrl119-r2-quoted-code-opener-after-blank-quote-line-residual", ">\n>\tA [ZXZ\n>\tZYZ](zdestz.png) ZBZ.", "A [ZXZ ZYZ](zdestz.png) ZBZ."],
-		// CLOSED by NRL-166 fix round 1 (the walker records `>\tfoo` as fresh code
-		// of the outer quote): now the renderer's `A [ZXZ foo ZYZ](zdestz.png) ZBZ.`.
-		["pin-nrl119-r2-partially-lazy-indented-line-residual", "> > A [ZXZ\n>\tfoo\n> > ZYZ](zdestz.png) ZBZ.", "A [ZXZ foo ZYZ](zdestz.png) ZBZ."],
+		["pin-nrl119-r2-partially-lazy-indented-line-residual", "> > A [ZXZ\n>\tfoo\n> > ZYZ](zdestz.png) ZBZ.", "A ZXZ foo ZYZ ZBZ."],
 		["pin-nrl119-r2-lazy-space-tab-star-residual", "> A [ZXZ\n \t*\n> ZYZ](zdestz.png) ZBZ.", "A ZXZ * ZYZ ZBZ."],
 		["pin-nrl119-r2-quoted-list-tab-star-residual", "> - A [ZXZ\n>\t*\n>  ZYZ](zdestz.png) ZBZ.", "A ZXZ * ZYZ ZBZ."],
 		["pin-nrl119-r2-quoted-list-five-space-dash-residual", "> - A [ZXZ\n>     -\n>   ZYZ](zdestz.png) ZBZ.", "A ZXZ - ZYZ ZBZ."],
@@ -3008,6 +3002,19 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// any `[^x]:` shape keeps every fix-round-1 refinement off. QBAQ is hidden by
 		// the renderer in both; each row was NEWLY DISCLOSING without the gate.
 		["guard-nrl166-r1-footnote-after-code-ended-quote", "> > ```\n> \t<!-- QAAQ\n> > [^1]: QBAQ", "", { skipCodeBlocks: false }],
+		// /critique round 2, each NEWLY DISCLOSING on 14984fa: an image label that
+		// starts with `!`, and constructs that open INSIDE the would-be body or between
+		// the opener and the old bound's `-->` (a processing-instruction or `<!X`
+		// block line, a tag, a link title, an image label), which the renderer hides
+		// while an old over-hiding comment covered them. Expectations are main
+		// e2afbfe's output.
+		["guard-nrl166-r1-image-label-bang", "![!x <!-- QAQ -- QBQ\nQCQ -->](a.png) QDQ", "[!x ](a.png) QDQ"],
+		["guard-nrl166-r1-pi-block-in-body", "P <!-- QAQ -- QBQ\n<?x QEQ\nQCQ --> QDQ", "P QDQ"],
+		["guard-nrl166-r1-tag-opens-in-body", "P <!-- QAQ -- <b title=\"QBQ\nQCQ -->\">QDQ</b>", "P \">QDQ"],
+		["guard-nrl166-r1-link-title-in-body", "P <!-- QAQ -- QBQ [x](u \"QEQ\nQCQ -->\") QDQ", "P \") QDQ"],
+		["guard-nrl166-r1-declaration-block-before-code-stop", "P <!-- QAAQ\n><!X QBAQ\n    QDAQ\n> \tQEAQ --->", "P", { skipCodeBlocks: false }],
+		["guard-nrl166-r1-image-label-before-code-stop", "![!x <!-- QBAQ\nQCAQ](a.png)\n>\t]] -->", "[!x", { skipCodeBlocks: false }],
+		["guard-nrl166-r1-walker-code-line-over-image-label", "> > QAAQ\n>\t[r]: \"<!-- QCAQ\n![QDAQ\nQEAQ -->](a.png)", "QAAQ r : \" ](a.png)", { skipCodeBlocks: false }],
 		["guard-nrl166-r1-footnote-under-comment", "P <!-- QAAQ\n> \t<div>\n[^1]: QBAQ --> QCAQ\n- QDAQ -->", "P QCAQ QDAQ -->", { skipCodeBlocks: false }],
 		// Class B: `- > \t` opens indented code inside the item's quote, so its
 		// `<!--` is code. A `%%` line below ends the list uncertainly and the walker
