@@ -2033,61 +2033,194 @@ one base-parity case: a non-space, non-tab whitespace character directly after
 character was built, closed those cells, and unmasked 46 newly disclosing fuzz
 cells of the classes below, so it was reverted.
 
-### Evidence, all bare Node against the executed renderer
+### Fix round 1 (2026-10-02): what an independent Verify found on `f0c52a2`, and the model fixes
 
-Censuses, base `9132c3b` against the fix, units = sentinel-cells (every sentinel
+An independent Verify FAILED PR #212's first head, `f0c52a2`, under decision Q11
+(a newly lost or newly disclosing cell is acceptable only as an unmasking with a
+recorded base control). Its three findings and what changed:
+
+> **This round was never pushed.** PR #212 merged at `f0c52a2` (squash `bcc59fe`),
+> so `main` carried F1's disclosure until NRL-166 ported this round onto `main`
+> `e2afbfe` on 2026-10-08. The figures in this section were measured on the unpushed
+> commit `9c22016`; where NRL-166 re-measured a corpus on the port they are corrected
+> in place below, marked "NRL-166 port", and the port's own section after the
+> evidence section gives every re-measured figure with its corpus.
+
+**F1, a new disclosure with no control.** `- > Plain ZPZ <!-- QAQ` / `> [!tip] QBQ`
+/ `> QCQ -->` renders as ONE list-item quote paragraph whose inline comment hides
+QAQ, QBQ and QCQ; `f0c52a2` spoke all three. Root cause, confirmed by ablation: the
+term-2 pass treats a `[!type]` line as a callout title, and so a stop, on a quote's
+certain first line, defined as "depth rose and the line above was a stop". The
+depth came from `term2QuoteView`, which cannot see a `>` behind a list marker, so
+`- > Plain` read depth 0 (and is itself a `TERM2_LIST` stop) and the next line read
+as a quote STARTING. *Fix:* the depth of the line above is now the larger of
+`term2QuoteView`'s count and `containerPrefix(line).quotes`, the file's one
+definition of the prefix. A deeper count can only withhold a quote start, which
+withholds a stop, so the change is fail-closed against `f0c52a2`. The opposite
+direction is kept: after a PLAIN item (`- x <!--` / `> [!tip]`) the renderer really
+does start a callout, and that `<!--` stays spoken
+(`guard-nrl114-f1-plain-item-then-callout-starts`). Verify's 576-cell callout census:
+**832 newly disclosing on `f0c52a2`, 0 now**; an extended 3,200-shape x 2-mask
+callout census (16 opener prefixes including plain items, prose and quotes; 10
+callout lines including fence titles; 5 continuations; with and without a tail):
+**1,812 newly disclosing on `f0c52a2`, 0 newly moved now** (876 losses and 36
+disclosures closed).
+
+**F2, six uncontrolled fuzz shapes (seed 31337).** Each root was fixed rather than
+waived:
+
+- A tab-led `%%` in a quote NESTED INSIDE a list item (`1.  text` / `   >  \t%%`,
+  `- item` / `  > \t%%`): the `listDedented` pass applied the item's any-whitespace
+  rule, but the renderer dedents the item first and peels the quote second, so the
+  `%%` is in a quote body, where module 6234 dedents nothing. *Fix:* a line quoted
+  DEEPER than its item's marker line is not `listDedented`. A quote around the list
+  (`> - item` / `> \t%%`) has the marker's depth and is untouched
+  (`guard-nrl114-f2-quote-around-list-still-dedents`). This also closes three
+  long-standing tripwires, replaced in place with their names kept:
+  `pin-nrl93-quote-inside-list-still-silenced`,
+  `pin-nrl114-quote-tab-in-list-item-still-silenced` and
+  `pin-nrl117-note-scope-parity-discloses`, the last now expecting the renderer's
+  text exactly in BOTH directions.
+- `-    ---` read as a list item: `thematicBreak` precedes `list`, so it is a rule,
+  and the line under it is not item content. *Fix:* the pass's marker excludes
+  `RENDERER_HR`, the renderer's own rule measured with its parser (at most three
+  leading spaces, separators SPACES only; `- \t---`, `- \v---` and `*\t*\t*` are list
+  items for it, `guard-nrl114-f2-tab-separated-dashes-are-an-item`). The shared
+  `HR` is untouched.
+- A fence line's info string spoken (`> [!note]\t~~~ QFQ`, `1. >    ~~~ QDQ`): the
+  top-level `FENCE` branch reads the raw line, so a container fence line was prose.
+  *Fix:* the line is dropped, only in two positions: a callout whose
+  title is a fence on a `[!type]` line that STARTS a quote (`calloutTitleAt`, the
+  term-2 pass's own quote-start answer; the title is the text after the marker less
+  one whitespace character), and the first content of a list item opened at column 0
+  that starts a block (`itemStartsBlock`), and never with a fence-shaped line above.
+  No fence state is kept, so the code inside stays prose as before; a line holding
+  a comment opener keeps the old path; and `rawOrMathBlockMayBeOpenTable` refuses
+  wherever a raw HTML or `$$` block may still be open. A wider first form (any
+  container fence line) was built and newly LOST text in the seed-31337 fuzz (a
+  `[!note]` line that is not a quote's first line is paragraph text; a fence-shaped
+  line can be the content of a quoted fence above it; a `<div>` block swallows the
+  line), and those shapes are now guards. A quoted fence at a quote START is still
+  spoken, base parity (`pin-nrl114-f2-quote-start-fence-still-spoken`).
+- Lone CRs (NRL-164). `x` + CR + `%%` opens a real comment for the renderer that our
+  `\n` split never sees, and `f0c52a2`'s code mask then spoke a quoted `<!--` line
+  below it with no control (seed 20261002 n2311; round 0 had adjudicated it on a
+  control that defused that very `<!--`, which Q11 no longer accepts). *Fix:* from a
+  note's first lone CR on, every line keeps the pre-NRL-114 term-2 answer and no code
+  mask (`crAbove`), and the quote-in-item rule above is waived the same way.
+- **The fix round's own `/critique` BLOCKED its first commit (`9c22016`)** with
+  five findings, each absent on `f0c52a2`, and all five are closed:
+  (i) the marker's depth was its RAW `>` count, but after `>` or `> ---` the
+  renderer keeps the quote open over a marker that cannot interrupt it
+  (`>` / `2. b` / `> \t%% HIDDEN` is `<blockquote><ol><li>b</li></ol>` with
+  HIDDEN hidden), so the depth now carries the last quoted line's depth over
+  unquoted lines unless the marker is a bullet or a literal `1.` / `1)`, which do
+  interrupt (`TERM2_LIST`'s rule); (ii) a line a raw HTML or `$$` block may hold
+  keeps the old dedent answer; (iii) a non-interrupting ordered marker (`x` /
+  `2. ~~~ js` is one paragraph) no longer drops the fence line, through
+  `itemStartsBlock`; (iv) any fence-shaped line above refuses the drop, since a
+  later line may be its content (`- ~~~ js` / `> [!tip] ~~~ x` is code); (v)
+  `- - -` / `    ` + CR + `%%` is an unmasking of NRL-164 on the
+  renderer-equivalent `***` twin, pinned beside it. Each is a `guard-nrl114-r1-`
+  or `pin-nrl114-r1-` row, red on `9c22016`.
+- Two shapes are unmaskings with controls and are pinned beside them: NRL-136's
+  same-line reopen (`1. >  \t<!--  -->  <!--` / `> \t%% QEQ`; control: the list
+  marker removed; **NRL-166 port: closed on `main` by NRL-136's own #196**, so the
+  pin and its control now both expect the renderer's empty text) and an unreferenced footnote after `>` + CR (NRL-163 with NRL-164;
+  control: that line replaced by a blank line).
+
+**F3, unmasking classes no row named.** Verify's own structured census
+(`gen.cjs`: 9 containers including quote-in-list, list-in-quote and callout; 6
+positions; 13 leads including NBSP, VT, CR, space-tab, tab-space and 4 and 5
+spaces; 3 openers; a middle line at the same, a deeper and a shallower prefix with 4
+leads and 16 constructs; closer or none) found **2,832 newly lost cells on
+`f0c52a2`**, contradicting the PR's "0 newly lost on every structured census". That
+sentence was true only of the corpora the PR measured and is withdrawn. After fix
+round 1 the same census finds **2,736 newly lost and 0 newly disclosing** of
+6,514,560 sentinel-cells, in exactly three classes, every cell of which has the
+peel-equalising control (`>X` -> `> X`) on which base loses the same text
+byte-identically. **NRL-166 port, re-measured on the port against `9132c3b`: 2,708
+newly lost and 0 newly disclosing** of the same 6,514,560: classes (a) 2,464 and (b)
+64 unchanged and controlled as below; (c) 0, closed on `main` by NRL-156's `FENCE`
+cap (#214, `8d2b3f2`), whose two rows now expect the renderer's text exactly; and a
+new 180-cell class (e) that moved at `8d2b3f2` and is byte-identical on `main`
+`e2afbfe`, so it is not this round's (named in the NRL-166 section):
+
+| class | cells | why the renderer displays it | pinned (red on base) / control (green on base) |
+|---|---|---|---|
+| (a) a VT- or NBSP-led `<!--` after `>`, then `>\t===`, `>\t=`, `>\t---` or `>\t-` | 2,464 | module 8776 skips spaces and tabs only, so this is no HTML block; our term 1's `.trim()` takes the lead | `pin-nrl114-f3a-vt-led-html-opener-unmasked` / `guard-nrl114-f3a-control` |
+| (b) a tab- or tab-space-led lazy `<!--`, then `>\t---`, then `-->` | 64 | an inline comment may not contain `--`, so this is no comment; term 2 does not check the body | `pin-nrl114-f3b-comment-body-holding-dashes-unmasked` / `guard-nrl114-f3b-control` |
+| (c) a `%%` after `>` + tab, NBSP or VT, then an UNQUOTED `\t```` or ` \t```` | 208 | a tab-led ```` ``` ```` is module 134 indented code; the shared `FENCE` is `^\s*` | `pin-nrl114-f3c-tab-led-fence-unmasked` / `guard-nrl114-f3c-control` |
+
+Base hid each only because its wide peel ate the tab in the line under the opener.
+Verify's fourth class, (d) an NBSP- or VT-led `%%` then `>\t%%` (96 cells on
+`f0c52a2`), is 0 after fix round 1, closed by the quote-in-item rule. Closing (a)
+for real means narrowing term 1's lead, which round 0 built and reverted because it
+unmasked footnote and raw-HTML classes; (b) and (c) live in shared predicates other
+lanes own. All three are fail-closed (prose loss), none is a disclosure.
+
+### Evidence, all bare Node against the executed renderer, re-measured on the fix-round-1 tree
+
+**The control criterion.** A newly moved cell is accepted ONLY when base's output
+on a control twin is byte-identical to the fix's output on the original. A twin is
+one of: Verify's peel-equalising twin (`>X` -> `> X`); Verify's unquoted twin; or a
+RENDERER-EQUIVALENT edit, kept only if the executed renderer's visible text of the
+twin equals the original's: a lone CR made a LF, a blank line inserted, a
+quote-only line blanked, one list marker removed, a thematic break respelled `***`,
+or one `%%` / `<!--` defused by an invisible marker that both texts then drop.
+Because the visible text must not change, no twin can defuse a comment the renderer
+honours: doing so would reveal the comment's body. Round 0's twins that defused the
+`<!--` itself are therefore no longer used, and every round-0 note was re-adjudicated.
+
+Censuses, base `9132c3b` against the fix (units = sentinel-cells: every sentinel
 in a shape x every one of the 512 content-key masks, signed against the rendered
 HTML; a displayed sentinel in a code, heading, table or math context is excused
-when its content key is on). "Reconstructed" means rebuilt by construction from
-the source ticket's description, not replayed.
+when its content key is on). "Reconstructed" means rebuilt by construction from the
+source ticket's description, not replayed. The `f0c52a2` figures that stood here are
+REPLACED, not averaged.
 
 | corpus | shapes x masks | lost base -> fix (closed / NEWLY) | disclosed base -> fix (closed / NEWLY) |
 |---|---|---|---|
 | NRL-114 amendment census, reconstructed (7 leads x 6 bodies x quoted/lazy x closer/none x 2 positions) | 308 x 512 | 75,264 -> 30,720 (44,544 / **0**) | 4,096 -> 0 (4,096 / **0**) |
 | run 205646 quoted-setext class plus quoted-HR rows, reconstructed | 270 x 512 | 36,864 -> 24,576 (12,288 / **0**) | 0 -> 0 (no room) |
-| run 205646's 638,976-cell census plus augmentation, reconstructed | 1,664 x 512 | 359,680 -> 115,968 (243,712 / **0**) | 88,064 -> 20,480 (67,584 / **0**) |
-| 7cdc7b7's 3,150-shape census plus quoted HR/blank rows | 5,670 x 512 | 986,112 -> 373,504 (612,608 / **0**) | 97,792 -> 66,048 (31,744 / **0**) |
+| run 205646's 638,976-cell census plus augmentation, reconstructed | 1,664 x 512 | 359,680 -> 113,920 (245,760 / **0**) | 88,064 -> 18,432 (69,632 / **0**) |
+| 7cdc7b7's 3,150-shape census, reconstructed | 3,150 x 512 | 575,488 -> 221,952 (353,536 / **0**) | 81,408 -> 41,472 (39,936 / **0**) |
+| the same plus quoted HR/blank rows | 5,670 x 512 | 986,112 -> 321,280 (664,832 / **0**) | 97,792 -> 57,856 (39,936 / **0**) |
 | NRL-115 Verify census plus augmentation | 5,418 x 512 | 1,261,312 -> 819,456 (441,856 / **0**) | 2,048 -> 0 (2,048 / **0**) |
 | NRL-155 predecessor census plus quoted twins | 20,800 x 512 | 5,448,192 -> 3,427,840 (2,020,352 / **0**) | 48,128 -> 48,128 (0 / **0**) |
-| NRL-131 position census x 512 plus `<!--` rows | 980 x 512 | 314,112 -> 82,176 (231,936 / **0**) | 0 -> 0 (no room) |
+| NRL-131 position census x 512 plus `<!--` rows | 980 x 512 | 314,112 -> 80,640 (233,472 / **0**) | 0 -> 0 (no room) |
+| Verify's `gen.cjs` census (F3 above), masks ALL and DEF | 808,704 x 2 | 678,374 -> 212,152 (468,958 / **2,736, all controlled**) | 37,316 -> 17,398 (19,918 / **0**) |
+| the same, **NRL-166 port** (re-measured 2026-10-08) | 808,704 x 2 | 678,374 -> 206,216 (474,866 / **2,708**: 2,528 controlled, 180 moved at `8d2b3f2`) | 37,316 -> 17,398 (19,918 / **0**) |
 
-Destination: 6,656 -> 6,656 in the 638,976-cell corpus, 0 moved, 0 elsewhere.
-Every corpus carries a quoted-setext row, a quoted thematic-break row (`---`,
-`***`, `-`, bare `>`) and a tab-led `<!--` row. Room to fail is shown by the
-wrong arm: 7cdc7b7 alone newly loses 10,240 sentinel-cells in the amendment census
-and 46,080 in the 3,150-shape one, and the depth-rise and term-1-narrowing arms
-both newly disclosed in the fuzz.
+Destination: 6,656 -> 6,656 in the 638,976-cell corpus, 0 moved, 0 elsewhere. Room to
+fail is shown by wrong arms: 7cdc7b7 alone newly loses 10,240 sentinel-cells in the
+amendment census and 46,080 in the 3,150-shape one; against the fix, the space-only
+peel newly discloses 32,256 and the half-fix newly loses 115,200 there; `f0c52a2`
+newly discloses 832 and 1,812 in the two callout censuses.
 
-**Fuzz, and every newly moved cell adjudicated on a defused control (decision
-Q11).** Three 4,000-note fuzz runs (per-line unique sentinels; tabs, NBSP, VT,
-U+3000, lone CR and CRLF; quote, nested-quote, tab-between-levels, callout, list
-and quote-in-list prefixes; `<!--`, `-->`, `%%`, setext, quoted HR, tables,
-footnotes, destinations), masks 221 (the suite's `OPTS`) and 0:
+**Fuzz.** Round 0's three seeds (per-line unique sentinels; tabs, NBSP, VT, U+3000,
+lone CR and CRLF; quote, nested-quote, tab-between-levels, callout, list and
+quote-in-list prefixes; `<!--`, `-->`, `%%`, setext, quoted HR, tables, footnotes,
+destinations; masks 221 and 0) plus Verify's seed 31337 (its own generator, masks
+ALL, DEF and SKIPALL):
 
-| seed | sentinel-cells | lost base -> fix (closed / newly) | disclosed base -> fix (closed / newly) |
-|---|---|---|---|
-| 20261002 | 25,978 | 3,352 -> 2,285 (1,071 / 4) | 615 -> 607 (19 / 11) |
-| 7 | 25,854 | 3,266 -> 2,334 (937 / 5) | 671 -> 654 (25 / 8) |
-| 99 | 26,034 | 3,197 -> 2,283 (914 / 0) | 639 -> 637 (4 / 2) |
+| seed | sentinel-cells | lost base -> fix (closed / newly) | disclosed base -> fix (closed / newly) | groups moved / without a control |
+|---|---|---|---|---|
+| 20261002 | 25,978 | 3,352 -> 2,217 (1,137 / 2) | 615 -> 607 (19 / 11) | 6 notes / 0 |
+| 7 | 25,854 | 3,266 -> 2,246 (1,024 / 4) | 671 -> 658 (27 / 14) | 7 notes / 0 |
+| 99 | 26,034 | 3,197 -> 2,226 (971 / 0) | 639 -> 637 (4 / 2) | 1 note / 0 |
+| 31337 (Verify) | 48,741 | lost 10 newly, 610 closed | disclosed 55 newly, 90 closed | 42 note-masks / 0 (was 27 of 54 on `f0c52a2`) |
+| 31337, **NRL-166 port** | 48,741 | 3,197 -> 2,484 (723 / 10) | 1,747 -> 1,684 (136 / 73) | 63 note-masks / 22, every one moved at a later `main` commit and byte-identical on `e2afbfe` (NRL-166 section) |
 
-All 30 newly moved sentinel-cells sit in 15 notes. In every one, base was right
-only by accident: an over-wide peel or opener that this change corrects had
-hidden or exposed the region, and the fix exposes a pre-existing gap behind it.
-Each is accepted ONLY because the fix's output on the note is byte-identical,
-modulo the one defused token, to base's output on a twin with that trigger
-defused:
-
-| note | moved | class | defused twin (base output = fix output on the original) |
-|---|---|---|---|
-| 20261002 n1670, n1796, n2730; 7 n510, n990, n3011; 99 n1486 | disclose a footnote body | NRL-163 (unreferenced footnote definition) | `>\v%%` -> `>\va%%`; `<!--` -> `<!-`; `>\t> %%` -> `>\t> a%%`; `>　%%` -> `> a%%`; `>>\t%%` -> `>>\ta%%`; `>\t>    %%` -> `>\t>    a%%`; `<!--` -> `<!-` (twins in note order) |
-| 20261002 n193, n2311 | disclose text after a lone CR | NRL-164 (lone CR) | `>　%%` -> `> a%%`; `<!--` -> `<!-` |
-| 20261002 n1334; 7 n1018, n1123 | lose text after a lone CR | NRL-164 | `%% HBAZ` -> `HBAZ`; `>>\t%%` -> `>>\ta%%`; `>\t>    %%` -> `>\t>    a%%` |
-| 20261002 n3524; 7 n1677 | lose text after a VT- or tab-led `%%` in a list/quote | NRL-165 (NRL-153 family) | `[!note]      %% HAAZ` -> `[!note]      HAAZ`; `> \t %%` -> `> \t a%%` |
-| 7 n263 | disclose a `<!--` body inside a raw `<div>` block | NRL-137 | `>     %%` -> `>     a%%` |
-
-NRL-164 and NRL-165 were filed by this ticket with renderer / base / fix rows;
-NRL-163 was filed at the orchestrator's unblock. None is an owner decision for
-NRL-114.
+Every moved note is one of the filed classes: an unreferenced footnote definition
+(NRL-163), a lone CR (NRL-164), a raw HTML block or a same-line reopen (NRL-137,
+NRL-136), or a `%%` the renderer shows as code that base read as an opener and
+paired. Controls, seed 20261002: n1334 list marker removed; n1796 blank line; n193,
+n1670 peel-equalising; n2730 one displayed `%%` defused; n571 every displayed `%%`
+defused. Seed 7: n1018, n510, n990 peel-equalising; n1123, n263, n3011 one displayed
+`%%` defused; n2096 one hidden `%%` defused (it lies inside the raw HTML block a
+list-continuation `<!--` opens). Seed 99: n1486 blank line. Seed 31337: 39 cells
+peel-equalising, 19 blank line, 6 list marker removed, 1 unquoted.
 
 **Found at ship by `/critique`, outside every corpus above, and adjudicated the
 same way.** A hand-built probe set of 60 shapes and a further 4,000-note fuzz (seed 4242,
@@ -2119,14 +2252,20 @@ The first two are pinned with their controls
 control is green on base. The same fuzz found 0 `sourceIndex` length or identity
 failures on the fix.
 
-**`sourceIndex`**, by numeric UTF-16 code-unit index on both arms over every corpus
-above and all three fuzz runs: **0 failures** (fix: 28,561,920 chunks / 168,228,352
-units on the largest corpus alone), with all four mutators nonzero on both arms
-in every corpus (drop-one: length; shift-all: identity, plus bounds where a chunk
-ends at the note's end; swap-two: monotonic and identity; negate-one: bounds).
-Both exemptions are pre-existing: without `text[i] === " "` the fuzz reports 535
-identity failures on base and 541 on the fix, and without the synthetic
-`equation` text 208 on each.
+**`sourceIndex`**, by numeric UTF-16 code-unit index on both arms, re-measured on
+the fix-round-1 tree: **0 failures** on base and on the fix over the amendment,
+quoted-setext, 638,976-cell, 3,150-shape, NRL-115 and NRL-131 censuses and the three
+round-0 fuzz seeds (fix, largest: 5,946,368 chunks / 60,064,000 units on the NRL-115
+census), with all four mutators nonzero on both arms in every one (drop-one:
+length; shift-all: identity, plus bounds where a chunk ends at the note's end;
+swap-two: monotonic and identity; negate-one: bounds). Verify's `gen.cjs` census
+(6,514,560 sentinel-cells) and seed-31337 fuzz report 0 length, identity,
+monotonicity or bounds failures on either arm through Verify's own checker. The
+NRL-155 census, the largest of round 0's, was not re-run for lockstep in fix round
+1. Both exemptions stay pre-existing: without `text[i] === " "` the three seeds
+report 535 / 522 / 556 identity failures on base and 542 / 531 / 553 on the fix,
+and without the synthetic `equation` text 208 / 176 / 176 on base and 208 / 192 /
+176 on the fix.
 
 **Function bodies** (sha256 prefix of the brace-matched body, by an extractor
 that skips strings, template literals, comments and regex literals and skips an
@@ -2139,7 +2278,14 @@ and the fix: `opensHtmlBlock` `fcd96db3`, `opensObsidianBlock` `f3cce67c`,
 `8da74d5f`, `wikiTargetClose` `18052772`, `flowDepthDelta` `ec178340`,
 `opensHiddenComment` `98f5273f`. Moved, as intended: `peelQuotes` (7cdc7b7),
 `containerPrefix` (7cdc7b7), `isSetextContentLine`, `bracketClosesLater`,
-`cleanLine` (one argument and one term).
+`cleanLine` (one argument and one term). Fix round 1 moves none of these, nor `term2QuotedStop`,
+`term2QuoteView`, `inQuoteSetextBlockPosition` or `leadReachesBlockStart`: all are
+byte-identical on `f0c52a2` and the fix-round-1 tree. Its changes sit in
+`extractChunks` (the term-2 pass's depth read and `calloutTitleAt`, the
+`listDedented` pass, `crAbove`, the container-fence drop) and in five new
+constants and one new function (`RENDERER_HR`, `CONTAINER_FENCE_LINE`,
+`TOP_ITEM_MARKER`, `LONE_CR`, `BLOCKQUOTE_ONE_LEVEL`,
+`rawOrMathBlockMayBeOpenTable`).
 
 **Tests.** Against base `9132c3b`, 22 NRL-38 checks are red (10 are 7cdc7b7's own
 pins, 12 this continuation's, including five pre-existing tripwires replaced in
@@ -2151,13 +2297,20 @@ continuation's and the two `pin-nrl115-f1-code-line-*` pins 7cdc7b7 regressed on
 this base. Four guards are green on all three arms, and two 7cdc7b7 fixtures
 whose expectations were stale on every arm were renamed and replaced
 (`guard-nrl114-quote-tab-html-comment-spoken`,
-`guard-nrl114-setext-quote-tab-html-opener-spoken`).
+`guard-nrl114-setext-quote-tab-html-opener-spoken`). **Fix round 1:** against `f0c52a2`, 15 NRL-38 checks are red - the
+12 new `pin-nrl114-f1-` / `pin-nrl114-f2-` core pins and the three tripwires
+replaced in place (`pin-nrl93-quote-inside-list-still-silenced`,
+`pin-nrl114-quote-tab-in-list-item-still-silenced`,
+`pin-nrl117-note-scope-parity-discloses`); against base `9132c3b` 40 are red.
+The new guards are green on `f0c52a2`; the five F2/F3 unmasking pins are red on
+base and their controls green on base.
 
 **Known misses, pinned.** A container line declined as code is spoken as prose,
 so `skipCodeBlocks` does not silence it (displayed text, base parity on the
 shapes base already spoke). `>  \t<!-- ZCZ` / `> ===` speaks the `===` underline
 the renderer does not display (a glyph, not hidden text). A deeper quote after an
-opener still hides (above).
+opener still hides (above). A quoted fence at a quote start still has its info
+string spoken (fix round 1, above). F3's three classes (above) stay, controlled.
 
 **NOTHING WAS OBSERVED IN OBSIDIAN.** Reading-view parser and renderer executed
 in Node only; Live Preview has never been read or run; AGENTS.md rule 11 applies
@@ -2165,6 +2318,148 @@ to every number above. Overlap: NRL-119 edits `endsTerm2Block` and `TERM2_LIST`;
 this change wraps them and never edits their bodies, and whichever of the two
 merges second must rebase and re-run both censuses. R-M08 is NOT met and the
 2-of-16 MUST count does not move.
+
+### NRL-166 (2026-10-08): fix round 1 ported onto `main`, and re-measured there
+
+PR #212 merged at `f0c52a2` although Verify had failed it, and the fix round above
+(`9c22016`, plus an uncommitted follow-up that closed its own `/critique`'s five
+findings) was never pushed. So `main` spoke F1's hidden text from `bcc59fe` until this
+port: `- > Plain ZPZ <!-- QAQ` / `> [!tip] QBQ` / `> QCQ -->` / `TAIL QDQ` spoke
+`Plain ZPZ <!-- QAQ | QBQ | QCQ --> | TAIL QDQ` on `e2afbfe` (reproduced by bundling the
+real `src/text/extract.ts`, masks ALL and DEF), where the renderer shows
+`Plain ZPZ TAIL QDQ`.
+
+**What the port is.** `9c22016` cherry-picked without committing, then the follow-up
+diff applied three-way. Three hunks conflicted, all against later `main` work, and
+were resolved as follows. (1) The `listDedented` Phase 1 declarations keep both
+NRL-162's `levelIds` / `nextLevelId` (#216) and this round's `markerQuotes`,
+`crSeen` and `carryQuotes`. (2) #216 moved the `listDedented` assignment into a
+Phase 2 that replays each line's level chain against the item's real `p`. This
+round's quote-in-item term is therefore recorded in Phase 1 as `dedentQuoteGate[k]`
+(`lineQuotes <= markerQuotes || crSeen || htmlMayHold[k]`) and conjoined in Phase 2.
+A conjunction can only move an answer true to false, so Phase 2's refusal-only proof
+still holds. (3) `srs.md` takes `main`'s text and re-applies this round's sentences
+with figures re-measured here.
+
+Four existing rows had expectations that were already stale on `main` and are
+replaced in place, names kept. Each new expectation is the executed renderer's
+text:
+- `pin-nrl114-f2-nrl136-same-line-reopen-unmasked` and its control were closed by
+  #196, and both now expect `""`.
+- `pin-nrl114-f3c-tab-led-fence-unmasked` and its control were closed by #214, and
+  both now expect `Plain ZPZ prose %% ZAZ ZBZ %% TAIL ZDZ`.
+- `guard-nrl119-r2-opener-with-lone-cr` was written "equal to base" against a base
+  that already carried `f0c52a2`, and it spoke the destination `zdestz.png`. Under
+  `crAbove` it keeps the pre-NRL-114 answer, which is the renderer's: `A xx yy B.`
+
+**The lone-CR rule is containment, not a model.** `crSeen` and `crAbove` give every
+line from a note's first lone CR onwards the pre-NRL-114 answer. They do not model
+the CR as the line terminator it is for the renderer. NRL-164 stays open.
+
+**The oracle is Obsidian 1.13.7, and the app on this host is 1.14.4.** Every renderer
+verdict below comes from the parser harness, whose `app.js` sha256 is
+`8efbf581e259cabef4f9c9a34814cfe3c02863757377e56b3603933c50e89898` (re-checked this
+session). That is the flatpak's bundled 1.13.7. The flatpak config directory also
+holds `obsidian-1.14.4.asar`, dated 2026-10-05, and the plan phase found that the
+running app loads 1.14.4 and that 30 of the harness's 114 extracted modules are not
+verbatim in it. 1.13.7 is kept as the oracle so these figures stay comparable with
+every earlier figure in this ADR. A harness rebuilt on 1.14.4 is a follow-up, and no
+figure here is a 1.14.4 measurement.
+
+**Censuses.** All runs used the executed renderer as oracle. Arms were bundled from
+`git archive <sha> src`, and "fix" is this working tree. Units are sentinel-cells,
+signed per sentinel as in Verify's `lib.cjs`. Verify's generators were copied
+unchanged except that the arm paths come from the environment. `sourceIndex` is
+checked by Verify's own checker (length, identity of each non-space character,
+monotone, bounds) on both arms of every run, and every run reported **0 lockstep
+failures**.
+
+| corpus | pair | newly disclosing | newly lost | closed (disc / loss) |
+|---|---|---|---|---|
+| F1 `callout-census.cjs`, 288 shapes x 2 masks (ALL, DEF) | `9132c3b` -> `e2afbfe` | 832 (324 groups without a control) | 0 | 0 / 144 |
+| | `9132c3b` -> fix | **0** | **0** | 0 / 144 |
+| | `e2afbfe` -> fix | **0** | **0** | 832 / 0 |
+| F1 extended, 1,600 shapes x 2 masks (16 prefixes including plain items, prose and quotes; 10 callout lines including fence titles; 5 continuations; tail or none) | `9132c3b` -> `e2afbfe` | 3,016 (1,132 groups without a control) | 0 | 0 / 1,184 |
+| | `9132c3b` -> fix | **0** | **0** | 16 / 1,184 |
+| | `e2afbfe` -> fix | **0** | **0** | 3,032 / 0 |
+| F2 fuzz `SEED=31337 N=4000`, masks ALL, DEF, SKIPALL (48,741 cells) | `9132c3b` -> `e2afbfe` | 97 | 21 | 70 / 654 |
+| | `9132c3b` -> fix | 73 | 10 | 136 / 723 |
+| | `e2afbfe` -> fix | **0** | 34 | 90 / 114 |
+| F3 `gen.cjs`, 808,704 shapes x 2 masks (6,514,560 cells), 20 shards | `9132c3b` -> fix | **0** | 2,708 | 19,918 / 474,866 |
+| | `e2afbfe` -> fix | **0** | 56 | 0 / 800 |
+
+**Against `9132c3b`, every moved cell has been run down.**
+- F1: nothing moved in either corpus.
+- F3: 2,528 of the 2,708 newly lost cells are classes (a) and (b) above. All 828
+  shape-mask groups in them have Verify's peel-equalising control. Class (a) is
+  2,464 cells: a VT- or NBSP-led `<!--` followed by `>\t---` (880), `>\t-`, `>\t=`
+  or `>\t===` (528 each), and it is still the largest class. Class (b) is 64 cells.
+  Class (c) is 0, and class (d) was already 0 after fix round 1.
+- F3 class (e) is new, at 180 cells: a quoted `<!--` (`> \t<!-- ZAZ` after a
+  paragraph line), then an UNQUOTED tab-led ```` ``` ````, then `> ZBZ -->`. The
+  renderer ends the quote at the tab-led line and shows it as indented code, so
+  `<!-- ZAZ` and `ZBZ -->` are both displayed. NRL-156's capped `FENCE` reads the
+  line as lazy prose, and the term-2 bound then pairs across it. The class moved at
+  `8d2b3f2` (#214), the fix's output on it is byte-identical to `e2afbfe`'s, and it
+  has no peel-equalising control. It is fail-closed (prose loss).
+- F2: 63 shape-mask groups moved. 41 have a control under the criterion above:
+  24 peel-equalising, 11 by an inserted blank line, 5 by a renderer-equivalent
+  defusal and 1 by the unquoted twin. That search (`ctrl4.cjs`) rejects a defusal
+  twin unless the executed renderer's visible text is unchanged.
+- F2, the other 22 groups (24 cells): bisected across `main`'s commits. **Every one
+  is byte-identical on `e2afbfe` and moved at a later ticket, not at #212 or this
+  port.** 19 moved at `8d2b3f2` (NRL-156, #214; 18 disclosing cells and 1 lost).
+  They are a fence inside a list item, indented four or more raw columns but within
+  the item's dedent, so the renderer opens a fence and hides its info string, while
+  the capped `FENCE` reads the line as prose and speaks it. 3 moved at `a95740f`
+  (NRL-162, #216; n3951, `%% QDQ` disclosed in all three masks). **Both are
+  disclosures on `main` today**, and this port neither causes nor closes them.
+- Verify's 13 minimised shapes (`mins.json`), masks ALL and DEF: 8 now speak the
+  renderer's text or are pinned unmaskings. Their 10 moved groups all have a
+  control: 5 the unquoted twin (the `<div>` raw-HTML block, NRL-137) and 5 a
+  renderer-equivalent `-->` defusal (a quoted fence at a quote start, and NRL-163's
+  footnotes). Each shape without a row now has one, as a `pin-nrl166-min-` row,
+  with its control where that control is a document the test can read.
+  `minimize.cjs` reproduces none of the 13 against `e2afbfe`.
+
+**Against `e2afbfe`: 0 newly disclosing in every corpus, and every newly lost cell is
+named.** All 34 fuzz cells (11 notes) and all 56 F3 cells are byte-identical to
+`9132c3b`'s output on the same note. They are the pre-NRL-114 answer coming back,
+and every one is fail-closed.
+- An ablation arm with `LONE_CR` disabled shows that 25 of the 34 fuzz cells (8
+  notes) come from the lone-CR containment.
+- All 56 F3 cells are one shape: a list in a quote whose marker line carries a lone
+  CR (`> -\r--> ZAZ` / `>  >\t%%`). The renderer shows the `%%` there as code in the
+  item's nested quote. `crSeen` waives the quote-in-item rule, so the `%%` opens a
+  block again.
+- The other 9 fuzz cells (n618, n2147, n1164) come from F1's correction. The
+  `[!type]` line is now lazy, so the inline `<!--` reaches a later `-->`. But the
+  renderer's comment may not contain `--`, and n618 and n2147 have a `<!-- y`
+  between them, so this is class (b)'s missing body check. n1164 adds a lone CR.
+  `main` was right on these three only because it took the callout line as a stop.
+
+**Room to fail, shown rather than assumed.** The same F1 census reports 832 newly
+disclosing cells for `9132c3b` -> `e2afbfe`, Verify's own figure for `f0c52a2`.
+Against the final test file, `e2afbfe` turns 20 NRL-38 checks red, and so does the
+unfixed tree, including every F1 pin. `9132c3b` turns 91 red and throws in the
+textual section, and `9c22016`'s own `src/` turns 41 red. `9c22016` merged onto
+`e2afbfe` without the follow-up had the five `guard-nrl114-r1-` rows red, and they
+are green after it.
+
+**Not re-measured, and so not claimed on the port:** ADR 0006's 5,160,960-cell
+reconstruction and the 3,150-shape figures, the other fix-round censuses in the
+table above, round 0's three seeds, and the function-body hashes. They stand as
+measured on `9c22016`, or on `f0c52a2` where marked, because their generators were
+not in this lane's reach.
+
+The generator copies are kept in the NRL-166 run's scratch directory (`gens/`):
+`lib.cjs`, `run.cjs`, `runf.cjs`, `callout-census.cjs`, `callout-census2.cjs`,
+`ctrl.cjs`, `ctrl2.cjs`, `ctrl4.cjs`, `minimize.cjs`, `fuzz.cjs`, `gen.cjs` and
+`mins.json`. They are temporary.
+
+**NOT VERIFIED IN OBSIDIAN.** Everything above was run in bare Node against the 1.13.7
+reading-view renderer. Live Preview was not run, and nothing was deployed. R-M08 is
+NOT met.
 
 ### CLOSED by NRL-119: a list marker alone on its line ends the paragraph
 

@@ -2062,6 +2062,78 @@ const LIST_BULLET = /^\s*([-*+]|\d+[.)])\s+/;
 /** Every nesting level at once, so "> > x" does not speak the inner ">". */
 const BLOCKQUOTE = /^(?:\s{0,3}>\s?)+/;
 /**
+ * One level of the WIDE `BLOCKQUOTE` above, for COUNTING the levels the
+ * `listDedented` pass peels (NRL-114 fix round 1). That pass keeps the wide peel
+ * on purpose (see `QUOTE_LEVEL_PEEL`), so its count keeps the wide rule too.
+ */
+const BLOCKQUOTE_ONE_LEVEL = /^\s{0,3}>\s?/;
+/**
+ * A fenced code block's opening or closing LINE, as the body of a container
+ * line (NRL-114 fix round 1): up to three spaces, then three or more backticks
+ * with no backtick in the info string (CommonMark; a backtick there makes it
+ * inline code), or three or more tildes. A lone CR before the end is a line
+ * terminator for the renderer, so it is refused rather than read as one line.
+ */
+const CONTAINER_FENCE_LINE = /^ {0,3}(?:`{3,}[^`\r]*|~{3,}[^\r]*)\r?$/;
+/**
+ * A thematic break exactly as the reading-view renderer takes it, measured with
+ * its parser run in Node (NRL-114 fix round 1): at most three leading spaces,
+ * then three or more of one of `-`, `*`, `_` separated by SPACES only. A tab or
+ * a vertical tab anywhere in it (`- \t---`, `*\t*\t*`, `---\t`) makes it
+ * something else, a list item or a paragraph. The shared `HR` is wider (`\s`)
+ * and is left alone because `interruptsParagraph` reads it.
+ */
+const RENDERER_HR = /^ {0,3}([-*_])(?: *\1){2,} *\r?$/;
+/**
+ * Whether the column-0 list marker on line `k` really starts an item for the
+ * renderer (NRL-114 fix round 1): a bullet, or `1.` / `1)`, interrupts a
+ * paragraph; any other ordered marker does so only at a block start (the note's
+ * first line, after a blank line, an ATX heading or a thematic break). Measured
+ * with the renderer: `x` / `2. ~~~ js` is ONE paragraph that displays `2. ~~~ js`,
+ * and so is `- item` / `2. ~~~ js`, while `x` / `1) ~~~ js` is a list item.
+ */
+function itemStartsBlock(lines: readonly string[], k: number): boolean {
+	if (/^(?:[-*+]|1[.)])[ \t]/.test(lines[k]!)) return true;
+	if (k === 0) return true;
+	const prev = lines[k - 1]!;
+	return prev.trim() === "" || BLOCK_END_ATX.test(prev) || RENDERER_HR.test(prev);
+}
+/** A CR that does not end its line: a line terminator the `\n` split misses. */
+const LONE_CR = /\r(?!\n?$)/;
+/** A list marker at column 0, the line's outermost container. */
+const TOP_ITEM_MARKER = /^(?:[-*+]|\d{1,9}[.)])[ \t]/;
+/**
+ * For each line, whether a raw HTML block or a `$$` math block may still be
+ * open there, for the container-fence drop only (NRL-114 fix round 1), which must never
+ * drop a line those blocks display. Errs toward true: any line back to the
+ * previous blank line whose body starts with `<` (CommonMark HTML block types 6
+ * and 7 end at a blank line) or holds `$$`, and any earlier line at all that
+ * starts one of types 1, 3, 4 or 5, which do not. Type 2, the `<!--` comment, is
+ * left out of both: if the renderer has one open it hides the fence line anyway,
+ * so dropping that line cannot lose displayed text, and our own comment state
+ * reaches the line before this test does.
+ */
+function rawOrMathBlockMayBeOpenTable(lines: readonly string[], withFences: boolean): boolean[] {
+	// One forward pass rather than a backward scan per asking line, so a note of
+	// many fence-shaped item lines stays linear.
+	const out: boolean[] = new Array<boolean>(lines.length).fill(false);
+	let longLived = false;
+	let sinceBlank = false;
+	for (let k = 0; k < lines.length; k++) {
+		out[k] = longLived || sinceBlank;
+		const raw = lines[k]!;
+		const body = raw.replace(/^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?[ \t>]*/, "");
+		if (/^<(?:pre|script|style|textarea)\b|^<\?|^<![A-Za-z]|^<!\[CDATA\[/i.test(body)) longLived = true;
+		// For the fence drop, any fence-shaped line above at all, in any container
+		// or as a callout title: this drop keeps no fence state, so a later line
+		// may be that fence's CONTENT (`- ~~~ js` / `> [!tip] ~~~ x` is code).
+		if (withFences && /^(?:\[![^\]]*\][+-]?[ \t]*)?(?:`{3,}|~{3,})/.test(body)) longLived = true;
+		if (raw.trim() === "") sinceBlank = false;
+		else if ((body.startsWith("<") && !body.startsWith("<!--")) || raw.includes("$$")) sinceBlank = true;
+	}
+	return out;
+}
+/**
  * Obsidian callout marker, `[!type]` with an optional fold `+` or `-`. Only
  * recognised straight after a blockquote prefix, because a bare `[!note]` line
  * renders literally in Obsidian. Requiring `[!` keeps `> [link](x)` and
@@ -5140,6 +5212,10 @@ export function extractChunks(
 	// does with a quoted line (`unsureFresh`, below); those keep the old answer.
 	const term2Stop: boolean[] = new Array<boolean>(lines.length).fill(false);
 	const term2StopRaw: boolean[] = new Array<boolean>(lines.length).fill(false);
+	// A `[!type]` line that STARTS a quote, and so is a real callout title for
+	// the renderer rather than paragraph text (read for the container-fence drop
+	// in the per-line loop; NRL-114 fix round 1).
+	const calloutTitleAt: boolean[] = new Array<boolean>(lines.length).fill(false);
 	{
 		let paraLinesAbove = 0;
 		let rawLinesAbove = 0;
@@ -5152,13 +5228,23 @@ export function extractChunks(
 			term2StopRaw[k] = endsTerm2Scan(line, rawLinesAbove);
 			rawLinesAbove = endsTerm2Block(line, rawLinesAbove) ? 0 : rawLinesAbove + 1;
 			const { depth, body } = term2QuoteView(line);
+			// `prevDepth` is the previous line's CONTAINER depth, which counts a quote
+			// behind a list marker (`- > x`, `1. > x`) through `containerPrefix`, the
+			// one definition of the prefix. `term2QuoteView` cannot see that `>`, so
+			// with its depth alone `- > Plain <!--` / `> [!tip] x` read as a quote
+			// STARTING on the second line, a callout title, and a stop, where the
+			// renderer continues the list item's quote paragraph lazily and its inline
+			// comment hides the title (NRL-114 fix round 1). The larger of the two
+			// counts is taken: a deeper previous line can only withhold a quote start,
+			// which withholds a stop, the fail-closed direction.
 			const quoteStart = depth > prevDepth && (k === 0 || term2Stop[k - 1]!);
-			prevDepth = depth;
+			prevDepth = Math.max(depth, containerPrefix(line).quotes);
 			if (depth === 0) {
 				term2Stop[k] = endsTerm2Scan(line, paraLinesAbove);
 				paraLinesAbove = endsTerm2Block(line, paraLinesAbove) ? 0 : paraLinesAbove + 1;
 				continue;
 			}
+			calloutTitleAt[k] = quoteStart && TERM2_CALLOUT_TITLE.test(body);
 			const r = term2QuotedStop(body, quoteStart, paraLinesAbove);
 			term2Stop[k] = r.stop;
 			paraLinesAbove = r.next;
@@ -5295,12 +5381,13 @@ export function extractChunks(
 	// UNDER-dedent every line below it, which is the one direction that can speak
 	// hidden text. A whole-lead budget reproduces the pre-NRL-117 answer instead.
 	//
-	// NOT closed here, and pinned rather than left to be rediscovered: a
-	// blockquote nested inside a list item. `BLOCKQUOTE` is peeled from `raw`
-	// BEFORE this walk runs, where the renderer dedents the item first and peels
-	// the quote second, so for `- item` / `  > \t%%` the tab is gone before any
-	// budget is applied and no indent model can see it. That is NRL-114's
-	// quote-peel narrowing; 8 such cells stay divergent and 4 close here.
+	// A blockquote nested inside a list item is not closed by the walk itself:
+	// `BLOCKQUOTE` is peeled from `raw` BEFORE this walk runs, where the renderer
+	// dedents the item first and peels the quote second, so for `- item` /
+	// `  > \t%%` the tab is gone before any budget is applied and no indent
+	// model can see it. NRL-114's fix round 1 closes it beside the walk instead,
+	// through `dedentQuoteGate` (a line quoted deeper than its item's marker line
+	// is not dedented by the item), conjoined with Phase 2's answer below.
 	const listItemContent: boolean[] = new Array<boolean>(lines.length).fill(false);
 	const listDedented: boolean[] = new Array<boolean>(lines.length).fill(false);
 	// Phase 1: the structural walk, UNCHANGED - which lines belong to which
@@ -5334,18 +5421,57 @@ export function extractChunks(
 	const levelP = new Map<number, number>();
 	const fallbackLevelIds = new Set<number>();
 	const chainIds: number[][] = new Array<number[]>(lines.length);
+	// Phase 1's per-line quote-in-item gate (NRL-114 fix round 1), conjoined
+	// with Phase 2's answer.
+	const dedentQuoteGate: boolean[] = new Array<boolean>(lines.length).fill(true);
 	{
 		let inItem = false;
 		let blankBefore = true;
 		let levels: number[] = [];
 		let levelIds: number[] = [];
 		let nextLevelId = 0;
+		// The quote depth of the line that opened the current item (NRL-114 fix
+		// round 1). A line quoted DEEPER than that holds a blockquote nested INSIDE
+		// the item, and the renderer dedents the item first and peels that quote
+		// second, so the `%%` sits in a QUOTE BODY, where module 6234 dedents
+		// nothing and the spaces-only rule applies. Without it `- item` /
+		// `  > \t%%` (and `1.  text` / `   >  \t%%`) took the dedent's
+		// any-whitespace rule, opened a block on a tab-led `%%` the renderer shows
+		// as code or text, and hid the rest. A quote AROUND the list (`> - item` /
+		// `> \t%%`) is the same depth as its marker line and is untouched.
+		let markerQuotes = 0;
+		let crSeen = false;
+		// The quote depth the renderer may still hold open at this line: the
+		// last quoted line's depth, carried over unquoted non-blank lines (a lazy
+		// line inside an open quote) and dropped at a blank line. A marker line
+		// with no `>` of its own after `>` or `> ---`, whose marker cannot
+		// interrupt the quote (below), is an item INSIDE that quote
+		// (`>` / `2. b` / `> \t%%` is `<blockquote><ol><li>b</li></ol>` and the
+		// `%%` is dedented item content there), so the marker's depth is the
+		// larger of the two, which keeps the dedent: the fail-closed side.
+		let carryQuotes = 0;
+		// Lines a raw HTML or `$$` block may hold keep the old answer too.
+		const htmlMayHold = rawOrMathBlockMayBeOpenTable(lines, false);
 		for (let k = 0; k < lines.length; k++) {
 			const raw = lines[k]!;
 			const body = raw.replace(BLOCKQUOTE, "");
 			const quoted = BLOCKQUOTE.test(raw);
+			if (LONE_CR.test(raw)) crSeen = true;
+			let lineQuotes = 0;
+			for (let rest = raw, q = BLOCKQUOTE_ONE_LEVEL.exec(rest); q !== null && q[0].length > 0; q = BLOCKQUOTE_ONE_LEVEL.exec(rest)) {
+				lineQuotes += 1;
+				rest = rest.slice(q[0].length);
+			}
 			const blank = body.trim() === "";
-			const marker = LIST_BULLET.test(body);
+			// A thematic break is not an item, although `- - -` and `-    ---` match
+			// `LIST_BULLET`: `thematicBreak` precedes `list` in `blockMethods`, so
+			// module 745 never sees the line (NRL-114 fix round 1). Reading it as a
+			// marker made `> -    ---` / `>   \t%%` dedented item content, and the
+			// tab-led `%%` the renderer displays in a plain quote paragraph opened a
+			// block and hid the rest. `RENDERER_HR`, not the shared `HR`: the
+			// renderer's thematic break takes SPACES only, so `- \t---` and
+			// `- \v---` are list items for it and must stay markers here.
+			const marker = LIST_BULLET.test(body) && !RENDERER_HR.test(body);
 			const indented = /^\s/.test(raw) || /^\s/.test(body);
 			if (
 				!blank &&
@@ -5378,7 +5504,24 @@ export function extractChunks(
 			levelIds.length = depth;
 			chainIds[k] = chain;
 			listItemContent[k] = inItem && !marker;
-			if (marker) inItem = true;
+			// NRL-114 fix round 1's quote-in-item gate, recorded here and conjoined
+			// in Phase 2 below. A lone CR is a LINE TERMINATOR for the renderer, so
+			// what follows it starts a physical line this pass never sees; from the
+			// first one on, a line keeps the old answer (`> - x` / `>  ` + CR + `%%`
+			// hides for the renderer). That is containment only: it preserves the
+			// pre-NRL-114 answer and does not model the CR, which stays NRL-164's.
+			// A line a raw HTML or `$$` block may hold keeps the old answer too.
+			dedentQuoteGate[k] = lineQuotes <= markerQuotes || crSeen || htmlMayHold[k]!;
+			if (marker) {
+				inItem = true;
+				// Only where the marker cannot interrupt the quote: a bullet or a
+				// literal `1.` does (module 6234's interrupt walk, the same silent rule
+				// `TERM2_LIST` transcribes), so `> \t%% x` / `- > y` ends the quote and
+				// the item's own depth stands.
+				markerQuotes = TERM2_LIST.test(raw) ? lineQuotes : Math.max(lineQuotes, carryQuotes);
+			}
+			if (raw.trim() === "") carryQuotes = 0;
+			else if (lineQuotes > 0) carryQuotes = lineQuotes;
 			let head = ITEM_HEAD.exec(view);
 			if (head === null && marker) {
 				const id = nextLevelId++;
@@ -5436,7 +5579,9 @@ export function extractChunks(
 		if (!listItemContent[k]) continue;
 		let view = lines[k]!.replace(BLOCKQUOTE, "");
 		for (const id of chainIds[k]!) view = view.slice(listDedentCut(view, levelP.get(id)!));
-		listDedented[k] = leadReachesBlockStart(view);
+		// The conjunction with Phase 1's quote-in-item gate can only move an
+		// answer true -> false, so it keeps this pass's refusal-only proof.
+		listDedented[k] = leadReachesBlockStart(view) && dedentQuoteGate[k]!;
 	}
 	// `setextContent[k]` is "line k is the one content line of a setext heading,
 	// so a `<!--` at its start is heading TEXT and not an HTML block opener"
@@ -5782,6 +5927,8 @@ export function extractChunks(
 	// the measurements live on `rendererLeads`. Frontmatter lines get no record,
 	// and the first line after it starts a fresh frame, which is the safe default.
 	const leads = rendererLeads(lines, frontmatter ? frontmatter.endLine + 1 : 0);
+	// Built on first use by the container-fence drop in the per-line loop.
+	let rawOrMathOpen: boolean[] | undefined;
 	const htmlLeadIndented = leadIndentedForHtml(leads);
 	// A lone CR before the line's first `<!--` (or `%%`, for the code-line veto
 	// below) is a LINE TERMINATOR for the renderer, so that construct starts a
@@ -5826,14 +5973,25 @@ export function extractChunks(
 	// masking term 2 there newly spoke an inline comment's body
 	// (`> | a |` / `> \t<!-- SECRETH` / `> =` / `> HIDDEN` / `> --> t.` is ONE
 	// paragraph whose comment hides SECRETH and HIDDEN).
-	const htmlLeadCode = htmlLeadIndented.map((v, k) => v && !leads.cont[k]! && !leads.unsureFresh[k]!);
+	// Every line from the first LONE CR on (a CR not ending its line) keeps the
+	// pre-NRL-114 answers below, as an unsure line does (NRL-114 fix round 1). A
+	// lone CR is a line terminator for the renderer and not for our `\n` split,
+	// so after one the walker's view of which line starts which block is not the
+	// renderer's: `    ` + CR + `%%` opens a comment there that hides a later
+	// `> > \t\t<!-- x`, which the code mask alone newly spoke.
+	const crAbove: boolean[] = new Array<boolean>(lines.length).fill(false);
+	for (let k = 0, seen = false; k < lines.length; k++) {
+		if (!seen && LONE_CR.test(lines[k]!)) seen = true;
+		crAbove[k] = seen;
+	}
+	const htmlLeadCode = htmlLeadIndented.map((v, k) => v && !leads.cont[k]! && !leads.unsureFresh[k]! && !crAbove[k]!);
 	// A line the walker is unsure of keeps the pre-NRL-114 term-2 answer whole:
 	// after a definition-shaped line the renderer may have a FOOTNOTE whose
 	// continuation it dedents (`> [^1]: foot` / `> \t<!-- SECRETH` / `> ---`
 	// holds an html node `<!-- SECRETH` inside the footnote), after a
 	// table-shaped one a plain paragraph, and the walker models neither, so
 	// neither the quoted stop nor the code mask may decide such a line.
-	const htmlClosesLaterAt = htmlCloserAhead.map((v, k) => (leads.unsureFresh[k]! ? htmlCloserAheadRaw[k]! : v && !htmlLeadCode[k]!));
+	const htmlClosesLaterAt = htmlCloserAhead.map((v, k) => (leads.unsureFresh[k]! || crAbove[k]! ? htmlCloserAheadRaw[k]! : v && !htmlLeadCode[k]!));
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,
@@ -6541,6 +6699,44 @@ export function extractChunks(
 			continue;
 		}
 		if (/^[-*_]{3,}$/.test(body.trim())) {
+			flushParagraph();
+			continue;
+		}
+		// A FENCE line that is the first content of a list item opened on this very
+		// line at column 0 (`- ~~~ js`, `1. >    ~~~ js`): the fence and its info
+		// string are never displayed, as the top-level `FENCE` branch above says of
+		// an unquoted one, but that branch reads the RAW line, so these were spoken
+		// as prose (NRL-114 fix round 1). Base spoke them too, but a `%%` above that
+		// base wrongly read as an open block used to silence them, and the narrower
+		// peel's correct reading of that `%%` exposed them. Only the fence LINE is
+		// dropped; no fence state is kept, so the code inside stays spoken as prose
+		// exactly as before.
+		//
+		// Deliberately this narrow, because every wider form was measured dropping
+		// text the renderer DISPLAYS: a fence line inside a quote can be CONTENT of a
+		// quoted fence opened above it (`>  ` + fence / `> -\t ~~~ x`), a `[!note]`
+		// line is a callout title only on a quote's first line and paragraph text
+		// anywhere else, and a raw HTML block or a `$$` block swallows what follows.
+		// A marker at column 0 starts a new top-level item, which no quoted or
+		// item-local fence can hold; `FENCE` on the raw line already handles a fence
+		// at the top level; and the backward scan refuses whenever an HTML block or
+		// a math block may still be open. A line holding a comment opener is left to
+		// the old path, so no comment state moves here.
+		//
+		// The second arm is a callout whose TITLE is a fence (`> [!note] ~~~ js`):
+		// module 6234 tokenizes the title on its own, so the fence there is a
+		// block that displays nothing. Only on a `[!type]` line that STARTS a quote
+		// (`calloutTitleAt`), since on any later line of a quote it is paragraph
+		// text the renderer displays; the title is the text after the marker less
+		// ONE whitespace character, which is how `[!note] \t%%` comes out as
+		// indented code there.
+		if (
+			((TOP_ITEM_MARKER.test(raw) && !prefix.callout && CONTAINER_FENCE_LINE.test(body) && itemStartsBlock(lines, lineNo)) ||
+				(prefix.callout && calloutTitleAt[lineNo]! && CONTAINER_FENCE_LINE.test(/\s*$/.exec(raw.slice(0, prefixChars))![0].slice(1) + body))) &&
+			!body.includes("%%") &&
+			!body.includes("<!--") &&
+			!(rawOrMathOpen ??= rawOrMathBlockMayBeOpenTable(lines, true))[lineNo]!
+		) {
 			flushParagraph();
 			continue;
 		}
