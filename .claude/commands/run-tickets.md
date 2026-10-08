@@ -19,7 +19,7 @@ table before the first run.
 | **One deploy slot.** `npm run deploy` writes to one fixed folder in `~/Documents/Notes`. | Only one lane at a time may call it. Take `$PRIMARY/.claude/deploy.lock` atomically with `mkdir`, deploy, write `.deployed-from` with the `runId` and commit, then release. **The path is resolved against `$PRIMARY` deliberately:** a lock inside the run's own fresh lane is free by construction, so it would guard nothing while the slot it protects is still a single shared folder. A lane that cannot take it skips the deploy and says so in its report rather than waiting: the vault carries merged `main` either way, and whoever deploys last wins. |
 | **A deploy is not live until Obsidian restarts.** On 2026-09-28 two tickets were "passed" against a stale in-memory build after an in-app reload. | Finish deploys `main` so the owner's vault always has the latest merged build, and the end-of-run report tells them to **fully quit and relaunch** Obsidian. A deploy never counts as evidence that the code ran. |
 | **Base branch is `main`.** It is the only branch; `origin/HEAD` resolves correctly here. | No special casing. Still assert it rather than assuming. |
-| **Reproduced defects are listed** in `AGENTS.md` "Known state", with exact triggering inputs. | Phase 0 must not ask for a repro for one of those. It is already written down. |
+| **Reproduced defects are listed** in the "Known state" section of `docs/agent-history.md`, with exact triggering inputs. It moved out of `AGENTS.md` on 2026-10-04 (`e2afbfe`); `AGENTS.md` no longer has a Known state section. | Phase 0 must not ask for a repro for one of those. It is already written down. |
 | **Parallel runs are supported.** Several `/run-tickets` may be in flight on this repo at once, each in its own lane, each with its own state file. | Nothing serialises a run as a whole. The two things that really are shared are guarded individually: the single deploy slot by `$PRIMARY/.claude/deploy.lock`, and `main` by git itself, where a conflict blocks one ticket and nothing else. **Give parallel runs disjoint ticket sets.** Two runs holding the same ticket is not a data-safety problem, it is duplicated work and two PRs for one fix. |
 | **Every run's state file is its own**, `$PRIMARY/.claude/pipeline-state.<stamp>.json`, sharing the lane's stamp. | This is what makes parallelism safe, and it is the fix for 2026-09-29, when two runs shared one hardcoded `pipeline-state.json`: the second reinitialised it, destroying the first run's six ticket entries **and** the archive it had just written to `.claude/scratch/`, then rewrote `main` and dropped an unpushed commit. A run now writes exactly one path that no other run can name. **Never write another run's state file**, and never "tidy" one away. |
 | **The lock binds `/run-tickets` only.** | Interactive sessions never take it, so `/start-issue`, `/ship` and `/verify` in the primary repo or in a `note-reader-local-nrl-*` worktree still run alongside a live run. What they must not do is deploy: that is what `deploy.lock` is for. |
@@ -293,7 +293,7 @@ Then make the lane usable, and **prove it before any ticket touches it**:
 
 ```bash
 npm ci
-npm run typecheck && npm run build && npm test
+npm run typecheck && npm run lint && npm run build && npm test
 ```
 
 `npm ci` rather than `npm install`: `package-lock.json` is committed and `ci` reproduces it exactly.
@@ -349,7 +349,7 @@ Merge squashed), and this branch is the run's own. It is permission-gated, which
 section lists it. If `status --short` is not empty at this point, something in the previous ticket did
 not finish cleanly: block rather than resetting over it, because that reset would destroy work.
 
-Then read, in this order: `AGENTS.md` (the non-negotiables and the Known-state defect list),
+Then read, in this order: `AGENTS.md` (the non-negotiables), the "Known state" defect list in `docs/agent-history.md`,
 `.claude/linear.md`, and the commands this pipeline delegates to - `start-issue.md`, `ship.md`,
 `finish.md`, `check-constraints.md`, `critique.md`. Do not reimplement their contents here; call
 them. `verify.md` is the interactive, human-driven check and is **not** used by this command.
@@ -367,7 +367,7 @@ Progress.
    > including any "Decisions" section, which records answers the owner already gave. Grep and
    > read the files each ticket actually names; do not judge by title. Return a table with ticket
    > id, judgment (simple / complex / needs-decomposition), the `srs.md` requirement ID it closes
-   > if any, whether it is one of the `AGENTS.md` Known-state defects, and whether it would amend
+   > if any, whether it is one of the Known-state defects in `docs/agent-history.md`, and whether it would amend
    > `srs.md`. Flag inter-ticket dependencies and file overlap for the given run order.
    >
    > For every open question the Decisions section does not answer, give the question, **your
@@ -548,7 +548,8 @@ weaken an existing test. Consult the `AGENTS.md` non-negotiable that matches the
 touching: `extract.ts` means the `sourceIndex` lockstep rule, engines mean the `ownsPlayback` rate
 rule, settings mean the normalisation rule, anything logging means no note text ever.
 
-Run the gates yourself before finishing: `npm test`, `npm run typecheck`, and `npm run build` if
+Run the gates yourself before finishing: `npm test`, `npm run typecheck`, `npm run lint`, and
+`npm run build` if
 you touched `src/engines/onnx/`, `esbuild.config.mjs`, `manifest.json` or `package.json`. Every
 registered suite runs and is reported; read the runner's output as `AGENTS.md`'s quality-gates
 block describes it. Write a 3 to 6 sentence `implementationSummary` that lists every deviation
@@ -593,7 +594,7 @@ write this code; your job is to find out whether it does what the acceptance cri
 edit tracked files.
 
 1. Confirm the working tree is clean and `HEAD` equals `commitSha`. Run `npm test`,
-   `npm run typecheck` and `npm run build`. Check that `main.js`'s `require()` list is only
+   `npm run typecheck`, `npm run lint` and `npm run build`. Check that `main.js`'s `require()` list is only
    `obsidian`, `@codemirror/view`, `@codemirror/state` and `child_process` (ADR 0033), and that
    it holds no `import()` of a node builtin.
 2. End-to-end probes: bundle the real changed module from the scratchpad and run **every input the
@@ -739,7 +740,9 @@ claim 'not merged' for work that is fully in `main`. Grep the resynced lane for 
 the PR added before deleting, and use `-D` only once content is confirmed. Set the Linear status to
 Done with `save_issue`, passing `id` and `state: \"Done\"`: the parameter is `state`, never
 `status`, and unknown fields are rejected, so no id lookup is needed. Read the status back. Then
-check whether this ticket removed one of the defects listed in the `AGENTS.md` Known state section,
+check whether this ticket removed one of the defects listed in the "Known state" section of
+`docs/agent-history.md` (not `AGENTS.md`: that section was moved out on 2026-10-04 to keep the
+entry point compact, so never re-create it there),
 or moved a requirement's status in `srs.md`. If so, make the doc edit on a `docs/<id>-finish`
 branch, open a PR, and squash-merge it yourself; never commit to `main` directly. Merge it the way
 Phase 6 does and for the same reason, with no `--delete-branch` and the delete chained to the
@@ -908,7 +911,7 @@ When every ticket is `done` or `blocked` and Step 8 has run, print one message:
 /run-tickets NRL-19,NRL-20,NRL-21
 ```
 Three reproduced markdown defects in `extract.ts`. Phase 0 skips the repro questions because all
-three are in the Known state list; each ticket then runs 1 to 7 without stopping.
+three are in the Known state list in `docs/agent-history.md`; each ticket then runs 1 to 7 without stopping.
 
 ```
 /run-tickets NRL-30 --build
@@ -971,7 +974,7 @@ next run leaves a second sibling beside it.
 | **Base branch** | `main`. PRs target it; the lane never checks it out, since the primary has it |
 | **Remote** | `git@github.com:JoshShearer/Note-Reader-Local.git` |
 | **Tracker** | Linear workspace `note-reader-local`, MCP server `linear-nrl`, team key `NRL` |
-| **Gates** | `npm test` · `npm run typecheck` · `npm run build` when the bundle moved. Run once in the fresh lane at Step 0c before any ticket |
+| **Gates** | `npm test` · `npm run typecheck` · `npm run lint` · `npm run build` when the bundle moved. Lint errors fail CI and warnings do not, so `npm run lint` exits non-zero exactly when CI would. Run once in the fresh lane at Step 0c before any ticket |
 | **CI** | `.github/workflows/ci.yml`: the workflow is **named `CI`** and its one job is **named `gates`**, on `push` (`branches: ["**"]`) and `pull_request`, so it runs twice on a PR branch and the two runs do not conclude together. `gh run list` can only ever see the workflow name, never the job name; read a conclusion with the snippet under `Reading a CI conclusion` below. May be read once, never waited on. No branch protection, so a red check does not block a merge. `/test-issue` is the human-invoked triage |
 | **Push gate** | None. No husky, no active git hooks. |
 | **Permission gate** | Four commands the pipeline needs are `ask` in `opencode.json`. Launch headless (`opencode run --auto --command run-tickets "<ids>"`) or in a Claude Code bypass session. See "How to launch it, per runtime". |
