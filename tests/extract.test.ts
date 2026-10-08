@@ -1906,7 +1906,14 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl119-r2-tab-nested-opener-across-tab-one-dot", "> ZPZ\n>\t> ZAZ ![ZXZ\n>\t1.\n> > ZYZ](zdestz.png) ZBZ.", "ZPZ ZAZ ZXZ 1. ZYZ ZBZ."],
 		["guard-nrl119-r2-space-tab-opener-across-tab-dash", ">\n> \tZAZ ![ZXZ\n>\t-\n> ZYZ](zdestz.png) ZBZ.", "ZAZ [ZXZ - ZYZ](zdestz.png) ZBZ."],
 		["guard-nrl119-r2-tab-nested-opener-tab-tab-closer", "> ZPZ\n>\t> ZAZ [ZXZ\n>\t\tZYZ](zdestz.png) ZBZ.", "ZPZ ZAZ ZXZ ZYZ ZBZ."],
-		["guard-nrl119-r2-opener-with-lone-cr", ">\t\rA ![xx\n>\t\ryy](zdestz.png) B.", "A [xx yy](zdestz.png) B."],
+		// NRL-166 (NRL-114 fix round 1's `crAbove`): REPLACED IN PLACE, name kept.
+		// From a note's first lone CR on, a line keeps the pre-NRL-114 answer, and
+		// here that is the renderer's: `<blockquote><p>A <span class="internal-embed"
+		// src="zdestz.png" alt="xx\n\t\nyy"></span> B.` displays the alt and never
+		// the destination. The old expectation was "equal to base" against a base
+		// that already carried NRL-114's head f0c52a2, and it spoke `zdestz.png`.
+		// Green on 9132c3b; RED on e2afbfe. Containment only: NRL-164 stays open.
+		["guard-nrl119-r2-opener-with-lone-cr", ">\t\rA ![xx\n>\t\ryy](zdestz.png) B.", "A xx yy B."],
 		["guard-nrl119-r2-quoted-code-opener-across-tab-dash", ">\tA ![ZXZ\n>\t-\n>\tZYZ](zdestz.png) ZBZ.", "A [ZXZ - ZYZ](zdestz.png) ZBZ."],
 		["guard-nrl119-r2-quoted-tab-continuation-still-carried", "> P\n>\tA ![ZXZ\n> ZYZ](zdestz.png) ZBZ.", "P A ZXZ ZYZ ZBZ."],
 		// A list inside a quote, and a quote inside a list (/critique 1 and 2): RED on
@@ -2603,9 +2610,15 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// model can see it, and NRL-117 scoped it out rather than duplicating blocked
 		// work (Q42). 4 cells of that class closed anyway, as the 8sp twin below shows,
 		// and 8 stay divergent.
+		// The third is now ALSO replaced in place: CLOSED BY NRL-114's fix round 1,
+		// which makes the `listDedented` pass give a line quoted deeper than its
+		// item's marker line the spaces-only rule, since the renderer dedents the
+		// item first and then peels the quote, leaving `\t%%` in a quote body
+		// (`<ul><li>item<blockquote><p>Plain<br>%%<br>SECRET</p></blockquote></li></ul>`,
+		// executed renderer). RED on base and on the PR head f0c52a2.
 		["pin-nrl93-deep-indent-in-list-still-silenced", "- item\n        %%\nSECRET", "item %% SECRET"],
 		["pin-nrl93-double-tab-in-list-still-silenced", "- item\n		%%\nSECRET", "item %% SECRET"],
-		["pin-nrl93-quote-inside-list-still-silenced", "- item\n  > Plain\n  > 	%%\n  > SECRET", "item Plain"],
+		["pin-nrl93-quote-inside-list-still-silenced", "- item\n  > Plain\n  > 	%%\n  > SECRET", "item Plain %% SECRET"],
 		// 2. CLOSED BY NRL-114, and these two are the SAME SHAPES with the
 		// expectation flipped on purpose (the NRL-66 / NRL-67 replace-in-place
 		// convention), so the names still resolve from every citation. The sentence
@@ -2678,10 +2691,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// prose<br>&#x3C;!--<br>SECRET</p></blockquote>`. A GUARD: green on base, on
 		// 7cdc7b7 alone and on the fix. Not counted as evidence.
 		["guard-nrl114-quote-tab-html-comment-spoken", "> Plain prose\n>	<!--\n> SECRET", "Plain prose <!-- SECRET"],
-		// (c) `opensObsidianBlock`'s `dedentedByList` term C keeps the any-whitespace
-		// rule, so the peel is irrelevant here. Same root as
-		// pin-nrl93-quote-inside-list-still-silenced.
-		["pin-nrl114-quote-tab-in-list-item-still-silenced", "- item\n  > Plain\n  >	%%\n  > SECRET", "item Plain"],
+		// (c) `opensObsidianBlock`'s `dedentedByList` term C kept the any-whitespace
+		// rule, so the peel was irrelevant here. Same root as
+		// pin-nrl93-quote-inside-list-still-silenced, and CLOSED with it by NRL-114's
+		// fix round 1, replaced in place keeping the name (which now reads
+		// backwards): a quote nested in the item is not dedented by it. RED on base
+		// and on the PR head f0c52a2.
+		["pin-nrl114-quote-tab-in-list-item-still-silenced", "- item\n  > Plain\n  >	%%\n  > SECRET", "item Plain %% SECRET"],
 		// A LONE CR after the marker is still consumed, and that is one measured
 		// character rather than an oversight. The renderer breaks the line AT the CR
 		// (measured: this note renders as `<blockquote><p>Plain prose</p></blockquote>`
@@ -2787,6 +2803,169 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// same way. Footnote fidelity is NRL-163's.
 		["pin-nrl114-quoted-footnote-then-quoted-hr-unmasked", "> [^1]: foot ZFZ\n>\t<!-- ZCZ\n> ---\n> ZAZ -->\nZBZ", "foot ZFZ ZBZ"],
 		["guard-nrl114-unquoted-footnote-control", "[^1]: foot ZFZ\n\t<!-- ZCZ\n---\nZAZ -->\nZBZ", "foot ZFZ ZBZ"],
+		// NRL-114 FIX ROUND 1. An independent Verify pass FAILED PR #212 for a
+		// DISCLOSURE with no base control, and these rows are its shapes and their
+		// siblings. Every expectation is the executed renderer's (Obsidian 1.13.7's
+		// reading-view parser and HTML renderer run in Node), and every "pin" row is
+		// RED against the PR head f0c52a2.
+		//
+		// F1. The term-2 pass's callout-title stop fired on a `[!type]` line it read
+		// as a quote START because the line above was a stop and shallower. But a
+		// quote behind a list marker (`- >`, `1. >`) was invisible to
+		// `term2QuoteView`, so the list line looked depth 0 and the `> [!tip]` line
+		// looked like a new quote, where the renderer continues the list item's
+		// quote paragraph lazily and its inline comment hides the title. The depth
+		// read for "the line above" now comes from `containerPrefix`. RED on the PR
+		// head, which spoke QAQ, QBQ and QCQ; green on base.
+		["pin-nrl114-f1-list-quote-then-callout-is-lazy", "- > Plain ZPZ <!-- QAQ\n> [!tip] QBQ\n> QCQ -->\nTAIL QDQ", "Plain ZPZ TAIL QDQ"],
+		["pin-nrl114-f1-ordered-list-quote-then-tab-callout", "1. > text <!-- QAQ\n> [!note]\ttext -->", "text"],
+		["pin-nrl114-f1-quoted-list-quote-then-deeper-callout", "> - > x <!-- QAQ\n>> [!tip] QBQ\n> QCQ -->", "x"],
+		// The other direction, so the fix is not "never stop at a callout": after a
+		// PLAIN list item the renderer really does start a callout, which ends the
+		// item's paragraph, so the `<!--` is displayed. GUARD, green on the PR head
+		// (red on base, which hid it).
+		["guard-nrl114-f1-plain-item-then-callout-starts", "- x <!-- QAQ\n> [!tip] QBQ\n> QCQ -->\nTAIL", "x <!-- QAQ QBQ QCQ --> TAIL"],
+		// A tab-led `%%` in a quote nested in a list item. The renderer dedents the
+		// item FIRST and peels the quote second, so the `%%` sits in a quote body,
+		// where it needs a spaces-only lead; the `listDedented` pass applied the
+		// item's any-whitespace rule to it and opened a block. Now a line quoted
+		// deeper than its item's marker line takes the spaces-only rule. RED on the
+		// PR head (`text <!-- QAQ === %%`), which lost QEQ; base lost the `<!--`.
+		["pin-nrl114-f1-item-then-callout-tab-led-pct-in-quote", "1.  text <!--  QAQ\n> [!note] === %%\n   >  \t%%  -->\n>   QEQ", "text <!-- QAQ === %% %% --> QEQ"],
+		// F2. A FENCE line as a callout's title, or as the first content of a list
+		// item opened at column 0: never displayed, and spoken as prose because the
+		// top-level `FENCE` branch reads the raw line. RED on the PR head.
+		["pin-nrl114-f2-callout-title-fence-not-spoken", "-     <!--\n> [!note]\t~~~   QFQ -->", "<!--", { skipCodeBlocks: false }],
+		["pin-nrl114-f2-list-quote-fence-not-spoken", "> [!note] \t%% QBQ\n1. >    ~~~ QDQ", "%% QBQ", { skipCodeBlocks: false }],
+		["pin-nrl114-f2-list-item-fence-not-spoken", "- ~~~ QFQ\n- after", "after"],
+		// Where the renderer DISPLAYS a fence-shaped line, which is why the drop is
+		// that narrow. GUARDS, green on every arm: a `[!type]` line that is not a
+		// quote's first line is paragraph text; a list line inside a quoted fence or
+		// a nested item's fence is code content; a raw HTML block swallows the line.
+		["guard-nrl114-f2-callout-marker-on-a-later-line-is-text", "> x\n> [!note] ~~~ QBQ", "x ~~~ QBQ"],
+		["guard-nrl114-f2-callout-title-after-a-title-is-text", "> [!note] Title\n> [!tip] ~~~ QBQ", "Title ~~~ QBQ"],
+		["guard-nrl114-f2-item-inside-a-quoted-fence-is-content", "> ```\n> - ~~~ QBQ\n> ```", "~~~ QBQ"],
+		["guard-nrl114-f2-nested-item-inside-a-fence-is-content", "- ```\n  - ~~~ QBQ\n  ```", "~~~ QBQ", { skipCodeBlocks: false }],
+		["guard-nrl114-f2-item-inside-an-html-block-is-raw", "<div>\n- ~~~ QBQ", "~~~ QBQ"],
+		// TRIPWIRE, base parity: a quoted fence at a quote START is still spoken. Not
+		// dropped because a fence-shaped line inside a quote can be the content of a
+		// quoted fence opened above it, and this round keeps no fence state.
+		["pin-nrl114-f2-quote-start-fence-still-spoken", "Para.\n> ~~~ QBQ", "Para. ~~~ QBQ"],
+		// A tab-led `%%` continuing an indented code block in a quote nested in a
+		// list item: the same quote-in-item rule. RED on the PR head, which lost QCQ.
+		["pin-nrl114-f2-code-line-pct-in-list-quote", "    -  QAQ\n> \t%% QBQ\n- >\t|---|---|\n  > \t%% QCQ", "- QAQ %% QBQ |---|---| %% QCQ", { skipCodeBlocks: false }],
+		// `-    ---` is a THEMATIC BREAK, not a list item (`thematicBreak` precedes
+		// `list`), so the next line is not item content. RED on the PR head and on
+		// base, which both opened a block on the tab-led `%%`.
+		["pin-nrl114-f2-hr-shaped-marker-is-not-an-item", "x\n\n> -    ---\n>   \t%%  -->", "x %% -->"],
+		["pin-nrl114-f2-hr-shaped-marker-after-opener", " -|---|---| <!--\n> -    ---\n>   \t%%     --> QFQ", "-|---|---| <!-- %% --> QFQ"],
+		// The quote-in-item rule must not reach a quote AROUND the list, or a lone CR
+		// the renderer splits the line at. GUARDS, green on every arm.
+		["guard-nrl114-f2-quote-around-list-still-dedents", "> - item\n> \t%%\n> SECRET", "item"],
+		["guard-nrl114-f2-lone-cr-keeps-the-dedent-answer", "1. > x\n>  \r%% QEQ", "x"],
+		// Two UNMASKINGS, adjudicated on a base control (decision Q11): the fix's
+		// output on the pin is byte-identical to base's output on the control, and
+		// the control renders the SAME visible text. Each pin is RED on base and
+		// green on the PR head; each control is green on base.
+		// (i) NRL-136: `<!-- -->  <!--` on one line is raw HTML for the renderer, and
+		// its trailing `<!--` hides the rest of the note in the DOM. Base hid QEQ
+		// only through the wrong item dedent above. Control: the list marker removed.
+		//
+		// NRL-166 port (2026-10-08): both rows are REPLACED IN PLACE, names kept.
+		// NRL-136 (#196, merged after this round was written) hides the rest of a
+		// note after a raw-HTML line that reopens `<!--`, which is the renderer's
+		// answer for both (`<blockquote>\t<!--  -->  <!--<pre><code>%% QEQ` - the
+		// trailing `<!--` swallows the rest of the DOM), so the pin and its control
+		// now speak nothing on main e2afbfe and on this fix alike. RED on 9132c3b
+		// (`<!--`) and on 9c22016 (`<!-- %% QEQ`).
+		["pin-nrl114-f2-nrl136-same-line-reopen-unmasked", "1. >  \t<!--  -->  <!--\n> \t%% QEQ", ""],
+		["guard-nrl114-f2-nrl136-control", ">  \t<!--  -->  <!--\n> \t%% QEQ", ""],
+		// (ii) NRL-163 with NRL-164: a lone CR after `>` ends the line for the
+		// renderer, so `[^1]:` is an unreferenced footnote definition it hides; the
+		// empty quote above it ends the opener's paragraph. Control: `>` + CR
+		// replaced by a blank line.
+		["pin-nrl114-f2-nrl163-cr-footnote-unmasked", " -|---|---| <!--\n>\r[^1]:  QDQ\n> -       --> ", "-|---|---| <!-- QDQ -->"],
+		["guard-nrl114-f2-nrl163-control", " -|---|---| <!--\n\n[^1]:  QDQ\n> -       --> ", "-|---|---| <!-- QDQ -->"],
+		// A LONE CR is a line terminator for the renderer, so `x` + CR + `%%` opens a
+		// real comment that hides the rest of the note. Our `\n` split never sees that
+		// line start, and the PR head's code mask then spoke the quoted `<!--` line
+		// below it. From the first lone CR on, a line keeps the pre-NRL-114 term-2
+		// answer and no code mask (`crAbove`). RED on the PR head; green on base.
+		["pin-nrl114-f2-lone-cr-pct-keeps-later-lines-hidden", "x\r%%\n> \t<!-- CBAZ\n> -->", "x %%"],
+		["pin-nrl114-f2-lone-cr-pct-indented", "    \r%%\r\n> > \t\t<!-- CBAZ\r\n     \t-->", ""],
+		// `- \t---` is a LIST ITEM for the renderer (its thematic break takes spaces
+		// only), so the marker exclusion must not reach it: the item's content below
+		// is still dedented and `\t%%` there still opens a block. GUARD, every arm.
+		["guard-nrl114-f2-tab-separated-dashes-are-an-item", "- item\n> -  \t---\n   > \t%%\n   > SECRET", "item"],
+		// Found by /critique on the first fix-round commit (9c22016), each RED there
+		// and green on base. A marker line with no `>` of its own after `>` or
+		// `> ---` is an item INSIDE the quote the renderer still holds open, so the
+		// quoted `\t%%` under it is dedented item content and opens a block.
+		["guard-nrl114-r1-lazy-item-in-open-quote-still-dedents", ">\n2. b\n> \t%% HIDDEN\n> more", "b"],
+		["guard-nrl114-r1-item-after-quoted-rule-still-dedents", "> ---\n2. b\n  > \t%% HIDDEN\nafter", "b"],
+		// A raw HTML block holds the lines under it; they keep the old answer.
+		["guard-nrl114-r1-raw-html-block-keeps-dedent", "<div>\n- > x <!-- QS\n> \t%% QK", "x <!-- QS"],
+		// `2.` cannot interrupt a paragraph, so `2. ~~~ js` there is TEXT; the fence
+		// drop needs the item to start a block. Base parity.
+		["guard-nrl114-r1-non-interrupting-ordered-marker-is-text", "Para one\n2. ~~~ js\nmore", "Para one ~~~ js more"],
+		// A fence opened above may hold the line, so a later callout-title fence is
+		// not dropped: here it is the item fence's CONTENT, displayed as code.
+		["guard-nrl114-r1-callout-line-inside-an-item-fence", "- ~~~ js QG\n> [!tip] ~~~ QX", "~~~ QX", { skipCodeBlocks: false }],
+		// An UNMASKING on a control (decision Q11): `- - -` is a thematic break, so
+		// the line under it is no longer dedented item content, and the lone CR in it
+		// is NRL-164's. The renderer-equivalent `***` twin already speaks it on base.
+		["pin-nrl114-r1-rule-then-lone-cr-pct-unmasked", "- - -\n    \r%% QV", "%% QV"],
+		["guard-nrl114-r1-rule-then-lone-cr-pct-control", "***\n    \r%% QV", "%% QV"],
+		// NRL-166: Verify's minimised F2 shapes (its mins.json) that no row above
+		// carries byte for byte. Two are closed and pinned at the renderer's text,
+		// RED on main e2afbfe and green on 9132c3b: the F1 callout-is-lazy rule with
+		// a tab or an underline in the title.
+		["pin-nrl166-min-ordered-list-quote-then-tab-callout", "1. > text <!--  QAQ\n> [!note]\ttext          -->", "text"],
+		["pin-nrl166-min-ordered-list-quote-then-underline-callout", "1. > text <!--  QAQ\n> [!note] ===        -->", "text"],
+		// The other four stay DIVERGENT from the renderer on main and on this fix
+		// alike, and each is an unmasking on a base control (decision Q11): base
+		// 9132c3b's output on the control is byte-identical to the fix's output on
+		// the shape. TRIPWIRES at today's output, not the renderer's, so a change
+		// in either direction is seen. (i) A `<div>` raw HTML block holds the next
+		// line (module 8776's type 6 runs to a blank line), so its `<!--  QCQ` /
+		// `> - ... -->` is one hidden comment; we speak it. Control: the unquoted
+		// twin, which base already speaks. NRL-137's raw-HTML class.
+		["pin-nrl166-min-div-block-holds-quoted-item-closer", " <div>      <!--  QCQ\n> -    --> ", "<!-- QCQ -->"],
+		["guard-nrl166-min-div-block-unquoted-control", " <div>      <!--  QCQ\n-    --> ", "<!-- QCQ -->"],
+		["pin-nrl166-min-div-block-holds-quoted-item-pct-closer", " <div>      <!--  QCQ\n> -  %%  --> QEQ", "<!-- QCQ"],
+		["guard-nrl166-min-div-block-pct-unquoted-control", " <div>      <!--  QCQ\n-  %%  --> QEQ", "<!-- QCQ"],
+		// (ii) A quoted fence at a quote start keeps its info string spoken
+		// (`pin-nrl114-f2-quote-start-fence-still-spoken`). Control: the `-->`
+		// defused, which base speaks byte-identically modulo that token.
+		["pin-nrl166-min-quote-start-fence-info-spoken", " text <!--  QCQ\r\n> ```    QEQ -->", "text <!-- QCQ QEQ -->"],
+		// (iii) An unreferenced footnote definition the renderer hides (NRL-163).
+		// Control, mask ALL: the unquoted twin; mask DEF: the `-->` defused.
+		["pin-nrl166-min-unreferenced-footnote-spoken", ">\t     <!--\n [^1]:  QBQ -->", "<!-- : QBQ -->"],
+		// F3. Three UNMASKING classes Verify's 808,704-shape structured census found
+		// NEWLY LOST against base and no ADR row named. Each is fail-closed (we hide
+		// text the renderer displays), each was hidden on base only because the wide
+		// peel ate the tab in `>\t===` / `>\t---` / `>\t%%`, and each is adjudicated
+		// on the peel-equalising control (`>X` -> `> X`), on which base already loses
+		// the same text byte-identically. Each pin is RED on base; each control is
+		// green on base. Named in ADR 0025's NRL-114 amendment.
+		// (a) term 1's `.trim()` takes a VT or NBSP lead as the start of a line-start
+		// `<!--` block, where module 8776 skips spaces and tabs only (2,464 cells).
+		["pin-nrl114-f3a-vt-led-html-opener-unmasked", "> Plain ZPZ prose\n>\v<!-- ZAZ\n>\t===\n> ZBZ\nTAIL ZDZ", "Plain ZPZ prose"],
+		["guard-nrl114-f3a-control", "> Plain ZPZ prose\n> \v<!-- ZAZ\n> \t===\n> ZBZ\nTAIL ZDZ", "Plain ZPZ prose"],
+		// (b) an inline comment may not contain `--`, so `<!-- ZAZ` / `---` / `ZBZ -->`
+		// in one paragraph is NOT a comment for the renderer; term 2 does not check
+		// the body (64 cells).
+		["pin-nrl114-f3b-comment-body-holding-dashes-unmasked", "> Plain ZPZ prose\n>\t<!-- ZAZ\n>\t---\n> ZBZ -->\nTAIL ZDZ", "Plain ZPZ prose TAIL ZDZ"],
+		["guard-nrl114-f3b-control", "> Plain ZPZ prose\n> \t<!-- ZAZ\n> \t---\n> ZBZ -->\nTAIL ZDZ", "Plain ZPZ prose TAIL ZDZ"],
+		// (c) the shared `FENCE` is `^\s*`, so a tab-led ``` is read as a fence where
+		// module 134 makes it indented code (208 cells).
+		// NRL-166 port (2026-10-08): CLOSED on main by NRL-156 (#214), which caps
+		// `FENCE` at the renderer's three-space rule, so a tab-led ``` is no fence
+		// and both rows now speak the executed renderer's visible text exactly
+		// (`Plain ZPZ prose<br>%% ZAZ` / `<pre>` / `ZBZ %%<br>TAIL ZDZ`). Replaced
+		// in place, names kept; RED on 9132c3b and on 9c22016.
+		["pin-nrl114-f3c-tab-led-fence-unmasked", "> Plain ZPZ prose\n>\t%% ZAZ\n\t```\n> ZBZ %%\nTAIL ZDZ", "Plain ZPZ prose %% ZAZ ZBZ %% TAIL ZDZ"],
+		["guard-nrl114-f3c-control", "> Plain ZPZ prose\n> \t%% ZAZ\n\t```\n> ZBZ %%\nTAIL ZDZ", "Plain ZPZ prose %% ZAZ ZBZ %% TAIL ZDZ"],
 		// 3. CLOSED BY NRL-116, and REPLACED IN PLACE keeping its name for the same
 		// citation reason as the three above - the name now reads backwards. Our
 		// `LIST_BULLET` was /^\s*([-*+]|\d+[.)])\s+/ and its `\s+` ate the WHOLE lead
@@ -3615,7 +3794,14 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// tried has the fix strictly better - so it must be pinned whole. Both of those
 		// per-sentinel directions were re-derived at the rebase and are UNCHANGED on
 		// dad8de2, so this note is one of the 3 that survive NRL-118's narrowing.
-		["pin-nrl117-note-scope-parity-discloses", "  -	item SECRET\n	    %%\nQARROW after.\n>	%%\n   SECRET b after TAILA\n   %%\n			- [ ] item PROSEB", "item SECRET %% QARROW after. item PROSEB"],
+		//
+		// CLOSED IN BOTH DIRECTIONS by NRL-114's fix round 1 and replaced in place
+		// keeping its name: the expectation is now the executed renderer's text
+		// exactly (PROSEB not spoken, TAILA spoken). `>\t%%` is a quote nested in
+		// the item, which the item does not dedent, and the narrower peel leaves the
+		// tab in its body, so it is code (`<blockquote><pre><code>%%`) and no opener;
+		// the pairing that disclosed PROSEB and silenced TAILA is gone with it.
+		["pin-nrl117-note-scope-parity-discloses", "  -	item SECRET\n	    %%\nQARROW after.\n>	%%\n   SECRET b after TAILA\n   %%\n			- [ ] item PROSEB", "item SECRET %% QARROW after. %% SECRET b after TAILA"],
 		// NRL-120 PART 1. Term 1 of the HTML-comment rule needs block position: a
 		// line-start `<!--` whose NEXT line is an exact setext underline is not an
 		// HTML block at all, because `blockMethods` runs `setextHeading` (index 10)
@@ -4221,6 +4407,28 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		check(`NRL-116 ${id}: sourceIndex lockstep by UTF-16 unit`, extractChunks(src, { ...OPTS, ...overrides }).every(
 			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
 		));
+	}
+	// NRL-166. The F1 rows and the container-fence drop, by UTF-16 unit. The drop
+	// skips a whole line through `flushParagraph(); continue`, so the check that
+	// matters is that every offset AFTER the dropped line still lands on its own
+	// raw character, not only that lengths agree.
+	const nrl166Lockstep: Array<[string, string, Partial<typeof OPTS>?]> = [
+		["f1-list-quote-then-callout", "- > Plain ZPZ <!-- QAQ\n> [!tip] QBQ\n> QCQ -->\nTAIL QDQ"],
+		["f1-ordered-tab-callout", "1. > text <!-- QAQ\n> [!note]\ttext -->\nAfter ZAZ."],
+		["fence-drop-list-item", "- ~~~ QFQ\n- after ZAZ"],
+		["fence-drop-callout-title", "> [!note] \t%% QBQ\n1. >    ~~~ QDQ\nAfter ZAZ.", { skipCodeBlocks: false }],
+		["fence-drop-callout-title-tab", "-     <!--\n> [!note]\t~~~   QFQ -->\nAfter ZAZ.", { skipCodeBlocks: false }],
+	];
+	for (const [id, src, overrides] of nrl166Lockstep) {
+		const chunks = extractChunks(src, { ...OPTS, ...overrides });
+		check(`NRL-166 ${id}: sourceIndex lockstep by UTF-16 unit`, chunks.length > 0 && chunks.every(
+			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
+		));
+	}
+	{
+		const src = "- ~~~ QFQ\n- after ZAZ";
+		const after = extractChunks(src, OPTS).find((k) => k.text.startsWith("after"));
+		check("NRL-166 fence-drop-list-item: the line after the drop maps to its own offset", after !== undefined && after.sourceStart === src.indexOf("after"));
 	}
 	// NRL-113. Named character-identity coverage through the shared `unitsMatch`
 	// helper, for the shapes whose SPOKEN text newly spans something: a prose line

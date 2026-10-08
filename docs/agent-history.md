@@ -1910,6 +1910,40 @@ residuals, roots 1 and 2's three non-container shapes (NRL-109), NRL-45's `[a]: 
 NRL-114's 8 quote-in-list cells, and NRL-137 and NRL-159 on the NRL-118
 residuals.
 
+**NRL-166 (2026-10-08): NRL-114's unpushed fix round 1 is ported onto `main`, and
+the evidence is in ADR 0025's NRL-166 section.** PR #212 merged at `f0c52a2` although
+Verify had failed it, and its fix round (`9c22016` on `backup/nrl-114-fix-round1`,
+plus an uncommitted follow-up diff) never reached a PR. So from `bcc59fe` onwards
+`main` spoke the hidden body of `- > Plain ZPZ <!-- QAQ` / `> [!tip] QBQ` /
+`> QCQ -->`. The port: cherry-pick `9c22016` without committing, then a three-way
+apply of the follow-up. #216's two-phase `listDedented` pass now takes the round's
+quote-in-item term as a Phase 1 `dedentQuoteGate` conjoined in Phase 2, which keeps
+the refusal-only proof.
+
+Re-measured with Verify's three generators against both `9132c3b` and `e2afbfe`.
+- F1: 0 newly moved in either direction against either base, in both the 288-shape
+  census and a 1,600-shape extension.
+- F2 and F3: 0 newly disclosing against `e2afbfe`. Every newly lost cell is
+  byte-identical to `9132c3b`'s output on the same note: the lone-CR containment,
+  plus F1's correction exposing a comment body that holds `<!--`.
+- Against `9132c3b`, F3's classes (a) and (b) are still controlled and (c) was
+  closed by #214.
+- **Two disclosure classes on `main` were found, not caused, by this port.** 19
+  fuzz groups moved at NRL-156's `8d2b3f2`: a list-item fence's info string, where
+  `FENCE`'s raw-column cap misses the item's dedent. 3 groups moved at NRL-162's
+  `a95740f` (n3951). Both need their own tickets.
+
+**Traps.**
+- Four existing rows were stale on `main` before the port: NRL-136's two pins,
+  closed by #196; f3c's two, closed by #214; and an NRL-119 guard that spoke a
+  destination. Replace such rows in place with the renderer's text. Never revert
+  them to the round's old expectations.
+- The oracle is the 1.13.7 harness (`app.js` `8efbf581...9898`), while this host
+  runs 1.14.4. NRL-164 stays open, because the lone-CR rule is containment only.
+- ADR 0006's 5,160,960-cell reconstruction was NOT re-measured on the port.
+
+NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
+
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
 commit: a `$$` display-math block between a label's opener and closer silenced the alt text

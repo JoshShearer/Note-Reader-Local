@@ -320,7 +320,10 @@ evidence, not a live Obsidian reading or highlighting observation.
    dedents the item first and peels the quote second, so for `- item` / `  > \t%%`
    the tab is gone before the budget is applied and no indent model can see it.
    That is NRL-114's quote-peel narrowing; 8 such cells stay divergent and 4 close
-   here. Four further cells at a four-column quote indent read as disclosures and
+   here. (**CLOSED by NRL-114's fix round 1, ported onto `main` by NRL-166 on
+   2026-10-08**: a line quoted deeper than its item's marker line is not dedented by
+   the item, `dedentQuoteGate` conjoined with this pass's Phase 2; ADR 0025's NRL-166
+   section. The 8 / 4 split was not re-measured.) Four further cells at a four-column quote indent read as disclosures and
    are byte-identical on both sides - pre-existing, not opened here.
 
    **One cost is in the DISCLOSURE direction and must not be separated from the
@@ -1197,10 +1200,13 @@ gates on it and then walks the one-level form across exactly what it matched, an
 "the iteration consumes exactly `q[0]`" is what licenses `quotes` as a peel
 budget. `tests/extract.test.ts`'s NRL-114 section pins the composition, the two
 literals, every call site, the deliberate non-sites and the walk property over
-585 constructed prefix lines. Re-measured on `9132c3b`: the half-fix that leaves
-the gate wide and narrows the counter newly loses **98,304** and newly discloses
-**27,136** of the census reconstruction's **5,160,960** sentinel-cells (below)
-against the fix, and turns nine fixtures plus checks (a) and (d) red.
+585 constructed prefix lines. Re-measured on `9132c3b` against the tree after
+NRL-114's fix round 1 (the unpushed `9c22016`; NRL-166 did NOT re-measure this
+reconstruction on the port onto `main`, because its generator was not in that lane's
+reach, so every 5,160,960-cell figure in this amendment is `9c22016`'s): the half-fix that leaves the gate wide and narrows the
+counter newly loses **115,200** and newly discloses **32,256** of the census
+reconstruction's **5,160,960** sentinel-cells (below) against the fix, and turns
+nine fixtures plus checks (a) and (d) red.
 
 **A lone CR is still consumed, and that one character is measured rather than
 assumed.** A CR is a line TERMINATOR for the renderer, not whitespace:
@@ -1208,7 +1214,8 @@ assumed.** A CR is a line TERMINATOR for the renderer, not whitespace:
 `<blockquote><p>Plain prose</p></blockquote>` with SECRET HIDDEN. Consuming it
 puts that `%%` at offset 0 of our body, the same place. Re-measured on `9132c3b`,
 a space-only peel newly SPEAKS author-hidden text in **32,256** (and newly loses
-**6,144**) of the same 5,160,960 sentinel-cells. A real CRLF file is untouched
+**6,912**) of the same 5,160,960 sentinel-cells, re-measured against the fix
+round 1 tree. A real CRLF file is untouched
 either way. Lone CRs elsewhere on a line are a separate, pre-existing model gap,
 NRL-164 (below).
 
@@ -1223,17 +1230,26 @@ all 512 content-key masks = **1,612,800 cells, 5,160,960 sentinel-cells** (every
 sentinel token in a shape, in every mask, signed against the rendered HTML; a
 displayed sentinel in a code, heading, table or math context is excused when its
 content key is on). Arms: base = `9132c3b`; 7cdc7b7 alone = base plus 7cdc7b7's
-`src/`; fix = this change.
+`src/`; fix = this change as of its fix round 1 (the figures that first stood in
+the fix row, 241,408 and 49,664, were taken on PR #212's first head `f0c52a2` and
+are REPLACED, not averaged).
 
 | arm | displayed but silenced | newly lost vs base | hidden but spoken | newly disclosing vs base |
 |---|---|---|---|---|
 | base | 575,488 | - | 81,408 | - |
 | 7cdc7b7 alone | 471,808 | **46,080** | 53,248 | 0 |
-| fix | 241,408 | **0** | 49,664 | **0** |
+| fix | 221,952 | **0** | 41,472 | **0** |
 
 So 7cdc7b7 alone still carries a composed loss on this base (46,080
-sentinel-cells), which is why it could not land, and the fix closes 334,080 lost
-and 31,744 disclosing sentinel-cells with 0 newly lost and 0 newly disclosing.
+sentinel-cells), which is why it could not land, and the fix closes 353,536 lost and 39,936 disclosing sentinel-cells with 0
+newly lost and 0 newly disclosing IN THIS CORPUS. That is a claim about this
+corpus and not about every corpus: Verify's independent 808,704-shape census found
+2,832 newly lost cells on `f0c52a2` and finds 2,736 after fix round 1, every one an
+unmasking on a base control (ADR 0025's NRL-114 fix-round section). Re-measured by
+NRL-166 on the port onto `main` (2026-10-08, harness 1.13.7): 2,708 newly lost and 0
+newly disclosing against `9132c3b`, of which 2,528 are controlled and 180 moved at
+NRL-156's `8d2b3f2` and are byte-identical on `main` `e2afbfe` (ADR 0025's NRL-166
+section).
 Destination and image-alt buckets are 0 on every arm in this corpus.
 
 **What the continuation had to fix, because 7cdc7b7 alone newly lost displayed
@@ -1256,8 +1272,10 @@ peel's output; both fixes live in ADR 0025's NRL-114 amendment, summarised here:
 fix and pinned as a tripwire: (a) `>\t> %%`, a tab BETWEEN levels, which the next
 level's own `\s{0,3}` re-absorbs (`pin-nrl114-tab-between-levels-still-silenced`);
 (c) `- item` / `  > Plain` / `  >\t%%`, where `opensObsidianBlock`'s
-`dedentedByList` term keeps the any-whitespace rule
-(`pin-nrl114-quote-tab-in-list-item-still-silenced`). 7cdc7b7's residual (b),
+`dedentedByList` term kept the any-whitespace rule - **CLOSED by NRL-114's fix
+round 1**, which stops the `listDedented` pass dedenting a line quoted deeper than
+its item's marker line (`pin-nrl114-quote-tab-in-list-item-still-silenced`,
+replaced in place, now expects `item Plain %% SECRET`). 7cdc7b7's residual (b),
 `>\t<!--` on a lazy continuation, had already been closed underneath it by NRL-115
 and is now a guard (`guard-nrl114-quote-tab-html-comment-spoken`).
 
@@ -1265,9 +1283,11 @@ and is now a guard (`guard-nrl114-quote-tab-html-comment-spoken`).
 were made (seeds 20261002, 7 and 99, masks 221 and 0, 24,000 cells); every newly
 lost or newly disclosing sentinel-cell against base is a place where base was
 right only by ACCIDENT, through the same over-wide peel or opener this change
-corrects. Each is accepted only because the fix's output is byte-identical,
-modulo the one defused token, to what base already produces on a twin with that
-trigger defused. Three pre-existing model gaps account for all of them, each
+corrects. Each is accepted only because the fix's output is byte-identical to what base
+already produces on a control twin; fix round 1 re-ran all three seeds and replaced
+the round-0 controls, some of which defused the very `<!--` a renderer honours,
+with controls the renderer reads as the same document (ADR 0025's fix-round
+section gives the criterion and the per-note table). Three pre-existing model gaps account for all of them, each
 filed: an unreferenced footnote definition is spoken where the renderer shows
 nothing (**NRL-163**); a lone CR is a line terminator for the renderer and not
 for our `\n` split (**NRL-164**); and a VT- or tab-bearing `%%` lead inside a
