@@ -4505,6 +4505,14 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl166-r2f-f1-quote-in-kept-footnote-does-not-close-attribute", "<div title=\"x\n\n[^1]: a \" b\n\nQAQ\n\nQBQ [^1]", ""],
 		["pin-nrl166-r2f-f2-lone-cr-stand-in-reads-the-whole-block", "- > <!X QEQ\r> > <b title=\"QFQ", ""],
 		["pin-nrl166-r2f-f2-lone-cr-stand-in-block-bogus-comment", "<details><summary>QAQ</summary>\r\tQBQ\">\r    <!X QCQ>\r\n", "QAQ QBQ\">"],
+		// /critique on 97388f2 (CONCERNS, 70), RED on 97388f2 where a pin: an open
+		// declaration, PI or CDATA in a lone-CR note carries past its block (F1), and a
+		// CRLF is one line break, not a blank line, in the open-attribute stop (F2).
+		["pin-nrl166-r2g-f1-open-declaration-carries-past-the-block", "<!X a\r<div title=\"b\r\rQAQ", ""],
+		["pin-nrl166-r2g-f1-open-declaration-carries-past-the-block-lf", "<!X a\n- <div title=\"b\n\nQAQ\rc", ""],
+		["pin-nrl166-r2g-f2-crlf-is-one-line-break", "> <div title=\"x\r\n# y \"\r\n\r\nQAQ\r\n\r\nQBQ", "QAQ QBQ"],
+		["guard-nrl166-r2g-f2-lf-twin", "> <div title=\"x\n# y \"\n\nQAQ\n\nQBQ", "QAQ QBQ"],
+		["guard-nrl166-r2g-crlf-twin-of-n1", "a\rb\r\n<div title=\"x\r\n<div title=\"y\r\n\r\nQAQ", "a b QAQ"],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });

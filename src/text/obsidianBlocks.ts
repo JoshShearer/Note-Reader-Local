@@ -1500,7 +1500,10 @@ function openQuoteEnd(source: string, from: number, quote: string, elsewhere?: (
 	// blank line: only then is it a quote the page receives as written. Past a
 	// blank line it sits in some later block the renderer may rewrite (math, a
 	// link definition, code), where the value's true end is unknown.
-	const sameBlock = !/(?:\r\n?|\n)[ \t]*(?:\r\n?|\n)/.test(source.slice(from, k));
+	// A line break is CRLF, a lone CR or LF; `\r(?!\n)` keeps a CRLF from
+	// splitting into two breaks under backtracking (/critique on 97388f2, F2: every
+	// CRLF note read as holding a blank line here).
+	const sameBlock = !/(?:\r\n|\r(?!\n)|\n)[ \t]*(?:\r\n|\r(?!\n)|\n)/.test(source.slice(from, k));
 	for (k++; k < source.length && source[k] !== ">"; k++) {
 		// Past a closing quote in the block's own text the tag still runs, now
 		// through attribute names, to the next `>`; at a blank line the next block
@@ -1510,7 +1513,7 @@ function openQuoteEnd(source: string, from: number, quote: string, elsewhere?: (
 		// displays QAQ). A quote found past a blank line gets no such stop: the
 		// final census against the earlier commits found it speaking text a
 		// rewritten block's quote had not really closed.
-		if (sameBlock && (source[k] === "\n" || source[k] === "\r") && /^(?:\r\n?|\n)[ \t]*(?:\r\n?|\n|$)/.test(source.slice(k, k + 64))) return k;
+		if (sameBlock && (source[k] === "\n" || source[k] === "\r") && /^(?:\r\n|\r(?!\n)|\n)[ \t]*(?:\r\n|\r(?!\n)|\n|$)/.test(source.slice(k, k + 64))) return k;
 		const c = source[k];
 		if (c === '"' || c === "'") {
 			const close = source.indexOf(c, k + 1);
@@ -1939,6 +1942,15 @@ export function fallbackHtmlHidden(source: string): Array<readonly [number, numb
 		// and the `>` after it, as in `rendererHiddenText`.
 		if (left?.kind === "tag" && left.quote !== undefined) {
 			openUntil = openQuoteEnd(source, blockEnd, left.quote);
+			out.push([map(left.at), openUntil]);
+		}
+		// A processing instruction, declaration or CDATA block has no blank-line
+		// end, and its bogus comment runs to the first `>` wherever that is
+		// (/critique on 97388f2, F1: `<!X a` + CR + `<div title="b` + CR + CR +
+		// `QAQ` hides QAQ).
+		if (left?.kind === "bogus") {
+			const gt = source.indexOf(">", blockEnd);
+			openUntil = gt === -1 ? source.length : gt + 1;
 			out.push([map(left.at), openUntil]);
 		}
 		k = e + 1;
