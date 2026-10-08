@@ -2727,9 +2727,9 @@ ms (c4a370e: 27,956 ms per Verify 2); `<!--` x n 31/82; in an item quote 35/86;
 `P ` + `<!-- a ` x n then `-->` 35/61; n lines of `a <!-- b --> [^1]` 5,840/391
 (a quadratic on `main` that the accumulator fix removes); a lone-CR note of n
 tags 5,735/331; n definitions each opening `<div 'x` 23,648/562; `<!--x--!>` x n
-in one block 12/58; many
-tags in one block 63/151; `%%` blocks 357/489; nested lists 1,577/2,114; every other
-Verify shape within 1.3x. Twenty-thousand footnote definitions dropped from 5,896 to
+in one block 12/58; many tags in one block 63/151; `%%` blocks 357/489; nested
+lists 1,577/2,114; `---` then n lines of `a <!-- b` 186/388, whose lines are now
+spoken; every other Verify shape within 1.45x. Twenty-thousand footnote definitions dropped from 5,896 to
 403 ms with the accumulator fix. `"[^".repeat(n)` stays NRL-172's (6,755/6,668).
 The new scans are checked by scaling in `tests/extract.test.ts`.
 
@@ -2759,19 +2759,28 @@ fail-closed class below); a `%%` line inside a list item's fence continued by a
 lazy line, which loses code text with code blocks spoken (F4); and backtick runs
 pairing across a callout title's lines, which can drop a referenced footnote (F5).
 
+**/critique on `db55516`: CONCERNS, 66, no disclosure.** 62,000 notes of its own
+generator and a second critique's, every loss checked with parse5 and Chromium.
+It found the lone-CR stand-in re-reading the line that closes an open attribute as
+a new tag (N1, and quadratic, N4) and splitting lines only on `\n` where the
+renderer also breaks on a lone CR (N2); both closed and pinned by the `nrl166-r2e`
+rows, and an open attribute now ends at a blank line once its quote has closed,
+since the next block's own opening tag ends it there. N3, the apostrophe class
+above, is left as stated.
+
 **Census** of the final tree, harness 1.13.7, Verify 2's judge (`run3.cjs`/`rfz.cjs`),
 masks ALL and DEF (F2 also SKIPALL), newly disclosing / newly lost. Lockstep: 0
 failures this tree has and `main` does not; the only failures at all are notes
-whose `$$` block's synthetic `equation` word merges into a chunk, 3,547 here
-against 4,145 on `main`, both in the second critique's generators.
+whose `$$` block's synthetic `equation` word merges into a chunk, 3,549 here
+against 4,145 on `main`, all in the second critique's generators.
 
 | corpus | cells | vs `9132c3b` | vs `e2afbfe` | vs `44a037a` |
 |---|---|---|---|---|
 | Verify 2's `gen2.cjs`, 1,215,000 shapes | 13,122,000 | 1,800 / 0 (was 50,982 / 0) | **0 / 11,097** (was 112 / 36,014) | 0 / 0 |
 | reviewers' fuzz, seeds 1-8 x 8,000 | 489,270 | 20 / 63 | **0 / 14** (was 2 / 29) | 0 / 0 (was 0 / 9) |
 | extended fuzz, seeds 501-512 x 6,000 | 724,310 | 105 / 57 | **0 / 126** | 0 / 21 |
-| first critique's generator, seeds 1-2 x 48,000 | 833,216 | 83 / 594 | **0 / 474** | 0 / 406 |
-| second critique's two generators, 40,000 each | 684,678 | 45 / 372 | **0 / 269** | 0 / 244 |
+| first critique's generator, seeds 1-2 x 48,000 | 833,216 | 83 / 619 | **0 / 499** | 0 / 431 |
+| second critique's two generators, 40,000 each | 684,678 | 45 / 366 | **0 / 263** | 0 / 238 |
 | Verify 1's `own-gen.cjs` | 1,481,472 | 0 / 0 | 0 / 0 | 0 / 0 |
 | its de-callout twins | 972,864 | 0 / 0 | 0 / 0 | 0 / 0 |
 | F1 `callout-census.cjs` | 2,496 | 0 / 0 | 0 / 0 | 0 / 0 |
@@ -2780,7 +2789,7 @@ against 4,145 on `main`, both in the second critique's generators.
 
 Closed against `44a037a` (disclosing / lost): `gen2` 374,998 / 1,534,782, the base
 fuzz 26,207 / 8,305, the extended 72,788 / 10,781, the first critique's generator
-171,545 / 524, the second's 87,746 / 239, F2 823 / 199, F3 3,262 / 18,906; own-gen
+171,823 / 524, the second's 87,836 / 239, F2 823 / 199, F3 3,262 / 18,906; own-gen
 and twins close 9,819 and 9,894 lost cells.
 
 - **`newly disclosing against e2afbfe` is 0 on every corpus**, and against
@@ -2807,10 +2816,14 @@ and twins close 9,819 and 9,894 lost cells.
   open: we hide to the next matching quote in the NOTE, while a quote the renderer
   writes into its own markup (`data-heading="`, `alt="`) can end the value sooner.
   (ii) A lone-CR note, which the transcription cannot read, where the stand-in
-  hides the markup of each line that starts an HTML block. Across the two critique
-  generators (1,517,894 cells) that is 650 cells against `44a037a`: 464 in 159
-  notes of class (i), 168 in 75 notes of class (ii), and 18 in 7 notes not
-  classified; parse5 says a browser shows 572 of the 650. The extended fuzz adds 21
+  hides the markup of each line that starts an HTML block. Across the critique
+  generators (1,517,894 cells) that is 669 cells against `44a037a`: 452 in 157
+  notes of class (i), 199 in 85 notes of class (ii), and 18 in 7 notes not
+  classified; parse5 says a browser shows 591 of the 669. Class (i) includes an
+  apostrophe inside an UNQUOTED attribute value (`<div title=it's>`), which a
+  browser does not read as a quote and our reader and the judge both do (the third
+  critique's N3); reading quotes only after `=` would follow the browser but
+  disagree with the judge. The extended fuzz adds 21
   cells (8 notes) of class (i), of which parse5 shows 11. The trade is deliberate:
   both close disclosures `main` has (`1. a [^1]` + CR + ... + `- <div title='QIQ`
   spoke QIQ).

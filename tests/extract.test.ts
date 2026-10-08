@@ -4491,6 +4491,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl166-r2d-f1-lone-cr-tag-line-is-text", "<b title=\"QAQ\rQBQ", "<b title=\"QAQ QBQ"],
 		["pin-nrl166-r2d-f2-footnote-attribute-hides-from-the-tag", "P [^1]\n\n[^1]: QAQ\n    <p class='QBQ", "P QAQ"],
 		["pin-nrl166-r2d-f2-footnote-attribute-hides-later-footnotes-only", "P [^1] [^2]\n\n[^1]: QAQ\n\n[^2]: QCQ <p class='QBQ\n    <p class='QDQ", "P QAQ QCQ <p class='QBQ"],
+		// /critique on db55516 (CONCERNS, 66), losses against main, RED on db55516: the
+		// lone-CR stand-in skips a line inside an attribute an earlier line left open
+		// (N1), splits lines where the renderer does, on a lone CR too (N2), and an open
+		// attribute ends at the next blank line once its quote has closed.
+		["pin-nrl166-r2e-n1-closing-quote-line-is-not-a-new-tag", "a\rb\n<div title=\"x\n<div title=\"y\n\nQAQ", "a b QAQ"],
+		["pin-nrl166-r2e-n2-lone-cr-breaks-the-stand-in-line", "a\rb\n</div>\r\r<b title=\"QAQ\n\nQBQ", "a b <b title=\"QAQ QBQ"],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -7721,6 +7727,8 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 		["many-comment-openers-before-a-definition", (n) => "P " + "<!-- a ".repeat(n) + "-->\n\n[^1]: x"],
 		["many-closed-comments-and-references", (n) => "a <!-- b --> [^1]\n".repeat(n) + "\n[^1]: x"],
 		["many-nested-definitions", (n) => "[^1]: ".repeat(n) + "x"],
+		// /critique on db55516, N4: 0.42 s, 1.43 s and 5.35 s at 4k, 8k and 16k.
+		["lone-cr-note-of-many-open-attributes", (n) => "a\rb\n" + "<div title=\"x\n\n".repeat(n)],
 		["lone-cr-note-of-many-tags", (n) => "a\rb\n" + "<div title='x'>y</div>\n".repeat(n)],
 		["many-dash-lines-in-one-paragraph", (n) => "P <!-- a\n" + "x -- y\n".repeat(n) + "-->"],
 	];

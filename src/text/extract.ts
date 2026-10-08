@@ -5457,7 +5457,7 @@ export function extractChunks(
 	// its `%%` block starts withhold our own block opener where the renderer has
 	// none (`percentOpensAt`).
 	const rendererHidden = rendererHiddenText(source, lines.length);
-	const hiddenSpans = mergeRanges(rendererHidden?.ranges ?? fallbackHtmlHidden(source, lines));
+	const hiddenSpans = mergeRanges(rendererHidden?.ranges ?? fallbackHtmlHidden(source));
 	const speak = (text: string, index: number[], start: number, blockType: BlockType): SpeechChunk[] => {
 		const kept = hiddenSpans.length === 0 ? { text, index } : dropHiddenText(text, index, hiddenSpans);
 		return splitSentences(kept.text, kept.index, start, segmentCtx, blockType);

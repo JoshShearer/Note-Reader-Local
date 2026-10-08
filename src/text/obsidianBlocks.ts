@@ -1484,14 +1484,21 @@ export function percentBlockEnds(source: string, lineCount: number): Map<number,
 /**
  * Where an attribute value a raw HTML block leaves open (quote `quote`, block
  * ending at `from`) ends for a browser: at the next such quote in the note, then
- * the first `>` after it outside a further quoted run; with neither, at the
- * note's end. The rendered page can only end it sooner (a quote the renderer
- * writes into its own markup), so this errs toward hiding.
+ * the first `>` after it outside a further quoted run, or the next blank line;
+ * with no such quote, at the note's end. The rendered page can only end the
+ * value sooner (a quote the renderer writes into its own markup), so this errs
+ * toward hiding.
  */
 function openQuoteEnd(source: string, from: number, quote: string): number {
 	let k = source.indexOf(quote, from);
 	if (k === -1) return source.length;
 	for (k++; k < source.length && source[k] !== ">"; k++) {
+		// Past the closing quote the tag still runs, now through attribute names,
+		// to the next `>`; at a blank line the next block begins, and every block
+		// the renderer writes opens with a tag whose `>` ends this one, so its
+		// content is displayed (/critique on db55516, N1: `a` + CR + `b` /
+		// `<div title="x` / `<div title="y` / blank / `QAQ` displays QAQ).
+		if (source[k] === "\n" && /^\n[ \t]*\r?(?:\n|$)/.test(source.slice(k, k + 64))) return k;
 		const c = source[k];
 		if (c === '"' || c === "'") {
 			const close = source.indexOf(c, k + 1);
@@ -1848,55 +1855,51 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
  * attribute value it leaves open hides on to the next such quote.
  * Comments are left to `extractChunks`' own comment state.
  */
-export function fallbackHtmlHidden(source: string, lines: readonly string[]): Array<readonly [number, number]> {
+export function fallbackHtmlHidden(source: string): Array<readonly [number, number]> {
 	const out: Array<readonly [number, number]> = [];
 	const LEAD = /^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+[ \t>]*)*/;
-	const starts: number[] = [];
-	for (let at = 0, k = 0; k < lines.length; k++) {
-		starts.push(at);
-		at += lines[k]!.length + 1;
-	}
-	for (let k = 0; k < lines.length; ) {
-		const lead = LEAD.exec(lines[k]!)![0].length;
+	// The renderer's lines: a lone CR breaks one too, which is the reason this
+	// runs at all (/critique on db55516, N2: `a` + CR + `b` / `</div>` + CR + CR +
+	// `<b title="QAQ` read the `<b` line as part of a `</div>` line).
+	const BREAK = /\r\n|\r|\n/g;
+	let openUntil = -1;
+	for (let at = 0; at <= source.length; ) {
+		BREAK.lastIndex = at;
+		const m = BREAK.exec(source);
+		const end = m === null ? source.length : m.index;
+		const line = source.slice(at, end);
+		const next = m === null ? source.length + 1 : m.index + m[0].length;
+		// A line inside an attribute value an earlier line left open is that
+		// value's text, not a tag of its own (/critique on db55516, N1), and
+		// skipping it keeps the quote scans disjoint and linear (N4).
+		if (at < openUntil) {
+			at = next;
+			continue;
+		}
+		const lead = LEAD.exec(line)![0].length;
 		// A line led by a tab or four spaces is indented code, whose text is shown.
 		// Otherwise the line must start an HTML block as the renderer's own table
 		// says (`HTML_KINDS`, less the comment kind): a known block name, a
 		// processing instruction, a declaration, CDATA, or a whole tag alone on
 		// its line. A line merely led by a tag is paragraph text (/critique on
 		// 996e8a7, F1: `a` + CR + `b` / `<b title="QAQ` / ... spoke nothing).
-		const content = lines[k]!.slice(lead).replace(/\r$/, "");
-		if (/^(?: {4}|\t)/.test(lines[k]!) || !HTML_KINDS.some((kind, i) => i !== 1 && kind[0].test(content))) {
-			k++;
-			continue;
-		}
-		// Only the block's first line: without the parser, which later lines the
+		// Only that first line is read: without the parser, which later lines the
 		// block holds, and whether their `>` is a quote marker or HTML, is not
 		// known (`1. <![CDATA[ a` / `> b` shows b: that `>` ends the bogus
 		// comment). An attribute the line leaves open still runs on below.
-		const e = k;
-		// The stretch's content, line by line less its container prefix, and for
-		// each content index the source offset it came from.
-		const text: string[] = [];
-		const from: number[] = [];
-		for (let j = k; j <= e; j++) {
-			const cut = j === k ? lead : LEAD.exec(lines[j]!)![0].length;
-			if (j > k) {
-				text.push("\n");
-				from.push(starts[j]! - 1);
-			}
-			for (let c = cut; c < lines[j]!.length; c++) {
-				text.push(lines[j]![c]!);
-				from.push(starts[j]! + c);
+		const content = line.slice(lead);
+		if (!/^(?: {4}|\t)/.test(line) && HTML_KINDS.some((kind, i) => i !== 1 && kind[0].test(content))) {
+			const { spans, left } = htmlMarkup(content);
+			const base = at + lead;
+			for (const [a, b] of spans) if (!content.startsWith("<!--", a)) out.push([base + a, base + b]);
+			// An attribute value left open runs on to the next such quote in the
+			// note and the `>` after it, as in `rendererHiddenText`.
+			if (left?.kind === "tag" && left.quote !== undefined) {
+				openUntil = openQuoteEnd(source, end, left.quote);
+				out.push([base + left.at, openUntil]);
 			}
 		}
-		const html = text.join("");
-		const map = (p: number): number => (p < from.length ? from[p]! : starts[e]! + lines[e]!.length);
-		const { spans, left } = htmlMarkup(html);
-		for (const [a, b] of spans) if (!html.startsWith("<!--", a)) out.push([map(a), b >= html.length ? map(html.length) : map(b)]);
-		// An attribute value left open runs on to the next such quote in the note
-		// and the `>` after it, as in `rendererHiddenText`.
-		if (left?.kind === "tag" && left.quote !== undefined) out.push([map(left.at), openQuoteEnd(source, map(html.length), left.quote)]);
-		k = e + 1;
+		at = next;
 	}
 	return out;
 }
