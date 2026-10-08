@@ -2025,8 +2025,9 @@ gates.
   F2, F3); 0 lockstep failures. Residuals: gen2 11,097 lost against `e2afbfe` (all
   lost on `44a037a`; 10,965 an inline construct on the opener line, withheld on
   purpose), and losses against `44a037a` in two fail-closed classes, an HTML block
-  leaving an attribute open (21 extended-fuzz cells, 295 critique-generator cells)
-  and the lone-CR stand-in (561 critique-generator cells).
+  leaving an attribute open and the lone-CR stand-in (21 extended-fuzz cells, 650
+  of 1,517,894 critique-generator cells). A second /critique (on `996e8a7`) found
+  no disclosure (CONCERNS, 74); its two loss findings were closed.
 
 **Traps.**
 - Un-hiding is where disclosures come from. Every correct reading in this round

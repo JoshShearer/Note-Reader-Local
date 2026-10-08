@@ -1481,6 +1481,26 @@ export function percentBlockEnds(source: string, lineCount: number): Map<number,
 	return ends;
 }
 
+/**
+ * Where an attribute value a raw HTML block leaves open (quote `quote`, block
+ * ending at `from`) ends for a browser: at the next such quote in the note, then
+ * the first `>` after it outside a further quoted run; with neither, at the
+ * note's end. The rendered page can only end it sooner (a quote the renderer
+ * writes into its own markup), so this errs toward hiding.
+ */
+function openQuoteEnd(source: string, from: number, quote: string): number {
+	let k = source.indexOf(quote, from);
+	if (k === -1) return source.length;
+	for (k++; k < source.length && source[k] !== ">"; k++) {
+		const c = source[k];
+		if (c === '"' || c === "'") {
+			const close = source.indexOf(c, k + 1);
+			k = close === -1 ? source.length : close;
+		}
+	}
+	return k >= source.length ? source.length : k + 1;
+}
+
 /** What the reading view certainly displays nothing of, as `rendererHiddenText` reports it. */
 export interface RendererHiddenText {
 	/** Source offset ranges `[start, end)`, sorted by start, possibly overlapping. */
@@ -1573,6 +1593,10 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	const footnoteLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	const droppedFootnoteLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	const keptFootnoteLines: boolean[] = new Array<boolean>(lineCount).fill(false);
+	// Each referenced label's first reference, which orders the footnotes section;
+	// and every kept definition's span, with that order.
+	const firstRefAt = new Map<string, number>();
+	const keptDefs: Array<{ start: number; end: number; order: number }> = [];
 	const browserRiskLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	let openFrom = lineCount;
 	for (const [a, b, open] of scanner.htmlBlocks) {
@@ -1709,7 +1733,11 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 			if (stop > i + 2) {
 				let slashes = 0;
 				for (let k = i - 1; k >= 0 && source.charCodeAt(k) === 92; k--) slashes++;
-				if (slashes % 2 === 0 && !defAt.has(i) && !inBogus(i) && !rawLine[lineOf(i)]! && noRef[i] === 0) referenced.add(source.slice(i + 2, stop).toLowerCase());
+				if (slashes % 2 === 0 && !defAt.has(i) && !inBogus(i) && !rawLine[lineOf(i)]! && noRef[i] === 0) {
+					const label = source.slice(i + 2, stop).toLowerCase();
+					referenced.add(label);
+					if (!firstRefAt.has(label)) firstRefAt.set(label, i);
+				}
 			}
 			i = source.indexOf("[^", stop + 1);
 		}
@@ -1730,6 +1758,7 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 				footnoteLines[l] = true;
 				if (kept_(d, k)) kept[l] = true;
 			}
+			if (kept_(d, k)) keptDefs.push({ start: offset(d.at), end: lineEnd[Math.min(d.lastLine, lineCount - 1)]!, order: firstRefAt.get(d.label.toLowerCase())! });
 		});
 		// Definitions nest (a definition's content may hold another, even on its
 		// own first line: `[^1]:[^2]: QKQ [^1]` shows definition 1, whose only
@@ -1779,27 +1808,23 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 		if (offset(o.at) < quoteEnd || droppedFootnoteLines[o.at.line]) continue;
 		// One inside a definition it keeps sits in the footnotes section at the
 		// page's END, in reference order, so what it swallows is the rest of that
-		// section, not the note text after it (/critique on 383f85c, F8): every
-		// kept definition line from the tag on is hidden, and the note is not.
+		// section, not the note text after it (/critique on 383f85c, F8): the rest
+		// of its own definition, and every kept definition listed after it
+		// (/critique on 996e8a7, F2). The innermost kept definition holding the tag
+		// is its own.
 		if (keptFootnoteLines[o.at.line]) {
 			const from = offset(o.at);
-			ranges.push([from, lineEnd[o.at.line]!]);
-			if (!footnotesSwallowed) for (let l = 0; l < lineCount; l++) if (keptFootnoteLines[l] && l !== o.at.line) ranges.push([lineStart[l]!, lineEnd[l]!]);
-			footnotesSwallowed = true;
+			let own: (typeof keptDefs)[number] | undefined;
+			for (const d of keptDefs) if (d.start <= from && from <= d.end && (own === undefined || d.start > own.start)) own = d;
+			if (own !== undefined) {
+				ranges.push([from, own.end]);
+				if (!footnotesSwallowed) for (const d of keptDefs) if (d.order > own.order) ranges.push([d.start, d.end]);
+				footnotesSwallowed = true;
+			}
 			continue;
 		}
-		let k = source.indexOf(o.quote, offset(o.end));
-		if (k !== -1) {
-			// The rest of the tag, any later quoted value skipped whole.
-			for (k++; k < source.length && source[k] !== ">"; k++) {
-				const c = source[k];
-				if (c === '"' || c === "'") {
-					const close = source.indexOf(c, k + 1);
-					k = close === -1 ? source.length : close;
-				}
-			}
-		}
-		quoteEnd = k === -1 || k >= source.length ? source.length : k + 1;
+		quoteEnd = openQuoteEnd(source, offset(o.end), o.quote);
+
 		ranges.push([offset(o.at), quoteEnd]);
 	}
 	sortRanges();
@@ -1818,14 +1843,10 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
  * renderer, and an old over-hiding comment may have been all that kept its
  * attribute values silent (`1. a [^1]` + CR + `<!-->` / ... / `- <div title='QIQ`
  * spoke QIQ on `main` too). So this is a stand-in read without the block
- * parser: a stretch of lines from one whose content (after any `>`, list marker
- * and indent) starts with a tag, a declaration, a processing instruction or
- * CDATA, through the line before the next blank line, is read as raw HTML, its
- * markup is hidden (`htmlMarkup`, on the lines less those container prefixes),
- * and an attribute value it leaves open hides the rest of the note. Wide where
- * it is unsure: a paragraph line that merely starts with a tag is read as HTML
- * too, which can only hide markup. Comments are left to `extractChunks`' own
- * comment state, and a line led by a tab or four spaces is indented code.
+ * parser: a line whose content (after any `>`, list marker and indent) starts
+ * an HTML block is read as raw HTML, its markup is hidden (`htmlMarkup`), and an
+ * attribute value it leaves open hides on to the next such quote.
+ * Comments are left to `extractChunks`' own comment state.
  */
 export function fallbackHtmlHidden(source: string, lines: readonly string[]): Array<readonly [number, number]> {
 	const out: Array<readonly [number, number]> = [];
@@ -1838,12 +1859,21 @@ export function fallbackHtmlHidden(source: string, lines: readonly string[]): Ar
 	for (let k = 0; k < lines.length; ) {
 		const lead = LEAD.exec(lines[k]!)![0].length;
 		// A line led by a tab or four spaces is indented code, whose text is shown.
-		if (/^(?: {4}|\t)/.test(lines[k]!) || !/^<(?:[A-Za-z/?]|![A-Za-z[])/.test(lines[k]!.slice(lead))) {
+		// Otherwise the line must start an HTML block as the renderer's own table
+		// says (`HTML_KINDS`, less the comment kind): a known block name, a
+		// processing instruction, a declaration, CDATA, or a whole tag alone on
+		// its line. A line merely led by a tag is paragraph text (/critique on
+		// 996e8a7, F1: `a` + CR + `b` / `<b title="QAQ` / ... spoke nothing).
+		const content = lines[k]!.slice(lead).replace(/\r$/, "");
+		if (/^(?: {4}|\t)/.test(lines[k]!) || !HTML_KINDS.some((kind, i) => i !== 1 && kind[0].test(content))) {
 			k++;
 			continue;
 		}
-		let e = k;
-		while (e + 1 < lines.length && lines[e + 1]!.trim() !== "") e++;
+		// Only the block's first line: without the parser, which later lines the
+		// block holds, and whether their `>` is a quote marker or HTML, is not
+		// known (`1. <![CDATA[ a` / `> b` shows b: that `>` ends the bogus
+		// comment). An attribute the line leaves open still runs on below.
+		const e = k;
 		// The stretch's content, line by line less its container prefix, and for
 		// each content index the source offset it came from.
 		const text: string[] = [];
@@ -1863,7 +1893,9 @@ export function fallbackHtmlHidden(source: string, lines: readonly string[]): Ar
 		const map = (p: number): number => (p < from.length ? from[p]! : starts[e]! + lines[e]!.length);
 		const { spans, left } = htmlMarkup(html);
 		for (const [a, b] of spans) if (!html.startsWith("<!--", a)) out.push([map(a), b >= html.length ? map(html.length) : map(b)]);
-		if (left?.kind === "tag" && left.quote !== undefined) out.push([map(left.at), source.length]);
+		// An attribute value left open runs on to the next such quote in the note
+		// and the `>` after it, as in `rendererHiddenText`.
+		if (left?.kind === "tag" && left.quote !== undefined) out.push([map(left.at), openQuoteEnd(source, map(html.length), left.quote)]);
 		k = e + 1;
 	}
 	return out;

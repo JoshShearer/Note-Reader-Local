@@ -2686,9 +2686,12 @@ segmentation (`dropHiddenText`, which keeps `sourceIndex` in lockstep). The rang
   missed reference only drops a definition.
 
 Where the transcription has no answer (a lone CR, deep nesting), a stand-in read
-without the block parser (`fallbackHtmlHidden`) hides the markup of every
-stretch of lines that starts with a tag, and the rest of the note after an
-attribute it leaves open.
+without the block parser (`fallbackHtmlHidden`) hides the markup of every line
+that starts an HTML block by the renderer's own table (a block name, a processing
+instruction, a declaration, CDATA, or a whole tag alone on its line), and after an
+attribute such a line leaves open, on to the next such quote. Only that first
+line: which later lines the block holds, and whether their `>` is a quote marker
+or HTML, needs the parser.
 
 Every range is hidden by construction, so the drop cannot disclose. The `%%`
 starts also give our opener a renderer answer: our block opener stands only on a
@@ -2721,9 +2724,10 @@ process, n = 20,000, `44a037a` against this tree: `P ` + `<!-- ` x n 31 against 
 ms (c4a370e: 27,956 ms per Verify 2); `<!--` x n 31/82; in an item quote 35/86;
 `<!-- -- ` x n 35/135; `P <!-- a` x n lines 194/394 (c4a370e 26,949); dash lines
 186/342; open-attribute blocks 920/1,067; lazy callout `%%` lines 974/1,584;
-`P ` + `<!-- a ` x n then `-->` 36/60; n lines of `a <!-- b --> [^1]` 6,105/398
+`P ` + `<!-- a ` x n then `-->` 35/61; n lines of `a <!-- b --> [^1]` 5,840/391
 (a quadratic on `main` that the accumulator fix removes); a lone-CR note of n
-tags 6,064/366; many
+tags 5,735/331; n definitions each opening `<div 'x` 23,648/562; `<!--x--!>` x n
+in one block 12/58; many
 tags in one block 63/151; `%%` blocks 357/489; nested lists 1,577/2,114; every other
 Verify shape within 1.3x. Twenty-thousand footnote definitions dropped from 5,896 to
 403 ms with the accumulator fix. `"[^".repeat(n)` stays NRL-172's (6,755/6,668).
@@ -2740,20 +2744,34 @@ referenced one (F4). Also two quadratics (`htmlMarkup`'s `-->` search, F5;
 letter to a hidden range (F7, the review's six lockstep failures), and an attribute
 left open in a referenced footnote swallowing the note text after it, where the
 renderer puts footnotes at the page's end (F8, losses). All are closed as described
-above; F8's open attribute now hides only the footnotes. Pinned by the
-`nrl166-r2c` rows, every one RED on `383f85c`.
+above; F8's open attribute now hides the rest of its own definition and the kept
+definitions listed after it in reference order. Pinned by the `nrl166-r2c` rows,
+every one RED on `383f85c`.
 
-**Census**, harness 1.13.7, Verify 2's judge (`run3.cjs`/`rfz.cjs`), masks ALL and
-DEF (F2 also SKIPALL), newly disclosing / newly lost, **0 lockstep failures on every
-arm and corpus**, measured on the final tree's behaviour (the last change after
-the census only reorders a scan; 31,686 note-mask outputs compared byte for byte).
+**/critique on `996e8a7`: CONCERNS, 74, no disclosure.** Its own two generators and
+fresh seeds (276,000 notes, about 1.5 million cells) found no new disclosure and no
+lockstep regression. It named losses: the lone-CR stand-in reading a paragraph line
+led by a tag as HTML (F1) and an open attribute in a kept footnote hiding every kept
+footnote (F2), both closed in the next commit and pinned by the `nrl166-r2d` rows;
+and three LOW ones left as they are: an open attribute's end found in the note
+text, where the renderer's own markup usually ends it sooner (F3, the documented
+fail-closed class below); a `%%` line inside a list item's fence continued by a
+lazy line, which loses code text with code blocks spoken (F4); and backtick runs
+pairing across a callout title's lines, which can drop a referenced footnote (F5).
+
+**Census** of the final tree, harness 1.13.7, Verify 2's judge (`run3.cjs`/`rfz.cjs`),
+masks ALL and DEF (F2 also SKIPALL), newly disclosing / newly lost. Lockstep: 0
+failures this tree has and `main` does not; the only failures at all are notes
+whose `$$` block's synthetic `equation` word merges into a chunk, 3,547 here
+against 4,145 on `main`, both in the second critique's generators.
 
 | corpus | cells | vs `9132c3b` | vs `e2afbfe` | vs `44a037a` |
 |---|---|---|---|---|
 | Verify 2's `gen2.cjs`, 1,215,000 shapes | 13,122,000 | 1,800 / 0 (was 50,982 / 0) | **0 / 11,097** (was 112 / 36,014) | 0 / 0 |
 | reviewers' fuzz, seeds 1-8 x 8,000 | 489,270 | 20 / 63 | **0 / 14** (was 2 / 29) | 0 / 0 (was 0 / 9) |
 | extended fuzz, seeds 501-512 x 6,000 | 724,310 | 105 / 57 | **0 / 126** | 0 / 21 |
-| the critique's generator, seeds 1-2 x 48,000 | 833,216 | 83 / 1,046 | **0 / 932** | 0 / 864 |
+| first critique's generator, seeds 1-2 x 48,000 | 833,216 | 83 / 594 | **0 / 474** | 0 / 406 |
+| second critique's two generators, 40,000 each | 684,678 | 45 / 372 | **0 / 269** | 0 / 244 |
 | Verify 1's `own-gen.cjs` | 1,481,472 | 0 / 0 | 0 / 0 | 0 / 0 |
 | its de-callout twins | 972,864 | 0 / 0 | 0 / 0 | 0 / 0 |
 | F1 `callout-census.cjs` | 2,496 | 0 / 0 | 0 / 0 | 0 / 0 |
@@ -2761,9 +2779,9 @@ the census only reorders a scan; 31,686 note-mask outputs compared byte for byte
 | F3 `gen.cjs` | 6,514,560 | 0 / 2,292 | 0 / 56 | 0 / 0 |
 
 Closed against `44a037a` (disclosing / lost): `gen2` 374,998 / 1,534,782, the base
-fuzz 26,207 / 8,305, the extended 72,788 / 10,781, the critique's generator
-171,965 / 524, F2 823 / 199, F3 3,262 / 18,906; own-gen and twins close 9,819 and
-9,894 lost cells.
+fuzz 26,207 / 8,305, the extended 72,788 / 10,781, the first critique's generator
+171,545 / 524, the second's 87,746 / 239, F2 823 / 199, F3 3,262 / 18,906; own-gen
+and twins close 9,819 and 9,894 lost cells.
 
 - **`newly disclosing against e2afbfe` is 0 on every corpus**, and against
   `44a037a` too. F2's and F3's moved rows against `9132c3b` are a subset, id for id,
@@ -2787,13 +2805,15 @@ fuzz 26,207 / 8,305, the extended 72,788 / 10,781, the critique's generator
 - Losses against `44a037a` remain in two fail-closed classes, both siblings of
   class 1's HTML-block disclosures. (i) An HTML block leaving an attribute value
   open: we hide to the next matching quote in the NOTE, while a quote the renderer
-  writes into its own markup (`data-heading="`, `alt="`) can end the value sooner;
-  the extended fuzz's 21 cells (8 notes; parse5 shows 11 and hides 10) and 295 of
-  the critique generator's 864 (101 notes). (ii) A lone-CR note, where the stand-in
-  hides every tag-led stretch's markup: 561 of the 864 (166 notes). Three more notes
-  (8 cells) were not classified. The trade is
-  deliberate: the stand-in closes disclosures `main` has in such notes
-  (`1. a [^1]` + CR + ... + `- <div title='QIQ` spoke QIQ).
+  writes into its own markup (`data-heading="`, `alt="`) can end the value sooner.
+  (ii) A lone-CR note, which the transcription cannot read, where the stand-in
+  hides the markup of each line that starts an HTML block. Across the two critique
+  generators (1,517,894 cells) that is 650 cells against `44a037a`: 464 in 159
+  notes of class (i), 168 in 75 notes of class (ii), and 18 in 7 notes not
+  classified; parse5 says a browser shows 572 of the 650. The extended fuzz adds 21
+  cells (8 notes) of class (i), of which parse5 shows 11. The trade is deliberate:
+  both close disclosures `main` has (`1. a [^1]` + CR + ... + `- <div title='QIQ`
+  spoke QIQ).
 - The base fuzz's 14 and F2's 34 against `e2afbfe` are the accepted rows of the
   port; the extended fuzz's 126 are all lost on `44a037a`.
 

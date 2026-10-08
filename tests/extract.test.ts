@@ -4484,6 +4484,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl166-r2c-self-reference-in-heading-counts", "[^1]: [^1]: QAAQ\n\t===", ": QAAQ ==="],
 		["pin-nrl166-r2c-lone-cr-open-attribute-hidden", "1. QFQ [^1]\r<!-->\n> - <!-->\n    QGQ QHQ\n- <div title='QIQ\n[^1]: \n> - [^1]", "QFQ QGQ QHQ"],
 		["pin-nrl166-r2c-lone-cr-open-attribute-hidden-in-code-note", "\tQLQ [^a]\r  ---\n> \tQAQ <!-- QBQ -- QCQ\n\t<!-->\n- <div title='QDQ\n    [x]: /u \"QEQ", "QAQ"],
+		// /critique on 996e8a7 (CONCERNS, 74), losses against main, each RED on 996e8a7:
+		// the lone-CR stand-in reads only a real HTML block start as HTML (F1), and an
+		// attribute a kept footnote leaves open hides only from the tag on (F2).
+		["pin-nrl166-r2d-f1-lone-cr-paragraph-tag-is-text", "a\rb\n<b title=\"QAQ\n\nQBQ\n\n# QCQ", "a b <b title=\"QAQ QBQ QCQ"],
+		["pin-nrl166-r2d-f1-lone-cr-tag-line-is-text", "<b title=\"QAQ\rQBQ", "<b title=\"QAQ QBQ"],
+		["pin-nrl166-r2d-f2-footnote-attribute-hides-from-the-tag", "P [^1]\n\n[^1]: QAQ\n    <p class='QBQ", "P QAQ"],
+		["pin-nrl166-r2d-f2-footnote-attribute-hides-later-footnotes-only", "P [^1] [^2]\n\n[^1]: QAQ\n\n[^2]: QCQ <p class='QBQ\n    <p class='QDQ", "P QAQ QCQ <p class='QBQ"],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
