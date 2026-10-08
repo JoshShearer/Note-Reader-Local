@@ -4465,6 +4465,25 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// A tag's attribute on the opener line still withholds the refinements.
 		["pin-nrl166-r2-residual-tag-on-opener-line-still-lost", "- > P QAQ <b title=\"<!-- QXQ\n> [!tip] QBQ\n> QCQ --->", "P QAQ <b title=\""],
 		["pin-nrl166-r2-residual-pct-with-percent-after-still-lost", "- >> P QAQ <!--\n> [!tip] QBQ\n> \t--> QCQ\n%% 5% x", "P QAQ QCQ %% 5% x"],
+		// /critique on 383f85c (BLOCK, 35): each row is the renderer's text, RED on 383f85c.
+		// F1/F2 our `%%` opener is kept where an inline construct or a footnote
+		// definition is in its reach; F3/F4 a reference inside an HTML comment or a
+		// definition no longer counts; F8 an
+		// attribute a kept footnote leaves open swallows only the footnotes section.
+		["pin-nrl166-r2c-f1-link-title-over-lazy-pct", ">[](u \"\n>[!e]%%QBQ\")", "u \""],
+		["pin-nrl166-r2c-f1-tag-attribute-over-lazy-pct", "> P <b title=\"QAQ\n> [!note] %% QBQ\n> QCQ\">QDQ</b>", "P <b title=\"QAQ"],
+		["pin-nrl166-r2c-f2-code-span-reference-not-counted", "> [^1]: a\n> [!e] %% QJQ `[^1]`", "", { skipInlineCode: false }],
+		["pin-nrl166-r2c-f3-reference-in-html-comment-not-counted", "[^1]: %% <!-- [^1] -->\n%% QDQ", ""],
+		["pin-nrl166-r2c-f4-reference-in-definition-not-counted", ">- \n    %%\n[^1]:[^2]:QKQ[^1]", ""],
+		["pin-nrl166-r2c-f8-footnote-attribute-stays-in-footnotes", "[^a]:<div '\n1. QAQ[^a]", "QAQ"],
+		// Nested definitions take their INNERMOST definition's fate, a reference inside
+		// a definition counts, and a note the transcription cannot read (a lone CR)
+		// hides HTML-block markup by a wide stand-in (`fallbackHtmlHidden`).
+		["pin-nrl166-r2c-nested-unreferenced-definition-hidden", "[^1]:[^2]:QKQ[^1]", ""],
+		["guard-nrl166-r2c-reference-inside-definition-counts", "[^2]: x [^1]\n\n[^1]: QAQ", "QAQ"],
+		["guard-nrl166-r2c-self-reference-in-heading-counts", "[^1]: [^1]: QAAQ\n\t===", ": QAAQ ==="],
+		["pin-nrl166-r2c-lone-cr-open-attribute-hidden", "1. QFQ [^1]\r<!-->\n> - <!-->\n    QGQ QHQ\n- <div title='QIQ\n[^1]: \n> - [^1]", "QFQ QGQ QHQ"],
+		["pin-nrl166-r2c-lone-cr-open-attribute-hidden-in-code-note", "\tQLQ [^a]\r  ---\n> \tQAQ <!-- QBQ -- QCQ\n\t<!-->\n- <div title='QDQ\n    [x]: /u \"QEQ", "QAQ"],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -7624,6 +7643,16 @@ console.log("a max-budgeted list dedent can over-dedent past a line's real inden
 	);
 }
 
+console.log("NRL-166 fix round 2: the synthetic equation word is kept or dropped whole");
+{
+	// /critique on 383f85c, F7: the word maps its last letter to the `$$` closer,
+	// and the per-character drop of renderer-hidden text took that letter alone.
+	// Not in the NRL-38 table, whose identity check a synthetic word cannot meet.
+	const src = "> - QHQ ?>\n    $$\n[^1]: QIQ $$";
+	const got = extractChunks(src, OPTS).map((c) => c.text);
+	check("NRL-166 pin-nrl166-r2c-f7-equation-kept-whole", JSON.stringify(got) === JSON.stringify(["QHQ ?>", "equation"]), JSON.stringify(got));
+}
+
 console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay linear");
 {
 	// The fix round's gates run on EVERY line of every note, so a backtracking
@@ -7675,6 +7704,17 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 		// quadratic (27 s at 20,000 lines on c4a370e against 192 ms on 44a037a,
 		// which hid the paragraph).
 		["many-literal-opener-lines", (n) => "P <!-- a\n".repeat(n) + "-->"],
+		// /critique on 383f85c, F5 and F6: an HTML block of many `--!>`-closed
+		// comments (18,626 ms at 40,000 on 383f85c against 9 ms on 44a037a), and
+		// many spans read by many chunks (13,811 ms against 1,096 ms at 80,000).
+		["many-bang-closed-comments", (n) => "<div>\n" + "<!--x--!>".repeat(n)],
+		["many-spans-many-chunks", (n) => "<div>" + "<b>x</b>".repeat(n) + "\n\n" + "# h\n".repeat(n)],
+		["many-backtick-runs-before-a-definition", (n) => "P " + "`a``".repeat(n) + "\n\n[^1]: x"],
+		["many-link-openers-before-a-definition", (n) => "P " + "](".repeat(n) + "\n\n[^1]: x"],
+		["many-comment-openers-before-a-definition", (n) => "P " + "<!-- a ".repeat(n) + "-->\n\n[^1]: x"],
+		["many-closed-comments-and-references", (n) => "a <!-- b --> [^1]\n".repeat(n) + "\n[^1]: x"],
+		["many-nested-definitions", (n) => "[^1]: ".repeat(n) + "x"],
+		["lone-cr-note-of-many-tags", (n) => "a\rb\n" + "<div title='x'>y</div>\n".repeat(n)],
 		["many-dash-lines-in-one-paragraph", (n) => "P <!-- a\n" + "x -- y\n".repeat(n) + "-->"],
 	];
 	const timeOf = (src: string): number => {

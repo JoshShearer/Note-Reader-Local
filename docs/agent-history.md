@@ -2015,12 +2015,18 @@ gates.
 - Round 1's refinements are now chosen per line by the line's own window
   (`refineWindowClean`), with the walker run twice; backtick and `](` left the
   construct shape; an exact `%%` interrupter certainly ends a list.
+- /critique on `383f85c` BLOCKED (35) with four new disclosures, two quadratics, a
+  lockstep break and a loss class; all closed: the withheld `%%` opener also stands
+  down near inline constructs and footnotes, references in inline comments, code
+  spans and link titles do not count, nested definitions take the innermost one's
+  fate, and a lone-CR note gets a wide stand-in (`fallbackHtmlHidden`).
 - Final census: 0 newly disclosing against `e2afbfe` and `44a037a` on every corpus
-  (gen2 13,122,000 cells, both fuzzes, own-gen, twins, F1, F2, F3); 0 lockstep
-  failures. Residuals: gen2 11,097 lost against `e2afbfe` (all lost on `44a037a`;
-  10,965 an inline construct on the opener line, withheld on purpose), and 21
-  extended-fuzz cells lost against `44a037a` where an HTML block leaves an
-  attribute open and we hide to the note's next quote.
+  (gen2 13,122,000 cells, both fuzzes, the critique's generator, own-gen, twins, F1,
+  F2, F3); 0 lockstep failures. Residuals: gen2 11,097 lost against `e2afbfe` (all
+  lost on `44a037a`; 10,965 an inline construct on the opener line, withheld on
+  purpose), and losses against `44a037a` in two fail-closed classes, an HTML block
+  leaving an attribute open (21 extended-fuzz cells, 295 critique-generator cells)
+  and the lone-CR stand-in (561 critique-generator cells).
 
 **Traps.**
 - Un-hiding is where disclosures come from. Every correct reading in this round
@@ -2036,8 +2042,11 @@ gates.
   end of a container's text after its last newline: map that position to the
   newline (`scanPos`), or a `%%` span swallows the next note line.
 - Footnote facts, measured on the harness: references compare without case, a
-  reference inside a `%%` comment counts, one in code, `$$`, frontmatter, HTML or
-  escaped does not, and the LAST definition of a label wins, nested ones included.
+  reference inside a `%%` comment or another definition counts, one in code, `$$`,
+  frontmatter, HTML, an inline comment, a code span or escaped does not, the LAST
+  definition of a label wins, and nested definitions each follow their own fate
+  (`[^1]:[^2]: x [^1]` shows 1, hides x). Read references WIDE (a miss only drops a
+  definition), but scope each zone to its paragraph, or the zone itself loses text.
 - `appendToParagraph` was quadratic (array rebuild plus `endsWith` flattening a
   rope); any change that speaks longer paragraphs will find such costs.
 

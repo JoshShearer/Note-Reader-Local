@@ -2,7 +2,7 @@ import type { BlockType, SpeechChunk } from "../audio/types";
 // words.ts imports nothing but its own types, so this edge adds no node builtin
 // and no new entry to main.js's require() list (non-negotiable 7).
 import { findWords, hasCjkScript } from "../audio/words";
-import { rendererHiddenText } from "./obsidianBlocks";
+import { fallbackHtmlHidden, rendererHiddenText } from "./obsidianBlocks";
 import {
 	type SegmenterSource,
 	graphemeBoundaries,
@@ -1928,7 +1928,18 @@ function mergeRanges(ranges: ReadonlyArray<readonly [number, number]>): Array<[n
 function dropHiddenText(text: string, index: readonly number[], spans: ReadonlyArray<readonly [number, number]>): { text: string; index: number[] } {
 	const chars: string[] = [];
 	const out: number[] = [];
+	// The first span that can hold any of `index`, by binary search, so a note of
+	// many spans and many chunks stays linear (/critique on 383f85c, F6).
 	let s = 0;
+	if (index.length > 0) {
+		let hi = spans.length;
+		const first = index[0]!;
+		while (s < hi) {
+			const mid = (s + hi) >> 1;
+			if (spans[mid]![1] <= first) s = mid + 1;
+			else hi = mid;
+		}
+	}
 	let seam = false;
 	for (let k = 0; k < text.length; k++) {
 		const o = index[k]!;
@@ -5446,7 +5457,7 @@ export function extractChunks(
 	// its `%%` block starts withhold our own block opener where the renderer has
 	// none (`percentOpensAt`).
 	const rendererHidden = rendererHiddenText(source, lines.length);
-	const hiddenSpans = mergeRanges(rendererHidden?.ranges ?? []);
+	const hiddenSpans = mergeRanges(rendererHidden?.ranges ?? fallbackHtmlHidden(source, lines));
 	const speak = (text: string, index: number[], start: number, blockType: BlockType): SpeechChunk[] => {
 		const kept = hiddenSpans.length === 0 ? { text, index } : dropHiddenText(text, index, hiddenSpans);
 		return splitSentences(kept.text, kept.index, start, segmentCtx, blockType);
@@ -5467,13 +5478,26 @@ export function extractChunks(
 	// line for line (`<div>` / `- > x <!-- QS` / `> \t%% QK` hides QK, and
 	// `> - <!-- a` / `b <!-- c --> d <!-- e` / `\t%%` / `- f` hides f). Elsewhere,
 	// and wherever the transcription has no answer, `undefined` keeps ours.
+	//
+	// Nor where an inline construct (`inlineConstructMayHold`) sits anywhere from
+	// the opener's paragraph start, back to the last blank line, through that
+	// reach, or a footnote definition does: a link title, a tag's attribute value
+	// or a definition the renderer drops may be what hides the text there
+	// (`> P <b title="a` / `> [!note] %% b` / `> c">d</b>` displays `P d`;
+	// /critique on 383f85c, F1 and F2).
 	const percentOpensAt: (boolean | undefined)[] = new Array<boolean | undefined>(lines.length).fill(undefined);
 	if (rendererHidden !== null) {
+		const constructSinceBlank: boolean[] = new Array<boolean>(lines.length).fill(false);
+		for (let k = 0, seen = false; k < lines.length; k++) {
+			if (lines[k]!.trim() === "") seen = false;
+			if (inlineConstructMayHold(lines[k]!)) seen = true;
+			constructSinceBlank[k] = seen;
+		}
 		let nextRisk = lines.length;
 		let nextPct = lines.length - 1;
 		for (let k = lines.length - 1; k >= 0; k--) {
-			if (rendererHidden.browserRiskLines[k]!) nextRisk = k;
-			if (nextRisk > nextPct) percentOpensAt[k] = rendererHidden.percentStarts.has(k);
+			if (rendererHidden.browserRiskLines[k]! || rendererHidden.footnoteLines[k]! || inlineConstructMayHold(lines[k]!)) nextRisk = k;
+			if (nextRisk > nextPct && !constructSinceBlank[k]!) percentOpensAt[k] = rendererHidden.percentStarts.has(k);
 			if (lines[k]!.includes("%%")) nextPct = k;
 		}
 	}
@@ -7122,9 +7146,11 @@ export function extractChunks(
 				const open = lineStart + mathOpen;
 				const last = lineStarts[closeLine]! + closeAt + 1;
 				flushParagraph();
-				// The synthetic word maps every letter but the last to the opener, so it
-				// is kept or dropped whole, by the opener's offset.
-				if (dropHiddenText("$", [open], hiddenSpans).text !== "") chunks.push(...speak("equation", [open, open, open, open, open, open, open, last], open, "other"));
+				// The synthetic word is kept or dropped WHOLE, by the opener's offset, and
+				// so bypasses the per-character drop in `speak`: its last letter maps to
+				// the closer, and dropping that alone spoke `equatio` (/critique on
+				// 383f85c, F7).
+				if (dropHiddenText("$", [open], hiddenSpans).text !== "") chunks.push(...splitSentences("equation", [open, open, open, open, open, open, open, last], open, segmentCtx, "other"));
 				lineNo = closeLine;
 				appendRemainder(lines[closeLine]!, closeAt + 2, lineStarts[closeLine]!, closeLine);
 				continue;

@@ -2675,18 +2675,30 @@ segmentation (`dropHiddenText`, which keeps `sourceIndex` in lockstep). The rang
   after that, or the note's end;
 - a fenced block's fence lines, info string included (it becomes a `class`);
 - every footnote definition the note never references, and every earlier
-  definition of a label defined again. Measured on the harness: the renderer
-  lists only referenced definitions, compares labels without case, keeps the
-  LAST of a label (nested ones included), and counts a reference inside a `%%`
-  comment but not one escaped, in code, `$$`, frontmatter or HTML.
+  definition of a label defined again, each character taking its INNERMOST
+  definition's fate (`[^1]:[^2]: QKQ [^1]` shows definition 1 and hides QKQ).
+  Measured on the harness: the renderer lists only referenced definitions,
+  compares labels without case, keeps the LAST of a label (nested ones
+  included), and counts a reference inside a `%%` comment or inside another
+  definition, but not one escaped, in code, `$$`, frontmatter, HTML, an inline
+  comment, a code span or a link title. Those last three are read wide (a
+  comment or span counts when it stays on its line or in its paragraph), since a
+  missed reference only drops a definition.
+
+Where the transcription has no answer (a lone CR, deep nesting), a stand-in read
+without the block parser (`fallbackHtmlHidden`) hides the markup of every
+stretch of lines that starts with a tag, and the rest of the note after an
+attribute it leaves open.
 
 Every range is hidden by construction, so the drop cannot disclose. The `%%`
 starts also give our opener a renderer answer: our block opener stands only on a
 line where the renderer opens a `%%` block too (`percentOpensAt`), which closes
 class 3 in the model. Withholding our block shows what it would have hidden up to
-the next `%%`, so it is not done where an HTML block, or a line after one that
-leaves a comment or a tag open, lies in that reach: there the browser hides text we
-do not model line for line (`<div>` / `- > x <!-- QS` / `> \t%% QK`).
+the next `%%`, so it is not done where an HTML block, a line after one that leaves
+a comment or a tag open, a footnote definition, or an inline-construct shape (from
+the opener's paragraph start on) lies in that reach: there something else may
+hide the text (`<div>` / `- > x <!-- QS` / `> \t%% QK`, and `> P <b title="a` /
+`> [!note] %% b` / `> c">d</b>`).
 
 **Round 1's gates, scoped.** The walker runs twice, with and without round 1's
 refinements, and each line takes the refined record only where its own WINDOW is
@@ -2708,22 +2720,40 @@ rule exposed by speaking long paragraphs; it now appends in place. Timing, singl
 process, n = 20,000, `44a037a` against this tree: `P ` + `<!-- ` x n 31 against 94
 ms (c4a370e: 27,956 ms per Verify 2); `<!--` x n 31/82; in an item quote 35/86;
 `<!-- -- ` x n 35/135; `P <!-- a` x n lines 194/394 (c4a370e 26,949); dash lines
-186/342; open-attribute blocks 920/1,067; lazy callout `%%` lines 974/1,584; many
+186/342; open-attribute blocks 920/1,067; lazy callout `%%` lines 974/1,584;
+`P ` + `<!-- a ` x n then `-->` 36/60; n lines of `a <!-- b --> [^1]` 6,105/398
+(a quadratic on `main` that the accumulator fix removes); a lone-CR note of n
+tags 6,064/366; many
 tags in one block 63/151; `%%` blocks 357/489; nested lists 1,577/2,114; every other
 Verify shape within 1.3x. Twenty-thousand footnote definitions dropped from 5,896 to
 403 ms with the accumulator fix. `"[^".repeat(n)` stays NRL-172's (6,755/6,668).
 The new scans are checked by scaling in `tests/extract.test.ts`.
 
+**/critique on `383f85c`: BLOCK, 35, and what it changed.** An independent review
+with its own 96,000-note generator found four disclosures against `main`, each
+again text that some OTHER construct hides once our over-wide answer is withdrawn:
+the withheld `%%` opener exposing a link title or a tag attribute (F1) or a
+footnote kept by a reference in a code span (F2); a reference inside an inline
+comment counted (F3); a nested unreferenced definition sharing its line with a
+referenced one (F4). Also two quadratics (`htmlMarkup`'s `-->` search, F5;
+`dropHiddenText` restarting per chunk, F6), the synthetic `equation` losing its last
+letter to a hidden range (F7, the review's six lockstep failures), and an attribute
+left open in a referenced footnote swallowing the note text after it, where the
+renderer puts footnotes at the page's end (F8, losses). All are closed as described
+above; F8's open attribute now hides only the footnotes. Pinned by the
+`nrl166-r2c` rows, every one RED on `383f85c`.
+
 **Census**, harness 1.13.7, Verify 2's judge (`run3.cjs`/`rfz.cjs`), masks ALL and
 DEF (F2 also SKIPALL), newly disclosing / newly lost, **0 lockstep failures on every
-arm and corpus**. The tree measured is the one before the accumulator change, which
-moves no output (31,686 note-mask outputs compared byte for byte).
+arm and corpus**, measured on the final tree's behaviour (the last change after
+the census only reorders a scan; 31,686 note-mask outputs compared byte for byte).
 
 | corpus | cells | vs `9132c3b` | vs `e2afbfe` | vs `44a037a` |
 |---|---|---|---|---|
 | Verify 2's `gen2.cjs`, 1,215,000 shapes | 13,122,000 | 1,800 / 0 (was 50,982 / 0) | **0 / 11,097** (was 112 / 36,014) | 0 / 0 |
-| reviewers' fuzz, seeds 1-8 x 8,000 | 489,270 | 26 / 63 | **0 / 14** (was 2 / 29) | 0 / 0 (was 0 / 9) |
-| extended fuzz, seeds 501-512 x 6,000 | 724,310 | 105 / 57 | **0 / 126** (was 0 / 117) | 0 / 21 |
+| reviewers' fuzz, seeds 1-8 x 8,000 | 489,270 | 20 / 63 | **0 / 14** (was 2 / 29) | 0 / 0 (was 0 / 9) |
+| extended fuzz, seeds 501-512 x 6,000 | 724,310 | 105 / 57 | **0 / 126** | 0 / 21 |
+| the critique's generator, seeds 1-2 x 48,000 | 833,216 | 83 / 1,046 | **0 / 932** | 0 / 864 |
 | Verify 1's `own-gen.cjs` | 1,481,472 | 0 / 0 | 0 / 0 | 0 / 0 |
 | its de-callout twins | 972,864 | 0 / 0 | 0 / 0 | 0 / 0 |
 | F1 `callout-census.cjs` | 2,496 | 0 / 0 | 0 / 0 | 0 / 0 |
@@ -2731,8 +2761,9 @@ moves no output (31,686 note-mask outputs compared byte for byte).
 | F3 `gen.cjs` | 6,514,560 | 0 / 2,292 | 0 / 56 | 0 / 0 |
 
 Closed against `44a037a` (disclosing / lost): `gen2` 374,998 / 1,534,782, the base
-fuzz 26,181 / 8,389, the extended 72,782 / 10,877, F2 823 / 309, F3 3,262 /
-18,906; own-gen and twins close 9,819 and 9,894 lost cells.
+fuzz 26,207 / 8,305, the extended 72,788 / 10,781, the critique's generator
+171,965 / 524, F2 823 / 199, F3 3,262 / 18,906; own-gen and twins close 9,819 and
+9,894 lost cells.
 
 - **`newly disclosing against e2afbfe` is 0 on every corpus**, and against
   `44a037a` too. F2's and F3's moved rows against `9132c3b` are a subset, id for id,
@@ -2741,11 +2772,9 @@ fuzz 26,181 / 8,389, the extended 72,782 / 10,877, F2 823 / 309, F3 3,262 /
   `QCQ">QZQ -->`, and all 1,800 are QZQ, which a browser DISPLAYS (parse5): the
   bogus comment ends at the first `>`. The judge reads the `"` as an attribute
   quote and hides it. A judge artifact, on `e2afbfe` and `44a037a` alike.
-- The fuzzes' remaining cells against `9132c3b` (26, 105 and 26) are all on
-  `e2afbfe` and `44a037a` too. parse5 says the browser shows 14 of the 26, 28 of the
-  105 and none of F2's 26; the rest involve a lone CR or a vertical tab (no
-  transcription answer), a callout title holding raw HTML, or an HTML block whose
-  browser comment opens inside an item. Not closed, and stated.
+- The fuzzes' remaining cells against `9132c3b` are all on `e2afbfe` and `44a037a`
+  too. They involve a lone CR or a vertical tab, a callout title holding raw HTML,
+  or a browser comment opened in an item's HTML block. Not closed, and stated.
 
 **What remains, and why.**
 - `gen2` against `e2afbfe`, 11,097 cells, all already lost on `44a037a`: 10,965 put
@@ -2755,20 +2784,25 @@ fuzz 26,181 / 8,389, the extended 72,782 / 10,877, F2 823 / 309, F3 3,262 /
   from one that is literal needs the inline parser, which this round does not
   transcribe. The other 132 are a footnote-definition line right after the item's
   code line (`... > \t--> c` / `[^1]: f`), where the walker stays unsure.
-- The extended fuzz loses 21 cells (8 notes) against `44a037a`, all one class: an
-  HTML block leaving an attribute value open. We hide to the next matching quote in
-  the NOTE; a quote the renderer writes into its own markup (`data-heading="`,
-  `alt="`) can end the value sooner. parse5 says the browser shows 11 of the 21 and
-  hides 10. Fail-closed, and siblings of class 1's HTML-block disclosures.
-- A reference only an inline code span, an inline HTML comment or a link title
-  holds still counts, so such a definition is spoken as it always was.
+- Losses against `44a037a` remain in two fail-closed classes, both siblings of
+  class 1's HTML-block disclosures. (i) An HTML block leaving an attribute value
+  open: we hide to the next matching quote in the NOTE, while a quote the renderer
+  writes into its own markup (`data-heading="`, `alt="`) can end the value sooner;
+  the extended fuzz's 21 cells (8 notes; parse5 shows 11 and hides 10) and 295 of
+  the critique generator's 864 (101 notes). (ii) A lone-CR note, where the stand-in
+  hides every tag-led stretch's markup: 561 of the 864 (166 notes). Three more notes
+  (8 cells) were not classified. The trade is
+  deliberate: the stand-in closes disclosures `main` has in such notes
+  (`1. a [^1]` + CR + ... + `- <div title='QIQ` spoke QIQ).
 - The base fuzz's 14 and F2's 34 against `e2afbfe` are the accepted rows of the
   port; the extended fuzz's 126 are all lost on `44a037a`.
 
 **Rows.** 37 new `nrl166-r2` rows in the NRL-38 table, every `pin` RED on
-`c4a370e` (the two `residual` pins and the guards excepted), four timing rows RED
-on `c4a370e`, scaling rows for every new scan, and four new unit rows for footnote
-definitions, with two rewritten to reference the definition they read. 30 existing rows moved, every one to the renderer's text: the NRL-114,
+`c4a370e` (the two `residual` pins and the guards excepted); 12 `nrl166-r2c` rows
+for the critique, every pin RED on `383f85c`; four timing rows RED on `c4a370e`;
+scaling rows for every new scan (four times the input must take under ten times
+as long); and four new unit rows for footnote definitions, with two rewritten to
+reference the definition they read. 30 existing rows moved, every one to the renderer's text: the NRL-114,
 NRL-117, NRL-118 and NRL-120 `still-silenced` / `unmasked` pins and their controls,
 NRL-166's div-block, fence and footnote pins, NRL-136's residual div opener, NRL-42's
 `span-html-*`, and NRL-38's `heading-tracking` and `tail-obsidian-continuation`

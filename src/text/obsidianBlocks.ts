@@ -264,9 +264,11 @@ function scanPos(t: string, line: number, p: number): ScanPos {
  */
 function htmlMarkup(html: string): { spans: Array<[number, number]>; left: { kind: "comment" | "bogus" | "tag"; at: number; quote?: string } | null } {
 	const spans: Array<[number, number]> = [];
-	// The last `--!>` bounds every search for one, so a block of many comments
-	// closed by `-->` does not rescan to its end per comment.
+	// The last `-->` and the last `--!>` bound every search for one, so a block
+	// of many comments closed by the other does not rescan to its end per
+	// comment (/critique on 383f85c, F5).
 	const lastBang = html.lastIndexOf("--!>");
+	const lastClose = html.lastIndexOf("-->");
 	for (let i = 0; ; ) {
 		const lt = html.indexOf("<", i);
 		if (lt === -1) return { spans, left: null };
@@ -276,7 +278,7 @@ function htmlMarkup(html: string): { spans: Array<[number, number]>; left: { kin
 				spans.push([lt, i]);
 				continue;
 			}
-			const a = html.indexOf("-->", lt + 4);
+			const a = lastClose < lt + 4 ? -1 : html.indexOf("-->", lt + 4);
 			const b = lastBang < lt + 4 ? -1 : html.indexOf("--!>", lt + 4);
 			const end = a === -1 ? b : b === -1 ? a : Math.min(a, b);
 			if (end === -1) {
@@ -356,8 +358,10 @@ class BlockScanner {
 	// starts, the quote, and where the block ends.
 	readonly openQuotes: Array<{ at: ScanPos; quote: string; end: ScanPos }> = [];
 	frontmatterLastLine = -1;
-	// First and last note line of every block whose text is never inline-parsed.
+	// First and last note line of every block whose text is never inline-parsed,
+	// and of every paragraph.
 	readonly rawBlocks: Array<readonly [number, number]> = [];
+	readonly paragraphs: Array<readonly [number, number]> = [];
 	private lastMethod = "";
 	private atStart = true;
 	// Container nesting depth of the current tokenizeBlock call. Each level
@@ -486,10 +490,10 @@ class BlockScanner {
 			// Blocks whose text is never inline-parsed, so a `[^x]` in them is no
 			// footnote reference (measured: one in fenced, indented or `$$` code,
 			// frontmatter or an HTML block leaves its definition hidden).
-			if (RAW_BLOCKS.has(this.lastMethod)) {
+			if (RAW_BLOCKS.has(this.lastMethod) || this.lastMethod === "paragraph") {
 				let last = line;
 				for (let k = pos; k < pos + eaten - 1; k++) if (value.charCodeAt(k) === 10) last++;
-				this.rawBlocks.push([line, last]);
+				(this.lastMethod === "paragraph" ? this.paragraphs : this.rawBlocks).push([line, last]);
 			}
 			// A fenced block's fence lines are never displayed: the opening one's
 			// info string becomes a `class` (measured: `> ~~~ QFQ` renders
@@ -1514,15 +1518,15 @@ export interface RendererHiddenText {
  *   measured, `P` / blank / `[^1]: QBQ` displays only `P`, and `P [^1]` /
  *   `[^1]: a` / `[^1]: b` displays b and not a.
  *
- * A reference is any `[^label]` in the note, compared without case, except a
- * backslash-escaped one, a definition's own label, one in HTML markup, and one
- * on a line of a block whose text is never inline-parsed (code, `$$`,
- * frontmatter, an HTML block). One inside a `%%` comment DOES count: measured,
- * `%%` / `[^1]` / `%%` / blank / `[^1]: QBQ` displays QBQ.
- * That still counts a reference the renderer does not see (in an inline code
- * span, an inline HTML comment, a link title) as seen, so such a definition
- * stays spoken as it always was: the miss is on the side of the old answer,
- * never of a new hiding of shown text.
+ * A reference is any `[^label]` in the note, compared without case, outside the
+ * places the renderer may not see one: a backslash escape, a definition's own
+ * label, HTML markup, a block whose text is never inline-parsed (code, `$$`,
+ * frontmatter, an HTML block), a `<!--` up to the next
+ * `-->`, a backtick run's span, and a link destination or title (`noRef`, read
+ * wide on purpose: a missed reference only hides a definition the renderer may
+ * show, a loss, while a wrongly counted one speaks a definition it leaves out).
+ * One inside a `%%` comment DOES count: measured, `%%` / `[^1]` /
+ * `%%` / blank / `[^1]: QBQ` displays QBQ.
  *
  * Every range here is hidden for the renderer by construction, so removing what
  * falls inside one from the spoken text can never disclose, and it is how
@@ -1568,6 +1572,7 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	};
 	const footnoteLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	const droppedFootnoteLines: boolean[] = new Array<boolean>(lineCount).fill(false);
+	const keptFootnoteLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	const browserRiskLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	let openFrom = lineCount;
 	for (const [a, b, open] of scanner.htmlBlocks) {
@@ -1577,8 +1582,6 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	for (let l = openFrom; l < lineCount; l++) browserRiskLines[l] = true;
 	if (scanner.defs.length > 0) {
 		const defAt = new Set(scanner.defs.map((d) => offset(d.at)));
-		const rawLine: boolean[] = new Array<boolean>(lineCount).fill(false);
-		for (const [a, b] of scanner.rawBlocks) for (let l = a; l <= b && l < lineCount; l++) rawLine[l] = true;
 		const lineOf = (o: number): number => {
 			let lo = 0;
 			let hi = lineCount - 1;
@@ -1589,6 +1592,107 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 			}
 			return lo;
 		};
+		// Where a `[^label]` is NOT counted as a reference, over-approximated on
+		// purpose: an uncounted reference drops its definition (hidden text stays
+		// hidden, shown text may be lost), while a wrongly counted one speaks a
+		// definition the renderer leaves out (/critique on 383f85c, F2 and F3). So
+		// everything from a `<!--` to the next `-->`, every
+		// backtick run to the next run of the same length before a blank line, and
+		// a link destination or title from `](` to the next `)` on its line. A
+		// reference inside a definition does count, as the renderer counts it
+		// (`[^1]: QAQ [^1]` shows QAQ).
+		const paragraphOf: number[] = new Array<number>(lineCount).fill(-1);
+		scanner.paragraphs.forEach(([a, b], id) => {
+			for (let l = a; l <= b && l < lineCount; l++) paragraphOf[l] = id;
+		});
+		const noRef = new Uint8Array(source.length + 1);
+		// Only a comment that can be one inline: closed by a `-->`, with a body that
+		// does not start with `>` or `->`, hold `--` or end with `-` (module 4839's
+		// rule), and that stays on one line or inside one paragraph. Any
+		// other `<!--` is literal text for the renderer, or an HTML block, whose
+		// lines `rawLine` covers already.
+		// Each test is O(1) or a short scan, so a line of many openers stays
+		// linear: the closer comes from a forward pointer over every `-->`, and
+		// "the body holds `--`" is the next `--` lying before that closer.
+		const closers: number[] = [];
+		for (let c = source.indexOf("-->"); c !== -1; c = source.indexOf("-->", c + 1)) closers.push(c);
+		let ci = 0;
+		for (let at = source.indexOf("<!--"); at !== -1; ) {
+			while (ci < closers.length && closers[ci]! < at + 4) ci++;
+			if (ci >= closers.length) break;
+			const close = closers[ci]!;
+			const from = lineOf(at);
+			const to = lineOf(close);
+			const dashes = source.indexOf("--", at + 4);
+			const ok =
+				source[at + 4] !== ">" &&
+				!(source[at + 4] === "-" && source[at + 5] === ">") &&
+				!(dashes !== -1 && dashes < close) &&
+				source[close - 1] !== "-" &&
+				(from === to || (paragraphOf[from]! !== -1 && paragraphOf[from] === paragraphOf[to]));
+			if (ok) noRef.fill(1, at, close + 3);
+			at = source.indexOf("<!--", ok ? close + 3 : at + 4);
+		}
+		// A run length that found no closer before a blank line finds none from any
+		// later run before that same blank line either, so it is not searched again
+		// there, which keeps this linear in the note for each run length.
+		const failedUntil = new Map<number, number>();
+		for (let k = 0; k < source.length; ) {
+			if (source.charCodeAt(k) !== 96) {
+				k++;
+				continue;
+			}
+			let run = k;
+			while (run < source.length && source.charCodeAt(run) === 96) run++;
+			const len = run - k;
+			if ((failedUntil.get(len) ?? -1) > run) {
+				k = run;
+				continue;
+			}
+			// The next run of exactly `len` backticks, unless a blank line comes first.
+			let close = -1;
+			let j = run;
+			for (; j < source.length; ) {
+				if (source.charCodeAt(j) === 10 && /^\n[ \t]*(?:\r?\n|$)/.test(source.slice(j, j + 64))) break;
+				if (source.charCodeAt(j) !== 96) {
+					j++;
+					continue;
+				}
+				let e = j;
+				while (e < source.length && source.charCodeAt(e) === 96) e++;
+				if (e - j === len) {
+					close = e;
+					break;
+				}
+				j = e;
+			}
+			if (close === -1) {
+				failedUntil.set(len, j);
+				k = run;
+				continue;
+			}
+			// A code span is inline, so both runs sit on one line or in one
+			// paragraph; a fence's run pairing with a later one is no span.
+			const from = lineOf(k);
+			const to = lineOf(close - 1);
+			if (from !== to && (paragraphOf[from]! === -1 || paragraphOf[from] !== paragraphOf[to])) {
+				k = run;
+				continue;
+			}
+			noRef.fill(1, k, close);
+			k = close;
+		}
+		// A later `](` before the first `)` or line end shares that end, so it is
+		// covered already and skipped.
+		for (let at = source.indexOf("]("), covered = -1; at !== -1; at = source.indexOf("](", at + 2)) {
+			if (at < covered) continue;
+			let e = at + 2;
+			while (e < source.length && source[e] !== ")" && source[e] !== "\n") e++;
+			noRef.fill(1, at, e + 1);
+			covered = e;
+		}
+		const rawLine: boolean[] = new Array<boolean>(lineCount).fill(false);
+		for (const [a, b] of scanner.rawBlocks) for (let l = a; l <= b && l < lineCount; l++) rawLine[l] = true;
 		const referenced = new Set<string>();
 		// Every `[^label]` with a label of no whitespace and no `]`, the language
 		// of `/\[\^([^\]\s]+)\]/g`, by a scan rather than that regex, which
@@ -1605,7 +1709,7 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 			if (stop > i + 2) {
 				let slashes = 0;
 				for (let k = i - 1; k >= 0 && source.charCodeAt(k) === 92; k--) slashes++;
-				if (slashes % 2 === 0 && !defAt.has(i) && !inBogus(i) && !rawLine[lineOf(i)]!) referenced.add(source.slice(i + 2, stop).toLowerCase());
+				if (slashes % 2 === 0 && !defAt.has(i) && !inBogus(i) && !rawLine[lineOf(i)]! && noRef[i] === 0) referenced.add(source.slice(i + 2, stop).toLowerCase());
 			}
 			i = source.indexOf("[^", stop + 1);
 		}
@@ -1616,7 +1720,7 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 		// A dropped definition's lines are hidden less any line of a kept one.
 		const lastOf = new Map<string, number>();
 		scanner.defs.forEach((d, k) => lastOf.set(d.label.toLowerCase(), k));
-		const kept: boolean[] = new Array<boolean>(lineCount).fill(false);
+		const kept = keptFootnoteLines;
 		const kept_ = (d: FootnoteDef, k: number): boolean => {
 			const label = d.label.toLowerCase();
 			return referenced.has(label) && lastOf.get(label) === k;
@@ -1627,16 +1731,37 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 				if (kept_(d, k)) kept[l] = true;
 			}
 		});
-		scanner.defs.forEach((d, k) => {
-			if (kept_(d, k)) return;
-			for (let l = d.line; l <= d.lastLine && l < lineCount; l++) if (!kept[l]) droppedFootnoteLines[l] = true;
-		});
-		for (let l = 0; l < lineCount; l++) {
-			if (!droppedFootnoteLines[l]) continue;
-			let e = l;
-			while (e + 1 < lineCount && droppedFootnoteLines[e + 1]) e++;
-			ranges.push([lineStart[l]!, lineEnd[e]!]);
-			l = e;
+		// Definitions nest (a definition's content may hold another, even on its
+		// own first line: `[^1]:[^2]: QKQ [^1]` shows definition 1, whose only
+		// content is definition 2, and hides QKQ, since 2 is never referenced;
+		// /critique on 383f85c, F4). So a character's fate is its INNERMOST
+		// definition's: each definition spans its `[^` through its last line's end,
+		// those spans nest, and one stack sweep labels each stretch by the
+		// innermost one holding it.
+		const spans = scanner.defs
+			.map((d, k) => ({ start: offset(d.at), end: lineEnd[Math.min(d.lastLine, lineCount - 1)]!, dropped: !kept_(d, k) }))
+			.sort((x, y) => x.start - y.start || y.end - x.end);
+		const stack: typeof spans = [];
+		let at = -1;
+		const emit = (to: number): void => {
+			const top = stack[stack.length - 1];
+			if (top !== undefined && top.dropped && to > at) {
+				ranges.push([at, to]);
+				for (let l = lineOf(at); l <= lineOf(to) && l < lineCount; l++) droppedFootnoteLines[l] = true;
+			}
+			at = to;
+		};
+		for (const sp of spans) {
+			while (stack.length > 0 && stack[stack.length - 1]!.end <= sp.start) {
+				emit(stack[stack.length - 1]!.end);
+				stack.pop();
+			}
+			emit(sp.start);
+			stack.push(sp);
+		}
+		while (stack.length > 0) {
+			emit(stack[stack.length - 1]!.end);
+			stack.pop();
 		}
 		sortRanges();
 	}
@@ -1648,9 +1773,21 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	// skipped: the browser reads it as that tag's attribute text, so it opens no
 	// tag of its own, and skipping it keeps the scans disjoint and linear.
 	let quoteEnd = -1;
+	let footnotesSwallowed = false;
 	for (const o of [...scanner.openQuotes].sort((x, y) => offset(x.at) - offset(y.at))) {
 		// A tag inside a definition the renderer drops is not on the page at all.
 		if (offset(o.at) < quoteEnd || droppedFootnoteLines[o.at.line]) continue;
+		// One inside a definition it keeps sits in the footnotes section at the
+		// page's END, in reference order, so what it swallows is the rest of that
+		// section, not the note text after it (/critique on 383f85c, F8): every
+		// kept definition line from the tag on is hidden, and the note is not.
+		if (keptFootnoteLines[o.at.line]) {
+			const from = offset(o.at);
+			ranges.push([from, lineEnd[o.at.line]!]);
+			if (!footnotesSwallowed) for (let l = 0; l < lineCount; l++) if (keptFootnoteLines[l] && l !== o.at.line) ranges.push([lineStart[l]!, lineEnd[l]!]);
+			footnotesSwallowed = true;
+			continue;
+		}
 		let k = source.indexOf(o.quote, offset(o.end));
 		if (k !== -1) {
 			// The rest of the tag, any later quoted value skipped whole.
@@ -1673,4 +1810,61 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 		if (!b.closed && b.lastLine < lineCount - 1) percentEnds.set(b.startLine, b.lastLine);
 	}
 	return { ranges, percentStarts, percentEnds, footnoteLines, browserRiskLines, frontmatterLastLine: scanner.frontmatterLastLine };
+}
+
+/**
+ * Where `rendererHiddenText` has no answer (a lone CR, containers nested past
+ * MAX_DEPTH), the raw HTML it would have masked is still raw HTML for the
+ * renderer, and an old over-hiding comment may have been all that kept its
+ * attribute values silent (`1. a [^1]` + CR + `<!-->` / ... / `- <div title='QIQ`
+ * spoke QIQ on `main` too). So this is a stand-in read without the block
+ * parser: a stretch of lines from one whose content (after any `>`, list marker
+ * and indent) starts with a tag, a declaration, a processing instruction or
+ * CDATA, through the line before the next blank line, is read as raw HTML, its
+ * markup is hidden (`htmlMarkup`, on the lines less those container prefixes),
+ * and an attribute value it leaves open hides the rest of the note. Wide where
+ * it is unsure: a paragraph line that merely starts with a tag is read as HTML
+ * too, which can only hide markup. Comments are left to `extractChunks`' own
+ * comment state, and a line led by a tab or four spaces is indented code.
+ */
+export function fallbackHtmlHidden(source: string, lines: readonly string[]): Array<readonly [number, number]> {
+	const out: Array<readonly [number, number]> = [];
+	const LEAD = /^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+[ \t>]*)*/;
+	const starts: number[] = [];
+	for (let at = 0, k = 0; k < lines.length; k++) {
+		starts.push(at);
+		at += lines[k]!.length + 1;
+	}
+	for (let k = 0; k < lines.length; ) {
+		const lead = LEAD.exec(lines[k]!)![0].length;
+		// A line led by a tab or four spaces is indented code, whose text is shown.
+		if (/^(?: {4}|\t)/.test(lines[k]!) || !/^<(?:[A-Za-z/?]|![A-Za-z[])/.test(lines[k]!.slice(lead))) {
+			k++;
+			continue;
+		}
+		let e = k;
+		while (e + 1 < lines.length && lines[e + 1]!.trim() !== "") e++;
+		// The stretch's content, line by line less its container prefix, and for
+		// each content index the source offset it came from.
+		const text: string[] = [];
+		const from: number[] = [];
+		for (let j = k; j <= e; j++) {
+			const cut = j === k ? lead : LEAD.exec(lines[j]!)![0].length;
+			if (j > k) {
+				text.push("\n");
+				from.push(starts[j]! - 1);
+			}
+			for (let c = cut; c < lines[j]!.length; c++) {
+				text.push(lines[j]![c]!);
+				from.push(starts[j]! + c);
+			}
+		}
+		const html = text.join("");
+		const map = (p: number): number => (p < from.length ? from[p]! : starts[e]! + lines[e]!.length);
+		const { spans, left } = htmlMarkup(html);
+		for (const [a, b] of spans) if (!html.startsWith("<!--", a)) out.push([map(a), b >= html.length ? map(html.length) : map(b)]);
+		if (left?.kind === "tag" && left.quote !== undefined) out.push([map(left.at), source.length]);
+		k = e + 1;
+	}
+	return out;
 }
