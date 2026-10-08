@@ -6,6 +6,8 @@
  */
 
 import { cp, mkdir, access, readdir, rm, stat } from "node:fs/promises";
+import { readFileSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -35,6 +37,66 @@ try {
 	await access(path.join(vault, ".obsidian"));
 } catch {
 	console.error(`Not a vault (no .obsidian folder): ${vault}`);
+	process.exit(1);
+}
+
+/**
+ * A `/run-tickets` lane deploys only the merged base, and only while holding the
+ * one deploy slot. The vault is the owner's real one - their notes, settings and
+ * reading positions - so an unattended agent deploying an unmerged build there
+ * is the lane's one real side effect outside the repo. A prompt saying "do not
+ * deploy" does not survive between tool calls; this check runs in the process
+ * that would do it.
+ *
+ * The lane is recognised by a marker Step 0c writes into the lane's own git
+ * admin directory (`<git-dir>/run-tickets-lane`, JSON `{lock, base}`): it is
+ * never a tracked or untracked file, so it cannot dirty the lane, and `git
+ * worktree remove` deletes it with the lane. The primary checkout and the
+ * interactive `-nrl-*` worktrees carry no marker and deploy exactly as before.
+ *
+ * Returns why the deploy is refused, or null to proceed.
+ */
+function runLaneRefusal(cwd) {
+	let gitdir;
+	try {
+		// A linked worktree's `.git` is a file naming its admin directory. In the
+		// primary it is a directory, which throws EISDIR here: not a lane.
+		const m = /^gitdir:\s*(.+)$/m.exec(readFileSync(path.join(cwd, ".git"), "utf8"));
+		if (!m) return null;
+		gitdir = path.resolve(cwd, m[1].trim());
+	} catch {
+		return null;
+	}
+	let marker;
+	try {
+		marker = JSON.parse(readFileSync(path.join(gitdir, "run-tickets-lane"), "utf8"));
+	} catch (err) {
+		if (err && err.code === "ENOENT") return null;
+		return `the run-tickets lane marker in ${gitdir} is unreadable, so the slot cannot be checked`;
+	}
+	const lane = realpathSync(cwd);
+	let holder = "";
+	try {
+		holder = readFileSync(path.join(String(marker.lock), "holder"), "utf8").split("\n")[0].trim();
+	} catch {
+		return `this lane does not hold the deploy slot ${marker.lock}`;
+	}
+	if (holder !== lane) return `the deploy slot ${marker.lock} is held by ${holder || "(empty holder)"}, not this lane`;
+	const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+	try {
+		if (git("status", "--porcelain") !== "") return "the lane has uncommitted changes";
+		const head = git("rev-parse", "HEAD");
+		const base = git("rev-parse", String(marker.base ?? "origin/main"));
+		if (head !== base) return `HEAD ${head} is not ${marker.base ?? "origin/main"} (${base}): a lane deploys merged code only`;
+	} catch (err) {
+		return `git could not confirm the lane is at its base: ${err instanceof Error ? err.message : err}`;
+	}
+	return null;
+}
+
+const refusal = runLaneRefusal(process.cwd());
+if (refusal !== null) {
+	console.error(`Refusing to deploy from a /run-tickets lane: ${refusal}`);
 	process.exit(1);
 }
 
