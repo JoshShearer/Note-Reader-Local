@@ -9,7 +9,7 @@
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
     "typecheck": "tsc --noEmit --skipLibCheck",
     "deploy": "npm run build && node deploy.mjs",
-    "pretest": "node build-tests.mjs tests/extract.test.ts tests/engine.test.ts tests/player.test.ts tests/paths.test.ts tests/kokoro.test.ts tests/settings.test.ts tests/positionThrottle.test.ts tests/highlightColour.test.ts tests/highlight.test.ts tests/affordances.test.ts tests/engineSelection.test.ts tests/webspeechVoices.test.ts tests/fallback.test.ts tests/espeak.test.ts tests/types.test.ts tests/release.test.ts tests/voiceChoice.test.ts tests/platform.test.ts tests/readSelection.test.ts tests/modelStore.test.ts tests/adrNumbers.test.ts tests/vaultPersistence.test.ts tests/loadingNotice.test.ts tests/suiteRegistry.test.ts tests/bridge.test.ts",
+    "pretest": "node build-tests.mjs tests/extract.test.ts tests/engine.test.ts tests/player.test.ts tests/paths.test.ts tests/kokoro.test.ts tests/settings.test.ts tests/positionThrottle.test.ts tests/highlightColour.test.ts tests/highlight.test.ts tests/affordances.test.ts tests/engineSelection.test.ts tests/webspeechVoices.test.ts tests/fallback.test.ts tests/espeak.test.ts tests/types.test.ts tests/release.test.ts tests/voiceChoice.test.ts tests/platform.test.ts tests/readSelection.test.ts tests/modelStore.test.ts tests/adrNumbers.test.ts tests/vaultPersistence.test.ts tests/loadingNotice.test.ts tests/suiteRegistry.test.ts tests/bridge.test.ts tests/runTickets.test.ts",
     "test": "node run-tests.mjs",
     "test:obsidian": "node tests/obsidian-smoke.mjs",
     "pretest:inline-worker": "npm run build && node build-tests.mjs tests/nrl-15-inline-worker.test.ts",

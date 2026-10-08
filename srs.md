@@ -146,7 +146,7 @@ See ADR 0028 (0028-bundle-executable-runtime.md), which supersedes ADR 0024 (ort
 
 Quality gates run before any release:
 - `npm run typecheck` (TypeScript must compile).
-- `npm test` (all 25 test suites must pass).
+- `npm test` (all 26 test suites must pass).
 - `npm run build` (production esbuild must succeed).
 
 `.github/workflows/release.yml` enforces these gates on tagged commits, and `.github/workflows/ci.yml` enforces them on every push and pull request. Only tagged commits that pass all gates are released to GitHub.

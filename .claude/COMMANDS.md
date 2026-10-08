@@ -45,7 +45,7 @@ never deploys.
 | Command | Purpose |
 |---|---|
 | `/worktrees` | Parallel sessions - list, inspect, create, remove; file-overlap and deploy-slot ownership. Owns the `note-reader-local-nrl-*` pool only |
-| `/run-tickets` | Run a batch of tickets end to end in fresh subagents, fully autonomously, in a disposable `note-reader-local-run-*` lane it creates and removes; anything needing a human blocks that ticket and is reported at the end |
+| `/run-tickets` | Run a batch of tickets end to end - three agents per clean ticket (Build, Critic, Verify) plus a Fix loop, mechanical steps scripted in `scripts/run-tickets/ticket-ops.mjs` - in a disposable `note-reader-local-run-*` lane it creates and removes; anything needing a human blocks that ticket and is reported at the end |
 
 ---
 
@@ -69,12 +69,12 @@ names any red PR in its end-of-run report and leaves the triage to you.
 |---|---|
 | `/verify` runs the gates itself | `.github/workflows/ci.yml` runs them on `push` and `pull_request`, but there is no git hook and no branch protection, so the check is a backstop. `/verify` may read its conclusion once; it must not wait on it. |
 | Every shipping command demands an Obsidian check | `AGENTS.md` rule 11. The suites run in bare Node against fakes, so green says nothing about whether speech works. |
-| `/run-tickets` never waits for a human | The owner tests by using the app and files new tickets for what they find. Verify is automated (gates, bundled probes of every acceptance input, CDP smoke when reachable) and merge is automatic. Nothing is ever described as verified in Obsidian unless a human saw it; interactive `/verify` still exists for that. |
+| `/run-tickets` never waits for a human | The owner tests by using the app and files new tickets for what they find. Verify is automated (gates, bundled probes of every acceptance input; it never drives the owner's Obsidian) and merge is automatic, pinned to the graded head and base. The run deploys merged `main` once at the end, and `deploy.mjs` refuses a lane that does not hold the slot. Nothing is ever described as verified in Obsidian unless a human saw it; interactive `/verify` still exists for that. |
 | `/run-tickets` works in a worktree it creates and removes | The owner keeps the primary checkout. The lane is `note-reader-local-run-<stamp>` on a throwaway `run/<stamp>` branch cut from `origin/main`, and it is removed at the end **only if nothing would be lost** - a ticket blocked before Ship leaves unpushed commits, and those are kept rather than force-removed. The state file and the archive live in the **primary**, because a state file inside the lane would be deleted by the run's own cleanup. Runs are **parallel**: each has its own lane and its own `pipeline-state.<stamp>.json`, there is no repo-wide lock, and only the single Obsidian deploy slot is serialised, by `deploy.lock`. Give parallel runs disjoint ticket sets. |
 | `/test-issue` has no `known-failures.json` | ShroomSpy triages CI against a hand-maintained baseline file. Here the triage is measured: reproduce the failing gate locally, then on `origin/main` in a throwaway tree. The one structural exception is already written down - a red `release.yml` on a branch push is expected for refs predating `01c9a84` (`AGENTS.md`, NRL-79). |
 | `/spec-check` is new | This project has a written spec with MoSCoW IDs. Compliance drift is the main risk, and no other repo in the portfolio has that shape. |
 | `/critique` risk factors are rewritten | Scored on source-offset edits, log call sites, the worker's network guards, rate handling, settings normalisation and node-builtin imports, not on generic churn. |
-| Bugs must be reproduced before they are fixed | `AGENTS.md` rule 12, enforced in `/create-issue` and in `/run-tickets` Phase 3. |
+| Bugs must be reproduced before they are fixed | `AGENTS.md` rule 12, enforced in `/create-issue` and in `/run-tickets`' Build phase. |
 | No `deslop`, no `update-packages` | `deslop` is 3279 lines of React and Firebase patterns that do not apply. Dependency updates here are rare enough to do by hand. |
 
 ## Setup
@@ -110,7 +110,7 @@ When a Linear call will not resolve, check the operation name before blaming the
 
 `/run-tickets` promises it never waits. That is a property of how it is launched, not of the file.
 `opencode.json` sets `git push *`, `git branch -D *`, `git reset --hard*` and `rm -rf *` to `ask`, and
-the pipeline runs all four: Ship pushes, Finish deletes the squash-merged branch with `-D`, the lane is
+the pipeline needs all four: `ticket-ops` pushes and deletes the squash-merged branch with `-D`, the lane is
 resynced between tickets with `reset --hard origin/main`, and the deploy lock is released with `rm -rf`.
 `git worktree add` and `git worktree remove` match no rule and are not gated, so the lane itself adds
 no prompt. Those rules protect every other session in this repo, so the fix is the launch, not the
