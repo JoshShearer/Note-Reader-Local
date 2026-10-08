@@ -2991,6 +2991,24 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// through the rendered code block and hides QBQ and QCQ. RED on an arm that
 		// applied the stop to every opener (minimised from the seed-31337 fuzz).
 		["guard-nrl166-r1-c-browser-comment-crosses-code-line", "1. ><!-- y --> QAQ <!--\n>>> \tQBQ\n>> QCQ\n> >\t --> QDQ", "QAQ QDQ"],
+		// /critique on the first fix-round commit, each NEWLY DISCLOSING there: an
+		// inline construct still open around the `<!--` (an attribute value, a link
+		// title, a declaration, CDATA, an image label that becomes `alt`) displays
+		// nothing, so the body rule must not make it spoken. Each expectation is
+		// main e2afbfe's output; QAQ and QBQ are hidden by the renderer in all.
+		["guard-nrl166-r1-a-attribute-value-holds-opener", "Note <span title=\"<!-- QAQ -- secret\nQBQ -->\">QCQ</span>", "Note <span title=\" \">QCQ"],
+		["guard-nrl166-r1-a-link-title-holds-opener", "P [a](u \"<!-- QAQ -- x\nQBQ -->\") QCQ", "P a u \" \") QCQ"],
+		["guard-nrl166-r1-a-tag-opened-a-line-above", "P <abbr\ntitle=\"<!-- QAQ -- y\"\ndata-x=\"QBQ -->\">QCQ</abbr>", "P <abbr title=\" \">QCQ"],
+		["guard-nrl166-r1-a-img-alt-holds-opener", "P <img alt=\"<!-- QAQ -- y\nQBQ -->\"> QCQ", "P <img alt=\" \"> QCQ"],
+		["guard-nrl166-r1-a-cdata-holds-opener", "P <![CDATA[ QAQ <!-- QBQ -- x\nQCQ --> ]]> QDQ", "P <[CDATA[ QAQ ]]> QDQ"],
+		["guard-nrl166-r1-a-declaration-holds-opener", "P <!DOCTYPE QAQ <!-- QBQ -- x\nQCQ --> > QDQ", "P <!DOCTYPE QAQ > QDQ"],
+		["guard-nrl166-r1-a-image-label-holds-opener", "P ![al <!-- QAQ -- x\nQBQ -->](u) QCQ", "P [al ](u) QCQ"],
+		// An UNREFERENCED footnote definition is hidden by the renderer and not
+		// modelled here; an old over-hiding comment was masking it, so a note with
+		// any `[^x]:` shape keeps every fix-round-1 refinement off. QBAQ is hidden by
+		// the renderer in both; each row was NEWLY DISCLOSING without the gate.
+		["guard-nrl166-r1-footnote-after-code-ended-quote", "> > ```\n> \t<!-- QAAQ\n> > [^1]: QBAQ", "", { skipCodeBlocks: false }],
+		["guard-nrl166-r1-footnote-under-comment", "P <!-- QAAQ\n> \t<div>\n[^1]: QBAQ --> QCAQ\n- QDAQ -->", "P QCAQ QDAQ -->", { skipCodeBlocks: false }],
 		// Class B: `- > \t` opens indented code inside the item's quote, so its
 		// `<!--` is code. A `%%` line below ends the list uncertainly and the walker
 		// skipped the whole last item; its FIRST line does not depend on where the

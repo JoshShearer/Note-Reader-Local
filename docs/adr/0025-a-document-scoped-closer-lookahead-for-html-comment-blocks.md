@@ -2537,7 +2537,7 @@ is now `main`. sourceIndex was checked on every fix output with Verify's checker
 | Verify's `own-gen.cjs`, 199,584 shapes x ALL, DEF | 1,481,472 | 0 / 0 | **0 / 0** (was 0 / 3,609) | 0 / 0 | 20,250 / 6,174 |
 | its de-callout twins (`[!tip]`, `[!tip]-`, `[!x]` -> `Tip`, deduplicated), 177,408 shapes | 1,311,936 | 0 / 0 | **0 / 0** | 0 / 0 | 0 / 11,466 |
 | F1 `callout-census.cjs`, 288 shapes x 2 | 2,496 | 0 / 0 | 0 / 0 | 0 / 0 | 832 / 0 |
-| F2 fuzz `SEED=31337 N=4000`, ALL, DEF, SKIPALL | 48,741 | 73 / 10 | **0 / 34** | 0 / 0 | 90 / 368 |
+| F2 fuzz `SEED=31337 N=4000`, ALL, DEF, SKIPALL | 48,741 | 73 / 10 | **0 / 34** | 0 / 0 | 90 / 290 |
 | F3 `gen.cjs`, 808,704 shapes x 2 | 6,514,560 | 0 / 2,292 | **0 / 56** | 0 / 0 | 60 / 19,426 |
 
 - Against `e2afbfe`, the only newly lost cells are the 90 accepted at the port. The
@@ -2552,6 +2552,38 @@ is now `main`. sourceIndex was checked on every fix output with Verify's checker
   `<!--` on the first line, 10 with a `%%` there, and 14 with neither. They were not
   classified further. One example is `- > Plain QAQ <!-- QXQ` / `>> QBQ -->` / `%%`
   (QXQ).
+
+**The `/critique` round: two disclosures found, both closed fail-closed.** The
+first commit of this round (`6e79fd6`) was blocked by its own `/critique`. That
+review found six newly disclosing inputs, and none of them were in any census
+above.
+
+First, an inline construct can still be open around the `<!--`. In
+`Note <span title="<!-- QAQ -- secret` / `QBQ -->">QCQ</span>` the renderer
+displays only `Note QCQ`, because the opener sits in an attribute value. The same
+happens in a link title, in a tag opened a line above, in `<img alt=`, in CDATA
+and in `<!DOCTYPE`. One more case was found on re-probing: an image label, whose
+text becomes the embed's `alt`. The body rule is now withheld whenever a `<`, a
+backtick, a `[` not followed by `!`, or a `](` comes before the opener. That covers
+the opener's line and every earlier line back to the last blank line
+(`inlineConstructMayHold`). An opener's own `<!--` text is left out of that test.
+
+Second, a re-run of the review's 64,000-note fuzz (`fz.cjs`, seeds 1 to 8, 8,000
+notes each, masks ALL and DEF) found 24 more disclosing notes. All 24 hold an
+UNREFERENCED footnote definition. The renderer hides such a definition, and
+`extractChunks` does not model that. `main` already speaks `P` / blank /
+`[^1]: QBQ`. An old over-hiding comment had been masking the definition. So in a
+note with any `[^x]:` shape, every refinement in this round is off
+(`RendererLeads.refine`, which also gates `paraSure`). In that note the old answer
+stands. Nine guard rows pin these cases. Each is RED on an arm without its gate.
+
+On the final tree, that fuzz finds **0 newly disclosing** against both `e2afbfe`
+and `44a037a`. It also finds 8,573 lost cells closed. 27 cells in 11 notes are
+newly lost against both bases, and 14 more against `e2afbfe` only. The examples
+are top-level indented code holding `<!-->` and `%%` lines, and every one is a
+loss. Every census in the table above was re-run on this final tree. The fuzz row
+now closes 290 lost cells where the first commit closed 368. That difference is
+the cost of the wider gate. All other figures are unchanged.
 
 **What remains, and why.** The 9 class-(b) fuzz cells inside the accepted 34 (n618,
 n2147) stay lost. In both notes, a quote above the item ends at its `- >` line,

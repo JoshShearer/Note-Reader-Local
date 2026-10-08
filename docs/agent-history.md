@@ -1980,6 +1980,18 @@ exactly the accepted 90 (fuzz 34 + F3 56), the same rows as `44a037a`. Against
   after a quote ended by a list line, and the same-line `<!-- a -- b -->`, which is
   still hidden. Both are losses.
 - Verify found that the running Obsidian is 1.13.7, matching the harness.
+- /critique BLOCKED the first commit (`6e79fd6`) with a disclosure the censuses
+  never generated. A `<!--` inside a raw tag's attribute, a link title, CDATA, a
+  declaration or an image label displays nothing, so the body rule must not make
+  it spoken. The fix is `inlineConstructMayHold`: any `<`, backtick, `[` not followed
+  by `!`, or `](` before the opener, back to the last blank line, withholds the
+  rule.
+- Re-running the review's fuzz then found 24 notes with an UNREFERENCED footnote
+  definition. The renderer hides it, we do not model that, and an old wrong
+  comment had masked it. So a note holding any `[^x]:` shape takes none of this
+  round's refinements (`RendererLeads.refine`).
+- Lesson: zero on the structured censuses did not cover inline HTML or footnotes.
+  Run an adversarial fuzz that includes them before claiming 0 disclosing.
 
 NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
 

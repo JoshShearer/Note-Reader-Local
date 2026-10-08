@@ -610,6 +610,29 @@ function opensHtmlBlock(view: string, at: number, closesLater: boolean, setextCo
  * and `P <!--` / `-> a --> Z` hide the body, since the line break sits between
  * the dashes. The later lines' share is `commentBodyOkAheadOf` in extractChunks.
  */
+/**
+ * Text before an inline `<!--` that may leave an inline construct open around it
+ * (NRL-166 fix round 1): a raw tag, declaration, processing instruction or CDATA
+ * (`<`), a link or image label (`[`, which also covers `![`), a link destination
+ * or title (`](`), or a code span (a backtick). Deliberately wide; a false yes
+ * only keeps the comment hidden. Measured with the harness: an image label's
+ * `<!-- x -- y` / `z -->` becomes the embed's `alt` attribute, which displays
+ * nothing, and a tag's attribute value or a link title displays nothing either.
+ * A `[` directly followed by `!` is a callout marker, not a label, and is left
+ * out so a callout title line does not withhold the rule from the line below.
+ */
+const INLINE_CONSTRUCT_MAY_HOLD = /<|`|\[(?!!)|\]\(/;
+/**
+ * `INLINE_CONSTRUCT_MAY_HOLD` on `text` with every `<!--` taken out first. A
+ * `<!--` opens no tag, declaration (that needs `<!` and a letter) or CDATA, and
+ * a comment that really holds a later opener means our own comment state already
+ * owns that line, so counting it would only withhold the rule from a second
+ * literal opener (`P <!--> a` / `\tP <!--> b` / `--> c` lost b).
+ */
+function inlineConstructMayHold(text: string): boolean {
+	return INLINE_CONSTRUCT_MAY_HOLD.test(text.replaceAll("<!--", ""));
+}
+
 function inlineCommentBodyStartOk(after: string): boolean {
 	return !/^-?>/.test(after) && !after.includes("--");
 }
@@ -1381,6 +1404,14 @@ function cleanLine(
 			// bound as `htmlClosesLater`, and is undefined - nothing is checked -
 			// on any line the walker is not sure of. Only a comment that term 2
 			// says closes later is judged: one with no `-->` ahead keeps hiding.
+			// And only where no inline construct can still be open around the
+			// `<!--`: inside a raw tag's attribute value, a link title, a `<!...>`
+			// declaration or CDATA the renderer consumes it as markup and displays
+			// nothing, so speaking it would be a disclosure (/critique on the first
+			// fix-round commit: `Note <span title="<!-- QAQ -- secret` /
+			// `QBQ -->">QCQ</span>` shows only `Note QCQ`). Any `<` or `](` before
+			// the opener on this line, or on an earlier line of the paragraph
+			// (folded into `htmlBodyOkLater` as undefined), keeps it hidden.
 			if (
 				close === -1 &&
 				htmlComment &&
@@ -1389,6 +1420,7 @@ function cleanLine(
 				!htmlRawLine &&
 				htmlClosesLater &&
 				htmlBodyOkLater !== undefined &&
+				!inlineConstructMayHold(raw.slice(0, i)) &&
 				!(htmlBodyOkLater && inlineCommentBodyStartOk(raw.slice(i + 4)))
 			) {
 				blockOpens = false;
@@ -4519,8 +4551,20 @@ interface RendererLeads {
 	 * every line the walker did not record, or recorded as anything else.
 	 */
 	para: boolean[];
+	/**
+	 * Whether NRL-166 fix round 1's two walker refinements apply (a quote ended
+	 * by indented code is fresh; an uncertainly-ended last item's first line is
+	 * walked). False for a note holding a footnote-definition shape (`[^x]:`):
+	 * the renderer hides an unreferenced definition, which nothing here models,
+	 * and those refinements newly spoke one in the fuzz
+	 * (`> > ```` / `> \t<!-- x` / `> > [^1]: y` spoke y). The old answer stands.
+	 */
+	refine: boolean;
 	pending: { frame: LeadFrameLine[]; depth: number }[];
 }
+
+/** Anything shaped like a footnote definition's label, anywhere on a line. */
+const FOOTNOTE_SHAPED = /\[\^[^\]]*\]:/;
 
 function startsIndentedCode(view: string): boolean {
 	return view.startsWith("\t") || view.startsWith("    ");
@@ -4776,7 +4820,7 @@ function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: Rend
 			// 6234's `interruptBlockquote`, and `startsIndentedCode` is module 134's
 			// literal test on the same view `mayInterruptQuote` read. The other
 			// interrupters stay `unknown`, since that test over-approximates them.
-			state = i < frame.length && (frame[i]!.view.trim() === "" || startsIndentedCode(frame[i]!.view)) ? "fresh" : "unknown";
+			state = i < frame.length && (frame[i]!.view.trim() === "" || (out.refine && startsIndentedCode(frame[i]!.view))) ? "fresh" : "unknown";
 			continue;
 		}
 		if (RL_HEADING.test(view) || RL_HR.test(view)) {
@@ -4990,7 +5034,7 @@ function walkLeadList(frame: readonly LeadFrameLine[], start: number, depth: num
 	 */
 	const walkable = state === "unknown" ? items.slice(0, -1) : items;
 	if (depth < RL_MAX_DEPTH) for (const it of walkable) walkLeadItem(frame, it.lines, depth, out);
-	if (depth < RL_MAX_DEPTH && state === "unknown" && items.length > 0) walkLeadItem(frame, [items[items.length - 1]!.lines[0]!], depth, out);
+	if (out.refine && depth < RL_MAX_DEPTH && state === "unknown" && items.length > 0) walkLeadItem(frame, [items[items.length - 1]!.lines[0]!], depth, out);
 	return { end, state };
 }
 
@@ -5030,6 +5074,7 @@ function rendererLeads(lines: readonly string[], from: number): RendererLeads {
 		closerInPara: new Array<boolean>(lines.length).fill(false),
 		unsureFresh: new Array<boolean>(lines.length).fill(false),
 		para: new Array<boolean>(lines.length).fill(false),
+		refine: !lines.some((l) => FOOTNOTE_SHAPED.test(l)),
 		pending: [],
 	};
 	const frame: LeadFrameLine[] = [];
@@ -6100,7 +6145,16 @@ export function extractChunks(
 	// arm without this condition spoke it in the 4,000-note fuzz.
 	const term2StopOrCode = term2Stop.map((s, k) => s || htmlLeadCode[k]!);
 	const htmlCloserAheadCode = closerAheadOf(term2StopOrCode);
-	const paraSure = leads.para.map((v, k) => v && !leads.unsureFresh[k]! && !crAbove[k]!);
+	// Both of fix round 1's term-2 changes (the code-line stop here and the body
+	// rule below) are withheld from a whole note that holds anything shaped like a
+	// footnote definition (`[^x]:`). The renderer hides an UNREFERENCED definition
+	// entirely, which extractChunks does not model (main already speaks
+	// `P` / blank / `[^1]: QBQ`), and an old over-hiding comment was masking that:
+	// reading the comment correctly newly spoke the definition's text in 24 notes
+	// of a 64,000-note fuzz (`P <!-- QAAQ` / `> \t<div>` / `[^1]: QBAQ --> QCAQ`).
+	// Document-wide and shape-only on purpose: the fail-closed side. The walker's
+	// own refinements take the same gate (`RendererLeads.refine`).
+	const paraSure = leads.para.map((v, k) => v && !leads.unsureFresh[k]! && !crAbove[k]! && leads.refine);
 	const htmlClosesLaterAt = htmlCloserAhead.map((v, k) =>
 		leads.unsureFresh[k]! || crAbove[k]! ? htmlCloserAheadRaw[k]! : (paraSure[k]! ? htmlCloserAheadCode[k]! : v) && !htmlLeadCode[k]!,
 	);
@@ -6115,7 +6169,18 @@ export function extractChunks(
 	// carries keep the unchecked answer, which ends their paragraph sooner, the
 	// fail-closed side for them.
 	const bodyOkLater = commentBodyOkAheadOf(term2StopOrCode);
-	const htmlBodyOkLaterAt: (boolean | undefined)[] = bodyOkLater.map((v, k) => (paraSure[k]! ? v : undefined));
+	// An inline construct opened on an EARLIER line of the paragraph may still hold
+	// this line's `<!--` (`P <abbr` / `title="<!-- x -- y"` / `data-x="z -->">`),
+	// so a `<` or `](` anywhere above since the last blank line withholds the rule
+	// too. Reset only at a blank line, which over-approximates the paragraph: the
+	// fail-closed side.
+	const inlineMayHoldAbove: boolean[] = new Array<boolean>(lines.length).fill(false);
+	for (let k = 0, seen = false; k < lines.length; k++) {
+		if (lines[k]!.trim() === "") seen = false;
+		inlineMayHoldAbove[k] = seen;
+		if (inlineConstructMayHold(lines[k]!)) seen = true;
+	}
+	const htmlBodyOkLaterAt: (boolean | undefined)[] = bodyOkLater.map((v, k) => (paraSure[k]! && !inlineMayHoldAbove[k]! ? v : undefined));
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,
