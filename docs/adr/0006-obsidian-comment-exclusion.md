@@ -1519,6 +1519,21 @@ unmoved, re-confirmed rather than assumed to still hold after this second change
 from the executed Obsidian 1.13.7 reading-view parser and renderer, not a live deploy. R-M08 is
 still NOT met and the 2-of-16 MUST count does not move.
 
+### Clause 2 and clause 5 amendment, NRL-166 fix round 2 (2026-10-08): the renderer's `%%` blocks decide
+
+Clause 5's transcription (`src/text/obsidianBlocks.ts`) now answers the opener
+question too, wherever it has an answer: our `%%` block opener stands only on a line
+where the renderer opens a `%%` block (`percentOpensAt` in `extractChunks`), and the
+text of every `%%` block the renderer opens is dropped from what we speak even where
+our own opener test missed it (`rendererHiddenText`). The first closes a loss: a
+lazy quote line `> [!note] %%` is no callout title for the renderer, so its `%%`
+opened no block, while our callout prefix opened one and hid the rest. The second
+closes disclosures #219 left on `main` (`- > -` / `>\t%%` / `QBAQ`, where the
+renderer's quote takes `QBAQ` lazily into an unclosed block). Withholding is not
+done where an HTML block lies in the reach our block would have hidden, since a
+browser comment may be what hides it there. Measurements and residuals: ADR 0025,
+"NRL-166 fix round 2". NOT VERIFIED IN OBSIDIAN.
+
 ## Consequences and verification
 
 - Extraction keeps the original source intact. A dropped inline span uses a

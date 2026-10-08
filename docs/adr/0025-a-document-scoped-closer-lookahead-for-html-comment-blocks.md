@@ -2637,6 +2637,147 @@ matches the harness, so the 1.14.4 note in the port's section above is supersede
 reading-view renderer. Live Preview was not run, and nothing was deployed. R-M08 is
 NOT met.
 
+### NRL-166 fix round 2 (2026-10-08): the renderer's own hiding read off its block parser, and round 1's gates scoped to the comment's window
+
+Verify 2 failed `c4a370e` on four counts. This round closes them in that order,
+privacy first.
+
+1. **Disclosures on `main`, from #219 and from `bcc59fe`.** Each was text the
+   renderer hides by a construct `extractChunks` did not model, which an old
+   over-hiding comment or `%%` block had been covering until a correct reading
+   uncovered it: a `%%` block the renderer opens where our opener test said no
+   (`- > -` / `>\t%%` / `QBAQ` spoke QBAQ), an UNREFERENCED footnote definition
+   (`- >> P <!-- x` / ... / `[^1]: QFQ`), and a processing-instruction block
+   (`- > \t<!-- QXQ` / `<?x QBQ` / `--> QCQ` spoke QBQ).
+2. **A branch-introduced quadratic.** cleanLine sliced the line three times per
+   `<!--` for round 1's questions, and searched for `-->` and tested the lead
+   from the start each time.
+3. **9 cells lost against `44a037a`.** `> P <!-- a` / `> [!note] %%` / `> b` is one
+   quote paragraph: the second line is lazy, so `[!note]` is no callout title and
+   its `%%` opens no block for the renderer. Our callout prefix opened one.
+4. **36,014 cells lost against `e2afbfe`** on Verify 2's `gen2.cjs`, 35,978 of them
+   withheld by round 1's NOTE-WIDE gates (any `<`, backtick, `[`, `](`, `[^x]:` or
+   leading `---` anywhere), and 36 ungated (`- >> P <!--` / `> [!tip] b` /
+   `> \t--> c` / `%%`).
+
+**The model.** `src/text/obsidianBlocks.ts` already transcribes the reading view's
+block parser and was used only to END a `%%` block. `rendererHiddenText` now reports,
+from the same scan, the source ranges the renderer certainly displays nothing of,
+and `extractChunks` drops every spoken character whose offset falls in one before
+segmentation (`dropHiddenText`, which keeps `sourceIndex` in lockstep). The ranges:
+- every `%%` block comment, from its `%%` through its closing one or to the end of
+  its container's text;
+- the markup of every HTML block, which reaches the page as raw HTML: comments,
+  tags with their attribute values, and the bogus comment a `<?`, `<!X` or
+  `<![CDATA[` becomes, to its first `>` (`htmlMarkup`, read as an HTML parser
+  reads them, cross-checked with parse5); and where a block leaves an attribute
+  value open, everything after it to the next such quote in the note and the `>`
+  after that, or the note's end;
+- a fenced block's fence lines, info string included (it becomes a `class`);
+- every footnote definition the note never references, and every earlier
+  definition of a label defined again. Measured on the harness: the renderer
+  lists only referenced definitions, compares labels without case, keeps the
+  LAST of a label (nested ones included), and counts a reference inside a `%%`
+  comment but not one escaped, in code, `$$`, frontmatter or HTML.
+
+Every range is hidden by construction, so the drop cannot disclose. The `%%`
+starts also give our opener a renderer answer: our block opener stands only on a
+line where the renderer opens a `%%` block too (`percentOpensAt`), which closes
+class 3 in the model. Withholding our block shows what it would have hidden up to
+the next `%%`, so it is not done where an HTML block, or a line after one that
+leaves a comment or a tag open, lies in that reach: there the browser hides text we
+do not model line for line (`<div>` / `- > x <!-- QS` / `> \t%% QK`).
+
+**Round 1's gates, scoped.** The walker runs twice, with and without round 1's
+refinements, and each line takes the refined record only where its own WINDOW is
+clean (`refineWindowClean`): no inline-construct shape on the line, back to the
+last blank line or ahead to the old bound's `-->`; not inside a footnote definition;
+past the renderer's frontmatter. The note-wide footnote and `---` gates now stand
+only where the transcription has no answer (a lone CR, deep nesting), since an
+unreferenced definition is dropped by the ranges above and the frontmatter is read
+off the parser. The construct shape is narrower too: a backtick (a code span
+displays its text) and a `](` (a link needs its `[`, which already counts) hid
+nothing. And a line of exactly the `%%` interrupting shape certainly ends a list in
+`walkLeadList`, which closes the 36 ungated cells.
+
+**Linear by construction.** `inlineCommentFacts` answers round 1's three questions
+per `<!--` in O(1) after one pass over the line; the last `-->` on the line and the
+lead length are computed once. The paragraph accumulator appended by rebuilding its
+index array and flattened its text per line, a pre-existing quadratic that the body
+rule exposed by speaking long paragraphs; it now appends in place. Timing, single
+process, n = 20,000, `44a037a` against this tree: `P ` + `<!-- ` x n 31 against 94
+ms (c4a370e: 27,956 ms per Verify 2); `<!--` x n 31/82; in an item quote 35/86;
+`<!-- -- ` x n 35/135; `P <!-- a` x n lines 194/394 (c4a370e 26,949); dash lines
+186/342; open-attribute blocks 920/1,067; lazy callout `%%` lines 974/1,584; many
+tags in one block 63/151; `%%` blocks 357/489; nested lists 1,577/2,114; every other
+Verify shape within 1.3x. Twenty-thousand footnote definitions dropped from 5,896 to
+403 ms with the accumulator fix. `"[^".repeat(n)` stays NRL-172's (6,755/6,668).
+The new scans are checked by scaling in `tests/extract.test.ts`.
+
+**Census**, harness 1.13.7, Verify 2's judge (`run3.cjs`/`rfz.cjs`), masks ALL and
+DEF (F2 also SKIPALL), newly disclosing / newly lost, **0 lockstep failures on every
+arm and corpus**. The tree measured is the one before the accumulator change, which
+moves no output (31,686 note-mask outputs compared byte for byte).
+
+| corpus | cells | vs `9132c3b` | vs `e2afbfe` | vs `44a037a` |
+|---|---|---|---|---|
+| Verify 2's `gen2.cjs`, 1,215,000 shapes | 13,122,000 | 1,800 / 0 (was 50,982 / 0) | **0 / 11,097** (was 112 / 36,014) | 0 / 0 |
+| reviewers' fuzz, seeds 1-8 x 8,000 | 489,270 | 26 / 63 | **0 / 14** (was 2 / 29) | 0 / 0 (was 0 / 9) |
+| extended fuzz, seeds 501-512 x 6,000 | 724,310 | 105 / 57 | **0 / 126** (was 0 / 117) | 0 / 21 |
+| Verify 1's `own-gen.cjs` | 1,481,472 | 0 / 0 | 0 / 0 | 0 / 0 |
+| its de-callout twins | 972,864 | 0 / 0 | 0 / 0 | 0 / 0 |
+| F1 `callout-census.cjs` | 2,496 | 0 / 0 | 0 / 0 | 0 / 0 |
+| F2 fuzz `SEED=31337 N=4000` | 48,741 | 26 / 9 (was 73 / 10) | 0 / 34 | 0 / 0 |
+| F3 `gen.cjs` | 6,514,560 | 0 / 2,292 | 0 / 56 | 0 / 0 |
+
+Closed against `44a037a` (disclosing / lost): `gen2` 374,998 / 1,534,782, the base
+fuzz 26,181 / 8,389, the extended 72,782 / 10,877, F2 823 / 309, F3 3,262 /
+18,906; own-gen and twins close 9,819 and 9,894 lost cells.
+
+- **`newly disclosing against e2afbfe` is 0 on every corpus**, and against
+  `44a037a` too. F2's and F3's moved rows against `9132c3b` are a subset, id for id,
+  of the sets Verify 1 and 2 accepted.
+- `gen2`'s 1,800 against `9132c3b` are one shape, `- > \t<!-- x` / `<?x QBQ` /
+  `QCQ">QZQ -->`, and all 1,800 are QZQ, which a browser DISPLAYS (parse5): the
+  bogus comment ends at the first `>`. The judge reads the `"` as an attribute
+  quote and hides it. A judge artifact, on `e2afbfe` and `44a037a` alike.
+- The fuzzes' remaining cells against `9132c3b` (26, 105 and 26) are all on
+  `e2afbfe` and `44a037a` too. parse5 says the browser shows 14 of the 26, 28 of the
+  105 and none of F2's 26; the rest involve a lone CR or a vertical tab (no
+  transcription answer), a callout title holding raw HTML, or an HTML block whose
+  browser comment opens inside an item. Not closed, and stated.
+
+**What remains, and why.**
+- `gen2` against `e2afbfe`, 11,097 cells, all already lost on `44a037a`: 10,965 put
+  an inline construct ON the opener line (`<!-- x <?x y`, `<!-- x <![CDATA[ y`,
+  `<b title="<!--`, `[l](u "<!--`, `![al <!--`), exactly the classes round 1's
+  critique found disclosing. They stay withheld: telling a construct that closes
+  from one that is literal needs the inline parser, which this round does not
+  transcribe. The other 132 are a footnote-definition line right after the item's
+  code line (`... > \t--> c` / `[^1]: f`), where the walker stays unsure.
+- The extended fuzz loses 21 cells (8 notes) against `44a037a`, all one class: an
+  HTML block leaving an attribute value open. We hide to the next matching quote in
+  the NOTE; a quote the renderer writes into its own markup (`data-heading="`,
+  `alt="`) can end the value sooner. parse5 says the browser shows 11 of the 21 and
+  hides 10. Fail-closed, and siblings of class 1's HTML-block disclosures.
+- A reference only an inline code span, an inline HTML comment or a link title
+  holds still counts, so such a definition is spoken as it always was.
+- The base fuzz's 14 and F2's 34 against `e2afbfe` are the accepted rows of the
+  port; the extended fuzz's 126 are all lost on `44a037a`.
+
+**Rows.** 37 new `nrl166-r2` rows in the NRL-38 table, every `pin` RED on
+`c4a370e` (the two `residual` pins and the guards excepted), four timing rows RED
+on `c4a370e`, scaling rows for every new scan, and four new unit rows for footnote
+definitions, with two rewritten to reference the definition they read. 30 existing rows moved, every one to the renderer's text: the NRL-114,
+NRL-117, NRL-118 and NRL-120 `still-silenced` / `unmasked` pins and their controls,
+NRL-166's div-block, fence and footnote pins, NRL-136's residual div opener, NRL-42's
+`span-html-*`, and NRL-38's `heading-tracking` and `tail-obsidian-continuation`
+(each of which had pinned speaking text the renderer hides, or hiding text it shows).
+
+**NOT VERIFIED IN OBSIDIAN.** Bare Node against the 1.13.7 reading-view parser and
+renderer, with parse5 as a second reading of the rendered HTML. Live Preview was not
+run, and nothing was deployed. R-M08 is NOT met.
+
 ### CLOSED by NRL-119: a list marker alone on its line ends the paragraph
 
 `TERM2_LIST` required `[ \t]` after the marker, so a marker ALONE on its line was not

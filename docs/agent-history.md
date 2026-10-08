@@ -2001,6 +2001,48 @@ exactly the accepted 90 (fuzz 34 + F3 56), the same rows as `44a037a`. Against
 
 NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
 
+**NRL-166 fix round 2 (2026-10-08): the renderer's own hiding read off its block
+parser, with evidence in ADR 0025's "NRL-166 fix round 2" section.** Verify 2 failed
+`c4a370e`: disclosures left on `main` by #219 and `bcc59fe`, a branch quadratic, 9
+cells lost against `44a037a`, and 36,014 against `e2afbfe` from round 1's note-wide
+gates.
+- `rendererHiddenText` (`obsidianBlocks.ts`) turns the existing block-parser
+  transcription into source ranges the renderer certainly hides: `%%` blocks, HTML
+  block markup (comments, tags, bogus comments, an open attribute value), fence
+  lines, and footnote definitions that are unreferenced or superseded. `extractChunks`
+  drops what falls in them before segmentation, and its `%%` block opener stands
+  only where the renderer opens one (not where an HTML block lies in the reach).
+- Round 1's refinements are now chosen per line by the line's own window
+  (`refineWindowClean`), with the walker run twice; backtick and `](` left the
+  construct shape; an exact `%%` interrupter certainly ends a list.
+- Final census: 0 newly disclosing against `e2afbfe` and `44a037a` on every corpus
+  (gen2 13,122,000 cells, both fuzzes, own-gen, twins, F1, F2, F3); 0 lockstep
+  failures. Residuals: gen2 11,097 lost against `e2afbfe` (all lost on `44a037a`;
+  10,965 an inline construct on the opener line, withheld on purpose), and 21
+  extended-fuzz cells lost against `44a037a` where an HTML block leaves an
+  attribute open and we hide to the note's next quote.
+
+**Traps.**
+- Un-hiding is where disclosures come from. Every correct reading in this round
+  (a `%%` withheld, a footnote line skipped) first spoke text some OTHER construct
+  hides, and the fuzz found each: a browser comment from a `<div>` block, an open
+  `title="` attribute swallowing later blocks, a fence info string. A def-line skip
+  was dropped for that reason. Prefer a renderer-model RANGE (hide by construction)
+  over moving our own state.
+- The judge (`lib.cjs` `contexts`) is not a browser: it pairs quotes across tags and
+  closes `<!-->` late. Re-check a surprising verdict with parse5 (`gens/v5.cjs` in the
+  run's scratch); gen2's 1,800 cells against `9132c3b` are judge artifacts.
+- A content line in the transcription is the note line's TAIL, except at the very
+  end of a container's text after its last newline: map that position to the
+  newline (`scanPos`), or a `%%` span swallows the next note line.
+- Footnote facts, measured on the harness: references compare without case, a
+  reference inside a `%%` comment counts, one in code, `$$`, frontmatter, HTML or
+  escaped does not, and the LAST definition of a label wins, nested ones included.
+- `appendToParagraph` was quadratic (array rebuild plus `endsWith` flattening a
+  rope); any change that speaks longer paragraphs will find such costs.
+
+NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
+
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
 commit: a `$$` display-math block between a label's opener and closer silenced the alt text

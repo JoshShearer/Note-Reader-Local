@@ -98,6 +98,9 @@ export interface RendererPercentBlock {
 type Tokenizer = (t: string, silent: boolean, line: number) => number;
 type InterruptEntry = readonly [string, { pedantic?: boolean; commonmark?: boolean }?];
 
+/** The block methods whose content the renderer never inline-parses. */
+const RAW_BLOCKS: ReadonlySet<string> = new Set(["frontmatter", "indentedCode", "math", "fencedCode", "html"]);
+
 /** Deepest container nesting scanned before giving up (see BlockScanner.depth). */
 const MAX_DEPTH = 64;
 
@@ -218,8 +221,144 @@ function listItemContent(item: string, line: number, stripped: number[]): string
 	return out;
 }
 
+/**
+ * A position in the note as the scanner sees it: a note line and the number of
+ * characters from the position to that line's end. A container's content line
+ * is the note line less a prefix (a quote's `>`, an item's marker and dedent, a
+ * footnote's label), and the item rewrite only ever replaces a marker with as
+ * many spaces, so the TAIL of every content line is the note line's own tail
+ * and a distance from the line's end needs no prefix bookkeeping.
+ */
+interface ScanPos {
+	line: number;
+	fromEnd: number;
+}
+
+/** Where `p` (an index into `t`, whose first character sits on note line `line`) falls in the note. */
+function scanPos(t: string, line: number, p: number): ScanPos {
+	// The end of a text that ends in a newline is that newline, not the start of
+	// a line the text does not hold (whose note line may carry a tail of its own).
+	if (p === t.length && p > 0 && t.charCodeAt(p - 1) === 10) p--;
+	let at = line;
+	for (let k = t.indexOf("\n"); k !== -1 && k < p; k = t.indexOf("\n", k + 1)) at++;
+	let end = t.indexOf("\n", p);
+	if (end === -1) end = t.length;
+	return { line: at, fromEnd: end - p };
+}
+
+/**
+ * The parts of raw HTML `html` a browser displays NOTHING of, as `[start, end)`
+ * index pairs, and what `html` leaves open at its end (NRL-166 fix round 2),
+ * read the way an HTML parser reads them:
+ *
+ * - a comment: `<!--` opens one, `<!-->` and `<!--->` are complete, and the
+ *   first `-->` or `--!>` after an opener closes it;
+ * - a bogus comment: `<?`, `<!X` or `<![CDATA[`, closed by the first `>`;
+ * - a tag, `<` then a letter or `/`, closed by the first `>` outside a quote,
+ *   attributes and all.
+ *
+ * Text between them is displayed and is not reported. A construct still open at
+ * the end runs to the end and is reported as `left`. Deliberately wide where it
+ * is unsure (a quote anywhere in a tag opens a run): a wider span only hides
+ * more, and a `left` only keeps an old answer or hides more.
+ */
+function htmlMarkup(html: string): { spans: Array<[number, number]>; left: { kind: "comment" | "bogus" | "tag"; at: number; quote?: string } | null } {
+	const spans: Array<[number, number]> = [];
+	// The last `--!>` bounds every search for one, so a block of many comments
+	// closed by `-->` does not rescan to its end per comment.
+	const lastBang = html.lastIndexOf("--!>");
+	for (let i = 0; ; ) {
+		const lt = html.indexOf("<", i);
+		if (lt === -1) return { spans, left: null };
+		if (html.startsWith("<!--", lt)) {
+			if (html.startsWith(">", lt + 4) || html.startsWith("->", lt + 4)) {
+				i = lt + (html[lt + 4] === ">" ? 5 : 6);
+				spans.push([lt, i]);
+				continue;
+			}
+			const a = html.indexOf("-->", lt + 4);
+			const b = lastBang < lt + 4 ? -1 : html.indexOf("--!>", lt + 4);
+			const end = a === -1 ? b : b === -1 ? a : Math.min(a, b);
+			if (end === -1) {
+				spans.push([lt, html.length]);
+				return { spans, left: { kind: "comment", at: lt } };
+			}
+			i = end + (end === a ? 3 : 4);
+			spans.push([lt, i]);
+			continue;
+		}
+		if (html.startsWith("<?", lt) || /^<![A-Za-z[]/.test(html.slice(lt, lt + 3))) {
+			const gt = html.indexOf(">", lt + 2);
+			if (gt === -1) {
+				spans.push([lt, html.length]);
+				return { spans, left: { kind: "bogus", at: lt } };
+			}
+			i = gt + 1;
+			spans.push([lt, i]);
+			continue;
+		}
+		if (/^<\/?[A-Za-z]/.test(html.slice(lt, lt + 3))) {
+			let k = lt + 1;
+			for (; k < html.length && html[k] !== ">"; k++) {
+				const q = html[k]!;
+				if (q === '"' || q === "'") {
+					const close = html.indexOf(q, k + 1);
+					if (close === -1) {
+						spans.push([lt, html.length]);
+						return { spans, left: { kind: "tag", at: lt, quote: q } };
+					}
+					k = close;
+				}
+			}
+			if (k >= html.length) {
+				spans.push([lt, html.length]);
+				return { spans, left: { kind: "tag", at: lt } };
+			}
+			i = k + 1;
+			spans.push([lt, i]);
+			continue;
+		}
+		i = lt + 1;
+	}
+}
+
+/** A span of the note the reading view displays nothing of, from `start` up to (not including) `end`. */
+interface HiddenSpan {
+	start: ScanPos;
+	end: ScanPos;
+}
+
+/** One footnote definition as the reading view's parser creates it. */
+interface FootnoteDef {
+	/** The label as written, between `[^` and `]`. */
+	label: string;
+	/** Where its `[^` sits. */
+	at: ScanPos;
+	/** Its first and last note lines. */
+	line: number;
+	lastLine: number;
+}
+
 class BlockScanner {
 	readonly found: RendererPercentBlock[] = [];
+	// Spans the reading view hides by construction (NRL-166 fix round 2): every
+	// `%%` block comment, and the markup of every HTML block (`htmlMarkup`).
+	readonly hidden: HiddenSpan[] = [];
+	// The HTML-markup subset of `hidden`, by index: a `[^x]` in a `%%` comment
+	// still counts as a footnote reference for the renderer, one in markup does
+	// not.
+	readonly bogus = new Set<number>();
+	readonly defs: FootnoteDef[] = [];
+	// First and last note line of every HTML block, of any kind, and whether
+	// its raw text leaves a comment or a tag open past its end.
+	readonly htmlBlocks: Array<readonly [number, number, boolean]> = [];
+	// Tags an HTML block leaves inside an open attribute value: where the tag
+	// starts, the quote, and where the block ends.
+	readonly openQuotes: Array<{ at: ScanPos; quote: string; end: ScanPos }> = [];
+	frontmatterLastLine = -1;
+	// First and last note line of every block whose text is never inline-parsed.
+	readonly rawBlocks: Array<readonly [number, number]> = [];
+	private lastMethod = "";
 	private atStart = true;
 	// Container nesting depth of the current tokenizeBlock call. Each level
 	// rescans its own rewritten content, so the cost is O(depth x length); past
@@ -319,7 +458,7 @@ class BlockScanner {
 			thematicBreak: (t, s) => this.thematicBreak(t, s),
 			list: (t, s, l) => this.list(t, s, l),
 			setextHeading: (t, s) => this.setextHeading(t, s),
-			html: (t, s) => this.html(t, s),
+			html: (t, s, l) => this.html(t, s, l),
 			footnoteDefinition: (t, s, l) => this.footnoteDefinition(t, s, l),
 			definition: (t, s) => this.definition(t, s),
 			table: (t, s) => this.table(t, s),
@@ -340,14 +479,48 @@ class BlockScanner {
 				this.curValue = value;
 				this.curPos = pos;
 				eaten = this.tokenizers[name]!(rest, false, line);
+				this.lastMethod = name;
 				if (eaten > 0) break;
 			}
 			if (eaten <= 0) throw new Error("renderer block scan made no progress");
+			// Blocks whose text is never inline-parsed, so a `[^x]` in them is no
+			// footnote reference (measured: one in fenced, indented or `$$` code,
+			// frontmatter or an HTML block leaves its definition hidden).
+			if (RAW_BLOCKS.has(this.lastMethod)) {
+				let last = line;
+				for (let k = pos; k < pos + eaten - 1; k++) if (value.charCodeAt(k) === 10) last++;
+				this.rawBlocks.push([line, last]);
+			}
+			// A fenced block's fence lines are never displayed: the opening one's
+			// info string becomes a `class` (measured: `> ~~~ QFQ` renders
+			// `<code class="language-QFQ">` and shows nothing), and a closing fence
+			// is markup. Content lines are left alone.
+			if (this.lastMethod === "fencedCode") this.hideFenceLines(rest.slice(0, eaten), line);
 			this.atStart = false;
 			for (let k = pos; k < pos + eaten; k++) if (value.charCodeAt(k) === 10) line++;
 			pos += eaten;
 		}
 		this.depth--;
+	}
+
+	/** Record a fenced block's opening line, and its closing line if it has one, as hidden. */
+	private hideFenceLines(block: string, line: number): void {
+		const firstEnd = block.indexOf("\n");
+		const head = firstEnd === -1 ? block : block.slice(0, firstEnd);
+		const lead = /^[ \t]*/.exec(head)![0].length;
+		const fence = /^(`{3,}|~{3,})/.exec(head.slice(lead));
+		if (fence === null) return;
+		this.bogus.add(this.hidden.length);
+		this.hidden.push({ start: scanPos(block, line, lead), end: scanPos(block, line, head.length) });
+		if (firstEnd === -1) return;
+		const body = block.replace(/\n$/, "");
+		const lastStart = body.lastIndexOf("\n") + 1;
+		if (lastStart <= firstEnd) return;
+		const tail = body.slice(lastStart);
+		const close = new RegExp(`^[ \\t]*${fence[1]![0] === "`" ? "`" : "~"}{${fence[1]!.length},}[ \\t]*$`);
+		if (!close.test(tail)) return;
+		this.bogus.add(this.hidden.length);
+		this.hidden.push({ start: scanPos(block, line, lastStart + /^[ \t]*/.exec(tail)![0].length), end: scanPos(block, line, body.length) });
 	}
 
 	private interrupts(set: readonly InterruptEntry[], text: string): boolean {
@@ -364,7 +537,9 @@ class BlockScanner {
 		let r = t.indexOf("---", 3);
 		while (r !== -1 && t.charAt(r - 1) !== "\n") r = t.indexOf("---", r + 3);
 		if (r === -1) return 0;
-		return silent ? 1 : r + 3;
+		if (silent) return 1;
+		this.frontmatterLastLine = scanPos(t, 0, r).line;
+		return r + 3;
 	}
 
 	private blankLine(t: string, silent: boolean): number {
@@ -477,6 +652,7 @@ class BlockScanner {
 		let r = 0;
 		while (r < i && t.charCodeAt(r) === 32) r++;
 		if (!(t.charCodeAt(r) === 37 && t.charCodeAt(r + 1) === 37)) return 0;
+		const open = r;
 		r += 2;
 		while (r < i) {
 			const a = t.charCodeAt(r);
@@ -506,6 +682,11 @@ class BlockScanner {
 		// line, so the line is the comment's, exactly as the parser's positions say.
 		if (endsAtLineStart && (this.stripped[endLine] ?? 0) > 0) lastLine = endLine;
 		this.found.push({ startLine: line, lastLine, endLine, closed });
+		// From the opening `%%` through the closing one, or to the end of what its
+		// container handed it. Eaten text ending in a newline ends at that newline:
+		// the next rewritten line may be a container's empty remainder, which is
+		// not the note line's tail (`[^1]: %%` / `>    - b` shows b).
+		this.hidden.push({ start: scanPos(t, line, open), end: scanPos(t, line, endsAtLineStart ? s - 1 : s) });
 		return s;
 	}
 
@@ -896,7 +1077,7 @@ class BlockScanner {
 		return silent ? 1 : (b + p).length;
 	}
 
-	private html(t: string, silent: boolean): number {
+	private html(t: string, silent: boolean, line = 0): number {
 		const D = t.length;
 		let A = 0;
 		let C: string;
@@ -908,6 +1089,7 @@ class BlockScanner {
 		const kind = HTML_KINDS.find((k) => k[0].test(w));
 		if (!kind) return 0;
 		if (silent) return kind[2] ? 1 : 0;
+		const open = A;
 		A = nl;
 		if (!kind[1].test(w)) {
 			while (A < D) {
@@ -921,6 +1103,40 @@ class BlockScanner {
 				A = nl;
 			}
 		}
+		// The block is passed to the page as raw HTML, so a browser displays
+		// nothing of its comments, its tags (attribute values included) and the
+		// BOGUS COMMENT it makes of a processing instruction, a declaration or
+		// CDATA, which ends at the first `>` (NRL-166 fix round 2). Measured with
+		// the harness: `<?x a` / `--> b` displays only b, `<!X a` / `b > c` only c,
+		// and `- <![CDATA[ a` / `> \t![!x <!-- b -- c` / `> - d -->` only `![!x`.
+		// Less a trailing newline, which the block may own when its container's
+		// text ends there: a span reaching it ends on that line, not the next.
+		const html = t.slice(open, A).replace(/\n$/, "");
+		const { spans, left } = htmlMarkup(html);
+		const breaks: number[] = [];
+		for (let k = html.indexOf("\n"); k !== -1; k = html.indexOf("\n", k + 1)) breaks.push(k);
+		const first = scanPos(t, line, open).line;
+		// A position in the block, as `scanPos` would give it, by binary search
+		// over the block's newlines rather than a count from the start each time.
+		const at = (p: number): ScanPos => {
+			let lo = 0;
+			let hi = breaks.length;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				if (breaks[mid]! < p) lo = mid + 1;
+				else hi = mid;
+			}
+			return { line: first + lo, fromEnd: (lo < breaks.length ? breaks[lo]! : html.length) - p };
+		};
+		for (const [a, b] of spans) {
+			this.bogus.add(this.hidden.length);
+			this.hidden.push({ start: at(a), end: at(b) });
+		}
+		this.htmlBlocks.push([line, scanPos(t, line, A).line, left !== null]);
+		// An attribute value left open runs on through whatever the page renders
+		// after the block, up to the next such quote: `<div title='a` / blank /
+		// `- b` / `- c ' d` / blank / `> e` displays only e.
+		if (left?.kind === "tag" && left.quote !== undefined) this.openQuotes.push({ at: at(left.at), quote: left.quote, end: scanPos(t, line, A) });
 		return A;
 	}
 
@@ -944,6 +1160,8 @@ class BlockScanner {
 		}
 		if (o === undefined || r === o || t.charCodeAt(k++) !== 58) return 0;
 		if (silent) return 1;
+		const labelAt = scanPos(t, line, r - 2);
+		const label = t.slice(r, o);
 		interface Seg {
 			start: number;
 			contentStart: number;
@@ -989,6 +1207,7 @@ class BlockScanner {
 			this.stripped[line + q] = (this.stripped[line + q] ?? 0) + v[q]!.contentStart - v[q]!.start;
 		}
 		this.atStart = false;
+		this.defs.push({ label, at: labelAt, line, lastLine: line + Math.max(n, 1) - 1 });
 		this.tokenizeBlock(parts.join(""), line);
 		return eaten;
 	}
@@ -1256,4 +1475,202 @@ export function percentBlockEnds(source: string, lineCount: number): Map<number,
 	if (found === null) return ends;
 	for (const b of found) if (!b.closed && b.lastLine < lineCount - 1) ends.set(b.startLine, b.lastLine);
 	return ends;
+}
+
+/** What the reading view certainly displays nothing of, as `rendererHiddenText` reports it. */
+export interface RendererHiddenText {
+	/** Source offset ranges `[start, end)`, sorted by start, possibly overlapping. */
+	ranges: Array<readonly [number, number]>;
+	/** 0-based note lines on which the reading view opens a `%%` block comment. */
+	percentStarts: Set<number>;
+	/** As `percentBlockEnds` reports it, from the same scan. */
+	percentEnds: Map<number, number>;
+	/** 0-based note lines inside any footnote definition, referenced or not. */
+	footnoteLines: boolean[];
+	/**
+	 * 0-based note lines inside an HTML block of any kind, and every line after
+	 * the first HTML block whose raw text leaves a browser comment open, which
+	 * then runs on through the rendered page.
+	 */
+	browserRiskLines: boolean[];
+	/** The last line of the reading view's frontmatter block, or -1. */
+	frontmatterLastLine: number;
+}
+
+/**
+ * Text the reading view displays NOTHING of, read off the same transcription
+ * (NRL-166 fix round 2), or `null` exactly when `rendererPercentBlocks` is:
+ *
+ * - every `%%` block comment, from its opening `%%` through its closing one, or
+ *   through the last line its container gives it;
+ * - the markup of every HTML block, which the page receives as raw HTML: its
+ *   comments, its tags with their attributes, and the bogus comment a `<?`,
+ *   `<!X` or `<![CDATA[` becomes, up to the first `>` (`htmlMarkup`); and where
+ *   a block leaves an attribute value open, everything after it up to the next
+ *   such quote in the note and the `>` after that, or the note's end;
+ * - every footnote definition the note never references, and every earlier
+ *   definition of a label defined twice. The renderer lists only referenced
+ *   definitions, and only the last of a label, which nothing else here models:
+ *   measured, `P` / blank / `[^1]: QBQ` displays only `P`, and `P [^1]` /
+ *   `[^1]: a` / `[^1]: b` displays b and not a.
+ *
+ * A reference is any `[^label]` in the note, compared without case, except a
+ * backslash-escaped one, a definition's own label, one in HTML markup, and one
+ * on a line of a block whose text is never inline-parsed (code, `$$`,
+ * frontmatter, an HTML block). One inside a `%%` comment DOES count: measured,
+ * `%%` / `[^1]` / `%%` / blank / `[^1]: QBQ` displays QBQ.
+ * That still counts a reference the renderer does not see (in an inline code
+ * span, an inline HTML comment, a link title) as seen, so such a definition
+ * stays spoken as it always was: the miss is on the side of the old answer,
+ * never of a new hiding of shown text.
+ *
+ * Every range here is hidden for the renderer by construction, so removing what
+ * falls inside one from the spoken text can never disclose, and it is how
+ * `extractChunks` drops text its own model would otherwise read.
+ */
+export function rendererHiddenText(source: string, lineCount: number): RendererHiddenText | null {
+	if (/\r(?!\n)/.test(source)) return null;
+	let value = source.replace(/\r\n/g, "\n");
+	if (value.charCodeAt(0) === 0xfeff) value = value.slice(1);
+	const scanner = new BlockScanner();
+	try {
+		scanner.tokenizeBlock(value, 0);
+	} catch {
+		return null;
+	}
+	const lineStart: number[] = [];
+	const lineEnd: number[] = [];
+	for (let at = 0, k = 0; k < lineCount; k++) {
+		let nl = source.indexOf("\n", at);
+		if (nl === -1) nl = source.length;
+		lineStart.push(at);
+		lineEnd.push(nl > at && source.charCodeAt(nl - 1) === 13 ? nl - 1 : nl);
+		at = nl + 1;
+	}
+	const offset = (p: ScanPos): number => Math.max(lineStart[p.line] ?? source.length, (lineEnd[p.line] ?? source.length) - p.fromEnd);
+	const ranges: Array<readonly [number, number]> = scanner.hidden.map((h) => [offset(h.start), offset(h.end)] as const);
+	const sortRanges = (): void => {
+		ranges.sort((x, y) => x[0] - y[0]);
+	};
+	sortRanges();
+	// Bogus comments come from distinct HTML blocks, so they never overlap, and
+	// sorted by start one binary search answers "inside one".
+	const bogusRanges = scanner.hidden.flatMap((h, k) => (scanner.bogus.has(k) ? [[offset(h.start), offset(h.end)] as const] : [])).sort((x, y) => x[0] - y[0]);
+	const inBogus = (o: number): boolean => {
+		let lo = 0;
+		let hi = bogusRanges.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			if (bogusRanges[mid]![0] <= o) lo = mid + 1;
+			else hi = mid;
+		}
+		return lo > 0 && bogusRanges[lo - 1]![1] > o;
+	};
+	const footnoteLines: boolean[] = new Array<boolean>(lineCount).fill(false);
+	const droppedFootnoteLines: boolean[] = new Array<boolean>(lineCount).fill(false);
+	const browserRiskLines: boolean[] = new Array<boolean>(lineCount).fill(false);
+	let openFrom = lineCount;
+	for (const [a, b, open] of scanner.htmlBlocks) {
+		for (let l = a; l <= b && l < lineCount; l++) browserRiskLines[l] = true;
+		if (open) openFrom = Math.min(openFrom, b + 1);
+	}
+	for (let l = openFrom; l < lineCount; l++) browserRiskLines[l] = true;
+	if (scanner.defs.length > 0) {
+		const defAt = new Set(scanner.defs.map((d) => offset(d.at)));
+		const rawLine: boolean[] = new Array<boolean>(lineCount).fill(false);
+		for (const [a, b] of scanner.rawBlocks) for (let l = a; l <= b && l < lineCount; l++) rawLine[l] = true;
+		const lineOf = (o: number): number => {
+			let lo = 0;
+			let hi = lineCount - 1;
+			while (lo < hi) {
+				const mid = (lo + hi + 1) >> 1;
+				if (lineStart[mid]! <= o) lo = mid;
+				else hi = mid - 1;
+			}
+			return lo;
+		};
+		const referenced = new Set<string>();
+		// Every `[^label]` with a label of no whitespace and no `]`, the language
+		// of `/\[\^([^\]\s]+)\]/g`, by a scan rather than that regex, which
+		// backtracks quadratically on a run of `[^` with no `]`. A failed start
+		// shares its stop with every `[^` before that stop, so the scan resumes
+		// there and stays linear.
+		for (let i = source.indexOf("[^"); i !== -1; ) {
+			let stop = i + 2;
+			while (stop < source.length && source.charCodeAt(stop) !== 93 && !/\s/.test(source[stop]!)) stop++;
+			if (stop >= source.length || source.charCodeAt(stop) !== 93) {
+				i = source.indexOf("[^", stop);
+				continue;
+			}
+			if (stop > i + 2) {
+				let slashes = 0;
+				for (let k = i - 1; k >= 0 && source.charCodeAt(k) === 92; k--) slashes++;
+				if (slashes % 2 === 0 && !defAt.has(i) && !inBogus(i) && !rawLine[lineOf(i)]!) referenced.add(source.slice(i + 2, stop).toLowerCase());
+			}
+			i = source.indexOf("[^", stop + 1);
+		}
+		// The renderer keeps, of each referenced label, the LAST definition in
+		// document order, wherever it sits, nested in a dropped one included:
+		// measured, `[^1]: [^1]: a` / blank / `P` / `[^1]: b` shows a (the inner
+		// definition, the last; the final line is a reference in P's paragraph).
+		// A dropped definition's lines are hidden less any line of a kept one.
+		const lastOf = new Map<string, number>();
+		scanner.defs.forEach((d, k) => lastOf.set(d.label.toLowerCase(), k));
+		const kept: boolean[] = new Array<boolean>(lineCount).fill(false);
+		const kept_ = (d: FootnoteDef, k: number): boolean => {
+			const label = d.label.toLowerCase();
+			return referenced.has(label) && lastOf.get(label) === k;
+		};
+		scanner.defs.forEach((d, k) => {
+			for (let l = d.line; l <= d.lastLine && l < lineCount; l++) {
+				footnoteLines[l] = true;
+				if (kept_(d, k)) kept[l] = true;
+			}
+		});
+		scanner.defs.forEach((d, k) => {
+			if (kept_(d, k)) return;
+			for (let l = d.line; l <= d.lastLine && l < lineCount; l++) if (!kept[l]) droppedFootnoteLines[l] = true;
+		});
+		for (let l = 0; l < lineCount; l++) {
+			if (!droppedFootnoteLines[l]) continue;
+			let e = l;
+			while (e + 1 < lineCount && droppedFootnoteLines[e + 1]) e++;
+			ranges.push([lineStart[l]!, lineEnd[e]!]);
+			l = e;
+		}
+		sortRanges();
+	}
+	// An open attribute value ends at the next matching quote in the note's text
+	// after the block, and the tag at the first `>` after that; with neither, at
+	// the note's end. The rendered page can only end it sooner (a quote the
+	// renderer writes into its own markup), so this errs toward hiding.
+	// In note order, and a block that starts inside an earlier one's range is
+	// skipped: the browser reads it as that tag's attribute text, so it opens no
+	// tag of its own, and skipping it keeps the scans disjoint and linear.
+	let quoteEnd = -1;
+	for (const o of [...scanner.openQuotes].sort((x, y) => offset(x.at) - offset(y.at))) {
+		// A tag inside a definition the renderer drops is not on the page at all.
+		if (offset(o.at) < quoteEnd || droppedFootnoteLines[o.at.line]) continue;
+		let k = source.indexOf(o.quote, offset(o.end));
+		if (k !== -1) {
+			// The rest of the tag, any later quoted value skipped whole.
+			for (k++; k < source.length && source[k] !== ">"; k++) {
+				const c = source[k];
+				if (c === '"' || c === "'") {
+					const close = source.indexOf(c, k + 1);
+					k = close === -1 ? source.length : close;
+				}
+			}
+		}
+		quoteEnd = k === -1 || k >= source.length ? source.length : k + 1;
+		ranges.push([offset(o.at), quoteEnd]);
+	}
+	sortRanges();
+	const percentStarts = new Set<number>();
+	const percentEnds = new Map<number, number>();
+	for (const b of scanner.found) {
+		percentStarts.add(b.startLine);
+		if (!b.closed && b.lastLine < lineCount - 1) percentEnds.set(b.startLine, b.lastLine);
+	}
+	return { ranges, percentStarts, percentEnds, footnoteLines, browserRiskLines, frontmatterLastLine: scanner.frontmatterLastLine };
 }
