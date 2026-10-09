@@ -2672,7 +2672,8 @@ segmentation (`dropHiddenText`, which keeps `sourceIndex` in lockstep). The rang
   `<![CDATA[` becomes, to its first `>` (`htmlMarkup`, read as an HTML parser
   reads them, cross-checked with parse5); and where a block leaves an attribute
   value open, everything after it to the next such quote in the note and the `>`
-  after that, or the note's end;
+  after that, or the note's end (WITHDRAWN by fix round 3, below: the renderer's
+  own quotes can end the value first, and nothing past the block is hidden now);
 - a fenced block's fence lines, info string included (it becomes a `class`);
 - every footnote definition the note never references, and every earlier
   definition of a label defined again, each character taking its INNERMOST
@@ -2713,7 +2714,8 @@ only where the transcription has no answer (a lone CR, deep nesting), since an
 unreferenced definition is dropped by the ranges above and the frontmatter is read
 off the parser. The construct shape is narrower too: a backtick (a code span
 displays its text) and a `](` (a link needs its `[`, which already counts) hid
-nothing. And a line of exactly the `%%` interrupting shape certainly ends a list in
+nothing. (Fix round 3 found the backtick half wrong where a run may pair across a
+line break, and restores it there; see below.) And a line of exactly the `%%` interrupting shape certainly ends a list in
 `walkLeadList`, which closes the 36 ungated cells.
 
 **Linear by construction.** `inlineCommentFacts` answers round 1's three questions
@@ -2888,6 +2890,179 @@ NRL-166's div-block, fence and footnote pins, NRL-136's residual div opener, NRL
 **NOT VERIFIED IN OBSIDIAN.** Bare Node against the 1.13.7 reading-view parser and
 renderer, with parse5 as a second reading of the rendered HTML. Live Preview was not
 run, and nothing was deployed. R-M08 is NOT met.
+
+### NRL-166 fix round 3 (2026-10-09): fail closed to `44a037a` wherever round 2's model was not exact
+
+Verify 3 failed `7bd6285` (last code commit `7bca4b1`) on three counts, and this
+round, the last one the pipeline allows, closes them in that order. The rule for
+every change: where a construct cannot be modelled exactly, keep `44a037a`'s
+answer. Zero new disclosure against `main` and zero pure regression against
+`main` come before closing more of `main`'s old losses, so several cells round 2
+had closed are `main`'s again (listed under "Given back" below).
+
+1. **13 cells newly disclosing against `44a037a`** (11 confirmed by the live
+   renderer). ``P QAQ <!-- ` `` / `` ` <!-- QHQ ` --> QZQ`` displays `P QAQ <!-- QZQ`:
+   the renderer pairs the line-end backtick with the next line's first, so
+   `<!-- QHQ ` -->` is a real comment. Round 2 had taken the backtick out of the
+   inline-construct gate, the body rule then (rightly) made the first `<!--`
+   literal, and cleanLine, which pairs code spans line by line, read
+   `` ` <!-- QHQ ` `` as code and spoke QHQ. **Fix**: `backtickCrossRisk`. The
+   renderer pairs runs left to right over the paragraph, each with the next run of
+   the same length, so line-by-line pairing agrees with it on every line exactly
+   when no span crosses a line break, and the first span that does starts at a run
+   its own line leaves unpaired. A line with such a run (or a backslash before a
+   run) and a backtick on a later line of the same blank-bounded stretch counts as
+   holding an inline construct, which keeps `44a037a`'s answer for every window it
+   is in. A lone unpaired backtick with nothing to pair with stays harmless
+   (`pin-nrl166-r2-e2-backtick-on-opener-line` keeps its renderer text).
+2. **A branch quadratic in `htmlMarkup`.** Every `<!--` searched from itself to the
+   one far closer of the other kind: `<div>` / `<!-- -->` x 20,000 / `--!>` took
+   4,835 ms against 7 on `44a037a`. **Fix**: one forward pointer per closer kind,
+   moved only past where its last search stopped, so the searches never overlap.
+3. **183 cells (172 unambiguous) lost against `44a037a` with no disclosure closed
+   in the note**, in four mechanisms:
+   - (2a) `percentOpensAt` mixed answers: the renderer's "no block" on one lazy `%%`
+     line and our opener on the next, so the two `%%` no longer paired as `main`
+     paired them and the second hid the rest. **Fix**: a chain. Withholding one
+     opener re-pairs every later `%%`, so a line takes the renderer's answer only
+     when the next `%%` line does too and holds exactly one `%%` (two or more there
+     re-pair by our inline rule, which does not know a line the renderer makes
+     code); and a `<!--` its line leaves open inside the reach is a risk, since the
+     withheld block exposes it to our term 2, which may carry it across lines the
+     renderer's paragraph does not reach.
+   - (2b) An open attribute value hidden past its block. Two causes. A block that
+     starts inside a browser comment an earlier block left open is comment text
+     up to the first `-->` or `--!>` (`1. > <!-- ` / `<div title="` / `\t--> QQZQ`
+     displays QQZQ): `htmlMarkup` now takes `inComment`, and the scanner carries the
+     state from block to block (neither block in a footnote definition, which the
+     renderer moves to the page's end; the earlier block holds no `<script>`,
+     `<style>`, `<textarea>` or other raw-text tag). Where the note holds a `-->` or
+     `--!>` between the two blocks, which inline HTML in a paragraph could put on
+     the page, the carry is only possible, so the block is read both ways and only
+     what BOTH readings hide is hidden (`intersectSpans`; the census found a `--!>`
+     inside a dropped definition there, `<!-- QBQ` in a callout title / `[^q]: QCQ
+     --!>` / `<p class='QDQ` / `> [!x]+ QEQ -->` / `\tQFQ` displays QFQ). And a quote the
+     renderer writes into its own markup ends the value first: a callout's
+     `class="callout-content"` (`<!-->` / `> [!tip]- <div title="` / ... /
+     `> [!tip]- ") QAQ` displays QAQ), a task list's `class=`. Which renderer quote
+     comes first is not modelled, so **nothing past the block is hidden for an open
+     attribute any more**. The block's own markup stays hidden.
+   - (2c) A reference inside a `%%` block between backticks (``> %% ` `` /
+     ``> [!x]+  `[^q]` `` / `*` / `[^q]: [^q]:QHQ` displays QHQ). `%%` text is never
+     inline-parsed, so a reference there now counts whatever surrounds it. More
+     generally, a reference in an inline comment, a code span or a link
+     destination or title (each read wide) MAY count for the renderer: a definition
+     referenced only from there is no longer dropped (`> - [l](u "QSQ [^1]: QSZQ` /
+     ... / `> [^1]: QUZQ` displays QUZQ, the `](` running to no `)`).
+   - (2d) A refinement exposing a `%%` to our opener: ``1. > QGQ ``` <!---> `` /
+     `  > [!note] %%` / `\t--> QJZQ` / `> > </pre>`. The `<!--->` is rightly literal,
+     and the `%%` behind it, no block for the renderer, opened ours, kept beside the
+     HTML block. A `%%` whose `percentOpensAt` is undefined, on the line or in the
+     would-be body, now withholds the refinements (`pctUnsure`).
+
+**What the removals exposed, found by this round's own census and closed.** Hiding
+less past a block meant a walker refinement above it could end `44a037a`'s
+comment and speak what a browser hides there (`> QLQ <!-- QLZQ <!-- QMQ` / ... /
+`>\t<!--<!--<!-- QNQ` / `1. > <div title="QNZQ` / `  - > <span title='QOQ` spoke
+QOQ). A refinement can stop one of our comments hiding everything to the note's
+end, so `rendererHiddenText` now reports `openRiskThrough`: the last line text a
+browser may hide beyond the ranges can reach (the note's end after a block that
+leaves a browser comment open; the furthest reach of an open attribute value; the
+last line of a definition kept only by a reference that may not count), and no
+line on or before it takes a refinement. Equally, a definition that is now kept
+because its reference may count is a footnote line, on which `percentOpensAt`
+keeps our opener.
+
+**Lone CR.** Verify 3 established that a lone CR cannot reach `extractChunks` in
+the product: all three call sites in `main.ts` (`readActiveNote`, `readSelection`,
+`readFromCursor`) read `view.editor.getValue()`, and CodeMirror splits a document on
+`/\r\n?|\n/` and joins with `"\n"` (checked live over CDP: `cm.state.lineBreak` is
+`"\n"`, no `lineSeparator` facet, `state.toText("a\rb\r\nc\nd")` has 4 lines). The
+lone-CR paths (`fallbackHtmlHidden`, `crSeen`, `crAbove`) stay as they are and this
+round adds nothing to them; their cells are class (ii) below and are not product
+behaviour.
+
+**Census** of the final tree, harness 1.13.7, Verify 2's judge with Verify 3's
+whole-note rows (`run3.cjs`, `rfz.cjs`), masks ALL and DEF (F2 also SKIPALL), newly
+disclosing / newly lost, against `9132c3b`, `e2afbfe` and `44a037a`. Then every
+newly disclosing row and every newly-lost-against-`44a037a` row was re-rendered in
+the running Obsidian 1.13.7 (read-only `MarkdownRenderer.render` over CDP, Verify 3's
+`liverender.mjs`) and re-judged on its `innerText`.
+
+| corpus | cells | vs `9132c3b` | vs `e2afbfe` | vs `44a037a` (7bd6285 was) |
+|---|---|---|---|---|
+| Verify 2's `gen2.cjs` | 13,122,000 | 1,800 / 0 | 0 / 11,097 | 0 / 0 (0 / 0) |
+| reviewers' fuzz, seeds 1-8 | 489,270 | 26 / 67 | 0 / 22 | 0 / 0 (0 / 0) |
+| extended fuzz, seeds 501-512 | 724,310 | 109 / 45 | 0 / 109 | 0 / 4 (0 / 21) |
+| first critique's generator | 833,216 | 239 / 758 | 3 / 636 | 0 / 568 (0 / 787) |
+| second critique's two | 684,678 | 86 / 384 | 0 / 277 | 0 / 252 (0 / 423) |
+| third critique's, three modes | 170,216 | 6 / 868 | 0 / 868 | 0 / 868 (0 / 884) |
+| fourth critique's | 125,350 | 29 / 1,733 | 0 / 1,740 | 0 / 1,738 (0 / 5,031) |
+| fifth critique's | 202,858 | 0 / 3,210 | 0 / 3,210 | 0 / 3,210 (0 / 4,235) |
+| Verify 1's `own-gen.cjs` | 1,481,472 | 0 / 0 | 0 / 0 | 0 / 0 |
+| its de-callout twins | 972,864 | 0 / 0 | 0 / 0 | 0 / 0 |
+| F1 `callout-census.cjs` | 2,496 | 0 / 0 | 0 / 0 | 0 / 0 |
+| F2 fuzz `SEED=31337 N=4000` | 48,741 | 26 / 9 | 0 / 34 | 0 / 0 |
+| F3 `gen.cjs` | 6,514,560 | 0 / 2,292 | 0 / 56 | 0 / 0 |
+| Verify 3's `gen3.cjs` grid | 667,400 | 806 / 0 | 0 / 122 | 0 / 0 (0 / 12) |
+| Verify 3's `gen3.cjs` rand, 300,000 notes | 3,221,614 | 683 / 2,927 | 57 / 426 | 2 / 133 (13 / 576) |
+
+- **Newly disclosing against `44a037a`: 0 confirmed.** The 2 judge cells (one
+  note, `QFQ <!-- QFZQ <!-- QGQ` / ... / `>> <!---> QHZQ` / `>[!x]- %% QIQ`) are
+  displayed by the live renderer: the judge reads `<!--->` as an open comment, a
+  browser as a complete one. Against `e2afbfe`, 28 of the 60 cells are hidden live
+  and `44a037a` speaks every one (they are #219's, not this branch's); the other 32
+  are displayed live.
+- **Every newly-lost-against-`44a037a` cell, classified live** (6,773 cells): (i)
+  paid for a disclosure closed in the same note and mask, 4,624; (ii) a lone CR,
+  1,000; not displayed by the live renderer at all (judge artifacts, no loss),
+  1,145; **(iii) pure regression, 0 unambiguous**. 4 more cells (fourth critique 1,
+  fifth 3) count as (iii) only because their generators reuse sentinel names: the
+  sentinel appears twice, `44a037a` speaks only the occurrence inside the block's
+  own `<pre title="` or `<p class="` (which the browser hides and this tree drops),
+  and the occurrence the renderer displays is lost on `44a037a` too.
+- **Lockstep**: 0 failures this tree has that `44a037a` lacks, on every corpus. The
+  only failures at all are the synthetic `equation` word merging into a chunk,
+  3,677 here against 4,193 on `44a037a`, in the second and fifth critiques'
+  generators.
+
+**Given back to `44a037a`.** Failing closed reopens some of what round 2 had
+closed, all of it `44a037a`'s own behaviour. Closed against `44a037a`, `7bd6285` ->
+this tree, disclosing / lost: `gen2` 374,998 / 1,534,782 -> 374,998 / 1,515,798;
+base fuzz 26,207 / 8,305 -> 26,177 / 7,804; extended 72,788 / 10,781 -> 72,435 /
+9,534; first critique's 172,344 / 524 -> 164,422 / 427; second's 88,077 / 239 ->
+82,100 / 130; third's 31,038 / 0 -> 30,119 / 0; fourth's 60,199 / 2 -> 48,260 / 2;
+fifth's 69,059 / 0 -> 62,986 / 0; `gen3` grid 39,263 / 23,024 -> 39,952 / 17,529;
+`gen3` rand 346,950 / 15,739 -> 332,768 / 10,787; F2 823 / 199 -> 823 / 164; F3,
+own-gen and twins unchanged. Rows that moved back to `44a037a`'s answer:
+`pin-nrl166-r2-open-attribute-swallows-later-blocks` (renamed
+`pin-nrl166-r3-open-attribute-not-hidden-past-the-block`), the two `r2f-f1` rows,
+the `r2g-f2` CRLF/LF pair, `pin-nrl166-r2-l44-lazy-callout-pct-indented-tail` and
+`pin-nrl166-r2c-f2-code-span-reference-not-counted`; each comment says so.
+
+**Timing**, single process, ALL options, n = 20,000, `44a037a` / `7bd6285` / this
+tree, on all of Verify 3's 74 adversarial inputs and 16 new ones for this round's
+scans (`tim/inputs.cjs` in the round's scratch). The quadratic is gone: `<div>` /
+`<!-- -->` x n / `--!>` 8 / 4,802 / 58 ms, its mirror 5 / 4,810 / 61, in a list-item
+quote 11 / 4,910 / 69 (at 80,000: 23 against 170 here). The new scans: n lines of
+``P <!-- ` `` 185 / 391 / 231; mixed backtick runs 17 / 45 / 52; n lazy-callout `%%`
+pairs then `<div>` 706 / 1,106 / 856 and without it 693 / 989 / 1,027; `<!-- a` then
+n `<div title="x` blocks 213 / 289 / 288; n blocks between paragraphs in an open
+comment 319 / 462 / 453; n comment-carrying blocks 6,332 / 754 / 783 (quadratic on
+`44a037a`); n open-attribute blocks with a comment after each 1,130 / 1,642 / 1,674;
+n `%%` blocks holding a backticked reference 225 / 319 / 334. Each doubles, not
+quadruples, from 40,000 to 80,000 (the slowest, n open-attribute blocks, 2,707 to
+4,854 ms against 4,040 on `44a037a` at 80,000). Every other input is within 1.2x
+of `7bd6285`. Pre-existing and equal on all three: `"[^".repeat(n)` (NRL-172)
+4,947 / 4,583 / 4,608; and `<div>` + `"<![CDATA[ ".repeat(n)` 96,659 / 96,896 /
+97,311, which needs no CR (Verify 3). Profiled here, it is cleanLine's `[` label scan
+(`inlineContainerClose`, one search for `]` per `[`), not this round's code, so it is
+recorded on NRL-172 as a sibling rather than changed in the last round.
+
+**NOT VERIFIED IN OBSIDIAN.** Bare Node against the 1.13.7 harness, with every
+newly disclosing or newly lost cell re-rendered in the running Obsidian 1.13.7 over
+CDP (read-only `MarkdownRenderer.render`) as Verify 3 did. Nothing was deployed and
+Live Preview was not run. R-M08 is NOT met.
 
 ### CLOSED by NRL-119: a list marker alone on its line ends the paragraph
 

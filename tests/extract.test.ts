@@ -4440,13 +4440,20 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl166-r2-declaration-ends-at-gt", "P\n\n<!X QBQ\nQCQ > QDQ\n\nQEQ", "P QDQ QEQ"],
 		["pin-nrl166-r2-cdata-ends-at-gt", "P\n\n<![CDATA[ QBQ\nQCQ ]]> QDQ\nQEQ", "P QDQ QEQ"],
 		["pin-nrl166-r2-cdata-in-item-then-browser-comment", "- <![CDATA[ QAAQ\n> \t![!x <!-- QBAQ -- QCAQ\n>- QDAQ\n> - QEAQ -->", "[!x"],
-		["pin-nrl166-r2-open-attribute-swallows-later-blocks", "<div title='QAQ\n\n- QBQ\n- QCQ ' QDQ\n\n> QEQ", "QEQ"],
+		// NRL-166 fix round 3: nothing past the block is hidden for an open
+		// attribute value any more (the renderer's own quotes may end it first), so
+		// this row keeps 44a037a's answer less the block's own markup. A
+		// disclosure equal to main's (QBQ, QCQ, QDQ), reopened on purpose.
+		["pin-nrl166-r3-open-attribute-not-hidden-past-the-block", "<div title='QAQ\n\n- QBQ\n- QCQ ' QDQ\n\n> QEQ", "QBQ QCQ ' QDQ QEQ"],
 		["guard-nrl166-r2-tag-attribute-in-html-block", "P\n\n<div>\nQBQ <span title=\"QXQ\">QCQ</span>\n</div>", "P QBQ QCQ"],
 		["guard-nrl166-r2-pct-span-ends-at-its-newline", "> \tQAAQ ---> QBAQ\n[^1]: %%\n>    - QCAQ", "QAAQ ---> QBAQ QCAQ"],
 		["pin-nrl166-r2-lazy-callout-pct-is-text", "> P\n> [!note] %%\n> QBAQ QDAQ", "P %% QBAQ QDAQ"],
 		["pin-nrl166-r2-l44-lazy-callout-pct-after-literal-opener", "> P <!-- QAAQ\n> [!note] %%\n> QBAQ <!-- QCAQ --> QDAQ", "P <!-- QAAQ %% QBAQ QDAQ"],
 		["pin-nrl166-r2-l44-lazy-callout-pct-two-callouts", "> QAAQ <!-- QBAQ --> QCAQ <!-- QDAQ\n> [!note] %%\n> > -> QEAQ\n> [!note] QFAQ ---> QGAQ", "QAAQ QCAQ <!-- QDAQ %% -> QEAQ QFAQ ---> QGAQ"],
-		["pin-nrl166-r2-l44-lazy-callout-pct-indented-tail", "> P <!-- QAAQ\n> [!note] %%\n>    QBAQ <!-- QCAQ --> QDAQ <!-- QEAQ\n>\t-- QFAQ\n\tQGAQ %% -- %% QHAQ", "P <!-- QAAQ %% QBAQ QDAQ <!-- QEAQ -- QFAQ QGAQ QHAQ"],
+		// Fix round 3: the `<!-- QEAQ` its line leaves open lies in the withheld
+		// opener's reach, so our opener keeps its 44a037a answer here and this row
+		// is 44a037a's again (QAAQ and QBAQ lost, as on main).
+		["pin-nrl166-r2-l44-lazy-callout-pct-indented-tail", "> P <!-- QAAQ\n> [!note] %%\n>    QBAQ <!-- QCAQ --> QDAQ <!-- QEAQ\n>\t-- QFAQ\n\tQGAQ %% -- %% QHAQ", "P QDAQ <!-- QEAQ -- QFAQ QGAQ QHAQ"],
 		["guard-nrl166-r2-withheld-pct-not-past-html-block", "> \tP <!--- QAAQ\n> [!note] %%\n<div>\n> P <!--> QBAQ\n- $$", "P <!--- QAAQ"],
 		["guard-nrl166-r2-withheld-pct-not-after-open-browser-comment", "> - <!-- QAAQ\nQBAQ <!-- QCAQ --> QDAQ <!-- QEAQ\n\t%%\n  - P <!--- QFAQ\n[^1]: P <!--- QGAQ", "QDAQ"],
 		["guard-nrl166-r2-withheld-pct-not-after-open-attribute", "<!X QAAQ\r\n> - <b title=\"QBAQ\r\n> \t%%\r\n> [!note] P <!-- QCAQ -\r\n  - QDAQ -->\") QEAQ", ""],
@@ -4472,7 +4479,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// attribute a kept footnote leaves open swallows only the footnotes section.
 		["pin-nrl166-r2c-f1-link-title-over-lazy-pct", ">[](u \"\n>[!e]%%QBQ\")", "u \""],
 		["pin-nrl166-r2c-f1-tag-attribute-over-lazy-pct", "> P <b title=\"QAQ\n> [!note] %% QBQ\n> QCQ\">QDQ</b>", "P <b title=\"QAQ"],
-		["pin-nrl166-r2c-f2-code-span-reference-not-counted", "> [^1]: a\n> [!e] %% QJQ `[^1]`", "", { skipInlineCode: false }],
+		// Fix round 3: a reference in a code span MAY count, so the definition is
+		// kept as on 44a037a and our opener keeps its answer beside it: `a` is
+		// spoken as 44a037a speaks it (a main-equal disclosure, reopened).
+		["pin-nrl166-r2c-f2-code-span-reference-not-counted", "> [^1]: a\n> [!e] %% QJQ `[^1]`", "a", { skipInlineCode: false }],
 		["pin-nrl166-r2c-f3-reference-in-html-comment-not-counted", "[^1]: %% <!-- [^1] -->\n%% QDQ", ""],
 		["pin-nrl166-r2c-f4-reference-in-definition-not-counted", ">- \n    %%\n[^1]:[^2]:QKQ[^1]", ""],
 		["pin-nrl166-r2c-f8-footnote-attribute-stays-in-footnotes", "[^a]:<div '\n1. QAQ[^a]", "QAQ"],
@@ -4501,8 +4511,11 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// had closed and 2d44f59 reopened, each RED on 2d44f59: a quote in a footnote
 		// definition closes no attribute (F1), and the lone-CR stand-in reads a block
 		// through to its blank line again (F2).
-		["pin-nrl166-r2f-f1-quote-in-footnote-does-not-close-attribute", "<div title=\"x\n\n[^1]: \"\n\nQAQ", ""],
-		["pin-nrl166-r2f-f1-quote-in-kept-footnote-does-not-close-attribute", "<div title=\"x\n\n[^1]: a \" b\n\nQAQ\n\nQBQ [^1]", ""],
+		// Fix round 3 hides nothing past the block for an open attribute (see
+		// `pin-nrl166-r3-open-attribute-not-hidden-past-the-block`), so these two
+		// speak QAQ (and QBQ) as 44a037a does: main-equal disclosures, reopened.
+		["pin-nrl166-r2f-f1-quote-in-footnote-does-not-close-attribute", "<div title=\"x\n\n[^1]: \"\n\nQAQ", "QAQ"],
+		["pin-nrl166-r2f-f1-quote-in-kept-footnote-does-not-close-attribute", "<div title=\"x\n\n[^1]: a \" b\n\nQAQ\n\nQBQ [^1]", "a \" b QAQ QBQ"],
 		["pin-nrl166-r2f-f2-lone-cr-stand-in-reads-the-whole-block", "- > <!X QEQ\r> > <b title=\"QFQ", ""],
 		["pin-nrl166-r2f-f2-lone-cr-stand-in-block-bogus-comment", "<details><summary>QAQ</summary>\r\tQBQ\">\r    <!X QCQ>\r\n", "QAQ QBQ\">"],
 		// /critique on 97388f2 (CONCERNS, 70), RED on 97388f2 where a pin: an open
@@ -4510,9 +4523,67 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// CRLF is one line break, not a blank line, in the open-attribute stop (F2).
 		["pin-nrl166-r2g-f1-open-declaration-carries-past-the-block", "<!X a\r<div title=\"b\r\rQAQ", ""],
 		["pin-nrl166-r2g-f1-open-declaration-carries-past-the-block-lf", "<!X a\n- <div title=\"b\n\nQAQ\rc", ""],
-		["pin-nrl166-r2g-f2-crlf-is-one-line-break", "> <div title=\"x\r\n# y \"\r\n\r\nQAQ\r\n\r\nQBQ", "QAQ QBQ"],
-		["guard-nrl166-r2g-f2-lf-twin", "> <div title=\"x\n# y \"\n\nQAQ\n\nQBQ", "QAQ QBQ"],
+		// Fix round 3: the heading after the block is no longer hidden either (it
+		// speaks `y "`, as 44a037a does); what these still pin is that CRLF and LF
+		// read alike.
+		["pin-nrl166-r2g-f2-crlf-is-one-line-break", "> <div title=\"x\r\n# y \"\r\n\r\nQAQ\r\n\r\nQBQ", "y \" QAQ QBQ"],
+		["guard-nrl166-r2g-f2-lf-twin", "> <div title=\"x\n# y \"\n\nQAQ\n\nQBQ", "y \" QAQ QBQ"],
 		["guard-nrl166-r2g-crlf-twin-of-n1", "a\rb\r\n<div title=\"x\r\n<div title=\"y\r\n\r\nQAQ", "a b QAQ"],
+		// NRL-166 fix round 3 (Verify 3 on 7bd6285). Every row is RED on 7bd6285 and
+		// is either the renderer's visible text (harness 1.13.7 and the live 1.13.7
+		// renderer) or, where marked, 44a037a's answer kept on purpose.
+		// (b) Disclosures new against 44a037a: the renderer pairs a line-end backtick
+		// with the next line's first, so `<!-- QHQ ` -->` is a real comment, and our
+		// line-by-line code spans spoke QHQ. A backtick its line leaves unpaired,
+		// with another backtick later in the stretch, now keeps 44a037a's answer.
+		["pin-nrl166-r3-b-code-span-across-line-break", "P QAQ <!-- `\n` <!-- QHQ ` --> QZQ", "P QAQ QZQ", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-across-line-break-def", "P QAQ <!-- `\n` <!-- QHQ ` --> QZQ", "P QAQ QZQ"],
+		["pin-nrl166-r3-b-code-span-across-line-break-item-quote", "- > P QAQ <!-- `\n> ` <!-- QHQ ` --> QZQ", "P QAQ QZQ", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-across-line-break-callout", "> [!tip] T\n> P QAQ <!-- `\n> ` <!-- QHQ ` --> QZQ", "T P QAQ QZQ", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-across-line-break-smallest", "Q<!--`\n`<!--QHQ`-->", "Q", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-in-callout-body", "- > QPQ <!--  <!-- \n> [!tip] `\n  > ` <!-- QRZQ`\n> QSQ - -->", "QPQ", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-after-literal-opener", "- `   <!--> \n` <!-- QQQ`\n    QQZQ - -->", "", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-after-fence-shaped-text", "QEZQ <!-->  ~~~\n` \n` <!-- QHQ`\n   --> ", "QEZQ", { skipInlineCode: false }],
+		// (c-iii) Losses new against 44a037a with no disclosure closed in the note.
+		// (2a) A withheld `%%` opener re-pairs every later `%%`: the chain now keeps
+		// ours unless the next `%%` line takes the renderer's answer too.
+		["pin-nrl166-r3-c-pct-chain-keeps-pairing", "> > P\n> [!tip]- %% QAQ\n> [!tip]- %% QBQ\n    QEQ [x](u \"QFQ", "P QBQ QEQ x u \"QFQ"],
+		["pin-nrl166-r3-c-pct-chain-with-code-span", "> > \\\n> [!info] %% `\n> [!info] %%QLQ\n- [ ] </script>", "\\ QLQ"],
+		// (2b) A block inside a browser comment an earlier block left open is
+		// comment text up to the first closer; and nothing past a block is hidden for
+		// an attribute value it leaves open (a callout's own `class="` ends it here).
+		["pin-nrl166-r3-c-attribute-inside-open-browser-comment", "1. > <!-- \n<div title=\"\n\t--> QQZQ", "QQZQ"],
+		["pin-nrl166-r3-c-attribute-inside-open-browser-comment-item", "- <!--\n- <div '-->QHQ", "QHQ"],
+		["pin-nrl166-r3-c-attribute-inside-open-browser-comment-footnote-line", "> - <!-- \n- <div title='\n[^A]:  --> QHQ", "QHQ"],
+		["pin-nrl166-r3-c-callout-title-attribute-ended-by-renderer-quote", "<!-->\n> [!tip]- <div title=\"\n><!-- [^1] -->\n> [!tip]- \") QAQ", "\") QAQ"],
+		["pin-nrl166-r3-c-task-list-quote-ends-attribute", "1. > <!----!>\n[^Q]: <custom-el a=\"\n- [ ] --> QAQ", "QAQ"],
+		// Where the carry is only possible (here the `--!>` between the blocks sits
+		// in a dropped definition, so the comment the callout title opened is still
+		// open), the block is read both ways and only what both hide is hidden.
+		["pin-nrl166-r3-c-possible-carry-hides-only-what-both-readings-hide", "> [!info] <!-- QBQ\n[^q]: QCQ --!>\n<p class='QDQ\n> [!x]+ QEQ -->\n\tQFQ\\[^1]\n2) ---\n", "QFQ[^1]", { skipCodeBlocks: false }],
+		// The carry is withheld where an inline comment between the blocks could
+		// close the browser comment first: here it does, and the tag hides QXQ.
+		["guard-nrl166-r3-c-carry-withheld-after-inline-closer", "<!-- QAQ\n\nP <!-- QBQ --> QCQ\n\n<div title=\"\n--> QXQ", "QCQ"],
+		// Found by this round's own census, after the open attribute stopped hiding
+		// past its block: a walker refinement above the block ended 44a037a's
+		// comment and spoke the attribute's text. Refinements now stand down on and
+		// before every line such text may reach (`openRiskThrough`). Equal to
+		// 44a037a; 7bd6285 spoke QNQ, which the live renderer also displays.
+		["guard-nrl166-r3-refinement-not-before-open-attribute", "> QLQ <!-- QLZQ <!-- QMQ\n> > ---\n\t[!tip] QMZQ %%\n>\t<!--<!--<!-- QNQ\n1. > <div title=\"QNZQ\n  - > <span title='QOQ\n\nQOZQ", "QLQ <!-- QLZQ <!-- QMQ !tip QMZQ %%"],
+		// Also from this round's census, each 44a037a's answer, which the live
+		// renderer matches on the sentinel 7bd6285 lost: a withheld `%%` exposed an
+		// open `<!--` (QSQ) or an inline `%%` pair on a line the renderer makes code
+		// (QRZQ) to our own model, and a reference in a link title that runs to no
+		// `)` dropped its definition (QUZQ).
+		["pin-nrl166-r3-c-withheld-pct-exposes-open-comment", "> > ````\n> > [!x]- %% QPQ\nQPZQ](a.png) QQQ\n    <!-- QQZQ --> QRQ <!-- QRZQ\n[!x]- %% QSQ\n> > --> QSZQ", "QSQ --> QSZQ", { skipCodeBlocks: false }],
+		["pin-nrl166-r3-c-withheld-pct-chain-stops-at-pct-pair", ">````\n>> [!x]- %% QQQ\nQQZQ - -->\n> \tQRQ %% QRZQ %%\n  > ~~~", "QRZQ %% ~~~", { skipCodeBlocks: false }],
+		["pin-nrl166-r3-c-maybe-referenced-footnote-kept", "> - [l](u \"QSQ [^1]: QSZQ <!-- QTQ\n    [l](u \"QTZQ\n- QUQ\n> [^1]: QUZQ <!-- QVQ", "l u \"QSQ : QSZQ <!-- QTQ l u \"QTZQ QUQ QUZQ <!-- QVQ"],
+		// (2c) A reference inside a `%%` block counts whatever surrounds it.
+		["pin-nrl166-r3-c-reference-in-pct-block-between-backticks", "> %% `\n> [!x]+  `[^q]`\n*     \n[^q]: [^q]:QHQ", ":QHQ"],
+		// (2d) A refinement that ends 44a037a's comment exposes a `%%` to our opener;
+		// where that opener keeps its own answer, the refinement is withheld.
+		["pin-nrl166-r3-c-exposed-pct-beside-html-block", "1. > QGQ ``` <!---> \n  > [!note] %%\n\t--> QJZQ\n> > </pre>", "QGQ QJZQ"],
+		["pin-nrl166-r3-c-exposed-pct-before-div-block", "- >> P QAQ <!-- QXQ <!-- QYQ\n> [!note] %% QBQ\n> \t--> QCQ\n\n<div>\nQGQ", "P QAQ QCQ QGQ"],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -7747,6 +7818,15 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 		["lone-cr-note-of-many-open-attributes", (n) => "a\rb\n" + "<div title=\"x\n\n".repeat(n)],
 		["lone-cr-note-of-many-tags", (n) => "a\rb\n" + "<div title='x'>y</div>\n".repeat(n)],
 		["many-dash-lines-in-one-paragraph", (n) => "P <!-- a\n" + "x -- y\n".repeat(n) + "-->"],
+		// NRL-166 fix round 3 (Verify 3 on 7bd6285): every `<!--` in an HTML block
+		// rescanned to the one far closer of the other kind, 4,835 ms at 20,000 on
+		// 7bd6285 against 7 ms on 44a037a.
+		["many-comments-closed-before-a-far-bang-closer", (n) => "<div>\n" + "<!-- -->".repeat(n) + "--!>"],
+		["many-bang-closed-comments-before-a-far-closer", (n) => "<div>\n" + "<!-- --!>".repeat(n) + "-->"],
+		["many-comments-before-a-far-bang-closer-in-item-quote", (n) => "- > <div>\n> " + "<!-- -->".repeat(n) + "--!>"],
+		["many-backtick-lines", (n) => "P <!-- `\n".repeat(n) + "` -->"],
+		["many-pct-lines-in-a-chain", (n) => "> P\n> [!note] %% a\n".repeat(n) + "<div>"],
+		["many-blocks-in-an-open-browser-comment", (n) => "<!-- a\n\n" + "<div title=\"x\n\n".repeat(n)],
 	];
 	const timeOf = (src: string): number => {
 		const t0 = performance.now();

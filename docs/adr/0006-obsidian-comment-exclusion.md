@@ -1534,6 +1534,13 @@ done where an HTML block lies in the reach our block would have hidden, since a
 browser comment may be what hides it there. Measurements and residuals: ADR 0025,
 "NRL-166 fix round 2". NOT VERIFIED IN OBSIDIAN.
 
+NRL-166 fix round 3 (2026-10-09) narrows the withholding: withholding one opener
+re-pairs every later `%%`, so a line takes the renderer's answer only when the next
+`%%` line takes it too and holds a single `%%`, and a `<!--` its line leaves open
+inside the reach keeps ours (Verify 3 found the mixed answers hiding text both the
+renderer and `44a037a` display). A reference inside a `%%` block now counts for a
+footnote whatever surrounds it. ADR 0025, "NRL-166 fix round 3".
+
 ## Consequences and verification
 
 - Extraction keeps the original source intact. A dropped inline span uses a

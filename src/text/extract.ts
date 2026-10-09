@@ -645,6 +645,63 @@ function inlineConstructMayHold(text: string): boolean {
 }
 
 /**
+ * Whether one line's own backtick runs may pair differently for the renderer
+ * than cleanLine pairs them (NRL-166 fix round 3). cleanLine pairs code spans
+ * line by line; the renderer pairs them over the whole paragraph, left to
+ * right, each run with the next run of the same length. The two agree on every
+ * line exactly when no span the renderer makes crosses a line break, and the
+ * first span that does starts at a run its own line leaves unpaired. So a line
+ * is at risk when a run on it pairs with nothing on it (or a backslash stands
+ * before a run, which may escape one of its backticks) AND a later line of the
+ * same blank-bounded stretch holds a backtick it could pair with.
+ *
+ * Fix round 2 took the backtick out of `INLINE_CONSTRUCT_MAY_HOLD`, since a code
+ * span displays its text, and Verify 3 found the cost: `P QAQ <!-- \`` /
+ * `` ` <!-- QHQ ` --> QZQ`` displays `P QAQ <!-- QZQ` (the line-end backtick
+ * pairs with the next line's first, so `<!-- QHQ ` -->` is a real comment), and
+ * cleanLine, reading `` ` <!-- QHQ ` `` as code, spoke QHQ. A line this marks
+ * counts as holding an inline construct, which keeps 44a037a's answer for the
+ * window. Linear: one pass per line over its runs, and one backward pass.
+ */
+function backtickCrossRisk(lines: readonly string[]): boolean[] {
+	const unsure = lines.map((line) => {
+		if (!line.includes("`")) return false;
+		const runs: number[] = [];
+		for (let k = 0; k < line.length; ) {
+			if (line.charCodeAt(k) !== 96) {
+				k++;
+				continue;
+			}
+			if (k > 0 && line.charCodeAt(k - 1) === 92) return true;
+			let e = k;
+			while (e < line.length && line.charCodeAt(e) === 96) e++;
+			runs.push(e - k);
+			k = e;
+		}
+		// The next run of the same length after each run, from the right.
+		const nextSame = new Array<number>(runs.length).fill(-1);
+		const seen = new Map<number, number>();
+		for (let r = runs.length - 1; r >= 0; r--) {
+			nextSame[r] = seen.get(runs[r]!) ?? -1;
+			seen.set(runs[r]!, r);
+		}
+		for (let r = 0; r < runs.length; r = nextSame[r]! + 1) if (nextSame[r] === -1) return true;
+		return false;
+	});
+	const out = new Array<boolean>(lines.length).fill(false);
+	for (let k = lines.length - 1, tickBelow = false; k >= 0; k--) {
+		const line = lines[k]!;
+		if (line.trim() === "") {
+			tickBelow = false;
+			continue;
+		}
+		out[k] = unsure[k]! && tickBelow;
+		if (line.includes("`")) tickBelow = true;
+	}
+	return out;
+}
+
+/**
  * cleanLine's three questions about one `<!--` at `at` on `raw`, answered in
  * O(1) after one O(line) pass (NRL-166 fix round 2). Asking them by slicing the
  * line at every `<!--` made one line of many literal openers quadratic: Verify
@@ -5450,6 +5507,11 @@ export function extractChunks(
 ): SpeechChunk[] {
 	const chunks: SpeechChunk[] = [];
 	const lines = source.split("\n");
+	// Whether line k may hold an inline construct that hides text, a code span
+	// whose backticks may pair across a line break included (`backtickCrossRisk`,
+	// NRL-166 fix round 3). A yes keeps 44a037a's answer wherever it is asked.
+	const tickRisk = backtickCrossRisk(lines);
+	const lineMayHold = (k: number): boolean => tickRisk[k]! || inlineConstructMayHold(lines[k]!);
 	// What the reading view displays nothing of, from the transcription of its
 	// block parser (NRL-166 fix round 2; see `rendererHiddenText`), or null where
 	// that transcription has no answer. Every spoken character whose source
@@ -5490,14 +5552,43 @@ export function extractChunks(
 		const constructSinceBlank: boolean[] = new Array<boolean>(lines.length).fill(false);
 		for (let k = 0, seen = false; k < lines.length; k++) {
 			if (lines[k]!.trim() === "") seen = false;
-			if (inlineConstructMayHold(lines[k]!)) seen = true;
+			if (lineMayHold(k)) seen = true;
 			constructSinceBlank[k] = seen;
 		}
+		// Withholding our opener on one line also changes how every later `%%`
+		// pairs: the next one, which closed our block, is now asked whether it
+		// OPENS one. So a line's answer is the renderer's only when the next
+		// `%%` line's is too, a chain to the note's end or to a line that keeps
+		// ours, whose chain then keeps ours as well (NRL-166 fix round 3; Verify
+		// 3: `> > P` / `> [!tip]- %% QAQ` / `> [!tip]- %% QBQ` / `    QEQ [x](u "QFQ`
+		// took the renderer's "no block" on the first `%%` line and our opener on
+		// the second, beside the link, which then hid QBQ through QFQ that the
+		// renderer and 44a037a both display).
+		// A withheld opener also exposes what lies in its reach to our own
+		// comment model, so a `<!--` there that its line does not close, which our
+		// term 2 may carry across lines the renderer's paragraph does not reach, is
+		// a risk too; and the chain holds only through a next `%%` line with one
+		// `%%`, since two or more there re-pair by our inline rule, which does not
+		// know a line the renderer makes code (fix round 3's census: `> > \`\`\`\``
+		// / `> > [!x]- %% QPQ` / ... / `    <!-- QQZQ --> QRQ <!-- QRZQ` /
+		// `[!x]- %% QSQ` / `> > --> QSZQ` lost QSQ, and `>\`\`\`\`` / `>> [!x]- %%
+		// QQQ` / `QQZQ - -->` / `> \tQRQ %% QRZQ %%` lost QRZQ, both shown by the
+		// renderer and 44a037a).
+		const openCommentOnLine = (line: string): boolean => {
+			const at = line.lastIndexOf("<!--");
+			return at !== -1 && line.indexOf("-->", at + 4) === -1;
+		};
+		const onePct = (line: string): boolean => {
+			const at = line.indexOf("%%");
+			return at !== -1 && line.indexOf("%%", at + 2) === -1;
+		};
 		let nextRisk = lines.length;
-		let nextPct = lines.length - 1;
+		let nextPct = -1;
 		for (let k = lines.length - 1; k >= 0; k--) {
-			if (rendererHidden.browserRiskLines[k]! || rendererHidden.footnoteLines[k]! || inlineConstructMayHold(lines[k]!)) nextRisk = k;
-			if (nextRisk > nextPct && !constructSinceBlank[k]!) percentOpensAt[k] = rendererHidden.percentStarts.has(k);
+			if (rendererHidden.browserRiskLines[k]! || rendererHidden.footnoteLines[k]! || lineMayHold(k) || openCommentOnLine(lines[k]!)) nextRisk = k;
+			const reach = nextPct === -1 ? lines.length - 1 : nextPct;
+			const chained = nextPct === -1 || (percentOpensAt[nextPct] !== undefined && onePct(lines[nextPct]!));
+			if (nextRisk > reach && !constructSinceBlank[k]! && chained) percentOpensAt[k] = rendererHidden.percentStarts.has(k);
 			if (lines[k]!.includes("%%")) nextPct = k;
 		}
 	}
@@ -5611,6 +5702,14 @@ export function extractChunks(
 	// rule is withheld and the comment keeps hiding, since the `-->` may sit in an
 	// attribute or a title the renderer displays as nothing
 	// (`P <!-- a -- <b title="x` / `y -->">z</b>` shows only `P <!-- a -- z`).
+	// A `%%` on which our block opener keeps its own answer (`percentOpensAt` is
+	// undefined) counts here too (NRL-166 fix round 3). A refinement that ends
+	// or withholds a comment 44a037a opened exposes the `%%` behind it to that
+	// opener, which may then hide what both the renderer and 44a037a display
+	// (Verify 3: `1. > QGQ \`\`\` <!---> ` / `  > [!note] %%` / `\t--> QJZQ` /
+	// `> > </pre>` lost QJZQ: the `<!--->` is rightly literal, and the `%%`, no
+	// block for the renderer, opened ours, kept beside the HTML block).
+	const pctUnsure = (k: number, line: string): boolean => percentOpensAt[k] === undefined && line.includes("%%");
 	const constructInBodyAheadOf = (stops: readonly boolean[]): boolean[] => {
 		const out: boolean[] = new Array<boolean>(lines.length).fill(false);
 		let seen = false;
@@ -5622,7 +5721,7 @@ export function extractChunks(
 			}
 			const line = lines[k]!;
 			const close = line.indexOf("-->");
-			seen = close !== -1 ? inlineConstructMayHold(line.slice(0, close)) : seen || inlineConstructMayHold(line);
+			seen = close !== -1 ? tickRisk[k]! || inlineConstructMayHold(line.slice(0, close)) || pctUnsure(k, line.slice(0, close)) : seen || lineMayHold(k) || pctUnsure(k, line);
 		}
 		return out;
 	};
@@ -6325,24 +6424,34 @@ export function extractChunks(
 	// - the line is past the renderer's frontmatter and the line closing it,
 	//   which the walker reads as paragraph text and a setext underline
 	//   (/critique round 3, Q1);
+	// - the line is past every line that text a browser hides beyond an HTML
+	//   block may reach (`openRiskThrough`): a browser comment the block leaves
+	//   open, or an attribute value, which runs on to a quote the renderer may
+	//   write itself. Neither is in the hidden ranges, so a refinement on or
+	//   before such text, which can stop one of our comments hiding everything to
+	//   the note's end, would speak it (NRL-166 fix round 3; its census: `> P <!--
+	//   a` / ... / `>\t<!--<!--<!-- QNQ` / `1. > <div title="QNZQ` / `  - > <span
+	//   title='QOQ` spoke QOQ, which 44a037a's comment hid);
 	// - and where the transcription has no answer (a lone CR, deep nesting),
 	//   round 1's note-wide footnote and `---` gates stand.
 	const inlineMayHoldAbove: boolean[] = new Array<boolean>(lines.length).fill(false);
 	for (let k = 0, seen = false; k < lines.length; k++) {
 		if (lines[k]!.trim() === "") seen = false;
 		inlineMayHoldAbove[k] = seen;
-		if (inlineConstructMayHold(lines[k]!)) seen = true;
+		if (lineMayHold(k)) seen = true;
 	}
 	const constructInBody = constructInBodyAheadOf(term2Stop);
 	const noteWideGate = rendererHidden === null && (/^---[ \t]*\r?$/.test(lines[0] ?? "") || lines.some(footnoteShaped));
 	const frontmatterGateTo = rendererHidden === null ? -1 : rendererHidden.frontmatterLastLine === -1 ? -1 : rendererHidden.frontmatterLastLine + 1;
 	const refineWindowClean = lines.map(
-		(line, k) =>
+		(_line, k) =>
 			!noteWideGate &&
 			k > frontmatterGateTo &&
 			!(rendererHidden?.footnoteLines[k] ?? false) &&
+			k > (rendererHidden?.openRiskThrough ?? -1) &&
 			!inlineMayHoldAbove[k]! &&
-			!inlineConstructMayHold(line) &&
+			!lineMayHold(k) &&
+			!pctUnsure(k, lines[k]!) &&
 			!constructInBody[k]!,
 	);
 

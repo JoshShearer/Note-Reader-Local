@@ -2060,6 +2060,52 @@ gates.
 
 NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
 
+**NRL-166 fix round 3 (2026-10-09), the last round: fail closed to `44a037a`
+wherever round 2's model was not exact, with evidence in ADR 0025's "NRL-166 fix
+round 3" section.** Verify 3 failed `7bd6285`: 13 cells newly disclosing against
+`44a037a`, a quadratic in `htmlMarkup`, and 183 cells lost against `44a037a` with no
+disclosure paid in the note.
+- Backticks: `backtickCrossRisk` marks a line whose own runs may pair across a line
+  break (an unpaired run, or a backslash before one, with a backtick later in the
+  stretch); it counts as an inline construct, so the window keeps `44a037a`'s answer.
+- `htmlMarkup` keeps one forward pointer per closer kind (`7bd6285` 4,802 ms, this
+  tree 58, `44a037a` 8, at 20,000).
+- `percentOpensAt` answers form a chain (the next `%%` line must take the renderer's
+  answer too and hold one `%%`), and an unclosed `<!--` in the reach is a risk.
+- HTML blocks carry a browser comment from block to block (`htmlMarkup`'s
+  `inComment`); where the carry is only possible, both readings are taken and only
+  their intersection is hidden.
+- Nothing past an HTML block is hidden for an attribute value it leaves open any
+  more: the renderer's own quotes (a callout's `class="callout-content"`) end it
+  first. `openRiskThrough` reports how far a browser-hidden region may reach, and
+  no line on or before it takes a refinement.
+- Footnotes: a reference inside `%%` counts whatever surrounds it, and one that MAY
+  count (inline comment, code span, link title) keeps its definition, as on main.
+- Refinements also stand down where a `%%` our opener decides is in the window.
+- Census, every new cell re-rendered live over CDP: 0 newly disclosing against
+  `44a037a` (2 judge cells, displayed live); newly lost 6,773 cells, of which (i)
+  4,624, (ii) lone CR 1,000, judge artifacts 1,145, (iii) 0 unambiguous plus 4
+  sentinel-reuse cells that are not losses. Lockstep: 0 new failures.
+
+**Traps.**
+- Every narrowing that stops HIDING something (an extension range, a gate) can
+  expose text to a refinement elsewhere. This round's own census found it twice
+  after removing the open-attribute extension (a refinement above the block, and a
+  withheld `%%` exposing an open `<!--`). Re-run the full census after every
+  removal, not only after additions.
+- "Fail closed" against a model you cannot finish means: report the uncertain
+  region and keep `main`'s answers there (refinements off), never hide it wider.
+  Wider hiding is what produced the (iii) losses.
+- The judge is not a browser: it reads `<!--->` as open and cannot tell a reused
+  sentinel's two occurrences apart. Re-render live before calling a cell a loss.
+- A lone CR cannot reach `extractChunks` in the product (Verify 3, CDP): do not add
+  lone-CR modelling.
+- `"<div>\n" + "<![CDATA[ ".repeat(n)` is quadratic on `44a037a` and here alike, in
+  cleanLine's `[` label scan (`inlineContainerClose`), not in this round's code:
+  NRL-172's family.
+
+NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
+
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
 commit: a `$$` display-math block between a label's opener and closer silenced the alt text
