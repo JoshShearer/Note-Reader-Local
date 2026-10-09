@@ -2089,6 +2089,10 @@ disclosure paid in the note.
   answers to the end; a quote opens a value only right after `=`; a fence opening
   line holding `-->` is not hidden; a label defined twice with a possibly-lazy
   definition is not judged. Its own generators then give 0 / 0.
+- /critique on `4f5df9b` (CONCERNS, 72, no disclosure): the quote rule toggled on
+  every `=`; `htmlMarkup` now walks the tokenizer's attribute states. Its own
+  generators then give 0 disclosures and 1 pure-regression cell (an exposed
+  `<!--->` on an HTML-block line, lost on `44a037a` in its twin).
 - Census on the final tree, every new cell re-rendered live over CDP: 0 newly
   disclosing against `44a037a` (2 judge cells, displayed live); newly lost 6,370
   cells, of which (i) 4,215, (ii) lone CR 991, judge artifacts 1,160, (iii) 0

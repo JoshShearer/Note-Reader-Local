@@ -3002,6 +3002,24 @@ every arm, which `44a037a` escaped only because it misread an earlier code line.
 Pinned by the `nrl166-r3-f1`/`f3`/`f5` rows and
 `pin-nrl166-r3-label-defined-twice-lazily-is-not-judged`, RED on `3702b0f`.
 
+**/critique on `4f5df9b`: CONCERNS, 72, no new disclosure against `44a037a`** in
+36,000 notes of its own (raw-text tags, odd `=`/quote placements, fences with
+`-->`, duplicate footnote labels, a mixed run, 25% CRLF). F1: the quote rule
+toggled on every `=`, so `<div =">QAQ`, `<div a="x"=">QAQ`, `<div a=b=">QAGQ` and
+`<div e==='>QAGQ` still hid what a browser shows (115 pure-regression cells per
+mask). `htmlMarkup` now walks the tokenizer's attribute states (before-name, name,
+after-name, before-value, unquoted value), and a quote opens a value only in
+before-value; pinned by the `nrl166-r3-g1` rows, RED on `4f5df9b`. Left as
+stated: F2, a raw-text tag inside a code span or fence still turns the
+refinements off to the note's end, which keeps `44a037a`'s answers there (lost
+coverage, not a regression). Re-run on the final tree, its generators give 0 new
+disclosures and 1 pure-regression cell in 439,966 sentinels per mask (54,000
+notes):
+`>--!> <!-- <!-- QAKQ` / `QAMQ` / `   <!-- x --> ```<!---> QANQ` loses QANQ. The
+`<!--` refinement correctly speaks QAKQ and QAMQ, which exposes the HTML-block
+line to our own reading of `<!--->` as an opener; its twin without the earlier
+line, `P` / blank / `   <!-- x --> ```<!---> QANQ`, is lost on `44a037a` as well.
+
 **Lone CR.** Verify 3 established that a lone CR cannot reach `extractChunks` in
 the product: all three call sites in `main.ts` (`readActiveNote`, `readSelection`,
 `readFromCursor`) read `view.editor.getValue()`, and CodeMirror splits a document on
@@ -3011,7 +3029,8 @@ lone-CR paths (`fallbackHtmlHidden`, `crSeen`, `crAbove`) stay as they are and t
 round adds nothing to them; their cells are class (ii) below and are not product
 behaviour.
 
-**Census** of the final tree (after the /critique fixes above), harness 1.13.7,
+**Census** of the final tree (`4f5df9b`'s fixes and the attribute states above; the
+attribute change moved no cell of the corpora below), harness 1.13.7,
 Verify 2's judge with Verify 3's whole-note rows (`run3.cjs`, `rfz.cjs`), masks ALL
 and DEF (F2 also SKIPALL), newly disclosing / newly lost, against `9132c3b`,
 `e2afbfe` and `44a037a`. Then every newly disclosing row and every
@@ -3036,7 +3055,8 @@ re-judged on its `innerText`.
 | F3 `gen.cjs` | 6,514,560 | 0 / 2,292 | 0 / 56 | 0 / 0 |
 | Verify 3's `gen3.cjs` grid | 667,400 | 806 / 0 | 0 / 122 | 0 / 0 (0 / 12) |
 | Verify 3's `gen3.cjs` rand, 300,000 notes | 3,221,614 | 836 / 2,927 | 107 / 426 | 2 / 133 (13 / 576) |
-| the /critique's own generators, 52,000 notes, parse5 judge | 430,106 sentinels x 2 masks | - | - | 0 new disclosures / 0 pure regressions (7bd6285: 0 / 1,449 under ALL) |
+| the `3702b0f` /critique's generators, 52,000 notes, parse5 judge | 430,106 sentinels x 2 masks | - | - | 0 new disclosures / 0 pure regressions (7bd6285: 0 / 1,449 under ALL) |
+| the `4f5df9b` /critique's generators, 54,000 notes, parse5 judge | 439,966 sentinels x 2 masks | - | - | 0 new disclosures / 1 pure regression (above) |
 
 - **Newly disclosing against `44a037a`: 0 confirmed.** The 2 judge cells (one
   note, `QFQ <!-- QFZQ <!-- QGQ` / ... / `>> <!---> QHZQ` / `>[!x]- %% QIQ`) are

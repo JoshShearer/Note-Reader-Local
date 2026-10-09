@@ -4595,6 +4595,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl166-r3-f3-quote-in-attribute-name-opens-no-value", "<div \">QAGQ", "QAGQ"],
 		["pin-nrl166-r3-f3-quote-in-unquoted-value-opens-no-value", "<div e=='>QAGQ", "QAGQ"],
 		["guard-nrl166-r3-f3-quote-after-equals-still-opens", "<div title=\"x\" b='QAQ", ""],
+		// /critique on 4f5df9b, F1: the attribute states, not a toggle on `=`.
+		["pin-nrl166-r3-g1-equals-starting-a-name-opens-no-value", "<div =\">QAQ\n\nQBQ", "QAQ QBQ"],
+		["pin-nrl166-r3-g1-equals-after-quoted-value-opens-no-value", "<div a=\"x\"=\">QAQ", "QAQ"],
+		["pin-nrl166-r3-g1-equals-in-unquoted-value-opens-no-value", "<div a=b=\">QAGQ", "QAGQ"],
+		["pin-nrl166-r3-g1-third-equals-opens-no-value", "<div e==='>QAGQ", "QAGQ"],
+		["guard-nrl166-r3-g1-spaced-equals-still-opens", "<div title = \"a > b\">QZQ</div>", "QZQ"],
 		// (2c) A reference inside a `%%` block counts whatever surrounds it.
 		["pin-nrl166-r3-c-reference-in-pct-block-between-backticks", "> %% `\n> [!x]+  `[^q]`\n*     \n[^q]: [^q]:QHQ", ":QHQ"],
 		// (2d) A refinement that ends 44a037a's comment exposes a `%%` to our opener;

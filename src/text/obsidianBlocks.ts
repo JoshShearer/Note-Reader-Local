@@ -324,33 +324,43 @@ function htmlMarkup(html: string, inComment = false): { spans: Array<[number, nu
 			continue;
 		}
 		if (/^<\/?[A-Za-z]/.test(html.slice(lt, lt + 3))) {
-			// A quote opens a value only as the first character after an `=` and
-			// any whitespace: anywhere else a browser reads it as part of a name
-			// or an unquoted value (/critique on 3702b0f, F3: `<div ">QAGQ` and
-			// `<div e=='>QAGQ` display QAGQ, which reading every quote as an
-			// opener hid). A `=` that starts a name is still read as an
-			// assignment, which only hides more.
+			// The tag runs to the first `>` outside a quoted attribute value, and a
+			// quote opens a value only where the HTML tokenizer's "before attribute
+			// value" state reads one: after an attribute NAME, an `=` and any
+			// whitespace. Anywhere else a quote is part of a name or an unquoted
+			// value (/critique on 3702b0f, F3, and on 4f5df9b, F1: `<div ">QAGQ`,
+			// `<div ="> QAQ`, `<div a=b=">QAGQ` and `<div e==='>QAGQ` all display
+			// their sentinel). The states, less those that change nothing here:
+			// the tag name, then before-name, name, after-name, before-value and
+			// unquoted value; a quoted value returns to before-name.
 			let k = lt + 1;
-			let valueNext = false;
+			while (k < html.length && !/[\s/>]/.test(html[k]!)) k++;
+			let state: "beforeName" | "name" | "afterName" | "beforeValue" | "unquoted" = "beforeName";
 			for (; k < html.length && html[k] !== ">"; k++) {
 				const q = html[k]!;
-				if (q === "=") {
-					// A second `=` right after one is the first character of an
-					// unquoted value.
-					valueNext = !valueNext;
-					continue;
-				}
-				if (q === " " || q === "\t" || q === "\n" || q === "\r" || q === "\f") continue;
-				const opens = valueNext;
-				valueNext = false;
-				if (opens && (q === '"' || q === "'")) {
-					const close = html.indexOf(q, k + 1);
-					if (close === -1) {
-						spans.push([lt, html.length]);
-						return { spans, left: { kind: "tag", at: lt, quote: q } };
-					}
-					k = close;
-				}
+				const space = q === " " || q === "\t" || q === "\n" || q === "\r" || q === "\f";
+				if (state === "beforeName") {
+					// A `=` here starts a name, as any other character does.
+					if (!space && q !== "/") state = "name";
+				} else if (state === "name") {
+					if (space) state = "afterName";
+					else if (q === "/") state = "beforeName";
+					else if (q === "=") state = "beforeValue";
+				} else if (state === "afterName") {
+					if (q === "/") state = "beforeName";
+					else if (q === "=") state = "beforeValue";
+					else if (!space) state = "name";
+				} else if (state === "beforeValue") {
+					if (q === '"' || q === "'") {
+						const close = html.indexOf(q, k + 1);
+						if (close === -1) {
+							spans.push([lt, html.length]);
+							return { spans, left: { kind: "tag", at: lt, quote: q } };
+						}
+						k = close;
+						state = "beforeName";
+					} else if (!space) state = "unquoted";
+				} else if (space) state = "beforeName";
 			}
 			if (k >= html.length) {
 				spans.push([lt, html.length]);
