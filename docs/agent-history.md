@@ -2082,12 +2082,23 @@ disclosure paid in the note.
 - Footnotes: a reference inside `%%` counts whatever surrounds it, and one that MAY
   count (inline comment, code span, link title) keeps its definition, as on main.
 - Refinements also stand down where a `%%` our opener decides is in the window.
-- Census, every new cell re-rendered live over CDP: 0 newly disclosing against
-  `44a037a` (2 judge cells, displayed live); newly lost 6,773 cells, of which (i)
-  4,624, (ii) lone CR 1,000, judge artifacts 1,145, (iii) 0 unambiguous plus 4
-  sentinel-reuse cells that are not losses. Lockstep: 0 new failures.
+- /critique on `3702b0f` (CONCERNS, 66) found classes `7bd6285` already had: raw-text
+  elements (`<textarea>`, `<script>`) read as markup, and a quote outside a value
+  position opening a run. Fixed: any raw-text tag (inline too, and for footnote
+  blocks anywhere) leaves later HTML blocks and fence lines unread and keeps old
+  answers to the end; a quote opens a value only right after `=`; a fence opening
+  line holding `-->` is not hidden; a label defined twice with a possibly-lazy
+  definition is not judged. Its own generators then give 0 / 0.
+- Census on the final tree, every new cell re-rendered live over CDP: 0 newly
+  disclosing against `44a037a` (2 judge cells, displayed live); newly lost 6,370
+  cells, of which (i) 4,215, (ii) lone CR 991, judge artifacts 1,160, (iii) 0
+  unambiguous plus 4 sentinel-reuse cells that are not losses. Lockstep: 0 new
+  failures.
 
 **Traps.**
+- Each fix that stops hiding something must be followed by a full census re-run.
+  The fence-line `-->` rule, applied to the whole block rather than its opening
+  line, reopened 6 disclosures against main on the next run.
 - Every narrowing that stops HIDING something (an extension range, a gate) can
   expose text to a refinement elsewhere. This round's own census found it twice
   after removing the open-attribute extension (a refinement above the block, and a

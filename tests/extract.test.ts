@@ -2951,7 +2951,9 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// (ii) A quoted fence at a quote start keeps its info string spoken
 		// (`pin-nrl114-f2-quote-start-fence-still-spoken`). Control: the `-->`
 		// defused, which base speaks byte-identically modulo that token.
-		["pin-nrl166-min-quote-start-fence-info-spoken", " text <!--  QCQ\r\n> ```    QEQ -->", "text <!-- QCQ"],
+		// Fix round 3: a fence line holding `-->` is left to the old answer, since
+		// the renderer writes it into a `class` where it can close a browser comment.
+		["pin-nrl166-min-quote-start-fence-info-spoken", " text <!--  QCQ\r\n> ```    QEQ -->", "text <!-- QCQ QEQ -->"],
 		// (iii) An unreferenced footnote definition the renderer hides (NRL-163).
 		// Control, mask ALL: the unquoted twin; mask DEF: the `-->` defused.
 		["pin-nrl166-min-unreferenced-footnote-spoken", ">\t     <!--\n [^1]:  QBQ -->", "<!--"],
@@ -4578,6 +4580,21 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl166-r3-c-withheld-pct-exposes-open-comment", "> > ````\n> > [!x]- %% QPQ\nQPZQ](a.png) QQQ\n    <!-- QQZQ --> QRQ <!-- QRZQ\n[!x]- %% QSQ\n> > --> QSZQ", "QSQ --> QSZQ", { skipCodeBlocks: false }],
 		["pin-nrl166-r3-c-withheld-pct-chain-stops-at-pct-pair", ">````\n>> [!x]- %% QQQ\nQQZQ - -->\n> \tQRQ %% QRZQ %%\n  > ~~~", "QRZQ %% ~~~", { skipCodeBlocks: false }],
 		["pin-nrl166-r3-c-maybe-referenced-footnote-kept", "> - [l](u \"QSQ [^1]: QSZQ <!-- QTQ\n    [l](u \"QTZQ\n- QUQ\n> [^1]: QUZQ <!-- QVQ", "l u \"QSQ : QSZQ <!-- QTQ l u \"QTZQ QUQ QUZQ <!-- QVQ"],
+		// /critique on 3702b0f (CONCERNS, 66), each RED on 3702b0f. F1: a block
+		// holding a raw-text element is not read (a browser takes `<?`, `<!--` and
+		// quotes there as text), and it keeps the old answers to the note's end
+		// (an unclosed `<script>` swallows the page: QAMQ, QANQ, QAOQ). F3: a quote
+		// opens an attribute value only right after `=`.
+		["pin-nrl166-r3-f1-textarea-content-not-read-as-markup", "P\n\n<textarea>\n<? QBQ\n", "P <textarea> <? QBQ", { stripTags: false }],
+		["pin-nrl166-r3-f1-script-block-keeps-old-answers-after-it", ">\t]] <!-- QAAQ QABQQACQ\r\n>\tQADQ QAEQ \r\n    QAFQ== QAGQ </b>QAHQ\r\n1. > <? QAIQ\r\n- <script> QAJQ QAKQ QALQ\r\n\r\n>\t<!--> *QAMQ QANQ\r\n> > QAOQ ", "]] <!-- QAAQ QABQQACQ QADQ QAEQ QAFQ== QAGQ QAHQ <script> QAJQ QAKQ QALQ", { skipCodeBlocks: false, stripTags: false }],
+		// The same for a raw-text tag earlier in the note, inline included: the
+		// browser may be inside the `<textarea>`, which displays the `<?` block.
+		["pin-nrl166-r3-f1-inline-textarea-before-block", ">\" QAAQ<textarea> QABQ\n1. <? QACQ QADQ", "\" QAAQ<textarea> QABQ <? QACQ QADQ", { stripTags: false }],
+		["pin-nrl166-r3-f5-fence-info-closer-not-hidden", "\tQAAQ QABQ QACQ\n- %% QADQ\n> %% <!-- QAEQ\n\n    > [^1]:  <b> QAFQ\n```<!--->[[aQAGQ\n", "QAAQ QABQ QACQ aQAGQ", { skipCodeBlocks: false }],
+		["pin-nrl166-r3-label-defined-twice-lazily-is-not-judged", "[^1]: <!--QAAQ`` QABQ\n> - QACQ QADQ \n[^1]:  <textarea>QAEQ QAFQ QAGQQAHQ", "<!--QAAQ QABQ QACQ QADQ <textarea>QAEQ QAFQ QAGQQAHQ", { stripTags: false }],
+		["pin-nrl166-r3-f3-quote-in-attribute-name-opens-no-value", "<div \">QAGQ", "QAGQ"],
+		["pin-nrl166-r3-f3-quote-in-unquoted-value-opens-no-value", "<div e=='>QAGQ", "QAGQ"],
+		["guard-nrl166-r3-f3-quote-after-equals-still-opens", "<div title=\"x\" b='QAQ", ""],
 		// (2c) A reference inside a `%%` block counts whatever surrounds it.
 		["pin-nrl166-r3-c-reference-in-pct-block-between-backticks", "> %% `\n> [!x]+  `[^q]`\n*     \n[^q]: [^q]:QHQ", ":QHQ"],
 		// (2d) A refinement that ends 44a037a's comment exposes a `%%` to our opener;
