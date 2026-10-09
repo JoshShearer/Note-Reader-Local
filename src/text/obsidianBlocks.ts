@@ -313,7 +313,11 @@ function htmlMarkup(html: string, inComment = false): { spans: Array<[number, nu
 			spans.push([lt, i]);
 			continue;
 		}
-		if (html.startsWith("<?", lt) || /^<![A-Za-z[]/.test(html.slice(lt, lt + 3))) {
+		// A bogus comment, closed by the first `>`: `<?`, a `<!` not starting
+		// `<!--` (handled above), and a `</` not followed by a letter (`</>`
+		// included, which a browser drops); /critique on 9df325a, F1: `<div>` /
+		// `<! <b title="x>QKQ` displays QKQ.
+		if (html.startsWith("<?", lt) || html.startsWith("<!", lt) || (html.startsWith("</", lt) && !/[A-Za-z]/.test(html[lt + 2] ?? ""))) {
 			const gt = html.indexOf(">", lt + 2);
 			if (gt === -1) {
 				spans.push([lt, html.length]);
@@ -443,9 +447,6 @@ class BlockScanner {
 	// Whether that comment is certainly open there, or open in only one of the
 	// two readings an unsure block was given.
 	private commentCertain = true;
-	// The quote of an attribute value the last HTML block outside a footnote
-	// definition left open, or null.
-	private attrOpenQuote: string | null = null;
 	// Where in `note` a raw-text element's tag first appears, inline or not, or
 	// Infinity. From there on the browser may be inside a `<textarea>` (whose
 	// text it displays) or a `<script>` (whose text it hides), neither of which
@@ -1254,40 +1255,34 @@ class BlockScanner {
 		// / blank / `>\t<!--> QAMQ` hid QAMQ). So its markup is not dropped,
 		// 44a037a's answer, and it counts as leaving a comment open, which keeps
 		// the old answers on every line from it to the note's end.
-		// A block in a footnote definition is written at the page's end, after
-		// every raw-text tag in the note.
-		const rawText = RAW_TEXT_TAG.test(html) || startAt >= this.rawTextFrom || (this.inFootnote > 0 && this.rawTextFrom !== Infinity);
-		// Likewise an attribute value the last block left open may still be open
-		// where this one starts (a quote between them, or the renderer's own,
-		// may have closed it first), so the block is also read as the rest of
-		// that value, and only what every reading hides is hidden (/critique on
-		// 8c336c7's census: `<!--P` / ... / `> > --> <b title="` / `<div title="
-		// > QAKQ` displays QAKQ, the second line's first quote closing the first
-		// line's value).
-		const attrQuote = this.inFootnote === 0 ? this.attrOpenQuote : null;
-		let quoted: ReturnType<typeof htmlMarkup> | null = null;
-		if (attrQuote !== null) {
-			const prefix = `<x a=${attrQuote}`;
-			const r = htmlMarkup(prefix + html, false);
-			const shifted: Array<[number, number]> = [];
-			for (const [a, b] of r.spans) if (b > prefix.length) shifted.push([Math.max(0, a - prefix.length), b - prefix.length]);
-			quoted = { spans: shifted, left: r.left === null ? null : { ...r.left, at: Math.max(0, r.left.at - prefix.length) } };
-		}
-		let spans = rawText ? [] : plain === null ? inside!.spans : inside === null ? plain.spans : intersectSpans(plain.spans, inside.spans);
-		if (quoted !== null) spans = intersectSpans(spans, quoted.spans);
+		// A block in a footnote definition is written at the page's end, among
+		// renderer markup (other footnotes, back-reference links with quoted
+		// attributes) that is not modelled, so it is not read either (/critique on
+		// 9df325a's census: `[^1]: <div title=' /> QAAQ` / ... / `[^1]` displays
+		// QAAQ); every footnote line keeps the old answers already.
+		const rawText = RAW_TEXT_TAG.test(html) || startAt >= this.rawTextFrom || this.inFootnote > 0;
+		const spans = rawText ? [] : plain === null ? inside!.spans : inside === null ? plain.spans : intersectSpans(plain.spans, inside.spans);
 		// What the block leaves open, for the risk reports below: any reading's,
 		// a comment first, since it runs furthest.
-		const lefts = [plain?.left ?? null, inside?.left ?? null, quoted?.left ?? null];
-		const left = rawText ? { kind: "comment" as const, at: 0 } : (lefts.find((l) => l?.kind === "comment") ?? lefts.find((l) => l !== null) ?? null);
+		const lefts = [plain?.left ?? null, inside?.left ?? null];
+		// A tag left open, quoted or not, leaves the browser inside it for an
+		// unknown stretch of the page: whatever the renderer writes next may end
+		// it, or the next block's text may (/critique on 8c336c7 and on 9df325a,
+		// F2 and F3: blocks after one could not be read reliably either way). So
+		// it is failed closed like a raw-text tag: no later block or fence line is
+		// read (`rawTextFrom`), and it counts as leaving a comment open, which keeps
+		// the old answers from it to the note's end (fix round 3).
+		const tagOpen = lefts.some((l) => l?.kind === "tag");
+		if (tagOpen && this.note !== "") this.rawTextFrom = Math.min(this.rawTextFrom, this.noteOffset(scanPos(t, line, A)));
+		const left = rawText || tagOpen ? { kind: "comment" as const, at: 0 } : (lefts.find((l) => l?.kind === "comment") ?? lefts.find((l) => l !== null) ?? null);
 		// Not from a block holding a raw-text element's tag (`<script>`, `<style>`,
 		// `<textarea>`, ...), inside which a browser reads `<!--` as no comment.
 		if (this.inFootnote === 0 && this.note !== "") {
 			const comments = lefts.filter((l) => l?.kind === "comment").length;
-			const readings = [plain, inside, quoted].filter((r) => r !== null).length;
+			const readings = [plain, inside].filter((r) => r !== null).length;
 			const open = comments > 0 && !rawText;
 			this.commentOpenAt = open ? this.noteOffset(scanPos(t, line, A)) : -1;
 			this.commentCertain = open && comments === readings;
-			this.attrOpenQuote = rawText ? null : (lefts.find((l) => l?.kind === "tag" && l.quote !== undefined)?.quote ?? null);
 		}
 		const breaks: number[] = [];
 		for (let k = html.indexOf("\n"); k !== -1; k = html.indexOf("\n", k + 1)) breaks.push(k);

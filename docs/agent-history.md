@@ -2096,9 +2096,18 @@ disclosure paid in the note.
 - /critique on `8c336c7` (CONCERNS, 76, no disclosure): the tag name ended at any
   JS `\s` (NBSP, VT); now ASCII whitespace only. Its census also showed a block
   starting inside the previous block's open attribute value; such a block is now
-  read that way too and only the intersection hidden (`attrOpenQuote`). Final
-  census: 0 new disclosures, newly lost vs `44a037a` 6,074 = (i) 3,981, (ii) 991,
-  judge artifacts 1,098, (iii) 0 unambiguous (+4 sentinel-reuse).
+  read that way too (withdrawn in the next commit).
+- /critique on `9df325a` (CONCERNS, 68, no disclosure): `<!x` / `</ ` bogus comments
+  now end at `>`; any block after one that leaves a tag open, and any HTML block in a
+  footnote definition, is failed closed (not read, old answers to the end).
+- FINAL census (`rendererHiddenText` as committed): 0 new disclosures vs
+  `44a037a`; newly lost 6,061 = (i) 3,977, (ii) lone CR 991, judge artifacts 1,089,
+  (iii) 0 unambiguous (+4 sentinel-reuse artifacts). All four critiques'
+  generators (226,000 notes): 0 new disclosures; pure regressions only in lone-CR
+  notes, plus 1 cell whose twin is lost on `44a037a`.
+- Trap: the round ran 18 h because every critique on a new mechanism found the next
+  shape. When a mechanism is not exact after one pass, fail it closed wholesale
+  (stop reading that block class) rather than adding a carry rule.
 - Census after `4f5df9b` (superseded by the final figures below): 0 newly
   disclosing against `44a037a`; newly lost 6,370, (iii) 0 unambiguous.
 

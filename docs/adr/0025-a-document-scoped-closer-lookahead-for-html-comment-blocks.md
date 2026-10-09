@@ -3045,6 +3045,23 @@ its generator (20,000 notes, both masks) gives 0 new disclosures and 691
 pure-regression cells, every one in a lone-CR note (class ii, not reachable in
 the product).
 
+**/critique on `9df325a`: CONCERNS, 68, no new disclosure** in 200,000 notes of its
+own (chains of HTML blocks leaving values or comments open). F1: a `<!` not
+starting `<!--`, and a `</` not followed by a letter, are bogus comments closed by
+the first `>`, which `htmlMarkup` read as text (`<div>` / `<! <b title="x>QKQ`
+displays QKQ); both now are. F2 and F3: blocks after one that leaves a tag open,
+quoted or not, could not be read reliably either way (a callout title's open
+`e='`, a quote carried only from one reading, an unquoted `<div`), so the
+attribute carry of `9df325a` is withdrawn and such a block is failed closed like a
+raw-text tag: no later block or fence line is read, and it counts as leaving a
+comment open, so the old answers stand to the note's end. Its census on the fixed
+tree also showed an HTML block inside a footnote definition hiding text the
+footnotes section shows (`[^1]: <div title=' --!> QAAQ"` / ... / `[^1]`); such
+blocks are not read either (every footnote line keeps the old answers already).
+Pinned by the `nrl166-r3-g3`/`g4`/`g5` rows, RED on `9df325a`. Three `r2c-f8`/`r2d-f2`
+footnote-attribute rows move back to `44a037a`'s answer. Re-run on the final tree,
+its generator gives 0 new disclosures and 0 pure regressions under both masks.
+
 **Census** of the final tree (all the fixes above), harness 1.13.7,
 Verify 2's judge with Verify 3's whole-note rows (`run3.cjs`, `rfz.cjs`), masks ALL
 and DEF (F2 also SKIPALL), newly disclosing / newly lost, against `9132c3b`,
@@ -3058,21 +3075,22 @@ re-judged on its `innerText`.
 | Verify 2's `gen2.cjs` | 13,122,000 | 9,000 / 0 | 0 / 11,097 | 0 / 0 (0 / 0) |
 | reviewers' fuzz, seeds 1-8 | 489,270 | 53 / 67 | 0 / 22 | 0 / 0 (0 / 0) |
 | extended fuzz, seeds 501-512 | 724,310 | 151 / 45 | 0 / 109 | 0 / 4 (0 / 21) |
-| first critique's generator | 833,216 | 402 / 725 | 7 / 603 | 0 / 535 (0 / 787) |
-| second critique's two | 684,678 | 190 / 356 | 0 / 249 | 0 / 224 (0 / 423) |
+| first critique's generator | 833,216 | 500 / 725 | 7 / 603 | 0 / 535 (0 / 787) |
+| second critique's two | 684,678 | 218 / 356 | 0 / 249 | 0 / 224 (0 / 423) |
 | third critique's, three modes | 170,216 | 8 / 858 | 0 / 858 | 0 / 858 (0 / 884) |
-| fourth critique's | 125,350 | 30 / 1,423 | 0 / 1,428 | 0 / 1,426 (0 / 5,031) |
-| fifth critique's | 202,858 | 0 / 2,967 | 0 / 2,967 | 0 / 2,967 (0 / 4,235) |
+| fourth critique's | 125,350 | 38 / 1,414 | 0 / 1,419 | 0 / 1,417 (0 / 5,031) |
+| fifth critique's | 202,858 | 0 / 2,963 | 0 / 2,963 | 0 / 2,963 (0 / 4,235) |
 | Verify 1's `own-gen.cjs` | 1,481,472 | 0 / 0 | 0 / 0 | 0 / 0 |
 | its de-callout twins | 972,864 | 0 / 0 | 0 / 0 | 0 / 0 |
 | F1 `callout-census.cjs` | 2,496 | 0 / 0 | 0 / 0 | 0 / 0 |
 | F2 fuzz `SEED=31337 N=4000` | 48,741 | 26 / 9 | 0 / 34 | 0 / 0 |
 | F3 `gen.cjs` | 6,514,560 | 0 / 2,292 | 0 / 56 | 0 / 0 |
 | Verify 3's `gen3.cjs` grid | 667,400 | 806 / 0 | 0 / 122 | 0 / 0 (0 / 12) |
-| Verify 3's `gen3.cjs` rand, 300,000 notes | 3,221,614 | 836 / 2,854 | 107 / 353 | 2 / 60 (13 / 576) |
+| Verify 3's `gen3.cjs` rand, 300,000 notes | 3,221,614 | 894 / 2,854 | 107 / 353 | 2 / 60 (13 / 576) |
 | the `3702b0f` /critique's generators, 52,000 notes, parse5 judge | 430,106 sentinels x 2 masks | - | - | 0 new disclosures / 0 pure regressions (7bd6285: 0 / 1,449 under ALL) |
 | the `4f5df9b` /critique's generators, 54,000 notes, parse5 judge | 439,966 sentinels x 2 masks | - | - | 0 new disclosures / 1 pure regression (above; its twin is lost on `44a037a`) |
 | the `8c336c7` /critique's generator, 20,000 notes, parse5 judge | 162,495 sentinels x 2 masks | - | - | 0 new disclosures / 0 pure regressions outside lone-CR notes |
+| the `9df325a` /critique's generator, 100,000 notes, parse5 judge | 978,509 sentinels x 2 masks | - | - | 0 new disclosures / 0 pure regressions |
 
 - **Newly disclosing against `44a037a`: 0 confirmed.** The 2 judge cells (one
   note, `QFQ <!-- QFZQ <!-- QGQ` / ... / `>> <!---> QHZQ` / `>[!x]- %% QIQ`) are
@@ -3082,9 +3100,9 @@ re-judged on its `innerText`.
   other 32 are displayed live. The disclosures against `9132c3b` that rose (`gen2`
   1,800 to 9,000) are all spoken by `44a037a` too: they are what failing closed
   gives back.
-- **Every newly-lost-against-`44a037a` cell, classified live** (6,074 cells): (i)
-  paid for a disclosure closed in the same note and mask, 3,981; (ii) a lone CR,
-  991; not displayed by the live renderer at all (judge artifacts, no loss), 1,098;
+- **Every newly-lost-against-`44a037a` cell, classified live** (6,061 cells): (i)
+  paid for a disclosure closed in the same note and mask, 3,977; (ii) a lone CR,
+  991; not displayed by the live renderer at all (judge artifacts, no loss), 1,089;
   **(iii) pure regression, 0 unambiguous**. 4 more cells (fourth critique 1, fifth
   3) count as (iii) only because their generators reuse sentinel names: the
   sentinel appears twice, `44a037a` speaks only the occurrence inside the block's
@@ -3092,23 +3110,24 @@ re-judged on its `innerText`.
   and the occurrence the renderer displays is lost on `44a037a` too.
 - **Lockstep**: 0 failures this tree has that `44a037a` lacks, on every corpus. The
   only failures at all are the synthetic `equation` word merging into a chunk,
-  3,813 here against 4,193 on `44a037a`, in the second and fifth critiques'
+  3,821 here against 4,193 on `44a037a`, in the second and fifth critiques'
   generators.
 
 **Given back to `44a037a`.** Failing closed reopens some of what round 2 had
 closed, all of it `44a037a`'s own behaviour. Closed against `44a037a`, `7bd6285` ->
 this tree, disclosing / lost: `gen2` 374,998 / 1,534,782 -> 340,192 / 1,515,798;
-base fuzz 26,207 / 8,305 -> 22,242 / 7,797; extended 72,788 / 10,781 -> 69,269 /
-9,524; first critique's 172,344 / 524 -> 146,729 / 427; second's 88,077 / 239 ->
-64,791 / 126; third's 31,038 / 0 -> 27,270 / 0; fourth's 60,199 / 2 -> 47,315 / 2;
-fifth's 69,059 / 0 -> 61,787 / 0; `gen3` grid 39,263 / 23,024 -> 38,808 / 17,529;
-`gen3` rand 346,950 / 15,739 -> 318,496 / 10,749; F2 823 / 199 -> 784 / 164; F3,
+base fuzz 26,207 / 8,305 -> 22,172 / 7,797; extended 72,788 / 10,781 -> 68,922 /
+9,524; first critique's 172,344 / 524 -> 141,981 / 427; second's 88,077 / 239 ->
+63,187 / 126; third's 31,038 / 0 -> 26,216 / 0; fourth's 60,199 / 2 -> 42,103 / 2;
+fifth's 69,059 / 0 -> 60,171 / 0; `gen3` grid 39,263 / 23,024 -> 38,808 / 17,529;
+`gen3` rand 346,950 / 15,739 -> 316,734 / 10,749; F2 823 / 199 -> 784 / 164; F3,
 own-gen and twins unchanged. Rows that moved back to `44a037a`'s answer:
 `pin-nrl166-r2-open-attribute-swallows-later-blocks` (renamed
 `pin-nrl166-r3-open-attribute-not-hidden-past-the-block`), the two `r2f-f1` rows,
 the `r2g-f2` CRLF/LF pair, `pin-nrl166-r2-l44-lazy-callout-pct-indented-tail`,
-`pin-nrl166-r2c-f2-code-span-reference-not-counted` and
-`pin-nrl166-min-quote-start-fence-info-spoken`; each comment says so.
+`pin-nrl166-r2c-f2-code-span-reference-not-counted`,
+`pin-nrl166-min-quote-start-fence-info-spoken`, `pin-nrl166-r2c-f8-footnote-attribute-stays-in-footnotes`
+and the two `r2d-f2` footnote-attribute rows; each comment says so.
 
 **Known leftovers, present on `44a037a` as well and out of this round's scope**:
 the 82 disclosures against `e2afbfe` above (#219's); `<!--> QDQ` lost by every arm

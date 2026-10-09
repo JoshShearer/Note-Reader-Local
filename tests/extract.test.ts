@@ -4487,7 +4487,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl166-r2c-f2-code-span-reference-not-counted", "> [^1]: a\n> [!e] %% QJQ `[^1]`", "a", { skipInlineCode: false }],
 		["pin-nrl166-r2c-f3-reference-in-html-comment-not-counted", "[^1]: %% <!-- [^1] -->\n%% QDQ", ""],
 		["pin-nrl166-r2c-f4-reference-in-definition-not-counted", ">- \n    %%\n[^1]:[^2]:QKQ[^1]", ""],
-		["pin-nrl166-r2c-f8-footnote-attribute-stays-in-footnotes", "[^a]:<div '\n1. QAQ[^a]", "QAQ"],
+		// Fix round 3: an HTML block in a footnote definition is not read (it is
+		// written among unmodelled renderer markup at the page's end), so these
+		// three keep 44a037a's answer; QBQ and QDQ are main-equal disclosures.
+		["pin-nrl166-r2c-f8-footnote-attribute-stays-in-footnotes", "[^a]:<div '\n1. QAQ[^a]", "<div ' QAQ", { stripTags: false }],
 		// Nested definitions take their INNERMOST definition's fate, a reference inside
 		// a definition counts, and a note the transcription cannot read (a lone CR)
 		// hides HTML-block markup by a wide stand-in (`fallbackHtmlHidden`).
@@ -4501,8 +4504,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// attribute a kept footnote leaves open hides only from the tag on (F2).
 		["pin-nrl166-r2d-f1-lone-cr-paragraph-tag-is-text", "a\rb\n<b title=\"QAQ\n\nQBQ\n\n# QCQ", "a b <b title=\"QAQ QBQ QCQ"],
 		["pin-nrl166-r2d-f1-lone-cr-tag-line-is-text", "<b title=\"QAQ\rQBQ", "<b title=\"QAQ QBQ"],
-		["pin-nrl166-r2d-f2-footnote-attribute-hides-from-the-tag", "P [^1]\n\n[^1]: QAQ\n    <p class='QBQ", "P QAQ"],
-		["pin-nrl166-r2d-f2-footnote-attribute-hides-later-footnotes-only", "P [^1] [^2]\n\n[^1]: QAQ\n\n[^2]: QCQ <p class='QBQ\n    <p class='QDQ", "P QAQ QCQ <p class='QBQ"],
+		["pin-nrl166-r2d-f2-footnote-attribute-hides-from-the-tag", "P [^1]\n\n[^1]: QAQ\n    <p class='QBQ", "P QAQ <p class='QBQ", { stripTags: false }],
+		["pin-nrl166-r2d-f2-footnote-attribute-hides-later-footnotes-only", "P [^1] [^2]\n\n[^1]: QAQ\n\n[^2]: QCQ <p class='QBQ\n    <p class='QDQ", "P QAQ QCQ <p class='QBQ <p class='QDQ", { stripTags: false }],
 		// /critique on db55516 (CONCERNS, 66), losses against main, RED on db55516: the
 		// lone-CR stand-in skips a line inside an attribute an earlier line left open
 		// (N1), splits lines where the renderer does, on a lone CR too (N2), and an open
@@ -4604,9 +4607,15 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl166-r3-g2-vertical-tab-is-part-of-the-tag-name", "<div>\n<p\u000b=\"x>QAQ\n\nQBQ", "QAQ QBQ"],
 		["guard-nrl166-r3-g2-slash-before-equals-opens-no-value", "<div a/=\"x>QAQ", "QAQ"],
 		["guard-nrl166-r3-g2-slash-after-equals-is-unquoted", "<div a=/\"x>QAQ", "QAQ"],
-		// /critique on 8c336c7's census: a block that may start inside an
-		// attribute value the last block left open is also read that way.
-		["pin-nrl166-r3-g3-block-inside-earlier-open-attribute", "<!--P QAAQ\n> > --> <b title=\"\n<div title=\" > QAKQ \n> > =  \n> > > QALQ QAMQ ", "QAKQ = QALQ QAMQ"],
+		// /critique on 8c336c7's census and on 9df325a: blocks after one that
+		// leaves a tag open are not read (kept as on 44a037a), and a `<!` or a `</`
+		// not followed by a letter is a bogus comment closed by the first `>`.
+		["pin-nrl166-r3-g3-block-after-open-tag-not-read", "<!--P QAAQ\n> > --> <b title=\"\n<div title=\" > QAKQ \n> > =  \n> > > QALQ QAMQ ", "<div title=\" > QAKQ = QALQ QAMQ", { stripTags: false }],
+		["pin-nrl166-r3-g5-footnote-html-block-not-read", "[^1]: <div title=' --!> QAAQ\"\n\nQABQ\n\n[^1]", "<div title=' --!> QAAQ\" QABQ", { stripTags: false }],
+		["pin-nrl166-r3-g4-bang-bogus-comment", "<div>\n<! <b title=\"x>QKQ", "QKQ"],
+		["pin-nrl166-r3-g4-slash-bogus-comment", "<div>\n</ <b title=\"x> QAQ", "QAQ"],
+		["pin-nrl166-r3-g4-bang-dash-bogus-comment", "<div>\n<!- <!-- -> QAQ", "QAQ"],
+		["pin-nrl166-r3-g4-callout-title-open-tag", ">[!x] <div\te='\n''=\"\n<div a=\">QGQ", "''=\" <div a=\">QGQ", { stripTags: false }],
 		["guard-nrl166-r3-g1-spaced-equals-still-opens", "<div title = \"a > b\">QZQ</div>", "QZQ"],
 		// (2c) A reference inside a `%%` block counts whatever surrounds it.
 		["pin-nrl166-r3-c-reference-in-pct-block-between-backticks", "> %% `\n> [!x]+  `[^q]`\n*     \n[^q]: [^q]:QHQ", ":QHQ"],
