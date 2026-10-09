@@ -2,7 +2,7 @@ import type { BlockType, SpeechChunk } from "../audio/types";
 // words.ts imports nothing but its own types, so this edge adds no node builtin
 // and no new entry to main.js's require() list (non-negotiable 7).
 import { findWords, hasCjkScript } from "../audio/words";
-import { percentBlockEnds } from "./obsidianBlocks";
+import { fallbackHtmlHidden, rendererHiddenText } from "./obsidianBlocks";
 import {
 	type SegmenterSource,
 	graphemeBoundaries,
@@ -597,8 +597,175 @@ function wikiTargetClose(raw: string, from: number): number {
  * to length 6, every `at`, both values of all three flags), against 25,614 for
  * a deliberately widened variant.
  */
-function opensHtmlBlock(view: string, at: number, closesLater: boolean, setextContent: boolean, leadIndented: boolean): boolean {
-	return !setextContent && ((!leadIndented && view.slice(0, at).trim() === "") || closesLater);
+function opensHtmlBlock(view: string, at: number, closesLater: boolean, setextContent: boolean, leadIndented: boolean, leadSpace?: number): boolean {
+	// `leadSpace`, when given, is the length of `view`'s leading whitespace run,
+	// which answers the same question in O(1) for a caller asking about many
+	// openers on one line (NRL-166 fix round 2).
+	return !setextContent && ((!leadIndented && (leadSpace !== undefined ? at <= leadSpace : view.slice(0, at).trim() === "")) || closesLater);
+}
+
+/**
+ * Text around an inline `<!--` that may hold an inline construct the renderer
+ * displays as NOTHING (NRL-166 fix round 1): a raw tag, declaration, processing
+ * instruction or CDATA (`<`; on a line of its own `<?`, `<!X` and `<![CDATA[` also
+ * start an HTML block that interrupts the paragraph), a link or image label
+ * (`[`), which a link destination or title also needs. Deliberately wide; a yes
+ * only withholds a refinement, which keeps the comment hidden. Measured with the
+ * harness: a `<!--` in a tag's attribute value, a link title or an image label
+ * (which becomes the embed's `alt`) displays nothing, whether the construct
+ * opens before the `<!--` or inside its would-be body. Narrowed by fix round 2,
+ * which Verify 2 found withholding the refinements for constructs that hide
+ * nothing: a backtick (a code span DISPLAYS its text) and a `](` (a link needs
+ * its `[`, which already counts wherever the link could reach the `<!--`, since
+ * a link cannot span the blank line that bounds the window; `> QCQ](u) --> QZQ`
+ * with no `[` was a withheld closer).
+ */
+const INLINE_CONSTRUCT_MAY_HOLD = /<|\[/;
+/**
+ * A callout marker at the start of a line, behind its quote and list prefix:
+ * `[!x]` there is no label, so it is taken out before the test above. Not when a
+ * `(`, `[` or `:` follows it, which would make it a link or a definition.
+ *
+ * Each list-marker step is ONE space or tab and then `[ \t>]*`, never `[ \t]+`
+ * then `[ \t>]*`: the two describe the same strings, but the second lets every
+ * run of spaces split two ways, which is exponential on `-  -  -  ...` (measured
+ * 382 ms at 24 markers, doubling per marker) and this runs on every line.
+ */
+const LEADING_CALLOUT_MARKER = /^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t][ \t>]*)*\[![^\]]*\][+-]?(?![([:])/;
+/**
+ * `INLINE_CONSTRUCT_MAY_HOLD` on `text`, a whole line or a line's leading part,
+ * with a leading callout marker and every `<!--` taken out first. A `<!--` opens
+ * no tag, declaration (that needs `<!` and a letter) or CDATA, and a comment that
+ * really holds a later opener means our own comment state already owns that
+ * line, so counting it would only withhold the rule from a second literal opener
+ * (`P <!--> a` / `\tP <!--> b` / `--> c` lost b).
+ */
+function inlineConstructMayHold(text: string): boolean {
+	return INLINE_CONSTRUCT_MAY_HOLD.test(text.replace(LEADING_CALLOUT_MARKER, "").replaceAll("<!--", ""));
+}
+
+/**
+ * Whether one line's own backtick runs may pair differently for the renderer
+ * than cleanLine pairs them (NRL-166 fix round 3). cleanLine pairs code spans
+ * line by line; the renderer pairs them over the whole paragraph, left to
+ * right, each run with the next run of the same length. The two agree on every
+ * line exactly when no span the renderer makes crosses a line break, and the
+ * first span that does starts at a run its own line leaves unpaired. So a line
+ * is at risk when a run on it pairs with nothing on it (or a backslash stands
+ * before a run, which may escape one of its backticks) AND a later line of the
+ * same blank-bounded stretch holds a backtick it could pair with.
+ *
+ * Fix round 2 took the backtick out of `INLINE_CONSTRUCT_MAY_HOLD`, since a code
+ * span displays its text, and Verify 3 found the cost: `P QAQ <!-- \`` /
+ * `` ` <!-- QHQ ` --> QZQ`` displays `P QAQ <!-- QZQ` (the line-end backtick
+ * pairs with the next line's first, so `<!-- QHQ ` -->` is a real comment), and
+ * cleanLine, reading `` ` <!-- QHQ ` `` as code, spoke QHQ. A line this marks
+ * counts as holding an inline construct, which keeps 44a037a's answer for the
+ * window. Linear: one pass per line over its runs, and one backward pass.
+ */
+function backtickCrossRisk(lines: readonly string[]): boolean[] {
+	const unsure = lines.map((line) => {
+		if (!line.includes("`")) return false;
+		const runs: number[] = [];
+		for (let k = 0; k < line.length; ) {
+			if (line.charCodeAt(k) !== 96) {
+				k++;
+				continue;
+			}
+			if (k > 0 && line.charCodeAt(k - 1) === 92) return true;
+			let e = k;
+			while (e < line.length && line.charCodeAt(e) === 96) e++;
+			runs.push(e - k);
+			k = e;
+		}
+		// The next run of the same length after each run, from the right.
+		const nextSame = new Array<number>(runs.length).fill(-1);
+		const seen = new Map<number, number>();
+		for (let r = runs.length - 1; r >= 0; r--) {
+			nextSame[r] = seen.get(runs[r]!) ?? -1;
+			seen.set(runs[r]!, r);
+		}
+		for (let r = 0; r < runs.length; r = nextSame[r]! + 1) if (nextSame[r] === -1) return true;
+		return false;
+	});
+	const out = new Array<boolean>(lines.length).fill(false);
+	for (let k = lines.length - 1, tickBelow = false; k >= 0; k--) {
+		const line = lines[k]!;
+		if (line.trim() === "") {
+			tickBelow = false;
+			continue;
+		}
+		out[k] = unsure[k]! && tickBelow;
+		if (line.includes("`")) tickBelow = true;
+	}
+	return out;
+}
+
+/**
+ * cleanLine's three questions about one `<!--` at `at` on `raw`, answered in
+ * O(1) after one O(line) pass (NRL-166 fix round 2). Asking them by slicing the
+ * line at every `<!--` made one line of many literal openers quadratic: Verify
+ * measured `P ` + `<!-- ` x 20,000 at 27,956 ms against 84 ms on main.
+ *
+ * - `prefixHolds(at)`: `inlineConstructMayHold(raw.slice(0, at))`.
+ * - `suffixHolds(at)`: `inlineConstructMayHold(raw.slice(at + 4))`, except
+ *   that no callout marker is taken off the front of the suffix: that removal
+ *   only ever answered "no construct", so dropping it can only add a yes, the
+ *   side on which the comment keeps hiding.
+ * - `bodyStartOk(at)`: the opener line's share of the inline comment's body
+ *   rule (NRL-166 fix round 1). The body after `<!--`, which holds no `-->`
+ *   on this line, may not start with `>` or `->` (so `<!-->` and `<!--->` are
+ *   literal) and may not hold `--`. Measured with the 1.13.7 parser:
+ *   `P <!-- a -- b --> Z` and `P <!-- a` / `-- b --> Z` display every
+ *   character, `P <!-- a -` / `--> Z` and `P <!--` / `-> a --> Z` hide the
+ *   body, since the line break sits between the dashes. The later lines' share
+ *   is `commentBodyOkAheadOf` in extractChunks.
+ *
+ * Both construct questions read one string: the line less its leading callout
+ * marker and less every `<!--`. Every `<!--` there is removed (two cannot
+ * overlap), so a prefix or a suffix of the line strips to a prefix or a suffix
+ * of that string, and a construct lies in the part before `at` exactly when the
+ * first match ends by `at`'s mapped position, and in the part after exactly when
+ * the last match starts at or past it. A marker reaching past `at` answers yes.
+ */
+interface InlineCommentFacts {
+	prefixHolds(at: number): boolean;
+	suffixHolds(at: number): boolean;
+	bodyStartOk(at: number): boolean;
+}
+function inlineCommentFacts(raw: string): InlineCommentFacts {
+	const markerLen = LEADING_CALLOUT_MARKER.exec(raw)?.[0].length ?? 0;
+	// strippedBefore[j]: the stripped string's length before raw position j.
+	const strippedBefore = new Int32Array(raw.length + 1);
+	const kept: string[] = [];
+	for (let j = 0; j < raw.length; ) {
+		strippedBefore[j] = kept.length;
+		if (j >= markerLen && raw.startsWith("<!--", j)) {
+			for (let k = 1; k < 4; k++) strippedBefore[j + k] = kept.length;
+			j += 4;
+			continue;
+		}
+		if (j >= markerLen) kept.push(raw[j]!);
+		j++;
+	}
+	strippedBefore[raw.length] = kept.length;
+	const stripped = kept.join("");
+	const first = INLINE_CONSTRUCT_MAY_HOLD.exec(stripped);
+	const firstEnd = first ? first.index + first[0].length : Infinity;
+	let lastStart = -1;
+	for (let p = stripped.length - 1; p >= 0; p--) {
+		const c = stripped[p]!;
+		if (c === "<" || c === "[") {
+			lastStart = p;
+			break;
+		}
+	}
+	const lastDashes = raw.lastIndexOf("--");
+	return {
+		prefixHolds: (at) => markerLen > at || firstEnd <= strippedBefore[at]!,
+		suffixHolds: (at) => markerLen > at || lastStart >= strippedBefore[at]!,
+		bodyStartOk: (at) => !(raw[at + 4] === ">" || (raw[at + 4] === "-" && raw[at + 5] === ">")) && lastDashes < at + 4,
+	};
 }
 
 /**
@@ -908,6 +1075,8 @@ function cleanLine(
 	htmlLeadIndented = false,
 	containerCodeLine = false,
 	htmlContext: HtmlContext = "none",
+	htmlBodyOkLater: boolean | undefined = undefined,
+	percentOpens: boolean | undefined = undefined,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -1127,6 +1296,10 @@ function cleanLine(
 	// NRL-136's third way in: does a later unclosed `<!--` here open a
 	// document-level comment? See HtmlContext.
 	const htmlRawLine = htmlContext === "raw" || htmlContext === "block";
+	// Built on the first `<!--` that asks (see `inlineCommentFacts`).
+	let commentFacts: InlineCommentFacts | undefined;
+	let leadSpace: number | undefined;
+	let lastHtmlCloser: number | undefined;
 	// A carried span that this line does not close stays open, so a span may
 	// cross several soft line breaks. It owns the carry ahead of any run opened
 	// on this line, being the outer and earlier opener.
@@ -1333,8 +1506,12 @@ function cleanLine(
 		const obsidianComment = ch === "%" && raw.startsWith("%%", i);
 		if ((htmlComment || obsidianComment) && i >= literalCodeEnd) {
 			const closer: CommentCloser = htmlComment ? "-->" : "%%";
-			const close = raw.indexOf(closer, i + (htmlComment ? 4 : 2));
-			if (close === -1 && obsidianComment && !(blockComments && !containerCodeLine && opensObsidianBlock(raw, i, dedentedByList))) {
+			// The last `-->` on the line answers "none ahead" without a scan, so a
+			// line of many literal `<!--` with no closer stays linear (NRL-166 fix
+			// round 2); a closer that does lie ahead is consumed up to, so finding
+			// it is paid for once.
+			const close = htmlComment && (lastHtmlCloser ??= raw.lastIndexOf("-->")) < i + 4 ? -1 : raw.indexOf(closer, i + (htmlComment ? 4 : 2));
+			if (close === -1 && obsidianComment && !(blockComments && !containerCodeLine && percentOpens !== false && opensObsidianBlock(raw, i, dedentedByList))) {
 				emit("%", rawStart + i);
 				emit("%", rawStart + i + 1);
 				i += 2;
@@ -1354,7 +1531,41 @@ function cleanLine(
 			// advances past them, mirroring the two-and-two above. Emitting only
 			// `<` would re-enter the loop at `!--` and risk another branch (the
 			// autolink or raw-HTML one) claiming it.
-			const blockOpens = htmlContext === "inline" ? htmlClosesLater : opensHtmlBlock(raw, i, htmlClosesLater, setextContent, htmlLeadIndented);
+			let blockOpens = htmlContext === "inline" ? htmlClosesLater : opensHtmlBlock(raw, i, htmlClosesLater, setextContent, htmlLeadIndented, (leadSpace ??= /^\s*/.exec(raw)![0].length));
+			// On a line the walker is sure is paragraph text, a `<!--` is INLINE for
+			// the renderer: a paragraph line's content never starts a block, and a
+			// lazy line led by a tab or four columns never reaches module 8776. An
+			// inline comment exists only when its body - everything up to the first
+			// `-->` - neither starts with `>` or `->` nor holds `--` nor ends with
+			// `-` (CommonMark's comment rule, module 4839; NRL-166 fix round 1).
+			// Otherwise `<!--` is literal text and the scan goes on, so a LATER
+			// `<!--` may be the comment. This line's share of the body is checked
+			// here; the later lines' share arrives as `htmlBodyOkLater`, on the same
+			// bound as `htmlClosesLater`, and is undefined - nothing is checked -
+			// on any line the walker is not sure of. Only a comment that term 2
+			// says closes later is judged: one with no `-->` ahead keeps hiding.
+			// And only where no inline construct can still be open around the
+			// `<!--`: inside a raw tag's attribute value, a link title, a `<!...>`
+			// declaration or CDATA the renderer consumes it as markup and displays
+			// nothing, so speaking it would be a disclosure (/critique on the first
+			// fix-round commit: `Note <span title="<!-- QAQ -- secret` /
+			// `QBQ -->">QCQ</span>` shows only `Note QCQ`). Any `<` or `](` before
+			// the opener on this line, or on an earlier line of the paragraph
+			// (folded into `htmlBodyOkLater` as undefined), keeps it hidden.
+			if (
+				close === -1 &&
+				htmlComment &&
+				blockOpens &&
+				blockComments &&
+				!htmlRawLine &&
+				htmlClosesLater &&
+				htmlBodyOkLater !== undefined &&
+				!(commentFacts ??= inlineCommentFacts(raw)).prefixHolds(i) &&
+				!commentFacts.suffixHolds(i) &&
+				!(htmlBodyOkLater && commentFacts.bodyStartOk(i))
+			) {
+				blockOpens = false;
+			}
 			if (close === -1 && htmlComment && blockComments && !blockOpens && !htmlRawLine) {
 				for (let k = 0; k < 4; k++) emit(raw[i + k]!, rawStart + i + k);
 				i += 4;
@@ -1749,6 +1960,66 @@ interface Piece {
 	 * a boundary may be erased by mergeShort; see there for why.
 	 */
 	legacyOpen: boolean;
+}
+
+/** Sorted, disjoint `[start, end)` ranges covering exactly the union of `ranges`. */
+function mergeRanges(ranges: ReadonlyArray<readonly [number, number]>): Array<[number, number]> {
+	const sorted = [...ranges].filter((r) => r[1] > r[0]).sort((a, b) => a[0] - b[0]);
+	const out: Array<[number, number]> = [];
+	for (const [a, b] of sorted) {
+		const last = out[out.length - 1];
+		if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+		else out.push([a, b]);
+	}
+	return out;
+}
+
+/**
+ * `text` and its `index` less every character whose source offset lies in one
+ * of `spans` (sorted, disjoint), in lockstep (NRL-166 fix round 2). Where a run
+ * is dropped, whitespace on both sides of the seam collapses to one character,
+ * and two words the run separated get one space, mapped to the character after
+ * it as `sourceOffsetOfSpace` maps a synthetic one. `index` is monotone, so one
+ * pointer walks the spans.
+ */
+function dropHiddenText(text: string, index: readonly number[], spans: ReadonlyArray<readonly [number, number]>): { text: string; index: number[] } {
+	const chars: string[] = [];
+	const out: number[] = [];
+	// The first span that can hold any of `index`, by binary search, so a note of
+	// many spans and many chunks stays linear (/critique on 383f85c, F6).
+	let s = 0;
+	if (index.length > 0) {
+		let hi = spans.length;
+		const first = index[0]!;
+		while (s < hi) {
+			const mid = (s + hi) >> 1;
+			if (spans[mid]![1] <= first) s = mid + 1;
+			else hi = mid;
+		}
+	}
+	let seam = false;
+	for (let k = 0; k < text.length; k++) {
+		const o = index[k]!;
+		while (s < spans.length && spans[s]![1] <= o) s++;
+		if (s < spans.length && spans[s]![0] <= o) {
+			seam = true;
+			continue;
+		}
+		const ch = text[k]!;
+		const space = /\s/.test(ch);
+		if (seam && chars.length > 0) {
+			const prevSpace = /\s/.test(chars[chars.length - 1]!);
+			if (space && prevSpace) continue;
+			if (!space && !prevSpace) {
+				chars.push(" ");
+				out.push(o);
+			}
+		}
+		seam = false;
+		chars.push(ch);
+		out.push(o);
+	}
+	return { text: chars.join(""), index: out };
 }
 
 /**
@@ -4473,7 +4744,46 @@ interface RendererLeads {
 	 * code mask must not trust it (`htmlLeadCode` in extractChunks).
 	 */
 	unsureFresh: boolean[];
+	/**
+	 * A line the walker put in a PARAGRAPH whose first line it trusts (NRL-166
+	 * fix round 1): that first line or one of its continuations. Its content
+	 * never starts a block, so a `<!--` on it is inline for the renderer, which
+	 * is what lets cleanLine apply the inline comment's body rule. False for
+	 * every line the walker did not record, or recorded as anything else.
+	 */
+	para: boolean[];
+	/**
+	 * Whether this walk applies NRL-166 fix round 1's walker refinements (a
+	 * quote ended by indented code is fresh; an uncertainly-ended last item's
+	 * first line is walked; since fix round 2, a line of exactly the `%%`
+	 * interrupting shape certainly ends a list). extractChunks runs the walk with
+	 * and without them and takes each line's refined record only where that
+	 * line's window is clean (`refineWindowClean`), which replaces round 1's
+	 * note-wide gate: a comment the refinements correctly drop could be covering
+	 * text that a tag attribute, a link title, an image label, a footnote or a
+	 * frontmatter block hides (`> > a` / `>\t[r]: "<!-- b` / `![c` /
+	 * `d -->](a.png)` spoke c and d, the embed's `alt`).
+	 */
+	refine: boolean;
 	pending: { frame: LeadFrameLine[]; depth: number }[];
+}
+
+/**
+ * Anything shaped like a footnote definition's label, anywhere on a line: a `[^`
+ * whose first `]` after it is followed by `:` (the language of
+ * `/\[\^[^\]]*\]:/`). A scan rather than that regex, which backtracks
+ * quadratically on a line of many `[^` with no `]` and runs on every line of
+ * every note here. Every `[^` before the same first `]` shares its answer, so
+ * the scan resumes after that `]` and stays linear.
+ */
+function footnoteShaped(line: string): boolean {
+	for (let i = line.indexOf("[^"); i !== -1; ) {
+		const close = line.indexOf("]", i + 2);
+		if (close === -1) return false;
+		if (line.charCodeAt(close + 1) === 58) return true;
+		i = line.indexOf("[^", close + 1);
+	}
+	return false;
 }
 
 function startsIndentedCode(view: string): boolean {
@@ -4581,6 +4891,7 @@ function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: Rend
 		out.lead[id] = /^[ \t]*/.exec(view)![0];
 		out.cont[id] = cont;
 		out.nested[id] = nested;
+		out.para[id] = cont && paraTrusted;
 	};
 	let i = 0;
 	while (i < frame.length) {
@@ -4724,7 +5035,12 @@ function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: Rend
 		// thematicBreak, list, setextHeading, html, ..., paragraph.
 		if (RL_QUOTE.test(view)) {
 			i = walkLeadQuote(frame, i, depth, out);
-			state = i < frame.length && frame[i]!.view.trim() === "" ? "fresh" : "unknown";
+			// A line that ended the quote by starting indented code is a FRESH block
+			// here, not a maybe (NRL-166 fix round 1): `indentedCode` is in module
+			// 6234's `interruptBlockquote`, and `startsIndentedCode` is module 134's
+			// literal test on the same view `mayInterruptQuote` read. The other
+			// interrupters stay `unknown`, since that test over-approximates them.
+			state = i < frame.length && (frame[i]!.view.trim() === "" || (out.refine && startsIndentedCode(frame[i]!.view))) ? "fresh" : "unknown";
 			continue;
 		}
 		if (RL_HEADING.test(view) || RL_HR.test(view)) {
@@ -4764,6 +5080,7 @@ function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: Rend
 		state = "para";
 		paraStart = i;
 		paraTrusted = ambiguousAt !== i - 1;
+		out.para[frame[i]!.id] = paraTrusted;
 		i++;
 	}
 }
@@ -4908,7 +5225,16 @@ function walkLeadList(frame: readonly LeadFrameLine[], start: number, depth: num
 			}
 			if (mayInterruptList(x)) {
 				end = j;
-				state = "unknown";
+				// A line that is exactly the comment tokenizer's interrupting shape
+				// (spaces, `%%`, no other `%` on the line) CERTAINLY ends the list:
+				// `comment` is in module 745's interrupt set with no option gate, and
+				// this branch is reached only where module 745 consults that set. So
+				// the last item is known whole and is walked (NRL-166 fix round 2,
+				// under the round-1 refinement gate): `- >> P <!--` / `> [!tip] b` /
+				// `> \t--> c` / `%%` left the item unwalked, and the code line's `-->`
+				// closed a comment the renderer shows as text. The other shapes the
+				// regex takes stay a maybe.
+				state = out.refine && /^ *%%[^%]*$/.test(x) ? "fresh" : "unknown";
 				break;
 			}
 			item!.lines.push(...pending, j);
@@ -4927,9 +5253,17 @@ function walkLeadList(frame: readonly LeadFrameLine[], start: number, depth: num
 	 * at `$$`, used 3 and left a bare tab, claimed indented code and spoke the
 	 * comment body (implement-phase fuzz). So the last item is not walked then,
 	 * and its lines keep the old answer.
+	 *
+	 * Except its FIRST line (NRL-166 fix round 1). `p` reaches only the lines
+	 * after the marker line, whose content is the marker's own remainder, and a
+	 * frame's first line is a fresh block whose record nothing below it changes.
+	 * Skipping it left `- > \t<!-- QXQ` / `> QBQ -->` / `%%` with no record, so
+	 * the code mask never saw that the `<!--` is indented code in the item's
+	 * quote, and the comment hid `QBQ -->`, which the renderer displays.
 	 */
 	const walkable = state === "unknown" ? items.slice(0, -1) : items;
 	if (depth < RL_MAX_DEPTH) for (const it of walkable) walkLeadItem(frame, it.lines, depth, out);
+	if (out.refine && depth < RL_MAX_DEPTH && state === "unknown" && items.length > 0) walkLeadItem(frame, [items[items.length - 1]!.lines[0]!], depth, out);
 	return { end, state };
 }
 
@@ -4961,13 +5295,15 @@ function walkLeadItem(frame: readonly LeadFrameLine[], lineIdx: readonly number[
 }
 
 /** Run the model over `lines[from..]`. Lines before `from` (frontmatter) get no record. */
-function rendererLeads(lines: readonly string[], from: number): RendererLeads {
+function rendererLeads(lines: readonly string[], from: number, refine: boolean): RendererLeads {
 	const out: RendererLeads = {
 		lead: new Array<string | null>(lines.length).fill(null),
 		cont: new Array<boolean>(lines.length).fill(false),
 		nested: new Array<boolean>(lines.length).fill(false),
 		closerInPara: new Array<boolean>(lines.length).fill(false),
 		unsureFresh: new Array<boolean>(lines.length).fill(false),
+		para: new Array<boolean>(lines.length).fill(false),
+		refine,
 		pending: [],
 	};
 	const frame: LeadFrameLine[] = [];
@@ -5171,6 +5507,91 @@ export function extractChunks(
 ): SpeechChunk[] {
 	const chunks: SpeechChunk[] = [];
 	const lines = source.split("\n");
+	// Whether line k may hold an inline construct that hides text, a code span
+	// whose backticks may pair across a line break included (`backtickCrossRisk`,
+	// NRL-166 fix round 3). A yes keeps 44a037a's answer wherever it is asked.
+	const tickRisk = backtickCrossRisk(lines);
+	const lineMayHold = (k: number): boolean => tickRisk[k]! || inlineConstructMayHold(lines[k]!);
+	// What the reading view displays nothing of, from the transcription of its
+	// block parser (NRL-166 fix round 2; see `rendererHiddenText`), or null where
+	// that transcription has no answer. Every spoken character whose source
+	// offset falls in one of its ranges is dropped before segmentation (`speak`), and
+	// its `%%` block starts withhold our own block opener where the renderer has
+	// none (`percentOpensAt`).
+	const rendererHidden = rendererHiddenText(source, lines.length);
+	const hiddenSpans = mergeRanges(rendererHidden?.ranges ?? fallbackHtmlHidden(source));
+	const speak = (text: string, index: number[], start: number, blockType: BlockType): SpeechChunk[] => {
+		const kept = hiddenSpans.length === 0 ? { text, index } : dropHiddenText(text, index, hiddenSpans);
+		return splitSentences(kept.text, kept.index, start, segmentCtx, blockType);
+	};
+	// Whether the renderer opens a `%%` block on each line, where that answer may
+	// overrule ours: our block opener on a line stands only where the renderer
+	// opens one there too (NRL-166 fix round 2). Its comment tokenizer is the only
+	// thing that makes a `%%` hide past its line (the inline one, `/^%%(.*?)%%/`,
+	// never crosses a line break, ADR 0006), so a `%%` it does not open is text:
+	// `> P` / `> [!note] %%` / `> b` is one quote paragraph whose second line is
+	// lazy, so `[!note]` is no callout title and its `%%` no block, and the
+	// renderer displays b, which our callout prefix used to hide.
+	//
+	// Withholding our block shows everything it would have hidden, up to the
+	// next `%%` in the note, so it is done only where nothing in that reach is
+	// an HTML block or follows one that leaves a browser comment open: there our
+	// over-wide block was covering text the browser hides, which we do not model
+	// line for line (`<div>` / `- > x <!-- QS` / `> \t%% QK` hides QK, and
+	// `> - <!-- a` / `b <!-- c --> d <!-- e` / `\t%%` / `- f` hides f). Elsewhere,
+	// and wherever the transcription has no answer, `undefined` keeps ours.
+	//
+	// Nor where an inline construct (`inlineConstructMayHold`) sits anywhere from
+	// the opener's paragraph start, back to the last blank line, through that
+	// reach, or a footnote definition does: a link title, a tag's attribute value
+	// or a definition the renderer drops may be what hides the text there
+	// (`> P <b title="a` / `> [!note] %% b` / `> c">d</b>` displays `P d`;
+	// /critique on 383f85c, F1 and F2).
+	const percentOpensAt: (boolean | undefined)[] = new Array<boolean | undefined>(lines.length).fill(undefined);
+	if (rendererHidden !== null) {
+		const constructSinceBlank: boolean[] = new Array<boolean>(lines.length).fill(false);
+		for (let k = 0, seen = false; k < lines.length; k++) {
+			if (lines[k]!.trim() === "") seen = false;
+			if (lineMayHold(k)) seen = true;
+			constructSinceBlank[k] = seen;
+		}
+		// Withholding our opener on one line also changes how every later `%%`
+		// pairs: the next one, which closed our block, is now asked whether it
+		// OPENS one. So a line's answer is the renderer's only when the next
+		// `%%` line's is too, a chain to the note's end or to a line that keeps
+		// ours, whose chain then keeps ours as well (NRL-166 fix round 3; Verify
+		// 3: `> > P` / `> [!tip]- %% QAQ` / `> [!tip]- %% QBQ` / `    QEQ [x](u "QFQ`
+		// took the renderer's "no block" on the first `%%` line and our opener on
+		// the second, beside the link, which then hid QBQ through QFQ that the
+		// renderer and 44a037a both display).
+		// A withheld opener also exposes what lies in its reach to our own
+		// comment model, so a `<!--` there that its line does not close, which our
+		// term 2 may carry across lines the renderer's paragraph does not reach, is
+		// a risk too; and the chain holds only through a next `%%` line with one
+		// `%%`, since two or more there re-pair by our inline rule, which does not
+		// know a line the renderer makes code (fix round 3's census: `> > \`\`\`\``
+		// / `> > [!x]- %% QPQ` / ... / `    <!-- QQZQ --> QRQ <!-- QRZQ` /
+		// `[!x]- %% QSQ` / `> > --> QSZQ` lost QSQ, and `>\`\`\`\`` / `>> [!x]- %%
+		// QQQ` / `QQZQ - -->` / `> \tQRQ %% QRZQ %%` lost QRZQ, both shown by the
+		// renderer and 44a037a).
+		const openCommentOnLine = (line: string): boolean => {
+			const at = line.lastIndexOf("<!--");
+			return at !== -1 && line.indexOf("-->", at + 4) === -1;
+		};
+		const onePct = (line: string): boolean => {
+			const at = line.indexOf("%%");
+			return at !== -1 && line.indexOf("%%", at + 2) === -1;
+		};
+		let nextRisk = lines.length;
+		let nextPct = -1;
+		for (let k = lines.length - 1; k >= 0; k--) {
+			if (rendererHidden.browserRiskLines[k]! || rendererHidden.footnoteLines[k]! || lineMayHold(k) || openCommentOnLine(lines[k]!)) nextRisk = k;
+			const reach = nextPct === -1 ? lines.length - 1 : nextPct;
+			const chained = nextPct === -1 || (percentOpensAt[nextPct] !== undefined && onePct(lines[nextPct]!));
+			if (nextRisk > reach && !constructSinceBlank[k]! && chained) percentOpensAt[k] = rendererHidden.percentStarts.has(k);
+			if (lines[k]!.includes("%%")) nextPct = k;
+		}
+	}
 	// `htmlCloserAhead[n]` is "some line AFTER n, and before the first line that
 	// ends n's paragraph, carries `-->`" - term 2 of the HTML-comment block rule
 	// (NRL-74, ADR 0025), bounded by the paragraph as module 4839's inline `.T`
@@ -5265,6 +5686,65 @@ export function extractChunks(
 	};
 	const htmlCloserAhead = closerAheadOf(term2Stop);
 	const htmlCloserAheadRaw = closerAheadOf(term2StopRaw);
+	// For each line, whether the lines AFTER it, up to the first `-->` inside the
+	// same term-2 bound, keep an inline comment's body valid: none of them holds
+	// `--`, and the closing line does not put `-` right before its `-->`
+	// (NRL-166 fix round 1; module 4839's rule, see `inlineCommentFacts`).
+	// Raw lines are read, prefix and all. A container prefix holds no `-`, and a
+	// list marker starts an item, which ends the paragraph and is a stop, so a
+	// `--` here is a `--` in the renderer's paragraph text whenever the
+	// renderer's closer is this one. When the bound runs past the renderer's
+	// paragraph, the renderer has no closer in it and displays the text, so a
+	// "not valid" here cannot hide what it shows nor show what it hides. A line
+	// break joins lines, so dashes either side of one never pair.
+	// The same bound again, for whether the would-be body holds an inline construct
+	// (`inlineConstructMayHold`) from the next line up to the `-->`: then the body
+	// rule is withheld and the comment keeps hiding, since the `-->` may sit in an
+	// attribute or a title the renderer displays as nothing
+	// (`P <!-- a -- <b title="x` / `y -->">z</b>` shows only `P <!-- a -- z`).
+	// A `%%` on which our block opener keeps its own answer (`percentOpensAt` is
+	// undefined) counts here too (NRL-166 fix round 3). A refinement that ends
+	// or withholds a comment 44a037a opened exposes the `%%` behind it to that
+	// opener, which may then hide what both the renderer and 44a037a display
+	// (Verify 3: `1. > QGQ \`\`\` <!---> ` / `  > [!note] %%` / `\t--> QJZQ` /
+	// `> > </pre>` lost QJZQ: the `<!--->` is rightly literal, and the `%%`, no
+	// block for the renderer, opened ours, kept beside the HTML block).
+	const pctUnsure = (k: number, line: string): boolean => percentOpensAt[k] === undefined && line.includes("%%");
+	const constructInBodyAheadOf = (stops: readonly boolean[]): boolean[] => {
+		const out: boolean[] = new Array<boolean>(lines.length).fill(false);
+		let seen = false;
+		for (let k = lines.length - 1; k >= 0; k--) {
+			out[k] = seen;
+			if (stops[k]!) {
+				seen = false;
+				continue;
+			}
+			const line = lines[k]!;
+			const close = line.indexOf("-->");
+			seen = close !== -1 ? tickRisk[k]! || inlineConstructMayHold(line.slice(0, close)) || pctUnsure(k, line.slice(0, close)) : seen || lineMayHold(k) || pctUnsure(k, line);
+		}
+		return out;
+	};
+	const commentBodyOkAheadOf = (stops: readonly boolean[]): boolean[] => {
+		const out: boolean[] = new Array<boolean>(lines.length).fill(true);
+		let ok = true;
+		for (let k = lines.length - 1; k >= 0; k--) {
+			out[k] = ok;
+			if (stops[k]!) {
+				ok = true;
+				continue;
+			}
+			const line = lines[k]!;
+			const close = line.indexOf("-->");
+			if (close !== -1) {
+				const before = line.slice(0, close);
+				ok = !before.includes("--") && !before.endsWith("-");
+			} else if (line.includes("--")) {
+				ok = false;
+			}
+		}
+		return out;
+	};
 	// `listDedented[n]` is "line n is the content of a list item AND the dedent
 	// Obsidian applies to that item leaves its lead at the block start a `%%`
 	// opener needs" (NRL-93 for the first half, NRL-117 for the second). It is the
@@ -5867,7 +6347,7 @@ export function extractChunks(
 	// does not have, the block stays note-scoped exactly as before. That keeps
 	// the change to one direction it can be argued in: a block both parsers
 	// agree on ends where the renderer ends it, and nothing else moves.
-	const percentEnds = percentBlockEnds(source, lines.length);
+	const percentEnds = rendererHidden?.percentEnds ?? new Map<number, number>();
 	let commentLastLine = -1;
 	const scopeComment = (lineNo: number): void => {
 		commentLastLine = inComment === "%%" ? (percentEnds.get(lineNo) ?? -1) : -1;
@@ -5920,13 +6400,91 @@ export function extractChunks(
 	// rule. Getting this wrong let skipHeadings drop the continuation text.
 	let prevContainer = false;
 	const frontmatter = detectFrontmatter(lines);
+	// A line's WINDOW for fix round 1's refinements (fix round 2 scopes to it
+	// what round 1 gated note-wide): the line itself, every earlier line back to
+	// the last blank one, and every later line up to the old bound's `-->`. A
+	// refined answer can only stop a comment hiding text inside that window, so
+	// the refined record is taken only where nothing in it can hide that text by
+	// another means:
+	// - no inline construct (`inlineConstructMayHold`) may be open around the
+	//   `<!--` or sit between it and that `-->`. There the old over-hiding
+	//   comment was also covering text that a DIFFERENT construct hides: a tag's
+	//   attribute value, a link title, an image label (the embed's `alt`), or an
+	//   `<!X` / `<?` / CDATA HTML block on a line of its own (/critique, two
+	//   rounds: `Note <span title="<!-- a -- b` / `c -->">d</span>` and
+	//   `P <!-- a` / `><!X b` / `    c` / `> \td --->` both spoke b). The old
+	//   bound, `term2Stop`, reaches at least as far as the code-stopped one, so it
+	//   covers both;
+	// - the line is in no footnote definition, where the renderer may hold the
+	//   `<!--` as an HTML node inside the footnote, which the walker does not
+	//   model (`> [^1]: foot` / `>\t<!-- x` / `> ---`). An unreferenced
+	//   definition is dropped whole by `rendererHiddenText` in any case, which is
+	//   what round 1's note-wide footnote gate stood in for (`P <!-- QAAQ` /
+	//   `> \t<div>` / `[^1]: QBAQ --> QCAQ` spoke QBAQ);
+	// - the line is past the renderer's frontmatter and the line closing it,
+	//   which the walker reads as paragraph text and a setext underline
+	//   (/critique round 3, Q1);
+	// - the line is past every line that text a browser hides beyond an HTML
+	//   block may reach (`openRiskThrough`): a browser comment the block leaves
+	//   open, or an attribute value, which runs on to a quote the renderer may
+	//   write itself. Neither is in the hidden ranges, so a refinement on or
+	//   before such text, which can stop one of our comments hiding everything to
+	//   the note's end, would speak it (NRL-166 fix round 3; its census: `> P <!--
+	//   a` / ... / `>\t<!--<!--<!-- QNQ` / `1. > <div title="QNZQ` / `  - > <span
+	//   title='QOQ` spoke QOQ, which 44a037a's comment hid);
+	// - and where the transcription has no answer (a lone CR, deep nesting),
+	//   round 1's note-wide footnote and `---` gates stand.
+	const inlineMayHoldAbove: boolean[] = new Array<boolean>(lines.length).fill(false);
+	for (let k = 0, seen = false; k < lines.length; k++) {
+		if (lines[k]!.trim() === "") seen = false;
+		inlineMayHoldAbove[k] = seen;
+		if (lineMayHold(k)) seen = true;
+	}
+	const constructInBody = constructInBodyAheadOf(term2Stop);
+	const noteWideGate = rendererHidden === null && (/^---[ \t]*\r?$/.test(lines[0] ?? "") || lines.some(footnoteShaped));
+	const frontmatterGateTo = rendererHidden === null ? -1 : rendererHidden.frontmatterLastLine === -1 ? -1 : rendererHidden.frontmatterLastLine + 1;
+	const refineWindowClean = lines.map(
+		(_line, k) =>
+			!noteWideGate &&
+			k > frontmatterGateTo &&
+			!(rendererHidden?.footnoteLines[k] ?? false) &&
+			k > (rendererHidden?.openRiskThrough ?? -1) &&
+			!inlineMayHoldAbove[k]! &&
+			!lineMayHold(k) &&
+			!pctUnsure(k, lines[k]!) &&
+			!constructInBody[k]!,
+	);
+
 	// `htmlLeadIndented[n]` is "the renderer never offers line n's content to its
 	// HTML block tokenizer, because after its own container dedent the line is a
 	// lazy paragraph continuation or indented code" (NRL-115). It is
 	// opensHtmlBlock's fifth argument; the reasoning, the failure direction and
 	// the measurements live on `rendererLeads`. Frontmatter lines get no record,
 	// and the first line after it starts a fresh frame, which is the safe default.
-	const leads = rendererLeads(lines, frontmatter ? frontmatter.endLine + 1 : 0);
+	//
+	// The walker runs twice, with and without NRL-166 fix round 1's two
+	// refinements, and each line takes the refined record only where its
+	// `refineWindowClean` holds (fix round 2). Round 1 withheld the refinements
+	// from a WHOLE NOTE holding any `<`, backtick, `[`, `](`, `[^x]:` line or a
+	// leading `---`, which nearly every real note has (a link is enough), and
+	// Verify 2 measured 35,978 cells it lost that way. Each record is a fact
+	// about its own line, so taking it line by line from one walk or the other
+	// is sound; what the gate guards is the text a refined answer stops hiding,
+	// which lies in that line's own window.
+	const walkFrom = frontmatter ? frontmatter.endLine + 1 : 0;
+	const leadsPlain = rendererLeads(lines, walkFrom, false);
+	const leadsRefined = rendererLeads(lines, walkFrom, true);
+	const pick = <T>(a: T[], b: T[]): T[] => a.map((v, k) => (refineWindowClean[k]! ? b[k]! : v));
+	const leads: RendererLeads = {
+		lead: pick(leadsPlain.lead, leadsRefined.lead),
+		cont: pick(leadsPlain.cont, leadsRefined.cont),
+		nested: pick(leadsPlain.nested, leadsRefined.nested),
+		closerInPara: pick(leadsPlain.closerInPara, leadsRefined.closerInPara),
+		unsureFresh: pick(leadsPlain.unsureFresh, leadsRefined.unsureFresh),
+		para: pick(leadsPlain.para, leadsRefined.para),
+		refine: true,
+		pending: [],
+	};
 	// Built on first use by the container-fence drop in the per-line loop.
 	let rawOrMathOpen: boolean[] | undefined;
 	const htmlLeadIndented = leadIndentedForHtml(leads);
@@ -5991,7 +6549,43 @@ export function extractChunks(
 	// holds an html node `<!-- SECRETH` inside the footnote), after a
 	// table-shaped one a plain paragraph, and the walker models neither, so
 	// neither the quoted stop nor the code mask may decide such a line.
-	const htmlClosesLaterAt = htmlCloserAhead.map((v, k) => (leads.unsureFresh[k]! || crAbove[k]! ? htmlCloserAheadRaw[k]! : v && !htmlLeadCode[k]!));
+	//
+	//
+	// A line `htmlLeadCode` marks is also a term-2 STOP for an opener above it on
+	// a line the walker is sure is paragraph text (NRL-166 fix round 1). The
+	// walker calls the code line a FRESH block, so that paragraph does not run
+	// into it, and a `-->` on it or past it closes nothing up there:
+	// `> > P <!-- a` / `> b` / `>\t--> Z` displays `<!-- a` and puts `--> Z` in an
+	// indented-code block of the outer quote, because `indentedCode` is in module
+	// 6234's `interruptBlockquote`. Only for a PARAGRAPH opener, whose comment is
+	// inline and so paragraph-scoped: an opener the walker does not place in a
+	// paragraph may be a browser comment trailing a raw HTML line, which runs
+	// through the rendered document and does not stop at a code block
+	// (`1. ><!-- y --> QAQ <!--` / `>>> \t| a |` / `>> QCQ` hides QCQ), and an
+	// arm without this condition spoke it in the 4,000-note fuzz.
+	const term2StopOrCode = term2Stop.map((s, k) => s || htmlLeadCode[k]!);
+	const htmlCloserAheadCode = closerAheadOf(term2StopOrCode);
+	// Both of fix round 1's term-2 changes (the code-line stop here and the body
+	// rule below) apply only on a line the walker is sure is paragraph text and
+	// whose window is clean (`refineWindowClean`, which since fix round 2 replaces
+	// round 1's note-wide footnote, inline-construct and leading `---` gates).
+	const paraSure = leads.para.map((v, k) => v && !leads.unsureFresh[k]! && !crAbove[k]! && refineWindowClean[k]!);
+	const refineAt = paraSure;
+	const htmlClosesLaterAt = htmlCloserAhead.map((v, k) =>
+		leads.unsureFresh[k]! || crAbove[k]! ? htmlCloserAheadRaw[k]! : (refineAt[k]! ? htmlCloserAheadCode[k]! : v) && !htmlLeadCode[k]!,
+	);
+	// The later lines' share of an inline comment's body rule, on the SAME bound
+	// as `htmlClosesLaterAt` (see `inlineCommentFacts`), and only on a line
+	// the walker is SURE is paragraph text (`leads.para`); anywhere else it is
+	// undefined and the comment keeps hiding as before. That is not caution for
+	// its own sake: after a definition-shaped line the renderer may hold the
+	// `<!--` as an HTML node inside a footnote (`> [^1]: foot` / `>\t<!-- x` /
+	// `> ---`), where the body rule does not apply, and an arm that checked
+	// every line spoke x there. Read by cleanLine's comment branch only: the
+	// carries keep the unchecked answer, which ends their paragraph sooner, the
+	// fail-closed side for them.
+	const bodyOkLater = commentBodyOkAheadOf(term2StopOrCode);
+	const htmlBodyOkLaterAt: (boolean | undefined)[] = bodyOkLater.map((v, k) => (refineAt[k]! ? v : undefined));
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,
@@ -6015,6 +6609,10 @@ export function extractChunks(
 	};
 
 	let paraText = "";
+	// Whether `paraText` ends in a space, kept beside it because asking the
+	// string flattens a long concatenation once per line, which was quadratic in
+	// a paragraph's length (NRL-166 fix round 2).
+	let paraEndsSpace = false;
 	let paraIndex: number[] = [];
 	let paraStart = 0;
 	// The kind of block the buffer is holding, so a buffered paragraph is not
@@ -6027,7 +6625,7 @@ export function extractChunks(
 
 	const flushParagraph = (blockType: BlockType = paraBlockType): void => {
 		if (paraText.trim() !== "") {
-			chunks.push(...splitSentences(paraText, paraIndex, paraStart, segmentCtx, blockType));
+			chunks.push(...speak(paraText, paraIndex, paraStart, blockType));
 		}
 		paraText = "";
 		paraIndex = [];
@@ -6036,10 +6634,12 @@ export function extractChunks(
 	const appendToParagraph = (cleaned: Cleaned, start: number, blockType: BlockType = "paragraph"): void => {
 		if (paraText === "") {
 			paraText = cleaned.text;
-			paraIndex = cleaned.index;
+			paraEndsSpace = cleaned.text.endsWith(" ");
+			// A copy, since later lines are appended to it in place.
+			paraIndex = cleaned.index.slice();
 			paraStart = start;
 			paraBlockType = blockType;
-		} else if (paraText.endsWith(" ")) {
+		} else if (paraEndsSpace) {
 			// The line already ended in a real mapped space, because whatever
 			// it ended with was dropped: a comment, an image, a tag, a URL, an
 			// emoji or a CR. A second synthetic one would put two spaces in the
@@ -6047,7 +6647,11 @@ export function extractChunks(
 			// verbatimLine can never emit a leading space, so only this side
 			// needs checking.
 			paraText += cleaned.text;
-			paraIndex = [...paraIndex, ...cleaned.index];
+			if (cleaned.text !== "") paraEndsSpace = cleaned.text.endsWith(" ");
+			// Appended in place: rebuilding the array per line was quadratic in a
+			// paragraph's length (20,000 lines of `P <!-- a`, each literal by the
+			// body rule, took 27 s; NRL-166 fix round 2).
+			for (const at of cleaned.index) paraIndex.push(at);
 		} else {
 			// Same join convention as mergeShort: the space between the two
 			// lines is synthetic, so it is attributed to the character right
@@ -6057,7 +6661,9 @@ export function extractChunks(
 				cleaned.index[0] ?? start,
 			);
 			paraText = `${paraText} ${cleaned.text}`;
-			paraIndex = [...paraIndex, gap, ...cleaned.index];
+			paraEndsSpace = cleaned.text === "" || cleaned.text.endsWith(" ");
+			paraIndex.push(gap);
+			for (const at of cleaned.index) paraIndex.push(at);
 		}
 	};
 
@@ -6261,6 +6867,7 @@ export function extractChunks(
 			false,
 			false,
 			htmlContext,
+			htmlBodyOkLaterAt[lineNo],
 		);
 		inComment = cleaned.openComment;
 		scopeComment(lineNo);
@@ -6648,7 +7255,11 @@ export function extractChunks(
 				const open = lineStart + mathOpen;
 				const last = lineStarts[closeLine]! + closeAt + 1;
 				flushParagraph();
-				chunks.push(...splitSentences("equation", [open, open, open, open, open, open, open, last], open, segmentCtx, "other"));
+				// The synthetic word is kept or dropped WHOLE, by the opener's offset, and
+				// so bypasses the per-character drop in `speak`: its last letter maps to
+				// the closer, and dropping that alone spoke `equatio` (/critique on
+				// 383f85c, F7).
+				if (dropHiddenText("$", [open], hiddenSpans).text !== "") chunks.push(...splitSentences("equation", [open, open, open, open, open, open, open, last], open, segmentCtx, "other"));
 				lineNo = closeLine;
 				appendRemainder(lines[closeLine]!, closeAt + 2, lineStarts[closeLine]!, closeLine);
 				continue;
@@ -6774,6 +7385,8 @@ export function extractChunks(
 		 * wholly inside an already-carried span.
 		 */
 		const htmlClosesLater = htmlClosesLaterAt[lineNo]!;
+		const htmlBodyOkLater = htmlBodyOkLaterAt[lineNo]!;
+		const percentOpens = percentOpensAt[lineNo];
 		const dedentedByList = listDedented[lineNo]!;
 		const isSetextContent = setextContent[lineNo]!;
 		// A refused `<!--` line still STARTS a block: `html` fires on it in the
@@ -6812,7 +7425,7 @@ export function extractChunks(
 			htmlBlockLine(body, listStrip[lineNo]!, htmlParaOpen[lineNo]!)
 				? "block"
 				: "none";
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext);
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
@@ -6820,7 +7433,7 @@ export function extractChunks(
 			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlClosesLaterAt, listDedented, htmlLeadIndented, listStrip)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -6878,6 +7491,8 @@ export function extractChunks(
 				leadIndented,
 				codeLine,
 				htmlContext,
+				htmlBodyOkLater,
+				percentOpens,
 			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the
@@ -6948,7 +7563,7 @@ export function extractChunks(
 
 		if (blockType !== "paragraph") {
 			flushParagraph();
-			chunks.push(...splitSentences(cleaned.text, cleaned.index, lineStart + prefixChars, segmentCtx, blockType));
+			chunks.push(...speak(cleaned.text, cleaned.index, lineStart + prefixChars, blockType));
 			continue;
 		}
 

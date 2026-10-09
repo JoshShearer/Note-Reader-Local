@@ -1944,6 +1944,196 @@ Re-measured with Verify's three generators against both `9132c3b` and `e2afbfe`.
 
 NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
 
+**NRL-166 fix round 1 (2026-10-08): three loss classes behind F1, closed in the
+model, with evidence in ADR 0025's "NRL-166 fix round 1" section.** PR #219 merged
+at `44a037a` although Verify had failed it: Verify's own 199,584-shape F1-structure
+generator found 3,609 cells newly lost against `e2afbfe`. Every one was `main`'s own
+loss on the de-callout twin. This round ships as a follow-up PR on
+`fix/nrl-166-round2-callout-lazy-closer-losses`.
+- (A) A comment body that holds `--` (2,772 cells, class (b) through F1). Term 2 now
+  applies module 4839's inline-comment rule to an opener on a line the walker is sure
+  is paragraph text (`rendererLeads.para`). The rule: the body must not start with
+  `>` or `->`, hold `--`, or end with `-`. It is checked by
+  `inlineCommentBodyStartOk` on the opener line and `commentBodyOkAheadOf` on the
+  later lines.
+- (C) `>\t-->` after a deeper quote is indented code of the outer quote (540
+  cells). The walker now takes a quote ended by `startsIndentedCode` as fresh, and
+  an `htmlLeadCode` line is a term-2 stop for a sure-paragraph opener.
+- (B) A tab-led item-quote opener, then a `%%` line (297 cells). `walkLeadList` now
+  walks the first line of an uncertainly-ended last item.
+
+Result: 0 newly lost and 0 newly disclosing against `e2afbfe` on `own-gen.cjs` and
+its de-callout twins. On the three original generators, against `e2afbfe`, it is
+exactly the accepted 90 (fuzz 34 + F3 56), the same rows as `44a037a`. Against
+`44a037a` it is 0 / 0 everywhere. Lockstep failures: 0.
+
+**Traps.**
+- Both gates are load-bearing, and each was found by running real input, not by
+  reading. An arm without the `para` gate on the body check spoke a footnote's HTML
+  node (an existing NRL-114 row). An arm without it on the code-line stop spoke a
+  browser comment's body in fuzz note n376.
+- Never apply the body rule to a line-start `<!--` or to a line the walker did not
+  record.
+- The walker change also moves two NRL-119 rows, to the renderer's literal
+  `](zdestz.png)`. That is displayed text, not a destination disclosure.
+- Remaining: 9 class-(b) fuzz cells (n618, n2147) where the walker records nothing
+  after a quote ended by a list line, and the same-line `<!-- a -- b -->`, which is
+  still hidden. Both are losses.
+- Verify found that the running Obsidian is 1.13.7, matching the harness.
+- /critique blocked this round twice, both times on disclosures that no census
+  generated: inline HTML attributes, link titles, CDATA and declarations, image
+  labels including `![!`, `<?x`/`<!X` block lines inside the would-be body, and
+  unreferenced footnotes. The final rule is `refineAt` plus
+  `RendererLeads.refine`. Any inline-construct shape (`<`, a backtick, `[`, `](`) in
+  the paragraph above, on the line, or in the body up to the OLD bound's `-->`
+  withholds both term-2 refinements. Any `[^x]:` or inline-construct shape anywhere
+  in the note turns the walker refinements off.
+- ReDoS trap: these gates run on every line. `[ \t]+[ \t>]*` inside a repeated
+  group was exponential (17.8 s on 28 list markers), and `/\[\^[^\]]*\]:/` was
+  quadratic. Write any new per-line pattern so adjacent quantifiers cannot share
+  characters, and keep the timing rows in `tests/extract.test.ts`.
+- A note whose first line is `---` also takes no refinements, because of
+  unrecognised frontmatter (critique round 3).
+- Lesson: an old over-hiding comment can be covering text that a DIFFERENT
+  construct hides. Before un-hiding anything, run an adversarial fuzz that
+  includes inline HTML, labels, titles, code spans and footnotes. On the final
+  tree the reviewers' fuzz gives 0 newly disclosing over 64,000 + 120,000 notes.
+
+NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
+
+**NRL-166 fix round 2 (2026-10-08): the renderer's own hiding read off its block
+parser, with evidence in ADR 0025's "NRL-166 fix round 2" section.** Verify 2 failed
+`c4a370e`: disclosures left on `main` by #219 and `bcc59fe`, a branch quadratic, 9
+cells lost against `44a037a`, and 36,014 against `e2afbfe` from round 1's note-wide
+gates.
+- `rendererHiddenText` (`obsidianBlocks.ts`) turns the existing block-parser
+  transcription into source ranges the renderer certainly hides: `%%` blocks, HTML
+  block markup (comments, tags, bogus comments, an open attribute value), fence
+  lines, and footnote definitions that are unreferenced or superseded. `extractChunks`
+  drops what falls in them before segmentation, and its `%%` block opener stands
+  only where the renderer opens one (not where an HTML block lies in the reach).
+- Round 1's refinements are now chosen per line by the line's own window
+  (`refineWindowClean`), with the walker run twice; backtick and `](` left the
+  construct shape; an exact `%%` interrupter certainly ends a list.
+- /critique on `383f85c` BLOCKED (35) with four new disclosures, two quadratics, a
+  lockstep break and a loss class; all closed: the withheld `%%` opener also stands
+  down near inline constructs and footnotes, references in inline comments, code
+  spans and link titles do not count, nested definitions take the innermost one's
+  fate, and a lone-CR note gets a wide stand-in (`fallbackHtmlHidden`).
+- Final census: 0 newly disclosing against `e2afbfe` and `44a037a` on every corpus
+  (gen2 13,122,000 cells, both fuzzes, the critique's generator, own-gen, twins, F1,
+  F2, F3); 0 lockstep failures. Residuals: gen2 11,097 lost against `e2afbfe` (all
+  lost on `44a037a`; 10,965 an inline construct on the opener line, withheld on
+  purpose), and losses against `44a037a` in two fail-closed classes, an HTML block
+  leaving an attribute open and the lone-CR stand-in (21 extended-fuzz cells;
+  11,360 of the five critique generators' 2,016,318 cells). Later
+  /critique rounds (`996e8a7`: 74, `db55516`: 66, `2d44f59`: 68, `97388f2`: 70,
+  `7bca4b1`: 72) found no disclosure against `main`; their findings were closed
+  except the apostrophe-in-unquoted-attribute class, where the judge and a
+  browser disagree, the blank-line stop's heading cases, and three lone-CR
+  stand-in edges recorded in ADR 0025.
+- Trap from those rounds: fixing a LOSS by narrowing a mask can reopen a
+  disclosure the mask was closing (2d44f59 did, twice). Re-run the previous
+  commit as a base too, not only `main`.
+
+**Traps.**
+- Un-hiding is where disclosures come from. Every correct reading in this round
+  (a `%%` withheld, a footnote line skipped) first spoke text some OTHER construct
+  hides, and the fuzz found each: a browser comment from a `<div>` block, an open
+  `title="` attribute swallowing later blocks, a fence info string. A def-line skip
+  was dropped for that reason. Prefer a renderer-model RANGE (hide by construction)
+  over moving our own state.
+- The judge (`lib.cjs` `contexts`) is not a browser: it pairs quotes across tags and
+  closes `<!-->` late. Re-check a surprising verdict with parse5 (`gens/v5.cjs` in the
+  run's scratch); gen2's 1,800 cells against `9132c3b` are judge artifacts.
+- A content line in the transcription is the note line's TAIL, except at the very
+  end of a container's text after its last newline: map that position to the
+  newline (`scanPos`), or a `%%` span swallows the next note line.
+- Footnote facts, measured on the harness: references compare without case, a
+  reference inside a `%%` comment or another definition counts, one in code, `$$`,
+  frontmatter, HTML, an inline comment, a code span or escaped does not, the LAST
+  definition of a label wins, and nested definitions each follow their own fate
+  (`[^1]:[^2]: x [^1]` shows 1, hides x). Read references WIDE (a miss only drops a
+  definition), but scope each zone to its paragraph, or the zone itself loses text.
+- `appendToParagraph` was quadratic (array rebuild plus `endsWith` flattening a
+  rope); any change that speaks longer paragraphs will find such costs.
+
+NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
+
+**NRL-166 fix round 3 (2026-10-09), the last round: fail closed to `44a037a`
+wherever round 2's model was not exact, with evidence in ADR 0025's "NRL-166 fix
+round 3" section.** Verify 3 failed `7bd6285`: 13 cells newly disclosing against
+`44a037a`, a quadratic in `htmlMarkup`, and 183 cells lost against `44a037a` with no
+disclosure paid in the note.
+- Backticks: `backtickCrossRisk` marks a line whose own runs may pair across a line
+  break (an unpaired run, or a backslash before one, with a backtick later in the
+  stretch); it counts as an inline construct, so the window keeps `44a037a`'s answer.
+- `htmlMarkup` keeps one forward pointer per closer kind (`7bd6285` 4,802 ms, this
+  tree 58, `44a037a` 8, at 20,000).
+- `percentOpensAt` answers form a chain (the next `%%` line must take the renderer's
+  answer too and hold one `%%`), and an unclosed `<!--` in the reach is a risk.
+- HTML blocks carry a browser comment from block to block (`htmlMarkup`'s
+  `inComment`); where the carry is only possible, both readings are taken and only
+  their intersection is hidden.
+- Nothing past an HTML block is hidden for an attribute value it leaves open any
+  more: the renderer's own quotes (a callout's `class="callout-content"`) end it
+  first. `openRiskThrough` reports how far a browser-hidden region may reach, and
+  no line on or before it takes a refinement.
+- Footnotes: a reference inside `%%` counts whatever surrounds it, and one that MAY
+  count (inline comment, code span, link title) keeps its definition, as on main.
+- Refinements also stand down where a `%%` our opener decides is in the window.
+- /critique on `3702b0f` (CONCERNS, 66) found classes `7bd6285` already had: raw-text
+  elements (`<textarea>`, `<script>`) read as markup, and a quote outside a value
+  position opening a run. Fixed: any raw-text tag (inline too, and for footnote
+  blocks anywhere) leaves later HTML blocks and fence lines unread and keeps old
+  answers to the end; a quote opens a value only right after `=`; a fence opening
+  line holding `-->` is not hidden; a label defined twice with a possibly-lazy
+  definition is not judged. Its own generators then give 0 / 0.
+- /critique on `4f5df9b` (CONCERNS, 72, no disclosure): the quote rule toggled on
+  every `=`; `htmlMarkup` now walks the tokenizer's attribute states. Its own
+  generators then give 0 disclosures and 1 pure-regression cell (an exposed
+  `<!--->` on an HTML-block line, lost on `44a037a` in its twin).
+- /critique on `8c336c7` (CONCERNS, 76, no disclosure): the tag name ended at any
+  JS `\s` (NBSP, VT); now ASCII whitespace only. Its census also showed a block
+  starting inside the previous block's open attribute value; such a block is now
+  read that way too (withdrawn in the next commit).
+- /critique on `9df325a` (CONCERNS, 68, no disclosure): `<!x` / `</ ` bogus comments
+  now end at `>`; any block after one that leaves a tag open, and any HTML block in a
+  footnote definition, is failed closed (not read, old answers to the end).
+- Single final /critique on `2acd366` (BLOCK, 45, no disclosure): end-tag names read
+  from the `/`, `<svg>`/`<math>` CDATA, an open bogus comment; fixed or failed closed.
+- FINAL census: 0 new disclosures vs `44a037a`; newly lost 6,045 = (i) 3,977, (ii)
+  lone CR 991, judge artifacts 1,073, (iii) 0 unambiguous (+4 sentinel-reuse
+  artifacts). All five critiques' generators (386,000 notes): 0 new disclosures;
+  pure regressions only in lone-CR notes plus 2 single cells recorded in ADR 0025.
+- Trap: the round ran 18 h because every critique on a new mechanism found the next
+  shape. When a mechanism is not exact after one pass, fail it closed wholesale
+  (stop reading that block class) rather than adding a carry rule.
+- Census after `4f5df9b` (superseded by the final figures below): 0 newly
+  disclosing against `44a037a`; newly lost 6,370, (iii) 0 unambiguous.
+
+**Traps.**
+- Each fix that stops hiding something must be followed by a full census re-run.
+  The fence-line `-->` rule, applied to the whole block rather than its opening
+  line, reopened 6 disclosures against main on the next run.
+- Every narrowing that stops HIDING something (an extension range, a gate) can
+  expose text to a refinement elsewhere. This round's own census found it twice
+  after removing the open-attribute extension (a refinement above the block, and a
+  withheld `%%` exposing an open `<!--`). Re-run the full census after every
+  removal, not only after additions.
+- "Fail closed" against a model you cannot finish means: report the uncertain
+  region and keep `main`'s answers there (refinements off), never hide it wider.
+  Wider hiding is what produced the (iii) losses.
+- The judge is not a browser: it reads `<!--->` as open and cannot tell a reused
+  sentinel's two occurrences apart. Re-render live before calling a cell a loss.
+- A lone CR cannot reach `extractChunks` in the product (Verify 3, CDP): do not add
+  lone-CR modelling.
+- `"<div>\n" + "<![CDATA[ ".repeat(n)` is quadratic on `44a037a` and here alike, in
+  cleanLine's `[` label scan (`inlineContainerClose`), not in this round's code:
+  NRL-172's family.
+
+NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
+
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
 commit: a `$$` display-math block between a label's opener and closer silenced the alt text

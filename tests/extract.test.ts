@@ -667,7 +667,14 @@ console.log("inline markup (NRL-9)");
 	// Footnotes.
 	eq("footnote reference dropped", "footnote[^1].", "footnote.");
 	eq("named footnote reference dropped", "See this[^note] here.", "See this here.");
-	eq("footnote definition marker dropped", "[^note]: Text.", "Text.");
+	eq("footnote definition marker dropped", "See[^note].\n\n[^note]: Text.", "See. Text.");
+	// NRL-166 fix round 2: the reading view lists only REFERENCED definitions,
+	// and of a label defined twice only the last, so an unreferenced one is text
+	// it never displays (harness 1.13.7: `P` / blank / `[^1]: QBQ` shows `P`).
+	eq("unreferenced footnote definition not read", "Before.\n\n[^note]: Hidden text.", "Before.");
+	eq("footnote reference matches without case", "See[^Note].\n\n[^nOTE]: Text.", "See. Text.");
+	eq("only the last of a twice-defined label is read", "See[^1].\n\n[^1]: First.\n\n[^1]: Last.", "See. Last.");
+	eq("escaped footnote reference is not a reference", "See \\[^1].\n\n[^1]: Hidden.", "See [^1].");
 	eq("plain link unaffected", "See [the docs](https://x.com) now.", "See the docs now.");
 
 	// Math: currency first, since a false positive eats prose.
@@ -1114,7 +1121,7 @@ console.log("NRL-45 link reference definitions (R-M08)");
 	expect("# [theref]: x.png", ["theref : x.png"]);
 	// Footnote definitions keep their own branch and their own rule (decision
 	// Q2); the pins in the NRL-9 section above cover the marker itself.
-	expect("[^note]: ZFOOTZ body text here.", ["ZFOOTZ body text here."]);
+	expect("ZREFZ[^note]\n\n[^note]: ZFOOTZ body text here.", ["ZREFZ", "ZFOOTZ body text here."]);
 
 	/*
 	 * Decision Q9, the disclosure direction. The branch sits AFTER cleanLine and
@@ -1400,13 +1407,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["wrong-obsidian-closer", "<!--\n%% hidden\n--> after.", "after."],
 		["tail-comments", "%%\nhidden\n%% after %%more%% tail <!--gone--> end.", "after tail end."],
 		["tail-html-continuation", "%%\nhidden\n%% after <!--more\nhidden\n--> tail.", "after tail."],
-		["tail-obsidian-continuation", "<!--hidden\n--> %%more\nhidden\n%% after.", "after."],
+		["tail-obsidian-continuation", "<!--hidden\n--> %%more\nhidden\n%% after.", ""],
 		["link-label", "Before [label %%hidden%% end](target) after.", "Before label end after."],
 		["wiki-alias", "Before [[target|label %%hidden%% end]] after.", "Before label end after."],
 		["highlight", "Before ==label %%hidden%% end== after.", "Before label end after."],
 		["local-label-state", "[%%literal](target) after.\nVisible.", "%%literal after. Visible."],
 		["local-html-state", "[label <!--hidden](target) after.\nVisible.", "label after. Visible."],
-		["heading-tracking", "# %%hidden\nhidden\n%% after.", "after.", { skipHeadings: true }],
+		["heading-tracking", "# %%hidden\nhidden\n%% after.", "hidden", { skipHeadings: true }],
 		["heading-html-tracking", "# Heading <!--hidden\nhidden\n--> after.", "after.", { skipHeadings: true }],
 		["table-tracking", "| cell <!--hidden\nhidden\n--> after.", "after."],
 		["table-inline", "| %%hidden%% visible |\nafter.", "| visible | after.", { skipTables: false }],
@@ -2093,7 +2100,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// opener and closer makes the construct literal and the renderer shows
 		// everything. We detect dash-ONLY lines. Declared out of scope by NRL-111's
 		// own PR before Verify measured it.
-		["tripwire-nrl111-f2-midline-dashes-between-opener-and-closer", "A <!--\nmore\n===\nHIDDENE\nB <!--\nmore2\n--> t.", "A t."],
+		// NRL-166 fix round 1: the first `<!--`'s body holds the second `<!--`, so
+		// it is no inline comment; the second one is, and hides only `more2`. Now
+		// the renderer's text, `A <!-- more === HIDDENE B t.`.
+		["tripwire-nrl111-f2-midline-dashes-between-opener-and-closer", "A <!--\nmore\n===\nHIDDENE\nB <!--\nmore2\n--> t.", "A <!-- more === HIDDENE B t."],
 		// F3, 3,072 cells over 6 of 21 shapes (room 3,072, saturated):
 		// `TERM2_SETEXT_EQ` is anchored at column 0 and the renderer peels the
 		// container prefix first, so an `=` run inside a list item or an ordered item
@@ -2165,7 +2175,11 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// skipTables positions.
 		["guard-nrl95-table-row-closer", "Prose <!--\n| a |\nHIDDENT\n--> t.", "Prose t."],
 		["guard-nrl95-table-row-closer-spoken", "Prose <!--\n| a |\nHIDDENT\n--> t.", "Prose t.", { skipTables: false }],
-		["guard-nrl95-real-gfm-table-closer", "Prose <!--\n| a | b |\n| --- | --- |\nHIDDENT\n--> t.", "Prose t."],
+		// NRL-166 fix round 1: `| --- | --- |` puts `--` in the comment's body, so the
+		// renderer has no comment and displays HIDDENT (`Prose <!-- | a | b | |
+		// --- | --- | HIDDENT --> t.`). The table-shaped lines stay silent under
+		// skipTables, a pre-existing loss.
+		["guard-nrl95-real-gfm-table-closer", "Prose <!--\n| a | b |\n| --- | --- |\nHIDDENT\n--> t.", "Prose <!-- HIDDENT --> t."],
 		// THE LIST HALF, corrected at ship review. `LIST_BULLET` is REPLACED by
 		// `TERM2_LIST`, not dropped, because it is right for bullets and wrong for
 		// ordered markers, and the earlier "a list re-offers its lines as one
@@ -2681,7 +2695,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// That is the indent BEFORE a `>`, which is a recorded NRL-98 decision
 		// (`BLOCKQUOTE`'s `\s{0,3}` cap against `ANY_QUOTE_MARKER`'s unbounded skip)
 		// rather than an open defect.
-		["pin-nrl114-tab-between-levels-still-silenced", "> Plain prose\n>	> %%\n> SECRET", "Plain prose"],
+		["pin-nrl114-tab-between-levels-still-silenced", "> Plain prose\n>	> %%\n> SECRET", "Plain prose %% SECRET"],
 		// (b) RENAMED from pin-nrl114-quote-tab-html-comment-still-silenced, because its
 		// meaning inverted and the old name was never on `main`. When 7cdc7b7 was
 		// written this shape stayed silenced: the tab-led line is a lazy continuation
@@ -2801,8 +2815,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// displays ZAZ; we drop the `<!--` block and lose ZAZ. Base spoke both, a
 		// disclosure of ZCZ. Control: the unquoted twin, which base already reads the
 		// same way. Footnote fidelity is NRL-163's.
-		["pin-nrl114-quoted-footnote-then-quoted-hr-unmasked", "> [^1]: foot ZFZ\n>\t<!-- ZCZ\n> ---\n> ZAZ -->\nZBZ", "foot ZFZ ZBZ"],
-		["guard-nrl114-unquoted-footnote-control", "[^1]: foot ZFZ\n\t<!-- ZCZ\n---\nZAZ -->\nZBZ", "foot ZFZ ZBZ"],
+		["pin-nrl114-quoted-footnote-then-quoted-hr-unmasked", "> [^1]: foot ZFZ\n>\t<!-- ZCZ\n> ---\n> ZAZ -->\nZBZ", "ZBZ"],
+		["guard-nrl114-unquoted-footnote-control", "[^1]: foot ZFZ\n\t<!-- ZCZ\n---\nZAZ -->\nZBZ", "ZBZ"],
 		// NRL-114 FIX ROUND 1. An independent Verify pass FAILED PR #212 for a
 		// DISCLOSURE with no base control, and these rows are its shapes and their
 		// siblings. Every expectation is the executed renderer's (Obsidian 1.13.7's
@@ -2850,7 +2864,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// TRIPWIRE, base parity: a quoted fence at a quote START is still spoken. Not
 		// dropped because a fence-shaped line inside a quote can be the content of a
 		// quoted fence opened above it, and this round keeps no fence state.
-		["pin-nrl114-f2-quote-start-fence-still-spoken", "Para.\n> ~~~ QBQ", "Para. ~~~ QBQ"],
+		["pin-nrl114-f2-quote-start-fence-still-spoken", "Para.\n> ~~~ QBQ", "Para."],
 		// A tab-led `%%` continuing an indented code block in a quote nested in a
 		// list item: the same quote-in-item rule. RED on the PR head, which lost QCQ.
 		["pin-nrl114-f2-code-line-pct-in-list-quote", "    -  QAQ\n> \t%% QBQ\n- >\t|---|---|\n  > \t%% QCQ", "- QAQ %% QBQ |---|---| %% QCQ", { skipCodeBlocks: false }],
@@ -2885,7 +2899,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// empty quote above it ends the opener's paragraph. Control: `>` + CR
 		// replaced by a blank line.
 		["pin-nrl114-f2-nrl163-cr-footnote-unmasked", " -|---|---| <!--\n>\r[^1]:  QDQ\n> -       --> ", "-|---|---| <!-- QDQ -->"],
-		["guard-nrl114-f2-nrl163-control", " -|---|---| <!--\n\n[^1]:  QDQ\n> -       --> ", "-|---|---| <!-- QDQ -->"],
+		["guard-nrl114-f2-nrl163-control", " -|---|---| <!--\n\n[^1]:  QDQ\n> -       --> ", "-|---|---| <!-- -->"],
 		// A LONE CR is a line terminator for the renderer, so `x` + CR + `%%` opens a
 		// real comment that hides the rest of the note. Our `\n` split never sees that
 		// line start, and the PR head's code mask then spoke the quoted `<!--` line
@@ -2904,7 +2918,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl114-r1-lazy-item-in-open-quote-still-dedents", ">\n2. b\n> \t%% HIDDEN\n> more", "b"],
 		["guard-nrl114-r1-item-after-quoted-rule-still-dedents", "> ---\n2. b\n  > \t%% HIDDEN\nafter", "b"],
 		// A raw HTML block holds the lines under it; they keep the old answer.
-		["guard-nrl114-r1-raw-html-block-keeps-dedent", "<div>\n- > x <!-- QS\n> \t%% QK", "x <!-- QS"],
+		["guard-nrl114-r1-raw-html-block-keeps-dedent", "<div>\n- > x <!-- QS\n> \t%% QK", "x"],
 		// `2.` cannot interrupt a paragraph, so `2. ~~~ js` there is TEXT; the fence
 		// drop needs the item to start a block. Base parity.
 		["guard-nrl114-r1-non-interrupting-ordered-marker-is-text", "Para one\n2. ~~~ js\nmore", "Para one ~~~ js more"],
@@ -2930,17 +2944,98 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// line (module 8776's type 6 runs to a blank line), so its `<!--  QCQ` /
 		// `> - ... -->` is one hidden comment; we speak it. Control: the unquoted
 		// twin, which base already speaks. NRL-137's raw-HTML class.
-		["pin-nrl166-min-div-block-holds-quoted-item-closer", " <div>      <!--  QCQ\n> -    --> ", "<!-- QCQ -->"],
-		["guard-nrl166-min-div-block-unquoted-control", " <div>      <!--  QCQ\n-    --> ", "<!-- QCQ -->"],
-		["pin-nrl166-min-div-block-holds-quoted-item-pct-closer", " <div>      <!--  QCQ\n> -  %%  --> QEQ", "<!-- QCQ"],
-		["guard-nrl166-min-div-block-pct-unquoted-control", " <div>      <!--  QCQ\n-  %%  --> QEQ", "<!-- QCQ"],
+		["pin-nrl166-min-div-block-holds-quoted-item-closer", " <div>      <!--  QCQ\n> -    --> ", ""],
+		["guard-nrl166-min-div-block-unquoted-control", " <div>      <!--  QCQ\n-    --> ", ""],
+		["pin-nrl166-min-div-block-holds-quoted-item-pct-closer", " <div>      <!--  QCQ\n> -  %%  --> QEQ", ""],
+		["guard-nrl166-min-div-block-pct-unquoted-control", " <div>      <!--  QCQ\n-  %%  --> QEQ", ""],
 		// (ii) A quoted fence at a quote start keeps its info string spoken
 		// (`pin-nrl114-f2-quote-start-fence-still-spoken`). Control: the `-->`
 		// defused, which base speaks byte-identically modulo that token.
+		// Fix round 3: a fence line holding `-->` is left to the old answer, since
+		// the renderer writes it into a `class` where it can close a browser comment.
 		["pin-nrl166-min-quote-start-fence-info-spoken", " text <!--  QCQ\r\n> ```    QEQ -->", "text <!-- QCQ QEQ -->"],
 		// (iii) An unreferenced footnote definition the renderer hides (NRL-163).
 		// Control, mask ALL: the unquoted twin; mask DEF: the `-->` defused.
-		["pin-nrl166-min-unreferenced-footnote-spoken", ">\t     <!--\n [^1]:  QBQ -->", "<!-- : QBQ -->"],
+		["pin-nrl166-min-unreferenced-footnote-spoken", ">\t     <!--\n [^1]:  QBQ -->", "<!--"],
+		// NRL-166 fix round 1: Verify's own F1-structure census (199,584 shapes)
+		// found three classes NEWLY LOST against main e2afbfe once the callout line
+		// is read as lazy, each a pre-existing main loss on its de-callout twin.
+		// Every row is the executed renderer's visible text (harness 1.13.7), and
+		// every pin is RED on 44a037a (fix round 0).
+		// Class A: an INLINE comment may not hold `--` (CommonMark's comment rule,
+		// module 4839), so a term-2 opener whose body up to its `-->` holds one is
+		// literal text and the next `<!--` is the comment.
+		["pin-nrl166-r1-a-callout-body-holds-opener", "- > Plain QAQ <!-- QXQ\n> [!tip] QBQ <!--\n> QCQ -->", "Plain QAQ <!-- QXQ QBQ"],
+		["pin-nrl166-r1-a-decallout-twin", "- > Plain QAQ <!-- QXQ\n> Tip QBQ <!--\n> QCQ -->", "Plain QAQ <!-- QXQ Tip QBQ"],
+		["pin-nrl166-r1-a-plain-paragraph", "Plain QAQ <!-- QXQ\nQBQ <!--\nQCQ -->\nTAIL QDQ", "Plain QAQ <!-- QXQ QBQ TAIL QDQ"],
+		["pin-nrl166-r1-a-quoted-dash-pair", "> P <!-- QXQ\n> -- QBQ --> Z", "P <!-- QXQ -- QBQ --> Z"],
+		["pin-nrl166-r1-a-body-ends-in-dash", "P <!-- QXQ\nQBQ ---> Z", "P <!-- QXQ QBQ ---> Z"],
+		["pin-nrl166-r1-a-abrupt-opener", "P <!--> QXQ\nQBQ --> Z", "P <!--> QXQ QBQ --> Z"],
+		// Valid bodies stay hidden: a dash at a line end is not `--` across the
+		// line break, and `->` after the line break is not at the body's start.
+		// A line-start `<!--` is an HTML block, where `--` does not matter.
+		["guard-nrl166-r1-a-dash-before-break-hidden", "P <!-- QXQ -\n--> Z", "P Z"],
+		["guard-nrl166-r1-a-arrow-after-break-hidden", "P <!--\n-> QXQ --> Z", "P Z"],
+		["guard-nrl166-r1-a-block-comment-ignores-dashes", "<!-- QXQ\n-- QBQ -->\nZ", "Z"],
+		// Class C: a lazy line led by indented code ENDS a quote (`indentedCode` is
+		// in `interruptBlockquote`), so `>\t-->` after a deeper quote's paragraph is a
+		// code block of the outer quote and closes nothing. We speak that code line
+		// as prose, as main does: displayed text either way.
+		["pin-nrl166-r1-c-item-quote-callout-code-closer", "- >> Plain QAQ <!-- QXQ\n> [!x]\n>\t--> QCQ", "Plain QAQ <!-- QXQ --> QCQ"],
+		["pin-nrl166-r1-c-nested-callout-code-closer", "- > > Plain QAQ <!-- QXQ\n> [!tip] QBQ\n>\t--> QCQ", "Plain QAQ <!-- QXQ QBQ --> QCQ"],
+		["pin-nrl166-r1-c-decallout-twin", "> > P <!-- QXQ\n> QBQ\n>\t--> QCQ", "P <!-- QXQ QBQ --> QCQ"],
+		// The same `>\t-->` at the paragraph's own depth is a lazy line, and a tab
+		// under a list item's quote is the item's indent: both still close.
+		["guard-nrl166-r1-c-same-depth-tab-closer-hidden", "> P <!-- QXQ\n>\t--> Z", "P Z"],
+		["guard-nrl166-r1-c-item-indent-tab-closer-hidden", "- > P <!-- QXQ\n\t--> Z", "P Z"],
+		["guard-nrl166-r1-c-three-columns-closer-hidden", "> > P <!-- QXQ\n>    --> Z", "P Z"],
+		// The code-line stop is for a PARAGRAPH opener only. Here the trailing
+		// `<!--` follows a raw HTML line, so it is a browser comment that runs on
+		// through the rendered code block and hides QBQ and QCQ. RED on an arm that
+		// applied the stop to every opener (minimised from the seed-31337 fuzz).
+		["guard-nrl166-r1-c-browser-comment-crosses-code-line", "1. ><!-- y --> QAQ <!--\n>>> \tQBQ\n>> QCQ\n> >\t --> QDQ", "QAQ QDQ"],
+		// /critique on the first fix-round commit, each NEWLY DISCLOSING there: an
+		// inline construct still open around the `<!--` (an attribute value, a link
+		// title, a declaration, CDATA, an image label that becomes `alt`) displays
+		// nothing, so the body rule must not make it spoken. Each expectation is
+		// main e2afbfe's output; QAQ and QBQ are hidden by the renderer in all.
+		["guard-nrl166-r1-a-attribute-value-holds-opener", "Note <span title=\"<!-- QAQ -- secret\nQBQ -->\">QCQ</span>", "Note <span title=\" \">QCQ"],
+		["guard-nrl166-r1-a-link-title-holds-opener", "P [a](u \"<!-- QAQ -- x\nQBQ -->\") QCQ", "P a u \" \") QCQ"],
+		["guard-nrl166-r1-a-tag-opened-a-line-above", "P <abbr\ntitle=\"<!-- QAQ -- y\"\ndata-x=\"QBQ -->\">QCQ</abbr>", "P <abbr title=\" \">QCQ"],
+		["guard-nrl166-r1-a-img-alt-holds-opener", "P <img alt=\"<!-- QAQ -- y\nQBQ -->\"> QCQ", "P <img alt=\" \"> QCQ"],
+		["guard-nrl166-r1-a-cdata-holds-opener", "P <![CDATA[ QAQ <!-- QBQ -- x\nQCQ --> ]]> QDQ", "P <[CDATA[ QAQ ]]> QDQ"],
+		["guard-nrl166-r1-a-declaration-holds-opener", "P <!DOCTYPE QAQ <!-- QBQ -- x\nQCQ --> > QDQ", "P <!DOCTYPE QAQ > QDQ"],
+		["guard-nrl166-r1-a-image-label-holds-opener", "P ![al <!-- QAQ -- x\nQBQ -->](u) QCQ", "P [al ](u) QCQ"],
+		// An UNREFERENCED footnote definition is hidden by the renderer and not
+		// modelled here; an old over-hiding comment was masking it, so a note with
+		// any `[^x]:` shape keeps every fix-round-1 refinement off. QBAQ is hidden by
+		// the renderer in both; each row was NEWLY DISCLOSING without the gate.
+		["guard-nrl166-r1-footnote-after-code-ended-quote", "> > ```\n> \t<!-- QAAQ\n> > [^1]: QBAQ", "", { skipCodeBlocks: false }],
+		// /critique round 2, each NEWLY DISCLOSING on 14984fa: an image label that
+		// starts with `!`, and constructs that open INSIDE the would-be body or between
+		// the opener and the old bound's `-->` (a processing-instruction or `<!X`
+		// block line, a tag, a link title, an image label), which the renderer hides
+		// while an old over-hiding comment covered them. Expectations are main
+		// e2afbfe's output.
+		["guard-nrl166-r1-image-label-bang", "![!x <!-- QAQ -- QBQ\nQCQ -->](a.png) QDQ", "[!x ](a.png) QDQ"],
+		["guard-nrl166-r1-pi-block-in-body", "P <!-- QAQ -- QBQ\n<?x QEQ\nQCQ --> QDQ", "P QDQ"],
+		["guard-nrl166-r1-tag-opens-in-body", "P <!-- QAQ -- <b title=\"QBQ\nQCQ -->\">QDQ</b>", "P \">QDQ"],
+		["guard-nrl166-r1-link-title-in-body", "P <!-- QAQ -- QBQ [x](u \"QEQ\nQCQ -->\") QDQ", "P \") QDQ"],
+		["guard-nrl166-r1-declaration-block-before-code-stop", "P <!-- QAAQ\n><!X QBAQ\n    QDAQ\n> \tQEAQ --->", "P", { skipCodeBlocks: false }],
+		["guard-nrl166-r1-image-label-before-code-stop", "![!x <!-- QBAQ\nQCAQ](a.png)\n>\t]] -->", "[!x", { skipCodeBlocks: false }],
+		["guard-nrl166-r1-walker-code-line-over-image-label", "> > QAAQ\n>\t[r]: \"<!-- QCAQ\n![QDAQ\nQEAQ -->](a.png)", "QAAQ r : \" ](a.png)", { skipCodeBlocks: false }],
+		// /critique round 3, Q1: a `---` block extractChunks does not take as
+		// frontmatter is still `pre.frontmatter` for the renderer; a note whose first
+		// line is `---` keeps main's answer.
+		["guard-nrl166-r1-unrecognised-frontmatter-keeps-old-answer", "---\nk: v\nP <!-- QAQ -- QBQ\nQCQ --> QDQ\n---\nQEQ", "k: v P QDQ QEQ"],
+		["guard-nrl166-r1-footnote-under-comment", "P <!-- QAAQ\n> \t<div>\n[^1]: QBAQ --> QCAQ\n- QDAQ -->", "P QDAQ -->", { skipCodeBlocks: false }],
+		// Class B: `- > \t` opens indented code inside the item's quote, so its
+		// `<!--` is code. A `%%` line below ends the list uncertainly and the walker
+		// skipped the whole last item; its FIRST line does not depend on where the
+		// item ends. We speak the code line as prose, as main does.
+		["pin-nrl166-r1-b-item-quote-code-opener-then-pct", "- > \tPlain QAQ <!-- QXQ\n> [!tip] QBQ -->\n%%", "Plain QAQ <!-- QXQ QBQ -->"],
+		["pin-nrl166-r1-b-item-quote-code-opener-then-pct-tail", "- > \tPlain QAQ <!-- QXQ\n> [!tip] QBQ -->\n%%\nTAIL QDQ", "Plain QAQ <!-- QXQ QBQ -->"],
+		["pin-nrl166-r1-b-decallout-twin", "- > \tPlain QAQ <!-- QXQ\n> Tip QBQ -->\n%%", "Plain QAQ <!-- QXQ Tip QBQ -->"],
 		// F3. Three UNMASKING classes Verify's 808,704-shape structured census found
 		// NEWLY LOST against base and no ADR row named. Each is fail-closed (we hide
 		// text the renderer displays), each was hidden on base only because the wide
@@ -2953,10 +3048,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl114-f3a-vt-led-html-opener-unmasked", "> Plain ZPZ prose\n>\v<!-- ZAZ\n>\t===\n> ZBZ\nTAIL ZDZ", "Plain ZPZ prose"],
 		["guard-nrl114-f3a-control", "> Plain ZPZ prose\n> \v<!-- ZAZ\n> \t===\n> ZBZ\nTAIL ZDZ", "Plain ZPZ prose"],
 		// (b) an inline comment may not contain `--`, so `<!-- ZAZ` / `---` / `ZBZ -->`
-		// in one paragraph is NOT a comment for the renderer; term 2 does not check
-		// the body (64 cells).
-		["pin-nrl114-f3b-comment-body-holding-dashes-unmasked", "> Plain ZPZ prose\n>\t<!-- ZAZ\n>\t---\n> ZBZ -->\nTAIL ZDZ", "Plain ZPZ prose TAIL ZDZ"],
-		["guard-nrl114-f3b-control", "> Plain ZPZ prose\n> \t<!-- ZAZ\n> \t---\n> ZBZ -->\nTAIL ZDZ", "Plain ZPZ prose TAIL ZDZ"],
+		// in one paragraph is NOT a comment for the renderer (64 cells). CLOSED by
+		// NRL-166 fix round 1, which checks the body on lines the walker is sure
+		// are paragraph text: both rows now speak the renderer's text (its `---`
+		// is a lazy line; we drop the dashes).
+		["pin-nrl114-f3b-comment-body-holding-dashes-unmasked", "> Plain ZPZ prose\n>\t<!-- ZAZ\n>\t---\n> ZBZ -->\nTAIL ZDZ", "Plain ZPZ prose <!-- ZAZ ZBZ --> TAIL ZDZ"],
+		["guard-nrl114-f3b-control", "> Plain ZPZ prose\n> \t<!-- ZAZ\n> \t---\n> ZBZ -->\nTAIL ZDZ", "Plain ZPZ prose <!-- ZAZ ZBZ --> TAIL ZDZ"],
 		// (c) the shared `FENCE` is `^\s*`, so a tab-led ``` is read as a fence where
 		// module 134 makes it indented code (208 cells).
 		// NRL-166 port (2026-10-08): CLOSED on main by NRL-156 (#214), which caps
@@ -3473,8 +3570,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// this is that PRE-EXISTING root unmasked, not a scope error. Was "" (base's
 		// note-scoped block hid it). MUST CHANGE ON PURPOSE when raw HTML blocks are
 		// modelled.
-		["pin-nrl118-ship-tab-after-tag-not-html", "> %%\n<div\tx\nSECRET", "<div x SECRET"],
-		["guard-nrl118-unterminated-tag-control-no-comment", "> x\n<div\tx\nSECRET", "x <div x SECRET"],
+		["pin-nrl118-ship-tab-after-tag-not-html", "> %%\n<div\tx\nSECRET", ""],
+		["guard-nrl118-unterminated-tag-control-no-comment", "> x\n<div\tx\nSECRET", "x"],
 		// Found by the same fuzz once the rows above were fixed, reduced by line
 		// deletion. Each was "" or hid SECRET on base and spoke it on the first
 		// revision. `-\t---` is a list item HOLDING a break (the renderer refuses a
@@ -3498,7 +3595,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// after `>---` and inside an HTML comment, and trusting them newly spoke
 		// hidden text in 32 reduced fuzz notes. MUST CHANGE ON PURPOSE when a
 		// reliable open-paragraph signal exists.
-		["pin-nrl118-ship-percent-after-continuation-marker-still-hidden", "Prose.\n2. %%\nSECRET", "Prose."],
+		["pin-nrl118-ship-percent-after-continuation-marker-still-hidden", "Prose.\n2. %%\nSECRET", "Prose. %% SECRET"],
 		// A marker indented four or more columns is indented CODE, not an item, so
 		// it opens no container: the `>  %%` block below is a top-level quote's,
 		// and the lazy `2. > SECRET` stays inside it.
@@ -3604,8 +3701,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// the dedent term correctly reports a block start while the renderer reads
 		// the line as indented CODE, and nothing routes it to the code exclusion, so
 		// `skipCodeBlocks` cannot reach it. That is not the indent.
-		["pin-nrl118-residual-code-depth-line-after-item", "-    %%\n    %% PROSE", ""],
-		["guard-nrl118-residual-code-depth-line-after-item-control", "-    xx\n    %% PROSE", "xx"],
+		["pin-nrl118-residual-code-depth-line-after-item", "-    %%\n    %% PROSE", "%% PROSE"],
+		["guard-nrl118-residual-code-depth-line-after-item-control", "-    xx\n    %% PROSE", "xx %% PROSE"],
 		// NRL-117. `listDedented` stopped being "this line is list content, so keep
 		// the old any-whitespace rule" and became that CONJOINED with "and the item's
 		// own dedent really does leave the lead at the block start a `%%` opener
@@ -3696,8 +3793,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// it as item content and dedent it away. `-    item` budgets five columns, so a
 		// four-space `%%` is shallower; so is a four-space one under `100. item` or
 		// `   - item`. Measured at 22 cells of a 667-cell renderer-keyed sweep.
-		["pin-nrl117-shallower-than-content-indent-still-silenced", "-    item\n    %%\nSECRET", "item"],
-		["pin-nrl117-wide-ordered-marker-still-silenced", "100. item\n    %%\nSECRET", "item"],
+		["pin-nrl117-shallower-than-content-indent-still-silenced", "-    item\n    %%\nSECRET", "item %% SECRET"],
+		["pin-nrl117-wide-ordered-marker-still-silenced", "100. item\n    %%\nSECRET", "item %% SECRET"],
 		// 3. CLOSED BY NRL-162 (2026-10-03). This used to document the budget
 		// being module 5540's `maximum` rather than the `p` it really uses (the
 		// minimum indent over the item's own non-blank lines), and claimed that
@@ -3897,7 +3994,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// the NRL-137 raw-HTML class, already recorded as an unmasking; what this
 		// pins is that VISIBLED is spoken.
 		["pin-nrl120-setext-needs-exact-underline", "Prose VISIBLEP <!--\n ===\n$$\nVISIBLEM --> t.", "Prose VISIBLEP <!-- === $$ VISIBLEM --> t.", { skipHeadings: true }],
-		["pin-nrl120-setext-needs-one-content-line", "<div>\nVISIBLED\n<div><!--\n===\n$$\nHIDDENM --> t.", "VISIBLED <!-- === $$ HIDDENM --> t.", { skipHeadings: true }],
+		["pin-nrl120-setext-needs-one-content-line", "<div>\nVISIBLED\n<div><!--\n===\n$$\nHIDDENM --> t.", "VISIBLED t.", { skipHeadings: true }],
 		["pin-nrl120-unmasked-same-line-reopen", "<!-- SECRETH\n---\n<!-- y --> <!--\nHIDDENA", "<!-- SECRETH"],
 		["guard-nrl120-same-line-reopen-on-base", "SEEN\n---\n<!-- y --> <!--\nHIDDENA", "SEEN"],
 		// Three more unmaskings, found by NRL-120's Ship census (73,728 newly
@@ -3921,10 +4018,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// and are deliberately unchanged.
 		["pin-nrl120-unmasked-reopen-by-math-stop", "<!-- y --> <!--\nHIDDENA\n$$\n--> t.", "t."],
 		["guard-nrl120-reopen-blank-stop-on-base", "<!-- y --> <!--\nHIDDENA\n\n--> t.", "t."],
-		["pin-nrl120-unmasked-processing-instruction", "<!--\n===\n<?x\nHIDDENP", "<!-- <?x HIDDENP"],
-		["guard-nrl120-processing-instruction-on-base", "SEEN\n===\n<?x\nHIDDENP", "SEEN <?x HIDDENP"],
-		["pin-nrl120-unmasked-div-block-comment", "<!--\n===\n<div>\nProse <!-- HIDDEND", "<!-- Prose <!-- HIDDEND"],
-		["guard-nrl120-div-block-comment-on-base", "SEEN\n===\n<div>\nProse <!-- HIDDEND", "SEEN Prose <!-- HIDDEND"],
+		["pin-nrl120-unmasked-processing-instruction", "<!--\n===\n<?x\nHIDDENP", "<!--"],
+		["guard-nrl120-processing-instruction-on-base", "SEEN\n===\n<?x\nHIDDENP", "SEEN"],
+		["pin-nrl120-unmasked-div-block-comment", "<!--\n===\n<div>\nProse <!-- HIDDEND", "<!-- Prose"],
+		["guard-nrl120-div-block-comment-on-base", "SEEN\n===\n<div>\nProse <!-- HIDDEND", "SEEN Prose"],
 		// NRL-120 PART 2. `math` is in `u.interruptParagraph` unconditionally, so a
 		// `$$` line ends the paragraph a mid-line `<!--` belongs to and module 4839's
 		// inline regex cannot reach the `-->` past it. Measured: `Prose <!--` / `$$` /
@@ -4317,6 +4414,220 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// the fix (renderer displays every line).
 		["guard-nrl115-crlf-lazy-continuation-spoken", "Before x.\r\n\t<!--\r\nHIDDEN1\r\nmore", "Before x. <!-- HIDDEN1 more"],
 		["guard-nrl115-f3-cap33-setext-fails-closed", "> ".repeat(33) + "PROSEP\n" + "> ".repeat(33) + "===\n" + "> ".repeat(33) + " \t<!--\n" + "> ".repeat(33) + "SECRET\n" + "> ".repeat(33) + "VISIBLE", "PROSEP ==="],
+		// NRL-166 fix round 2 (Verify 2 at c4a370e). Every row is the executed
+		// renderer's visible text (harness 1.13.7) less non-sentinel markup, except
+		// the two `residual` pins, and every `pin` is RED on c4a370e. `d219` and `dbcc`
+		// are the disclosures #219 and bcc59fe left on main, `l44` the losses c4a370e
+		// made against 44a037a, `e2` losses against e2afbfe that round 1 withheld
+		// note-wide. The renderer's own hiding (footnote definitions it drops, `%%`
+		// blocks, raw HTML markup) now comes from its block parser's transcription
+		// (`rendererHiddenText`), and our `%%` block opener stands only where it opens
+		// one too. Rows moved by this round, all to the renderer's text: the NRL-114,
+		// NRL-117, NRL-118 and NRL-120 `still-silenced` / `unmasked` pins and their
+		// controls, the NRL-166 div-block and footnote pins, NRL-136's residual div
+		// opener, and NRL-38's `heading-tracking` and `tail-obsidian-continuation`.
+		["pin-nrl166-r2-d219-pct-under-item-quote-bare-marker", "- > -\n>\t%%\nQBAQ", "-"],
+		["pin-nrl166-r2-d219-pct-block-interrupts-quote-paragraph", "- > -\n>\tP\n>\t%% QCAQ\nQBAQ %% QDAQ", "- P QDAQ"],
+		["pin-nrl166-r2-d219-crlf-pct-after-inline-opener", "- > -\r\n>\tP <!-- QAAQ\r\n>\t%%\r\nQBAQ --", "P <!-- QAAQ"],
+		["pin-nrl166-r2-d219-unreferenced-footnote-tail", "- >> P QAQ <!-- QXQ\n>\t%% QBQ\n>\tQCQ\n[^1]: QFQ", "P QAQ <!-- QXQ %% QBQ QCQ"],
+		["pin-nrl166-r2-dbcc-processing-instruction-block", "- > \t<!-- QXQ\n<?x QBQ\n--> QCQ", "<!-- QXQ QCQ"],
+		["pin-nrl166-r2-dbcc-unreferenced-footnote-lazy", "- > \t<!-- QXQ\n[^1]: QBQ\nQCQ -->", "<!-- QXQ"],
+		["pin-nrl166-r2-unreferenced-footnote-plain", "P\n\n[^1]: QBQ\n    QCQ\n\nQDQ", "P QDQ"],
+		["pin-nrl166-r2-unreferenced-footnote-in-quote", "P\n\n> [^1]: QAQ\n> QBQ", "P"],
+		["guard-nrl166-r2-referenced-footnote-spoken", "P [^1]\n\n[^1]: QBQ", "P QBQ"],
+		["guard-nrl166-r2-reference-in-pct-comment-counts", "%%\n[^1]\n%%\n\n[^1]: QBQ", "QBQ"],
+		["pin-nrl166-r2-reference-in-fence-does-not-count", "```\n[^1]\n```\n\n[^1]: QBQ", "[^1]", { skipCodeBlocks: false }],
+		["guard-nrl166-r2-nested-last-definition-kept", "[^1]: [^1]: QAAQ\n\nP\n[^1]: QHAQ", ": QAAQ P QHAQ"],
+		["pin-nrl166-r2-processing-instruction-ends-at-gt", "P\n\n<?x QBQ\nQCQ ?> QDQ\nQEQ", "P QDQ QEQ"],
+		["pin-nrl166-r2-declaration-ends-at-gt", "P\n\n<!X QBQ\nQCQ > QDQ\n\nQEQ", "P QDQ QEQ"],
+		["pin-nrl166-r2-cdata-ends-at-gt", "P\n\n<![CDATA[ QBQ\nQCQ ]]> QDQ\nQEQ", "P QDQ QEQ"],
+		["pin-nrl166-r2-cdata-in-item-then-browser-comment", "- <![CDATA[ QAAQ\n> \t![!x <!-- QBAQ -- QCAQ\n>- QDAQ\n> - QEAQ -->", "[!x"],
+		// NRL-166 fix round 3: nothing past the block is hidden for an open
+		// attribute value any more (the renderer's own quotes may end it first), so
+		// this row keeps 44a037a's answer less the block's own markup. A
+		// disclosure equal to main's (QBQ, QCQ, QDQ), reopened on purpose.
+		["pin-nrl166-r3-open-attribute-not-hidden-past-the-block", "<div title='QAQ\n\n- QBQ\n- QCQ ' QDQ\n\n> QEQ", "QBQ QCQ ' QDQ QEQ"],
+		["guard-nrl166-r2-tag-attribute-in-html-block", "P\n\n<div>\nQBQ <span title=\"QXQ\">QCQ</span>\n</div>", "P QBQ QCQ"],
+		["guard-nrl166-r2-pct-span-ends-at-its-newline", "> \tQAAQ ---> QBAQ\n[^1]: %%\n>    - QCAQ", "QAAQ ---> QBAQ QCAQ"],
+		["pin-nrl166-r2-lazy-callout-pct-is-text", "> P\n> [!note] %%\n> QBAQ QDAQ", "P %% QBAQ QDAQ"],
+		["pin-nrl166-r2-l44-lazy-callout-pct-after-literal-opener", "> P <!-- QAAQ\n> [!note] %%\n> QBAQ <!-- QCAQ --> QDAQ", "P <!-- QAAQ %% QBAQ QDAQ"],
+		["pin-nrl166-r2-l44-lazy-callout-pct-two-callouts", "> QAAQ <!-- QBAQ --> QCAQ <!-- QDAQ\n> [!note] %%\n> > -> QEAQ\n> [!note] QFAQ ---> QGAQ", "QAAQ QCAQ <!-- QDAQ %% -> QEAQ QFAQ ---> QGAQ"],
+		// Fix round 3: the `<!-- QEAQ` its line leaves open lies in the withheld
+		// opener's reach, so our opener keeps its 44a037a answer here and this row
+		// is 44a037a's again (QAAQ and QBAQ lost, as on main).
+		["pin-nrl166-r2-l44-lazy-callout-pct-indented-tail", "> P <!-- QAAQ\n> [!note] %%\n>    QBAQ <!-- QCAQ --> QDAQ <!-- QEAQ\n>\t-- QFAQ\n\tQGAQ %% -- %% QHAQ", "P QDAQ <!-- QEAQ -- QFAQ QGAQ QHAQ"],
+		["guard-nrl166-r2-withheld-pct-not-past-html-block", "> \tP <!--- QAAQ\n> [!note] %%\n<div>\n> P <!--> QBAQ\n- $$", "P <!--- QAAQ"],
+		["guard-nrl166-r2-withheld-pct-not-after-open-browser-comment", "> - <!-- QAAQ\nQBAQ <!-- QCAQ --> QDAQ <!-- QEAQ\n\t%%\n  - P <!--- QFAQ\n[^1]: P <!--- QGAQ", "QDAQ"],
+		["guard-nrl166-r2-withheld-pct-not-after-open-attribute", "<!X QAAQ\r\n> - <b title=\"QBAQ\r\n> \t%%\r\n> [!note] P <!-- QCAQ -\r\n  - QDAQ -->\") QEAQ", ""],
+		["guard-nrl166-r2-dropped-footnote-keeps-our-comment", "- > [^1]: QAAQ\n\tP <!-- QBAQ\n\tQCAQ\n    <!-- QDAQ", ""],
+		["pin-nrl166-r2-e2-unclosed-leading-rule-not-frontmatter", "---\n- > P QAQ <!--\n> [!tip] QBQ\n> QCQ --->", "P QAQ <!-- QBQ QCQ --->"],
+		["pin-nrl166-r2-e2-footnote-reference-elsewhere", "QHQ [^1]\n\n- > P QAQ <!--> QXQ\n> [!tip] QBQ\n> \t--> QCQ", "QHQ P QAQ <!--> QXQ QBQ --> QCQ"],
+		["pin-nrl166-r2-e2-link-in-another-paragraph", "[l](u) QHQ\n\n- > P QAQ <!--> QXQ\n> [!tip] QBQ\n> \t--> QCQ", "l QHQ P QAQ <!--> QXQ QBQ --> QCQ"],
+		["pin-nrl166-r2-e2-exact-pct-ends-list", "- >> P QAQ <!--\n> [!tip] QBQ\n> \t--> QCQ\n%%", "P QAQ <!-- QBQ --> QCQ"],
+		["pin-nrl166-r2-e2-exact-pct-ends-list-nested", "- > > P QAQ <!-- QXQ\n> [!tip] QBQ\n> \t--> QCQ\n%%", "P QAQ <!-- QXQ QBQ --> QCQ"],
+		// A backtick is no longer an inline-construct shape: a code span DISPLAYS
+		// its text, so it cannot be hiding what a refined answer would speak.
+		["pin-nrl166-r2-e2-backtick-on-opener-line", "- > P QAQ `<!-- QXQ\n> [!tip] QBQ\n> QCQ --->", "P QAQ <!-- QXQ QBQ QCQ --->"],
+		// Nor is a `](` without its `[`: a link cannot reach the opener without one.
+		["pin-nrl166-r2-e2-bracket-paren-without-label", "1. > P QAQ <!--> QXQ\n> [!tip] QBQ\n> QCQ](u) --> QZQ", "P QAQ <!--> QXQ QBQ QCQ](u) --> QZQ"],
+		["guard-nrl166-r2-bracket-paren-closer-still-closes", "- >> P QAQ <!--\n> [!tip] QBQ\n> QCQ](u) -->", "P QAQ"],
+		// A tag's attribute on the opener line still withholds the refinements.
+		["pin-nrl166-r2-residual-tag-on-opener-line-still-lost", "- > P QAQ <b title=\"<!-- QXQ\n> [!tip] QBQ\n> QCQ --->", "P QAQ <b title=\""],
+		["pin-nrl166-r2-residual-pct-with-percent-after-still-lost", "- >> P QAQ <!--\n> [!tip] QBQ\n> \t--> QCQ\n%% 5% x", "P QAQ QCQ %% 5% x"],
+		// /critique on 383f85c (BLOCK, 35): each row is the renderer's text, RED on 383f85c.
+		// F1/F2 our `%%` opener is kept where an inline construct or a footnote
+		// definition is in its reach; F3/F4 a reference inside an HTML comment or a
+		// definition no longer counts; F8 an
+		// attribute a kept footnote leaves open swallows only the footnotes section.
+		["pin-nrl166-r2c-f1-link-title-over-lazy-pct", ">[](u \"\n>[!e]%%QBQ\")", "u \""],
+		["pin-nrl166-r2c-f1-tag-attribute-over-lazy-pct", "> P <b title=\"QAQ\n> [!note] %% QBQ\n> QCQ\">QDQ</b>", "P <b title=\"QAQ"],
+		// Fix round 3: a reference in a code span MAY count, so the definition is
+		// kept as on 44a037a and our opener keeps its answer beside it: `a` is
+		// spoken as 44a037a speaks it (a main-equal disclosure, reopened).
+		["pin-nrl166-r2c-f2-code-span-reference-not-counted", "> [^1]: a\n> [!e] %% QJQ `[^1]`", "a", { skipInlineCode: false }],
+		["pin-nrl166-r2c-f3-reference-in-html-comment-not-counted", "[^1]: %% <!-- [^1] -->\n%% QDQ", ""],
+		["pin-nrl166-r2c-f4-reference-in-definition-not-counted", ">- \n    %%\n[^1]:[^2]:QKQ[^1]", ""],
+		// Fix round 3: an HTML block in a footnote definition is not read (it is
+		// written among unmodelled renderer markup at the page's end), so these
+		// three keep 44a037a's answer; QBQ and QDQ are main-equal disclosures.
+		["pin-nrl166-r2c-f8-footnote-attribute-stays-in-footnotes", "[^a]:<div '\n1. QAQ[^a]", "<div ' QAQ", { stripTags: false }],
+		// Nested definitions take their INNERMOST definition's fate, a reference inside
+		// a definition counts, and a note the transcription cannot read (a lone CR)
+		// hides HTML-block markup by a wide stand-in (`fallbackHtmlHidden`).
+		["pin-nrl166-r2c-nested-unreferenced-definition-hidden", "[^1]:[^2]:QKQ[^1]", ""],
+		["guard-nrl166-r2c-reference-inside-definition-counts", "[^2]: x [^1]\n\n[^1]: QAQ", "QAQ"],
+		["guard-nrl166-r2c-self-reference-in-heading-counts", "[^1]: [^1]: QAAQ\n\t===", ": QAAQ ==="],
+		["pin-nrl166-r2c-lone-cr-open-attribute-hidden", "1. QFQ [^1]\r<!-->\n> - <!-->\n    QGQ QHQ\n- <div title='QIQ\n[^1]: \n> - [^1]", "QFQ QGQ QHQ"],
+		["pin-nrl166-r2c-lone-cr-open-attribute-hidden-in-code-note", "\tQLQ [^a]\r  ---\n> \tQAQ <!-- QBQ -- QCQ\n\t<!-->\n- <div title='QDQ\n    [x]: /u \"QEQ", "QAQ"],
+		// /critique on 996e8a7 (CONCERNS, 74), losses against main, each RED on 996e8a7:
+		// the lone-CR stand-in reads only a real HTML block start as HTML (F1), and an
+		// attribute a kept footnote leaves open hides only from the tag on (F2).
+		["pin-nrl166-r2d-f1-lone-cr-paragraph-tag-is-text", "a\rb\n<b title=\"QAQ\n\nQBQ\n\n# QCQ", "a b <b title=\"QAQ QBQ QCQ"],
+		["pin-nrl166-r2d-f1-lone-cr-tag-line-is-text", "<b title=\"QAQ\rQBQ", "<b title=\"QAQ QBQ"],
+		["pin-nrl166-r2d-f2-footnote-attribute-hides-from-the-tag", "P [^1]\n\n[^1]: QAQ\n    <p class='QBQ", "P QAQ <p class='QBQ", { stripTags: false }],
+		["pin-nrl166-r2d-f2-footnote-attribute-hides-later-footnotes-only", "P [^1] [^2]\n\n[^1]: QAQ\n\n[^2]: QCQ <p class='QBQ\n    <p class='QDQ", "P QAQ QCQ <p class='QBQ <p class='QDQ", { stripTags: false }],
+		// /critique on db55516 (CONCERNS, 66), losses against main, RED on db55516: the
+		// lone-CR stand-in skips a line inside an attribute an earlier line left open
+		// (N1), splits lines where the renderer does, on a lone CR too (N2), and an open
+		// attribute ends at the next blank line once its quote has closed.
+		["pin-nrl166-r2e-n1-closing-quote-line-is-not-a-new-tag", "a\rb\n<div title=\"x\n<div title=\"y\n\nQAQ", "a b QAQ"],
+		["pin-nrl166-r2e-n2-lone-cr-breaks-the-stand-in-line", "a\rb\n</div>\r\r<b title=\"QAQ\n\nQBQ", "a b <b title=\"QAQ QBQ"],
+		// /critique on 2d44f59 (CONCERNS, 68): disclosures equal to main that db55516
+		// had closed and 2d44f59 reopened, each RED on 2d44f59: a quote in a footnote
+		// definition closes no attribute (F1), and the lone-CR stand-in reads a block
+		// through to its blank line again (F2).
+		// Fix round 3 hides nothing past the block for an open attribute (see
+		// `pin-nrl166-r3-open-attribute-not-hidden-past-the-block`), so these two
+		// speak QAQ (and QBQ) as 44a037a does: main-equal disclosures, reopened.
+		["pin-nrl166-r2f-f1-quote-in-footnote-does-not-close-attribute", "<div title=\"x\n\n[^1]: \"\n\nQAQ", "QAQ"],
+		["pin-nrl166-r2f-f1-quote-in-kept-footnote-does-not-close-attribute", "<div title=\"x\n\n[^1]: a \" b\n\nQAQ\n\nQBQ [^1]", "a \" b QAQ QBQ"],
+		["pin-nrl166-r2f-f2-lone-cr-stand-in-reads-the-whole-block", "- > <!X QEQ\r> > <b title=\"QFQ", ""],
+		["pin-nrl166-r2f-f2-lone-cr-stand-in-block-bogus-comment", "<details><summary>QAQ</summary>\r\tQBQ\">\r    <!X QCQ>\r\n", "QAQ QBQ\">"],
+		// /critique on 97388f2 (CONCERNS, 70), RED on 97388f2 where a pin: an open
+		// declaration, PI or CDATA in a lone-CR note carries past its block (F1), and a
+		// CRLF is one line break, not a blank line, in the open-attribute stop (F2).
+		["pin-nrl166-r2g-f1-open-declaration-carries-past-the-block", "<!X a\r<div title=\"b\r\rQAQ", ""],
+		["pin-nrl166-r2g-f1-open-declaration-carries-past-the-block-lf", "<!X a\n- <div title=\"b\n\nQAQ\rc", ""],
+		// Fix round 3: the heading after the block is no longer hidden either (it
+		// speaks `y "`, as 44a037a does); what these still pin is that CRLF and LF
+		// read alike.
+		["pin-nrl166-r2g-f2-crlf-is-one-line-break", "> <div title=\"x\r\n# y \"\r\n\r\nQAQ\r\n\r\nQBQ", "y \" QAQ QBQ"],
+		["guard-nrl166-r2g-f2-lf-twin", "> <div title=\"x\n# y \"\n\nQAQ\n\nQBQ", "y \" QAQ QBQ"],
+		["guard-nrl166-r2g-crlf-twin-of-n1", "a\rb\r\n<div title=\"x\r\n<div title=\"y\r\n\r\nQAQ", "a b QAQ"],
+		// NRL-166 fix round 3 (Verify 3 on 7bd6285). Every row is RED on 7bd6285 and
+		// is either the renderer's visible text (harness 1.13.7 and the live 1.13.7
+		// renderer) or, where marked, 44a037a's answer kept on purpose.
+		// (b) Disclosures new against 44a037a: the renderer pairs a line-end backtick
+		// with the next line's first, so `<!-- QHQ ` -->` is a real comment, and our
+		// line-by-line code spans spoke QHQ. A backtick its line leaves unpaired,
+		// with another backtick later in the stretch, now keeps 44a037a's answer.
+		["pin-nrl166-r3-b-code-span-across-line-break", "P QAQ <!-- `\n` <!-- QHQ ` --> QZQ", "P QAQ QZQ", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-across-line-break-def", "P QAQ <!-- `\n` <!-- QHQ ` --> QZQ", "P QAQ QZQ"],
+		["pin-nrl166-r3-b-code-span-across-line-break-item-quote", "- > P QAQ <!-- `\n> ` <!-- QHQ ` --> QZQ", "P QAQ QZQ", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-across-line-break-callout", "> [!tip] T\n> P QAQ <!-- `\n> ` <!-- QHQ ` --> QZQ", "T P QAQ QZQ", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-across-line-break-smallest", "Q<!--`\n`<!--QHQ`-->", "Q", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-in-callout-body", "- > QPQ <!--  <!-- \n> [!tip] `\n  > ` <!-- QRZQ`\n> QSQ - -->", "QPQ", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-after-literal-opener", "- `   <!--> \n` <!-- QQQ`\n    QQZQ - -->", "", { skipInlineCode: false }],
+		["pin-nrl166-r3-b-code-span-after-fence-shaped-text", "QEZQ <!-->  ~~~\n` \n` <!-- QHQ`\n   --> ", "QEZQ", { skipInlineCode: false }],
+		// (c-iii) Losses new against 44a037a with no disclosure closed in the note.
+		// (2a) A withheld `%%` opener re-pairs every later `%%`: the chain now keeps
+		// ours unless the next `%%` line takes the renderer's answer too.
+		["pin-nrl166-r3-c-pct-chain-keeps-pairing", "> > P\n> [!tip]- %% QAQ\n> [!tip]- %% QBQ\n    QEQ [x](u \"QFQ", "P QBQ QEQ x u \"QFQ"],
+		["pin-nrl166-r3-c-pct-chain-with-code-span", "> > \\\n> [!info] %% `\n> [!info] %%QLQ\n- [ ] </script>", "\\ QLQ"],
+		// (2b) A block inside a browser comment an earlier block left open is
+		// comment text up to the first closer; and nothing past a block is hidden for
+		// an attribute value it leaves open (a callout's own `class="` ends it here).
+		["pin-nrl166-r3-c-attribute-inside-open-browser-comment", "1. > <!-- \n<div title=\"\n\t--> QQZQ", "QQZQ"],
+		["pin-nrl166-r3-c-attribute-inside-open-browser-comment-item", "- <!--\n- <div '-->QHQ", "QHQ"],
+		["pin-nrl166-r3-c-attribute-inside-open-browser-comment-footnote-line", "> - <!-- \n- <div title='\n[^A]:  --> QHQ", "QHQ"],
+		["pin-nrl166-r3-c-callout-title-attribute-ended-by-renderer-quote", "<!-->\n> [!tip]- <div title=\"\n><!-- [^1] -->\n> [!tip]- \") QAQ", "\") QAQ"],
+		["pin-nrl166-r3-c-task-list-quote-ends-attribute", "1. > <!----!>\n[^Q]: <custom-el a=\"\n- [ ] --> QAQ", "QAQ"],
+		// Where the carry is only possible (here the `--!>` between the blocks sits
+		// in a dropped definition, so the comment the callout title opened is still
+		// open), the block is read both ways and only what both hide is hidden.
+		["pin-nrl166-r3-c-possible-carry-hides-only-what-both-readings-hide", "> [!info] <!-- QBQ\n[^q]: QCQ --!>\n<p class='QDQ\n> [!x]+ QEQ -->\n\tQFQ\\[^1]\n2) ---\n", "QFQ[^1]", { skipCodeBlocks: false }],
+		// The carry is withheld where an inline comment between the blocks could
+		// close the browser comment first: here it does, and the tag hides QXQ.
+		["guard-nrl166-r3-c-carry-withheld-after-inline-closer", "<!-- QAQ\n\nP <!-- QBQ --> QCQ\n\n<div title=\"\n--> QXQ", "QCQ"],
+		// Found by this round's own census, after the open attribute stopped hiding
+		// past its block: a walker refinement above the block ended 44a037a's
+		// comment and spoke the attribute's text. Refinements now stand down on and
+		// before every line such text may reach (`openRiskThrough`). Equal to
+		// 44a037a; 7bd6285 spoke QNQ, which the live renderer also displays.
+		["guard-nrl166-r3-refinement-not-before-open-attribute", "> QLQ <!-- QLZQ <!-- QMQ\n> > ---\n\t[!tip] QMZQ %%\n>\t<!--<!--<!-- QNQ\n1. > <div title=\"QNZQ\n  - > <span title='QOQ\n\nQOZQ", "QLQ <!-- QLZQ <!-- QMQ !tip QMZQ %%"],
+		// Also from this round's census, each 44a037a's answer, which the live
+		// renderer matches on the sentinel 7bd6285 lost: a withheld `%%` exposed an
+		// open `<!--` (QSQ) or an inline `%%` pair on a line the renderer makes code
+		// (QRZQ) to our own model, and a reference in a link title that runs to no
+		// `)` dropped its definition (QUZQ).
+		["pin-nrl166-r3-c-withheld-pct-exposes-open-comment", "> > ````\n> > [!x]- %% QPQ\nQPZQ](a.png) QQQ\n    <!-- QQZQ --> QRQ <!-- QRZQ\n[!x]- %% QSQ\n> > --> QSZQ", "QSQ --> QSZQ", { skipCodeBlocks: false }],
+		["pin-nrl166-r3-c-withheld-pct-chain-stops-at-pct-pair", ">````\n>> [!x]- %% QQQ\nQQZQ - -->\n> \tQRQ %% QRZQ %%\n  > ~~~", "QRZQ %% ~~~", { skipCodeBlocks: false }],
+		["pin-nrl166-r3-c-maybe-referenced-footnote-kept", "> - [l](u \"QSQ [^1]: QSZQ <!-- QTQ\n    [l](u \"QTZQ\n- QUQ\n> [^1]: QUZQ <!-- QVQ", "l u \"QSQ : QSZQ <!-- QTQ l u \"QTZQ QUQ QUZQ <!-- QVQ"],
+		// /critique on 3702b0f (CONCERNS, 66), each RED on 3702b0f. F1: a block
+		// holding a raw-text element is not read (a browser takes `<?`, `<!--` and
+		// quotes there as text), and it keeps the old answers to the note's end
+		// (an unclosed `<script>` swallows the page: QAMQ, QANQ, QAOQ). F3: a quote
+		// opens an attribute value only right after `=`.
+		["pin-nrl166-r3-f1-textarea-content-not-read-as-markup", "P\n\n<textarea>\n<? QBQ\n", "P <textarea> <? QBQ", { stripTags: false }],
+		["pin-nrl166-r3-f1-script-block-keeps-old-answers-after-it", ">\t]] <!-- QAAQ QABQQACQ\r\n>\tQADQ QAEQ \r\n    QAFQ== QAGQ </b>QAHQ\r\n1. > <? QAIQ\r\n- <script> QAJQ QAKQ QALQ\r\n\r\n>\t<!--> *QAMQ QANQ\r\n> > QAOQ ", "]] <!-- QAAQ QABQQACQ QADQ QAEQ QAFQ== QAGQ QAHQ <script> QAJQ QAKQ QALQ", { skipCodeBlocks: false, stripTags: false }],
+		// The same for a raw-text tag earlier in the note, inline included: the
+		// browser may be inside the `<textarea>`, which displays the `<?` block.
+		["pin-nrl166-r3-f1-inline-textarea-before-block", ">\" QAAQ<textarea> QABQ\n1. <? QACQ QADQ", "\" QAAQ<textarea> QABQ <? QACQ QADQ", { stripTags: false }],
+		["pin-nrl166-r3-f5-fence-info-closer-not-hidden", "\tQAAQ QABQ QACQ\n- %% QADQ\n> %% <!-- QAEQ\n\n    > [^1]:  <b> QAFQ\n```<!--->[[aQAGQ\n", "QAAQ QABQ QACQ aQAGQ", { skipCodeBlocks: false }],
+		["pin-nrl166-r3-label-defined-twice-lazily-is-not-judged", "[^1]: <!--QAAQ`` QABQ\n> - QACQ QADQ \n[^1]:  <textarea>QAEQ QAFQ QAGQQAHQ", "<!--QAAQ QABQ QACQ QADQ <textarea>QAEQ QAFQ QAGQQAHQ", { stripTags: false }],
+		["pin-nrl166-r3-f3-quote-in-attribute-name-opens-no-value", "<div \">QAGQ", "QAGQ"],
+		["pin-nrl166-r3-f3-quote-in-unquoted-value-opens-no-value", "<div e=='>QAGQ", "QAGQ"],
+		["guard-nrl166-r3-f3-quote-after-equals-still-opens", "<div title=\"x\" b='QAQ", ""],
+		// /critique on 4f5df9b, F1: the attribute states, not a toggle on `=`.
+		["pin-nrl166-r3-g1-equals-starting-a-name-opens-no-value", "<div =\">QAQ\n\nQBQ", "QAQ QBQ"],
+		["pin-nrl166-r3-g1-equals-after-quoted-value-opens-no-value", "<div a=\"x\"=\">QAQ", "QAQ"],
+		["pin-nrl166-r3-g1-equals-in-unquoted-value-opens-no-value", "<div a=b=\">QAGQ", "QAGQ"],
+		["pin-nrl166-r3-g1-third-equals-opens-no-value", "<div e==='>QAGQ", "QAGQ"],
+		["pin-nrl166-r3-g2-nbsp-is-part-of-the-tag-name", "<p\u00a0=\">QBQ", "QBQ"],
+		["pin-nrl166-r3-g2-vertical-tab-is-part-of-the-tag-name", "<div>\n<p\u000b=\"x>QAQ\n\nQBQ", "QAQ QBQ"],
+		["guard-nrl166-r3-g2-slash-before-equals-opens-no-value", "<div a/=\"x>QAQ", "QAQ"],
+		["guard-nrl166-r3-g2-slash-after-equals-is-unquoted", "<div a=/\"x>QAQ", "QAQ"],
+		// /critique on 8c336c7's census and on 9df325a: blocks after one that
+		// leaves a tag open are not read (kept as on 44a037a), and a `<!` or a `</`
+		// not followed by a letter is a bogus comment closed by the first `>`.
+		["pin-nrl166-r3-g3-block-after-open-tag-not-read", "<!--P QAAQ\n> > --> <b title=\"\n<div title=\" > QAKQ \n> > =  \n> > > QALQ QAMQ ", "<div title=\" > QAKQ = QALQ QAMQ", { stripTags: false }],
+		["pin-nrl166-r3-g5-footnote-html-block-not-read", "[^1]: <div title=' --!> QAAQ\"\n\nQABQ\n\n[^1]", "<div title=' --!> QAAQ\" QABQ", { stripTags: false }],
+		// /critique on 2acd366: an end tag's name, CDATA inside SVG, and a bogus
+		// comment left open at a block's end.
+		["pin-nrl166-r3-g6-end-tag-name-after-slash", "</div =\">QAQ", "QAQ"],
+		["pin-nrl166-r3-g6-svg-cdata-not-read", "<div>\n<svg><text><![CDATA[QCQ]]></text></svg>", "<svg><text>< CDATA[QCQ ]></text></svg>", { stripTags: false }],
+		["pin-nrl166-r3-g6-open-bogus-fails-closed", "<p><?\n\n<div e='>QCQ", "<div e='>QCQ", { stripTags: false }],
+		["pin-nrl166-r3-g4-bang-bogus-comment", "<div>\n<! <b title=\"x>QKQ", "QKQ"],
+		["pin-nrl166-r3-g4-slash-bogus-comment", "<div>\n</ <b title=\"x> QAQ", "QAQ"],
+		["pin-nrl166-r3-g4-bang-dash-bogus-comment", "<div>\n<!- <!-- -> QAQ", "QAQ"],
+		["pin-nrl166-r3-g4-callout-title-open-tag", ">[!x] <div\te='\n''=\"\n<div a=\">QGQ", "''=\" <div a=\">QGQ", { stripTags: false }],
+		["guard-nrl166-r3-g1-spaced-equals-still-opens", "<div title = \"a > b\">QZQ</div>", "QZQ"],
+		// (2c) A reference inside a `%%` block counts whatever surrounds it.
+		["pin-nrl166-r3-c-reference-in-pct-block-between-backticks", "> %% `\n> [!x]+  `[^q]`\n*     \n[^q]: [^q]:QHQ", ":QHQ"],
+		// (2d) A refinement that ends 44a037a's comment exposes a `%%` to our opener;
+		// where that opener keeps its own answer, the refinement is withheld.
+		["pin-nrl166-r3-c-exposed-pct-beside-html-block", "1. > QGQ ``` <!---> \n  > [!note] %%\n\t--> QJZQ\n> > </pre>", "QGQ QJZQ"],
+		["pin-nrl166-r3-c-exposed-pct-before-div-block", "- >> P QAQ <!-- QXQ <!-- QYQ\n> [!note] %% QBQ\n> \t--> QCQ\n\n<div>\nQGQ", "P QAQ QCQ QGQ"],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -4418,6 +4729,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["fence-drop-list-item", "- ~~~ QFQ\n- after ZAZ"],
 		["fence-drop-callout-title", "> [!note] \t%% QBQ\n1. >    ~~~ QDQ\nAfter ZAZ.", { skipCodeBlocks: false }],
 		["fence-drop-callout-title-tab", "-     <!--\n> [!note]\t~~~   QFQ -->\nAfter ZAZ.", { skipCodeBlocks: false }],
+		// Fix round 1: a literal `<!--` now spoken mid-paragraph, the code-line
+		// stop, and the first line of an uncertainly-ended item.
+		["r1-a-literal-opener-then-comment", "- > Plain QAQ <!-- QXQ\n> [!tip] QBQ <!--\n> QCQ -->\nAfter ZAZ."],
+		["r1-a-dash-pair-body", "> P <!-- QXQ\n> -- QBQ --> Z"],
+		["r1-c-code-line-stop", "- >> Plain QAQ <!-- QXQ\n> [!x]\n>\t--> QCQ", { skipCodeBlocks: false }],
+		["r1-b-item-quote-code-opener", "- > \tPlain QAQ <!-- QXQ\n> [!tip] QBQ -->\n%%"],
 	];
 	for (const [id, src, overrides] of nrl166Lockstep) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -4621,7 +4938,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl136-q1-multiline-pct-closes", "<!-- y --> <!-- Q1Z\nA %%x --> SEENZ\nB%% C\nTAIL", "SEENZ B%% C TAIL"],
 		["guard-nrl136-q1-raw-line-closes", "<!-- y --> <!-- Q1Z\n<!-- %%x --> SEENZ%% B\nTAIL", "SEENZ%% B TAIL"],
 		// TRIPWIRE, a residual NOT closed and pinned at today's output: a non-comment HTML block start (`<div>`) followed by `<!--` hides TAIL in the renderer too. NRL-137's class.
-		["pin-nrl136-residual-div-opener", "<div> <!-- Q1Z\nTAIL", "<!-- Q1Z TAIL"],
+		["pin-nrl136-residual-div-opener", "<div> <!-- Q1Z\nTAIL", ""],
 	];
 	for (const [id, src, expected, overrides] of nrl136) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -4647,7 +4964,7 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		// its literal %% before NRL-38 and lost it after.
 		["span-3line", "Before `first\n%%literal%%\nlast` after.", "Before first %%literal%% last after.", { skipInlineCode: false }],
 		["span-5line", "Before `one\n%%two%%\nthree\n%%four%%\nfive` after.", "Before one %%two%% three %%four%% five after.", { skipInlineCode: false }],
-		["span-html-3line", "Before `first\n<!--literal-->\nlast` after.", "Before first <!--literal--> last after.", { skipInlineCode: false }],
+		["span-html-3line", "Before `first\n<!--literal-->\nlast` after.", "Before first last after.", { skipInlineCode: false }],
 		["span-double-run", "Before ``one\n%%two%%\nthree`` after.", "Before one %%two%% three after.", { skipInlineCode: false }],
 		["span-comment-on-closing-line", "Before `first\nmid\n%%literal%% last` after.", "Before first mid %%literal%% last after.", { skipInlineCode: false }],
 		["span-second-run-on-line", "Before `a` and `b\n%%c%%\nd` after.", "Before a and b %%c%% d after.", { skipInlineCode: false }],
@@ -4690,7 +5007,7 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		// bails on a second `%` before the newline, so `%%literal%%` is never a
 		// block opener, and `<!--literal-->` closes on the line.
 		["span-inline-pair-stays-literal", "Before `x\n%%literal%%\ny ` z.", "Before x %%literal%% y z.", { skipInlineCode: false }],
-		["span-html-pair-stays-literal", "Before `x\n<!--literal-->\ny ` z.", "Before x <!--literal--> y z.", { skipInlineCode: false }],
+		["span-html-pair-stays-literal", "Before `x\n<!--literal-->\ny ` z.", "Before x y z.", { skipInlineCode: false }],
 		// `%%` that is not at the start of its line is not a block opener, so it
 		// hides nothing and the paragraph continues.
 		["span-percent-after-text", "Before `x\ntext %%\ny ` z.", "Before x text %% y z.", { skipInlineCode: false }],
@@ -7375,7 +7692,10 @@ console.log("a max-budgeted list dedent can over-dedent past a line's real inden
 		// ZT1Z`), a PRE-EXISTING residual of that other predicate, and it
 		// stays wrong in exactly the same way on the fix - 0 cells moved,
 		// confirming the two predicates stayed structurally separate.
-		["html-twin-control", "- item ZA0Z\n x ZM1Z\n      <!-- ZH1Z\nZH2Z\n     <!-- ZH3Z\nZH4Z\n--> ZT1Z", "item ZA0Z x ZM1Z ZT1Z"],
+		// NRL-166 fix round 1 closed that residual from the comment side: the first
+		// `<!--`'s body holds the second, so only the second is a comment, and the
+		// output is now the renderer's own text.
+		["html-twin-control", "- item ZA0Z\n x ZM1Z\n      <!-- ZH1Z\nZH2Z\n     <!-- ZH3Z\nZH4Z\n--> ZT1Z", "item ZA0Z x ZM1Z <!-- ZH1Z ZH2Z ZT1Z"],
 	];
 	for (const [id, src, expected] of guards) {
 		const spoken = extractChunks(src, OPTS)
@@ -7465,6 +7785,104 @@ console.log("a max-budgeted list dedent can over-dedent past a line's real inden
 		"NRL-162 Phase 2 replays each line's chain against the final levelP, not the max",
 		SRC162.includes("for (const id of chainIds[k]!) view = view.slice(listDedentCut(view, levelP.get(id)!));"),
 	);
+}
+
+console.log("NRL-166 fix round 2: the synthetic equation word is kept or dropped whole");
+{
+	// /critique on 383f85c, F7: the word maps its last letter to the `$$` closer,
+	// and the per-character drop of renderer-hidden text took that letter alone.
+	// Not in the NRL-38 table, whose identity check a synthetic word cannot meet.
+	const src = "> - QHQ ?>\n    $$\n[^1]: QIQ $$";
+	const got = extractChunks(src, OPTS).map((c) => c.text);
+	check("NRL-166 pin-nrl166-r2c-f7-equation-kept-whole", JSON.stringify(got) === JSON.stringify(["QHQ ?>", "equation"]), JSON.stringify(got));
+}
+
+console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay linear");
+{
+	// The fix round's gates run on EVERY line of every note, so a backtracking
+	// pattern there is a hang in Obsidian. Measured on a49b94d (before this guard):
+	// LEADING_CALLOUT_MARKER's `[ \t]+[ \t>]*` was exponential on `-  -  -  ...`
+	// (382 ms at 24 markers, doubling per marker), and the footnote-shape regex
+	// was quadratic on a callout line of many `[^` (7.7 s at 80,000). Generous
+	// bounds: each must finish far under one second. The plain `"[^".repeat(n)`
+	// note is a separate, pre-existing quadratic on main and is NOT tested here.
+	const timed: Array<[string, string]> = [
+		["many-list-markers-before-callout", "- > a <!-- b\n" + "-  ".repeat(28) + "x\n> c -->"],
+		["many-footnote-openers-in-callout", "- > a <!-- b\n> [!tip] " + "[^".repeat(80000) + "\n> c -->"],
+		["long-callout-label", "- > a <!-- b\n> [!" + "a".repeat(80000) + "\n> c -->"],
+		// NRL-166 fix round 2: one line of many `<!--` the body rule makes literal.
+		// Fix round 1 asked three questions per opener by slicing the line, and the
+		// closer search and the lead test scanned it again: Verify 2 measured
+		// `P ` + `<!-- ` x 20,000 at 27,956 ms on c4a370e against 84 ms on 44a037a.
+		["many-literal-openers-spaced", "P " + "<!-- ".repeat(20000) + "\n-->"],
+		["many-literal-openers", "P " + "<!--".repeat(20000) + "\n-->"],
+		["many-literal-openers-in-item-quote", "- > P " + "<!--".repeat(20000) + "\n> [!tip] x\n> -->"],
+		["many-literal-openers-with-dashes", "P " + "<!-- -- ".repeat(20000) + "\n-->"],
+	];
+	for (const [id, src] of timed) {
+		const t0 = performance.now();
+		extractChunks(src, OPTS);
+		const ms = performance.now() - t0;
+		check(`NRL-166 ${id}: extractChunks finishes under 1000 ms`, ms < 1000, `${ms.toFixed(0)} ms`);
+	}
+	// And the renderer-model scans fix round 2 adds (`rendererHiddenText`), on the
+	// shapes they loop over. These are checked by SCALING rather than by a fixed
+	// bound, which a loaded machine can miss: four times the input must take well
+	// under sixteen times as long (linear is four, quadratic sixteen). Measured
+	// before the fix, the open-attribute scan was quadratic (8,280 ms at 20,000
+	// blocks against 975 ms on 44a037a). A note of many `[^` with no `]`, or of
+	// many definition lines, is the pre-existing NRL-172 quadratic in cleanLine's
+	// footnote branch, as slow on 44a037a (6,144 ms at 20,000 definitions against
+	// 6,341 here), and is not checked here.
+	const scaled: Array<[string, (n: number) => string]> = [
+		["many-footnote-references", (n) => "a [^1] ".repeat(n) + "\n\n[^1]: x"],
+		["many-open-attribute-blocks", (n) => "<div title='a\n\nb\n\n".repeat(n)],
+		["many-html-tags-in-one-block", (n) => "<div>\n" + "<b title='x'>a</b> ".repeat(n)],
+		["many-comments-in-one-block", (n) => "<div>\n" + "<!-- a --> b ".repeat(n)],
+		["many-processing-instructions", (n) => "P\n\n" + "<?x a\n\n".repeat(n)],
+		["many-pct-blocks-and-references", (n) => "%% [^1] %%\n".repeat(n) + "\n[^1]: x"],
+		["many-fences", (n) => "~~~ js\nx\n~~~\n".repeat(n)],
+		["many-lazy-callout-pct-lines", (n) => "> P\n> [!note] %%\n> b\n\n".repeat(n)],
+		// One long paragraph the body rule now speaks: the paragraph accumulator
+		// rebuilt its index array and flattened its text per line, which was
+		// quadratic (27 s at 20,000 lines on c4a370e against 192 ms on 44a037a,
+		// which hid the paragraph).
+		["many-literal-opener-lines", (n) => "P <!-- a\n".repeat(n) + "-->"],
+		// /critique on 383f85c, F5 and F6: an HTML block of many `--!>`-closed
+		// comments (18,626 ms at 40,000 on 383f85c against 9 ms on 44a037a), and
+		// many spans read by many chunks (13,811 ms against 1,096 ms at 80,000).
+		["many-bang-closed-comments", (n) => "<div>\n" + "<!--x--!>".repeat(n)],
+		["many-spans-many-chunks", (n) => "<div>" + "<b>x</b>".repeat(n) + "\n\n" + "# h\n".repeat(n)],
+		["many-backtick-runs-before-a-definition", (n) => "P " + "`a``".repeat(n) + "\n\n[^1]: x"],
+		["many-link-openers-before-a-definition", (n) => "P " + "](".repeat(n) + "\n\n[^1]: x"],
+		["many-comment-openers-before-a-definition", (n) => "P " + "<!-- a ".repeat(n) + "-->\n\n[^1]: x"],
+		["many-closed-comments-and-references", (n) => "a <!-- b --> [^1]\n".repeat(n) + "\n[^1]: x"],
+		["many-nested-definitions", (n) => "[^1]: ".repeat(n) + "x"],
+		// /critique on db55516, N4: 0.42 s, 1.43 s and 5.35 s at 4k, 8k and 16k.
+		["lone-cr-note-of-many-open-attributes", (n) => "a\rb\n" + "<div title=\"x\n\n".repeat(n)],
+		["lone-cr-note-of-many-tags", (n) => "a\rb\n" + "<div title='x'>y</div>\n".repeat(n)],
+		["many-dash-lines-in-one-paragraph", (n) => "P <!-- a\n" + "x -- y\n".repeat(n) + "-->"],
+		// NRL-166 fix round 3 (Verify 3 on 7bd6285): every `<!--` in an HTML block
+		// rescanned to the one far closer of the other kind, 4,835 ms at 20,000 on
+		// 7bd6285 against 7 ms on 44a037a.
+		["many-comments-closed-before-a-far-bang-closer", (n) => "<div>\n" + "<!-- -->".repeat(n) + "--!>"],
+		["many-bang-closed-comments-before-a-far-closer", (n) => "<div>\n" + "<!-- --!>".repeat(n) + "-->"],
+		["many-comments-before-a-far-bang-closer-in-item-quote", (n) => "- > <div>\n> " + "<!-- -->".repeat(n) + "--!>"],
+		["many-backtick-lines", (n) => "P <!-- `\n".repeat(n) + "` -->"],
+		["many-pct-lines-in-a-chain", (n) => "> P\n> [!note] %% a\n".repeat(n) + "<div>"],
+		["many-blocks-in-an-open-browser-comment", (n) => "<!-- a\n\n" + "<div title=\"x\n\n".repeat(n)],
+	];
+	const timeOf = (src: string): number => {
+		const t0 = performance.now();
+		extractChunks(src, OPTS);
+		return performance.now() - t0;
+	};
+	for (const [id, make] of scaled) {
+		timeOf(make(500));
+		const small = timeOf(make(2000));
+		const large = timeOf(make(8000));
+		check(`NRL-166 ${id}: four times the input takes under ten times as long`, large < 50 || large < 10 * Math.max(small, 1), `${small.toFixed(0)} ms -> ${large.toFixed(0)} ms`);
+	}
 }
 
 console.log("");
