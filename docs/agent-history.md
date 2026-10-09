@@ -2025,11 +2025,13 @@ gates.
   F2, F3); 0 lockstep failures. Residuals: gen2 11,097 lost against `e2afbfe` (all
   lost on `44a037a`; 10,965 an inline construct on the opener line, withheld on
   purpose), and losses against `44a037a` in two fail-closed classes, an HTML block
-  leaving an attribute open and the lone-CR stand-in (21 extended-fuzz cells, 650
-  of 1,517,894 critique-generator cells). Later /critique rounds (`996e8a7`: 74,
-  `db55516`: 66, `2d44f59`: 68) found no disclosure against `main`; their findings
-  were closed except the apostrophe-in-unquoted-attribute class, where the judge
-  and a browser disagree, and the blank-line stop's lone-CR and heading cases.
+  leaving an attribute open and the lone-CR stand-in (21 extended-fuzz cells;
+  11,360 of the five critique generators' 2,016,318 cells). Later
+  /critique rounds (`996e8a7`: 74, `db55516`: 66, `2d44f59`: 68, `97388f2`: 70,
+  `7bca4b1`: 72) found no disclosure against `main`; their findings were closed
+  except the apostrophe-in-unquoted-attribute class, where the judge and a
+  browser disagree, the blank-line stop's heading cases, and three lone-CR
+  stand-in edges recorded in ADR 0025.
 - Trap from those rounds: fixing a LOSS by narrowing a mask can reopen a
   disclosure the mask was closing (2d44f59 did, twice). Re-run the previous
   commit as a base too, not only `main`.

@@ -2789,6 +2789,18 @@ attribute's stop (F2; a lone CR is now `\r(?!\n)`). Both are pinned by the
 `extractChunks` a CR at all, in which case the lone-CR paths cannot be reached in
 the product.
 
+**/critique on `7bca4b1`, the last code commit: CONCERNS, 72, no disclosure against
+`main`** in about 68,000 notes of its own generator (comments, `%%`, callouts,
+footnotes, list-item quotes, HTML, constructs near comments) and all five earlier
+critiques' generators. Left as stated, all in lone-CR notes: an unclosed `<?`,
+`<!X` or `<![CDATA[` inside a list item or a quote is carried to the first `>` or
+the note's end, where the renderer closes it at the container's end (F1, a loss:
+`- <?php echo 1;` + CR + CR + `QAQ here.` hides QAQ, 302 cells in 124 notes against
+`97388f2`); a line the carry ends partway through is skipped whole, so a tag after
+the `>` on it is not read (F2, 225 cells `main` also speaks); and
+`"<![CDATA[ a\r".repeat(n)` is quadratic on `main` and here alike (F3, 11.3 s and
+11.1 s at 8,000).
+
 **Census** of the final tree, harness 1.13.7, Verify 2's judge (`run3.cjs`/`rfz.cjs`),
 masks ALL and DEF (F2 also SKIPALL), newly disclosing / newly lost. Lockstep: 0
 failures this tree has and `main` does not; the only failures at all are notes
