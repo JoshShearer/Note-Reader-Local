@@ -4612,6 +4612,11 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// not followed by a letter is a bogus comment closed by the first `>`.
 		["pin-nrl166-r3-g3-block-after-open-tag-not-read", "<!--P QAAQ\n> > --> <b title=\"\n<div title=\" > QAKQ \n> > =  \n> > > QALQ QAMQ ", "<div title=\" > QAKQ = QALQ QAMQ", { stripTags: false }],
 		["pin-nrl166-r3-g5-footnote-html-block-not-read", "[^1]: <div title=' --!> QAAQ\"\n\nQABQ\n\n[^1]", "<div title=' --!> QAAQ\" QABQ", { stripTags: false }],
+		// /critique on 2acd366: an end tag's name, CDATA inside SVG, and a bogus
+		// comment left open at a block's end.
+		["pin-nrl166-r3-g6-end-tag-name-after-slash", "</div =\">QAQ", "QAQ"],
+		["pin-nrl166-r3-g6-svg-cdata-not-read", "<div>\n<svg><text><![CDATA[QCQ]]></text></svg>", "<svg><text>< CDATA[QCQ ]></text></svg>", { stripTags: false }],
+		["pin-nrl166-r3-g6-open-bogus-fails-closed", "<p><?\n\n<div e='>QCQ", "<div e='>QCQ", { stripTags: false }],
 		["pin-nrl166-r3-g4-bang-bogus-comment", "<div>\n<! <b title=\"x>QKQ", "QKQ"],
 		["pin-nrl166-r3-g4-slash-bogus-comment", "<div>\n</ <b title=\"x> QAQ", "QAQ"],
 		["pin-nrl166-r3-g4-bang-dash-bogus-comment", "<div>\n<!- <!-- -> QAQ", "QAQ"],

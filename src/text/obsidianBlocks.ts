@@ -337,7 +337,9 @@ function htmlMarkup(html: string, inComment = false): { spans: Array<[number, nu
 			// their sentinel). The states, less those that change nothing here:
 			// the tag name, then before-name, name, after-name, before-value and
 			// unquoted value; a quoted value returns to before-name.
-			let k = lt + 1;
+			// An end tag's name starts after its `/` (/critique on 2acd366, F1:
+			// `</div =">QAQ` displays QAQ).
+			let k = lt + (html[lt + 1] === "/" ? 2 : 1);
 			// The tag name ends only at ASCII whitespace, `/` or `>`: a no-break
 			// space or a vertical tab is part of it (/critique on 8c336c7, F1:
 			// `<p\u00a0=">QBQ` displays QBQ).
@@ -1260,7 +1262,10 @@ class BlockScanner {
 		// attributes) that is not modelled, so it is not read either (/critique on
 		// 9df325a's census: `[^1]: <div title=' /> QAAQ` / ... / `[^1]` displays
 		// QAAQ); every footnote line keeps the old answers already.
-		const rawText = RAW_TEXT_TAG.test(html) || startAt >= this.rawTextFrom || this.inFootnote > 0;
+		// Nor is a block holding `<svg` or `<math`, inside which `<![CDATA[` is a
+		// real CDATA section whose text a browser displays (/critique on 2acd366,
+		// F2).
+		const rawText = RAW_TEXT_TAG.test(html) || /<(?:svg|math)(?![A-Za-z0-9-])/i.test(html) || startAt >= this.rawTextFrom || this.inFootnote > 0;
 		const spans = rawText ? [] : plain === null ? inside!.spans : inside === null ? plain.spans : intersectSpans(plain.spans, inside.spans);
 		// What the block leaves open, for the risk reports below: any reading's,
 		// a comment first, since it runs furthest.
@@ -1272,8 +1277,12 @@ class BlockScanner {
 		// it is failed closed like a raw-text tag: no later block or fence line is
 		// read (`rawTextFrom`), and it counts as leaving a comment open, which keeps
 		// the old answers from it to the note's end (fix round 3).
-		const tagOpen = lefts.some((l) => l?.kind === "tag");
-		if (tagOpen && this.note !== "") this.rawTextFrom = Math.min(this.rawTextFrom, this.noteOffset(scanPos(t, line, A)));
+		// A bogus comment left open is failed closed the same way (/critique on
+		// 2acd366, F3).
+		const tagOpen = lefts.some((l) => l?.kind === "tag" || l?.kind === "bogus");
+		// An unread block (an `<svg>` or `<math>` one in particular, whose foreign
+		// content runs on unclosed) likewise leaves the rest unread.
+		if ((tagOpen || (rawText && this.inFootnote === 0)) && this.note !== "") this.rawTextFrom = Math.min(this.rawTextFrom, this.noteOffset(scanPos(t, line, A)));
 		const left = rawText || tagOpen ? { kind: "comment" as const, at: 0 } : (lefts.find((l) => l?.kind === "comment") ?? lefts.find((l) => l !== null) ?? null);
 		// Not from a block holding a raw-text element's tag (`<script>`, `<style>`,
 		// `<textarea>`, ...), inside which a browser reads `<!--` as no comment.

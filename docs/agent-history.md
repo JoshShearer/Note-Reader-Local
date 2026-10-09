@@ -2100,11 +2100,12 @@ disclosure paid in the note.
 - /critique on `9df325a` (CONCERNS, 68, no disclosure): `<!x` / `</ ` bogus comments
   now end at `>`; any block after one that leaves a tag open, and any HTML block in a
   footnote definition, is failed closed (not read, old answers to the end).
-- FINAL census (`rendererHiddenText` as committed): 0 new disclosures vs
-  `44a037a`; newly lost 6,061 = (i) 3,977, (ii) lone CR 991, judge artifacts 1,089,
-  (iii) 0 unambiguous (+4 sentinel-reuse artifacts). All four critiques'
-  generators (226,000 notes): 0 new disclosures; pure regressions only in lone-CR
-  notes, plus 1 cell whose twin is lost on `44a037a`.
+- Single final /critique on `2acd366` (BLOCK, 45, no disclosure): end-tag names read
+  from the `/`, `<svg>`/`<math>` CDATA, an open bogus comment; fixed or failed closed.
+- FINAL census: 0 new disclosures vs `44a037a`; newly lost 6,045 = (i) 3,977, (ii)
+  lone CR 991, judge artifacts 1,073, (iii) 0 unambiguous (+4 sentinel-reuse
+  artifacts). All five critiques' generators (386,000 notes): 0 new disclosures;
+  pure regressions only in lone-CR notes plus 2 single cells recorded in ADR 0025.
 - Trap: the round ran 18 h because every critique on a new mechanism found the next
   shape. When a mechanism is not exact after one pass, fail it closed wholesale
   (stop reading that block class) rather than adding a carry rule.
