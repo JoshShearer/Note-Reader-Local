@@ -2093,11 +2093,14 @@ disclosure paid in the note.
   every `=`; `htmlMarkup` now walks the tokenizer's attribute states. Its own
   generators then give 0 disclosures and 1 pure-regression cell (an exposed
   `<!--->` on an HTML-block line, lost on `44a037a` in its twin).
-- Census on the final tree, every new cell re-rendered live over CDP: 0 newly
-  disclosing against `44a037a` (2 judge cells, displayed live); newly lost 6,370
-  cells, of which (i) 4,215, (ii) lone CR 991, judge artifacts 1,160, (iii) 0
-  unambiguous plus 4 sentinel-reuse cells that are not losses. Lockstep: 0 new
-  failures.
+- /critique on `8c336c7` (CONCERNS, 76, no disclosure): the tag name ended at any
+  JS `\s` (NBSP, VT); now ASCII whitespace only. Its census also showed a block
+  starting inside the previous block's open attribute value; such a block is now
+  read that way too and only the intersection hidden (`attrOpenQuote`). Final
+  census: 0 new disclosures, newly lost vs `44a037a` 6,074 = (i) 3,981, (ii) 991,
+  judge artifacts 1,098, (iii) 0 unambiguous (+4 sentinel-reuse).
+- Census after `4f5df9b` (superseded by the final figures below): 0 newly
+  disclosing against `44a037a`; newly lost 6,370, (iii) 0 unambiguous.
 
 **Traps.**
 - Each fix that stops hiding something must be followed by a full census re-run.

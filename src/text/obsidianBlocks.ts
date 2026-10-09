@@ -334,7 +334,10 @@ function htmlMarkup(html: string, inComment = false): { spans: Array<[number, nu
 			// the tag name, then before-name, name, after-name, before-value and
 			// unquoted value; a quoted value returns to before-name.
 			let k = lt + 1;
-			while (k < html.length && !/[\s/>]/.test(html[k]!)) k++;
+			// The tag name ends only at ASCII whitespace, `/` or `>`: a no-break
+			// space or a vertical tab is part of it (/critique on 8c336c7, F1:
+			// `<p\u00a0=">QBQ` displays QBQ).
+			while (k < html.length && !/[\t\n\f\r />]/.test(html[k]!)) k++;
 			let state: "beforeName" | "name" | "afterName" | "beforeValue" | "unquoted" = "beforeName";
 			for (; k < html.length && html[k] !== ">"; k++) {
 				const q = html[k]!;
@@ -440,6 +443,9 @@ class BlockScanner {
 	// Whether that comment is certainly open there, or open in only one of the
 	// two readings an unsure block was given.
 	private commentCertain = true;
+	// The quote of an attribute value the last HTML block outside a footnote
+	// definition left open, or null.
+	private attrOpenQuote: string | null = null;
 	// Where in `note` a raw-text element's tag first appears, inline or not, or
 	// Infinity. From there on the browser may be inside a `<textarea>` (whose
 	// text it displays) or a `<script>` (whose text it hides), neither of which
@@ -1251,19 +1257,37 @@ class BlockScanner {
 		// A block in a footnote definition is written at the page's end, after
 		// every raw-text tag in the note.
 		const rawText = RAW_TEXT_TAG.test(html) || startAt >= this.rawTextFrom || (this.inFootnote > 0 && this.rawTextFrom !== Infinity);
-		const spans = rawText ? [] : plain === null ? inside!.spans : inside === null ? plain.spans : intersectSpans(plain.spans, inside.spans);
-		// What the block leaves open, for the risk reports below: either
-		// reading's, a comment first, since it runs furthest.
-		const lefts = [plain?.left ?? null, inside?.left ?? null];
+		// Likewise an attribute value the last block left open may still be open
+		// where this one starts (a quote between them, or the renderer's own,
+		// may have closed it first), so the block is also read as the rest of
+		// that value, and only what every reading hides is hidden (/critique on
+		// 8c336c7's census: `<!--P` / ... / `> > --> <b title="` / `<div title="
+		// > QAKQ` displays QAKQ, the second line's first quote closing the first
+		// line's value).
+		const attrQuote = this.inFootnote === 0 ? this.attrOpenQuote : null;
+		let quoted: ReturnType<typeof htmlMarkup> | null = null;
+		if (attrQuote !== null) {
+			const prefix = `<x a=${attrQuote}`;
+			const r = htmlMarkup(prefix + html, false);
+			const shifted: Array<[number, number]> = [];
+			for (const [a, b] of r.spans) if (b > prefix.length) shifted.push([Math.max(0, a - prefix.length), b - prefix.length]);
+			quoted = { spans: shifted, left: r.left === null ? null : { ...r.left, at: Math.max(0, r.left.at - prefix.length) } };
+		}
+		let spans = rawText ? [] : plain === null ? inside!.spans : inside === null ? plain.spans : intersectSpans(plain.spans, inside.spans);
+		if (quoted !== null) spans = intersectSpans(spans, quoted.spans);
+		// What the block leaves open, for the risk reports below: any reading's,
+		// a comment first, since it runs furthest.
+		const lefts = [plain?.left ?? null, inside?.left ?? null, quoted?.left ?? null];
 		const left = rawText ? { kind: "comment" as const, at: 0 } : (lefts.find((l) => l?.kind === "comment") ?? lefts.find((l) => l !== null) ?? null);
 		// Not from a block holding a raw-text element's tag (`<script>`, `<style>`,
 		// `<textarea>`, ...), inside which a browser reads `<!--` as no comment.
 		if (this.inFootnote === 0 && this.note !== "") {
 			const comments = lefts.filter((l) => l?.kind === "comment").length;
-			const readings = lefts.filter((_, k) => (k === 0 ? plain : inside) !== null).length;
+			const readings = [plain, inside, quoted].filter((r) => r !== null).length;
 			const open = comments > 0 && !rawText;
 			this.commentOpenAt = open ? this.noteOffset(scanPos(t, line, A)) : -1;
 			this.commentCertain = open && comments === readings;
+			this.attrOpenQuote = rawText ? null : (lefts.find((l) => l?.kind === "tag" && l.quote !== undefined)?.quote ?? null);
 		}
 		const breaks: number[] = [];
 		for (let k = html.indexOf("\n"); k !== -1; k = html.indexOf("\n", k + 1)) breaks.push(k);

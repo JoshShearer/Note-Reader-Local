@@ -4600,6 +4600,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl166-r3-g1-equals-after-quoted-value-opens-no-value", "<div a=\"x\"=\">QAQ", "QAQ"],
 		["pin-nrl166-r3-g1-equals-in-unquoted-value-opens-no-value", "<div a=b=\">QAGQ", "QAGQ"],
 		["pin-nrl166-r3-g1-third-equals-opens-no-value", "<div e==='>QAGQ", "QAGQ"],
+		["pin-nrl166-r3-g2-nbsp-is-part-of-the-tag-name", "<p\u00a0=\">QBQ", "QBQ"],
+		["pin-nrl166-r3-g2-vertical-tab-is-part-of-the-tag-name", "<div>\n<p\u000b=\"x>QAQ\n\nQBQ", "QAQ QBQ"],
+		["guard-nrl166-r3-g2-slash-before-equals-opens-no-value", "<div a/=\"x>QAQ", "QAQ"],
+		["guard-nrl166-r3-g2-slash-after-equals-is-unquoted", "<div a=/\"x>QAQ", "QAQ"],
+		// /critique on 8c336c7's census: a block that may start inside an
+		// attribute value the last block left open is also read that way.
+		["pin-nrl166-r3-g3-block-inside-earlier-open-attribute", "<!--P QAAQ\n> > --> <b title=\"\n<div title=\" > QAKQ \n> > =  \n> > > QALQ QAMQ ", "QAKQ = QALQ QAMQ"],
 		["guard-nrl166-r3-g1-spaced-equals-still-opens", "<div title = \"a > b\">QZQ</div>", "QZQ"],
 		// (2c) A reference inside a `%%` block counts whatever surrounds it.
 		["pin-nrl166-r3-c-reference-in-pct-block-between-backticks", "> %% `\n> [!x]+  `[^q]`\n*     \n[^q]: [^q]:QHQ", ":QHQ"],
