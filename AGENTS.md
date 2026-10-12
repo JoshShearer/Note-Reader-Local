@@ -12,7 +12,7 @@ Claude Code and opencode read the same rules.
   MoSCoW IDs `R-M01` through `R-C05` are acceptance criteria. Record deviations in
   `docs/adr/` and amend `srs.md`.
 - **Architecture:** read `CONTEXT.md` before structural changes.
-- **Linear:** read `.claude/linear.md` before tracker operations or ticket workflows.
+- **Workflow commands:** shared from `claude-workflow` (linked into `.claude/commands/`). Project facts they read: `.claude/project.md`. Linear: read `.claude/tickets.md` before tracker operations or ticket workflows. Project-specific steps: `.claude/overrides/`.
 - **History:** before changing extraction, playback, engines, highlighting, settings,
   persistence, distribution or the test runner, search `docs/agent-history.md` for
   the affected function, requirement or ticket and read the matching entries.
