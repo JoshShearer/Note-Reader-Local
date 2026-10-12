@@ -1,12 +1,21 @@
 # Commands - Local TTS Reader
 
-Adapted from the job-radar workspace, with `/run-tickets` from ShroomSpy. Linear conventions
-live in `linear.md`; every command reads from there rather than restating the team key,
-statuses, or branch patterns.
+**13 of these 14 commands are shared.** They come from `claude-workflow/core/commands/`, which is
+cloned next to this repo, and `claude-workflow/install.sh` links them into `.claude/commands/`.
+Don't edit a linked file: the edit would land in every project. Instead:
 
-**These files work in both Claude Code and opencode.** The canonical copies are in
-`.claude/commands/`. `.opencode/command/` holds per-file symlinks to them, so there is one
-source of truth and an edit lands in both runtimes at once.
+- Project **facts** (gates, verification target, risk areas, push policy...) go in
+  `.claude/project.md`.
+- Linear values and conventions go in `.claude/tickets.md`. (`linear.md` is a symlink to it.)
+- Project-specific **steps** go in `.claude/overrides/<command>.md`. Each shared command reads its
+  override in Step 0, and the override wins where the two conflict.
+- To fork a command outright, replace its link with a real file. `install.sh` will leave it
+  alone.
+
+`/run-tickets` is still local to this repo.
+
+**These files work in both Claude Code and opencode.** `.opencode/command/` holds per-file
+symlinks to `.claude/commands/`, which `install.sh link --opencode` maintains.
 
 This index lives at `.claude/COMMANDS.md`, not inside `commands/`, so it does not get exposed
 as a `/COMMANDS` command.
