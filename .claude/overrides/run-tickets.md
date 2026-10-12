@@ -9,7 +9,7 @@ in `deploy.mjs`; `SLOT=<vault>/.obsidian/plugins/local-tts-reader`.
 | Fact | Consequence |
 |---|---|
 | **One deploy slot.** `npm run deploy` writes one fixed plugin folder in the owner's vault. | `.claude/deploy.lock/` in the primary binds `/run-tickets` lanes only. Interactive sessions (`/verify`, `/ship`, `/worktrees`) check it and never deploy while it is held, but never take it. A lane that cannot take it skips the deploy and says so; never wait. |
-| **A deploy is not live until Obsidian restarts.** On 2026-09-28 two tickets were "passed" against a stale in-memory build after an in-app reload. | A run never starts, stops or restarts Obsidian, so a lane can **never** claim `VERIFIED IN OBSIDIAN`. A CDP smoke is recorded as a supplement under its own name, and the end-of-run report tells the owner to fully quit and relaunch Obsidian. |
+| **A deploy is not live until Obsidian restarts.** On 2026-09-28 two tickets were "passed" against a stale in-memory build after an in-app reload. | A run never starts, stops or restarts Obsidian, so a lane can **never** claim `VERIFIED IN OBSIDIAN`. No lane deploys or drives Obsidian (see "Taking the target"), and the end-of-run report tells the owner to fully quit and relaunch Obsidian. |
 | **Linear is `linear-nrl`, team `NRL`.** | Never call `linear-rea`, which is another workspace. |
 | **Reproduced defects are listed** in `docs/agent-history.md` "Known state", with exact triggering inputs. | Triage copies a known defect's repro into `reproduction` rather than asking for one. |
 | **CI is the workflow named `CI`, one job `gates`**, on `push` to every branch and on `pull_request`. | The workflow name for "Reading a CI conclusion" is `CI`; `gates` is a job name and `gh run list` cannot see it. |
@@ -55,27 +55,17 @@ For `extract.ts` changes, also check `sourceIndex` lockstep on every probe: equa
 text, and every non-space character maps to the same raw character. Run `require-list` after the
 build.
 
-## Taking the target: deploy and CDP smoke
+## Taking the target: lanes never deploy
 
-Only if Obsidian is reachable on the CDP port
-(`curl -s --max-time 2 http://127.0.0.1:9222/json/version`); otherwise
-`CDP smoke: not run (port 9222 not reachable)`.
+**No phase deploys a ticket's code.** The vault is the owner's real one, and the CDP port reaches
+their live Obsidian. Without a full restart, a smoke test would grade the build already in memory,
+not this ticket's. So Verify never takes `.claude/deploy.lock/` and never runs `npm run deploy`.
+`deploy.mjs` enforces this mechanically: in a lane that ticket-ops has marked, it refuses unless
+`.claude/deploy.lock/owner` names this lane and this run, and HEAD is a clean `origin/main`. That
+is only true at Finish.
 
-1. `$OPS lock <KEY> --take`. Not held → `CDP smoke: not run (deploy lock held by <holder>)`.
-2. `npm run deploy`, then write the marker with this lane's path, branch, commit and `runId`:
-
-   ```bash
-   printf '%s\nbranch=%s commit=%s at=%s purpose=run %s\n' "$(git rev-parse --show-toplevel)" \
-     "$(git branch --show-current)" "$(git rev-parse --short HEAD)" "$(date -u +%FT%TZ)" "<runId>" \
-     > "$SLOT/.deployed-from"
-   ```
-
-3. `npm run test:obsidian`, record the result as `CDP smoke: <result>`, and say which build was
-   loaded if you can tell. It ran against whatever Obsidian has in memory, so it is a supplement,
-   never `VERIFIED IN OBSIDIAN`.
-4. `$OPS lock <KEY> --release`, whatever happened.
-
-The `target` line is `NOT VERIFIED IN OBSIDIAN: <CDP smoke line>`.
+Verify's `target` line is always `NOT VERIFIED IN OBSIDIAN: lanes never deploy (owner verifies
+after the end-of-run deploy and a full restart)`. Verify relies on the gates and the bundled probes.
 
 ## Finish: deploy merged main
 
