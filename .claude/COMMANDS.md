@@ -13,8 +13,8 @@ Don't edit a linked file: the edit would land in every project. Instead:
   alone.
 
 `/run-tickets` is shared too: its script is `.claude/claude-workflow/core/scripts/ticket-ops.mjs`,
-its facts are `.claude/project.md` `## Autonomous runs`, and the deploy lock, CDP smoke and
-speech-dispatcher steps are in `.claude/overrides/run-tickets.md`.
+its facts are `.claude/project.md` `## Autonomous runs`, and the deploy lock (lanes never deploy;
+`deploy.mjs` enforces it), the end-of-run deploy and the speech-dispatcher steps are in `.claude/overrides/run-tickets.md`.
 
 **These files work in both Claude Code and opencode.** `.opencode/command/` holds per-file
 symlinks to `.claude/commands/`, which `install.sh link --opencode` maintains.

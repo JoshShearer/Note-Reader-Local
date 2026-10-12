@@ -50,7 +50,7 @@ scope, so a red check does not block a merge.
 | Field | Value |
 |---|---|
 | Target | A real Obsidian on this machine running the deployed plugin from the vault `deploy.mjs` writes to (its default vault, `<vault>/.obsidian/plugins/local-tts-reader`). Android-only behaviour (the `readme` bridge engine, mobile placement, R-M03) needs Obsidian on the phone, driven over CDP |
-| How | Take the slot, `npm run deploy`, write the `.deployed-from` marker, reload Obsidian, then drive the change through the plugin's real UI. `npm run test:obsidian` (CDP, port 9222) supplements it, never replaces it. Procedure in `overrides/verify.md`; CDP traps in `docs/agent-history.md` "Driving a real Obsidian over CDP" |
+| How | Check that no `/run-tickets` lane holds `.claude/deploy.lock/` (interactive sessions never take it), `npm run deploy`, write the `.deployed-from` marker, reload Obsidian, then drive the change through the plugin's real UI. `npm run test:obsidian` (CDP, port 9222) supplements it, never replaces it. Procedure in `overrides/verify.md`; CDP traps in `docs/agent-history.md` "Driving a real Obsidian over CDP" |
 | Verified wording | `VERIFIED IN OBSIDIAN` (name the engine: a pass on one engine is not a pass on the others) |
 | Not-verified wording | `NOT VERIFIED IN OBSIDIAN` (`/verify`'s verdict: `GATES GREEN, NOT VERIFIED`) |
 | Exclusive resource | none (`.claude/deploy.lock/` binds `/run-tickets` lanes only; interactive sessions check it but don't take it, see `overrides/verify.md`) |
@@ -140,7 +140,7 @@ docs-only commits to the default branch: allowed (`/update-docs` and `/finish` d
 
 ## Autonomous runs
 
-`/run-tickets` facts. The Obsidian deploy, the CDP smoke and the speech-dispatcher checks are in
+`/run-tickets` facts. The end-of-run deploy (lanes never deploy) and the speech-dispatcher checks are in
 `overrides/run-tickets.md`.
 
 | Field | Value |
