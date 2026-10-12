@@ -20,13 +20,15 @@ The canonical list is the "Quality gates" block in `AGENTS.md`. Its `npm test` l
 by `tests/suiteRegistry.test.ts` against `package.json`'s `pretest` registry; never restate the
 suite count or names anywhere else.
 
+Run them in this order, which is CI's order. `test` reads the built `main.js`.
+
 | Gate | Command | Required when the diff touches |
 |---|---|---|
-| test | `npm test` | any of `src/`, `tests/`, `run-tests.mjs`, `build-tests.mjs`, `package.json`, `.github/workflows/` |
 | typecheck | `npm run typecheck` | any TS (`src/`, `tests/`) |
 | lint | `npm run lint` (errors fail, warnings tolerated, ADR 0033) | anything under `src/` |
 | build | `npm run build` | `esbuild.config.mjs`, `src/engines/onnx/**`, `manifest.json`, `package.json` dependencies, any new import |
 | require-list | after `build`: `grep -oE 'require\("[^"]+"\)' main.js \| sort -u` must be exactly `@codemirror/state`, `@codemirror/view`, `child_process`, `obsidian`; `grep -oE 'import\("[^"]+"\)' main.js` must list no node builtin (rule 7, ADR 0033; same check as CI's "Assert main.js require() list" step) | whenever `build` is required |
+| test | `npm test` | any of `src/`, `tests/`, `run-tests.mjs`, `build-tests.mjs`, `package.json`, `.github/workflows/` |
 | inline-worker | `npm run test:inline-worker` (its `pretest` runs a build) | `src/engines/onnx/**`, `esbuild.config.mjs` |
 
 Setup in a fresh checkout: `npm ci`. `tests/release.test.ts` reads `main.js`, so in a fresh
