@@ -1,1 +1,0 @@
-../claude-workflow/core/agents/router-sonnet.md
