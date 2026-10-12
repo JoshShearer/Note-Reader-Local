@@ -57,6 +57,8 @@ build.
 
 ## Taking the target: deploy and CDP smoke
 
+`deploy.mjs` now enforces the slot mechanically: in a lane marked by ticket-ops it refuses unless `.claude/deploy.lock/owner` names this lane and run and HEAD is a clean `origin/main`.
+
 Only if Obsidian is reachable on the CDP port
 (`curl -s --max-time 2 http://127.0.0.1:9222/json/version`); otherwise
 `CDP smoke: not run (port 9222 not reachable)`.
