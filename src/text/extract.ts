@@ -5547,6 +5547,17 @@ export function extractChunks(
 	// or a definition the renderer drops may be what hides the text there
 	// (`> P <b title="a` / `> [!note] %% b` / `> c">d</b>` displays `P d`;
 	// /critique on 383f85c, F1 and F2).
+	//
+	// Nor on or across a line inside the renderer's frontmatter or a `$$` block
+	// (`hiddenRawLines`; NRL-166 fix round 4). The renderer opens no `%%` block
+	// there, but it displays nothing of the line either (frontmatter is rendered
+	// as properties or not at all, and `%` in TeX comments out its line), so the
+	// "no block" answer was read as "spoken text" and spoke what 44a037a's opener
+	// hid: `---` / `%% QAQ` / `---` / `QBQ` / `%%`, a frontmatter block
+	// `detectFrontmatter` rejects, and `> $$` / `> %% QAQ` / `> $$` / `> QBQ` /
+	// `%%`, a math block extractChunks' own `$$` rule does not take (/critique on
+	// ef84044, F1 and F2). Fenced and indented code display their text as
+	// written, so the renderer's "no block" there is exact and they are not risks.
 	const percentOpensAt: (boolean | undefined)[] = new Array<boolean | undefined>(lines.length).fill(undefined);
 	if (rendererHidden !== null) {
 		const constructSinceBlank: boolean[] = new Array<boolean>(lines.length).fill(false);
@@ -5585,7 +5596,7 @@ export function extractChunks(
 		let nextRisk = lines.length;
 		let nextPct = -1;
 		for (let k = lines.length - 1; k >= 0; k--) {
-			if (rendererHidden.browserRiskLines[k]! || rendererHidden.footnoteLines[k]! || lineMayHold(k) || openCommentOnLine(lines[k]!)) nextRisk = k;
+			if (rendererHidden.browserRiskLines[k]! || rendererHidden.footnoteLines[k]! || rendererHidden.hiddenRawLines[k]! || lineMayHold(k) || openCommentOnLine(lines[k]!)) nextRisk = k;
 			const reach = nextPct === -1 ? lines.length - 1 : nextPct;
 			const chained = nextPct === -1 || (percentOpensAt[nextPct] !== undefined && onePct(lines[nextPct]!));
 			if (nextRisk > reach && !constructSinceBlank[k]! && chained) percentOpensAt[k] = rendererHidden.percentStarts.has(k);

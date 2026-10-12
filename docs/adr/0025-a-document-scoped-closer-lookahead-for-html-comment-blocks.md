@@ -3182,6 +3182,130 @@ newly disclosing or newly lost cell re-rendered in the running Obsidian 1.13.7 o
 CDP (read-only `MarkdownRenderer.render`) as Verify 3 did. Nothing was deployed and
 Live Preview was not run. R-M08 is NOT met.
 
+### NRL-166 fix round 4 (2026-10-12): the `%%` withhold must ask WHY the renderer has no block
+
+An independent /critique of `ef84044` (BLOCK, 40; one of two L2 runs, recorded in
+`.claude/scratch/2026-10-12-pr221-critique-ef84044.md`) found that round 2's
+`percentOpensAt` withheld our `%%` opener wherever the renderer's parser opened no
+`%%` block, without asking why it had none. "No block" was read as "the `%%` is
+displayed text", which is exact for a paragraph, a heading, a table cell or a
+code block, and wrong for two raw blocks the page shows nothing of as written.
+Two findings were disclosures against `44a037a`, the first since round 3's census;
+the third was a loss.
+
+1. **F1, HIGH, frontmatter.** A `%%` line inside the renderer's frontmatter block
+   that `detectFrontmatter` rejects (no `key:` line, a `----`, `---x` or `--- -`
+   closer, a `%%`-led line) is no block for the scanner, so `percentOpensAt` was
+   false, cleanLine emitted `%%` and the line was spoken. `---` / `%% QAQ` / `---`
+   / `QBQ` / `%%` speaks `""` on `44a037a` and `%% QAQ | QBQ` on `ef84044`; the
+   same for the `key: v` / `----` twin, the two-line body, the CRLF twin and the
+   note with no later `%%`. Whether `pre.frontmatter` displays its raw text depends
+   on the Properties setting (not re-rendered live); `44a037a` never spoke it.
+2. **F2, HIGH, `$$` math.** The same for a `%%` line inside a `$$` block the
+   renderer's math tokenizer takes and extractChunks' own `$$` rule does not (in a
+   quote, in a list item, or unclosed): `> $$` / `> %% QAQ` / `> $$` / `> QBQ` /
+   `%%` speaks `$$` on `44a037a` and `$$ | %% QAQ | $$ | QBQ` on `ef84044`. MathJax
+   reads `%` as a TeX comment to the line's end, so the page displays nothing of
+   `%% QAQ` (inferred from TeX input semantics, not re-rendered live).
+3. **F3, MEDIUM, inline `<svg>` / `<math>`.** The round-3 fail-close for foreign
+   content tested only the HTML block's own text. An inline `<svg><text>` on a
+   tight list item's paragraph line is still open when the next line's
+   `<![CDATA[` block arrives (no `</p>` closes it in a tight item), so for the
+   browser that is a real CDATA section whose text displays, while `htmlMarkup`
+   read it as a bogus comment and hid it: `- P <svg><text>` / `  <![CDATA[ QAQ
+   ]]>` speaks `P <svg><text> | < CDATA[ QAQ ]>` on `44a037a` and `P <svg><text>`
+   on `ef84044`. A loss, not a disclosure.
+
+**Root cause, confirmed by execution** (24 probes through the bundled
+`extractChunks` of `44a037a` and `ef84044`; the harness is in this round's
+scratch, not the repository). The risk set in the `percentOpensAt` loop was
+`browserRiskLines`, `footnoteLines`, `lineMayHold` and `openCommentOnLine`; the
+scanner's `rawBlocks` carried frontmatter and `$$` lines and nothing consulted
+them there. `frontmatterGateTo` guards only `refineWindowClean`.
+
+**Fix.** `rendererHiddenText` reports `hiddenRawLines`: every line the scanner put
+in a raw block of kind `frontmatter` or `math` (`rawBlocks` now carries the
+tokenizer's name). The loop counts such a line as a risk, so `percentOpensAt`
+stays `undefined` on and across it, our opener stands and `pctUnsure` withholds
+the refinements there, which is `44a037a`'s answer on every probe. For F3,
+`UNREAD_TAG` (the raw-text tags plus `svg` and `math`) now drives the note-wide
+scan in `setNote` and `rendererHiddenText`, so a foreign-content tag anywhere,
+inline included, leaves every later HTML block and fence line unread and keeps the
+old answers from its line on, exactly as a raw-text tag has since round 3. The
+HTML-block test uses the same constant. All 24 probes equal `44a037a`.
+
+**Siblings searched.** The other raw-block kinds: fenced code and indented code
+display their text as written, so the renderer's "no block" there is exact and
+they are not risks (probes in a quote fence, a lazy quote fence, a list fence, a
+plain fence, a fence info string, indented code in a quote: identical on `44a037a`
+and `ef84044`, so no cell to move); an HTML block is already in
+`browserRiskLines`; a table cell is inline-parsed and displays `%%`. Three
+`guard-nrl166-r4-*` rows pin the code and table answers. One more shape is
+better than both arms: `---` / `%% A` / `---` / `%% C` / `D`. `44a037a` speaks
+`C D` (its own disclosure: the renderer's `%%` block at line 3 hides both),
+`ef84044` spoke `%% A`, and this tree speaks nothing, since our opener now
+re-pairs with the renderer's block, whose text `ranges` drops regardless. The F3
+fix also closes the round-3 known leftover (`- <svg><![CDATA[ QABQ` / `  <![CDATA[
+QACQ'`, lost on `ef84044`): it now speaks `44a037a`'s answer.
+
+**Pins.** 13 `pin-nrl166-r4-*` rows (7 F1, 3 F2, 3 F3) in the NRL-38 table, each
+RED on `ef84044` (the suite with the new rows run on an `ef84044` worktree: 13
+`FAIL ... visible output`, exit 1) and GREEN here (`all extract tests passed`).
+The 3 guards are green on both.
+
+**Census.** Round 3's generators, its `run3.cjs` judge and `liverender.mjs` live in
+that round's scratch and were not available to this one, so this round ran a
+differential census of its own (`census4.mjs`, in its scratch): 300,000 random
+notes over the constructs this round touches (frontmatter with every closer shape,
+`$$` in quotes, lists and unclosed, `%%` in every position, fences, HTML blocks,
+`<svg>`/`<math>` inline and as blocks, CDATA, raw-text tags, footnotes, 20% CRLF),
+2,121,154 sentinel cells under the DEF and ALL masks, through the bundled
+`extractChunks` of `44a037a`, `ef84044` and this tree. Without the renderer judge
+the figures are set relations, and the one that carries the bar is this: a cell
+this tree speaks that neither `44a037a` nor `ef84044` speaks is the only place a
+disclosure against `44a037a` beyond `ef84044`'s own census (0, above, taken as
+cited) could sit.
+
+- **Spoken here and by neither `44a037a` nor `ef84044`: 3 cells in 2 notes**, each
+  read by hand against the scanner's own transcription (`percentStarts`,
+  `ranges`, fence lines) and displayed by the renderer: `---` / `%% QAQ` / `- QBQ`
+  / `  ~~~` / `--- -` / `%%` / `- QMQ` / `%% QUQ` / `> > QXQ %% QYQ` / `> > ```js`
+  (frontmatter is lines 0-4, the renderer's `%%` block lines 5-7, QUQ and QXQ are
+  paragraph text; `44a037a` speaks the hidden QMQ, `ef84044` the frontmatter's
+  `%% QAQ`, this tree exactly `QUQ | QXQ %% QYQ`), and `---` / `%% QAQ` / `---` /
+  ```` ```%% ```` / blank / `%% QEQ` (QEQ is content of an unclosed fence the page
+  displays as code). **Newly disclosing against `44a037a`: 0.**
+- **Hidden by this round** (spoken on `ef84044`, not here): 10,289 cells, every one
+  hidden on `44a037a` too. **Lost by this round against `44a037a`** (spoken on
+  `44a037a` and `ef84044`, not here): **0**. The 163,729 cells `44a037a` speaks and
+  this tree does not are all rounds 1-3's, unchanged (they mix (i), disclosures the
+  branch closes, with any (iii); this run has no judge to split them, and round 3's
+  live classification stands).
+- **Newly spoken by this round** (here, not on `ef84044`): 5,396 cells, all but the
+  3 above spoken by `44a037a`: what failing closed gives back. Cells spoken here
+  and not on `44a037a` fall from 13,651 on `ef84044` to 3,365.
+- No arm threw on any note.
+
+**Gates** (this tree): `npm run typecheck` clean; `npm run lint` 0 errors, 42
+warnings; `npm run build` ok, `main.js` requires only `obsidian`,
+`@codemirror/state`, `@codemirror/view` and call-time `child_process`, with no
+`import(`; `npm test` 25 suites, 7,341 checks ok, 2 failed, both the real `spd-say`
+checks in `engine` (`real list: app language en picks English (America)`, `has an
+english variant voice`), which fail on `main` on this machine too: its
+speech-dispatcher lists no English variant.
+
+**Residual risk, stated plainly.** Failing closed to `44a037a` keeps `44a037a`'s own
+disclosures in these classes: `---` / `%% QAQ` / `---` / `$$` / `%% QBQ` / `$$` /
+`QCQ` / `%%` speaks `QBQ $$ QCQ` on `44a037a` and here (`ef84044` spoke `%% QAQ`
+instead), and QBQ is a TeX comment the page never shows. Hiding it would need the
+`%` comment of a `$$` block modelled (escapes included), which no round has done;
+it is a leftover present on `main`, not a regression. `<svg>` and `<math>` in a code
+span or fence now turn the refinements off to the note's end, as raw-text tags
+already did: lost coverage at `44a037a`'s answer, not a regression.
+
+**NOT VERIFIED IN OBSIDIAN.** Bare Node only. Nothing was re-rendered live this
+round, nothing was deployed and Live Preview was not run. R-M08 is NOT met.
+
 ### CLOSED by NRL-119: a list marker alone on its line ends the paragraph
 
 `TERM2_LIST` required `[ \t]` after the marker, so a marker ALONE on its line was not

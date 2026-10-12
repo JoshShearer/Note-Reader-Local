@@ -103,6 +103,21 @@ const RAW_BLOCKS: ReadonlySet<string> = new Set(["frontmatter", "indentedCode", 
 
 /** A tag opening an element whose content a browser reads as raw text or RCDATA, where `<!--` opens no comment. */
 const RAW_TEXT_TAG = /<(?:script|style|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)(?![A-Za-z0-9-])/i;
+/**
+ * A tag opening foreign content (`<svg>`, `<math>`), inside which `<![CDATA[` is
+ * a real CDATA section whose text a browser displays, where `htmlMarkup` reads a
+ * bogus comment. An inline one on a list item's paragraph line is still open
+ * when the next line's HTML block arrives (no `</p>` closes it in a tight item),
+ * so the whole note from its tag on is as unmodelled as it is after a raw-text
+ * tag (/critique on ef84044, F3: `- P <svg><text>` / `  <![CDATA[ QAQ ]]>`
+ * displays QAQ, which reading the block as a bogus comment hid; NRL-166 fix
+ * round 4).
+ */
+const FOREIGN_TAG = /<(?:svg|math)(?![A-Za-z0-9-])/i;
+/** Either of the above: from its first match on, no HTML block or fence line is read. */
+const UNREAD_TAG = new RegExp(`${RAW_TEXT_TAG.source}|${FOREIGN_TAG.source}`, "i");
+/** The raw blocks whose text the page shows nothing of as written, so a `%%` line inside one opens no block and is displayed nowhere (see `RendererHiddenText.hiddenRawLines`). */
+const HIDDEN_RAW_BLOCKS: ReadonlySet<string> = new Set(["frontmatter", "math"]);
 
 /** Deepest container nesting scanned before giving up (see BlockScanner.depth). */
 const MAX_DEPTH = 64;
@@ -431,8 +446,8 @@ class BlockScanner {
 	readonly openQuotes: Array<{ at: ScanPos; quote: string; end: ScanPos }> = [];
 	frontmatterLastLine = -1;
 	// First and last note line of every block whose text is never inline-parsed,
-	// and of every paragraph.
-	readonly rawBlocks: Array<readonly [number, number]> = [];
+	// with the tokenizer's name, and of every paragraph.
+	readonly rawBlocks: Array<readonly [number, number, string]> = [];
 	readonly paragraphs: Array<readonly [number, number]> = [];
 	private lastMethod = "";
 	// The note as scanned, and each of its lines' end offset, when the caller
@@ -586,7 +601,8 @@ class BlockScanner {
 			if (RAW_BLOCKS.has(this.lastMethod) || this.lastMethod === "paragraph") {
 				let last = line;
 				for (let k = pos; k < pos + eaten - 1; k++) if (value.charCodeAt(k) === 10) last++;
-				(this.lastMethod === "paragraph" ? this.paragraphs : this.rawBlocks).push([line, last]);
+				if (this.lastMethod === "paragraph") this.paragraphs.push([line, last]);
+				else this.rawBlocks.push([line, last, this.lastMethod]);
 			}
 			// A fenced block's fence lines are never displayed: the opening one's
 			// info string becomes a `class` (measured: `> ~~~ QFQ` renders
@@ -603,7 +619,7 @@ class BlockScanner {
 	/** Give the scan the note it reads, so the browser-comment carry can look between blocks. */
 	setNote(value: string): void {
 		this.note = value;
-		this.rawTextFrom = RAW_TEXT_TAG.exec(value)?.index ?? Infinity;
+		this.rawTextFrom = UNREAD_TAG.exec(value)?.index ?? Infinity;
 		this.noteLineEnd = [];
 		for (let k = value.indexOf("\n"); k !== -1; k = value.indexOf("\n", k + 1)) this.noteLineEnd.push(k);
 		this.noteLineEnd.push(value.length);
@@ -1264,8 +1280,9 @@ class BlockScanner {
 		// QAAQ); every footnote line keeps the old answers already.
 		// Nor is a block holding `<svg` or `<math`, inside which `<![CDATA[` is a
 		// real CDATA section whose text a browser displays (/critique on 2acd366,
-		// F2).
-		const rawText = RAW_TEXT_TAG.test(html) || /<(?:svg|math)(?![A-Za-z0-9-])/i.test(html) || startAt >= this.rawTextFrom || this.inFootnote > 0;
+		// F2), nor any block after such a tag anywhere in the note, inline included
+		// (`UNREAD_TAG` in `setNote`; /critique on ef84044, F3).
+		const rawText = UNREAD_TAG.test(html) || startAt >= this.rawTextFrom || this.inFootnote > 0;
 		const spans = rawText ? [] : plain === null ? inside!.spans : inside === null ? plain.spans : intersectSpans(plain.spans, inside.spans);
 		// What the block leaves open, for the risk reports below: any reading's,
 		// a comment first, since it runs furthest.
@@ -1733,6 +1750,18 @@ export interface RendererHiddenText {
 	openRiskThrough: number;
 	/** The last line of the reading view's frontmatter block, or -1. */
 	frontmatterLastLine: number;
+	/**
+	 * 0-based note lines inside the reading view's frontmatter block or one of
+	 * its `$$` math blocks (NRL-166 fix round 4). A `%%` there opens no block for
+	 * the renderer, yet it is no displayed text either: frontmatter is rendered
+	 * as properties or not at all, and `%` in TeX comments out the rest of its
+	 * line. So "no block here" must not be read as "the `%%` is spoken text", and
+	 * `extractChunks` keeps its own opener on these lines (/critique on ef84044,
+	 * F1 and F2: `---` / `%% QAQ` / `---` / `QBQ` / `%%` and `> $$` / `> %% QAQ`
+	 * / `> $$` / `> QBQ` / `%%` spoke QAQ, which 44a037a never did). Not the
+	 * fenced and indented code blocks, whose text the page displays as written.
+	 */
+	hiddenRawLines: boolean[];
 }
 
 /**
@@ -1827,8 +1856,10 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	}
 	// A raw-text element's tag anywhere, inline included, may swallow the rest
 	// of the page (an unclosed `<script>`), which nothing here models: from its
-	// line on, every line is a risk, and no refinement stands (fix round 3).
-	const rawTextAt = RAW_TEXT_TAG.exec(source)?.index ?? -1;
+	// line on, every line is a risk, and no refinement stands (fix round 3). A
+	// foreign-content tag (`<svg>`, `<math>`) likewise, since inside it a later
+	// block's `<![CDATA[` is displayed text (fix round 4, `UNREAD_TAG`).
+	const rawTextAt = UNREAD_TAG.exec(source)?.index ?? -1;
 	if (rawTextAt !== -1) {
 		let l = 0;
 		while (l + 1 < lineCount && lineStart[l + 1]! <= rawTextAt) l++;
@@ -2093,7 +2124,9 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 		percentStarts.add(b.startLine);
 		if (!b.closed && b.lastLine < lineCount - 1) percentEnds.set(b.startLine, b.lastLine);
 	}
-	return { ranges, percentStarts, percentEnds, footnoteLines, browserRiskLines, openRiskThrough, frontmatterLastLine: scanner.frontmatterLastLine };
+	const hiddenRawLines: boolean[] = new Array<boolean>(lineCount).fill(false);
+	for (const [a, b, kind] of scanner.rawBlocks) if (HIDDEN_RAW_BLOCKS.has(kind)) for (let l = a; l <= b && l < lineCount; l++) hiddenRawLines[l] = true;
+	return { ranges, percentStarts, percentEnds, footnoteLines, browserRiskLines, openRiskThrough, frontmatterLastLine: scanner.frontmatterLastLine, hiddenRawLines };
 }
 
 /**

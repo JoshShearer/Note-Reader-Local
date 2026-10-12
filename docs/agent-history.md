@@ -2134,6 +2134,44 @@ disclosure paid in the note.
 
 NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
 
+**NRL-166 fix round 4 (2026-10-12): the `%%` withhold asks WHY the renderer has no
+block, with evidence in ADR 0025's "NRL-166 fix round 4" section.** An independent
+/critique of `ef84044` (BLOCK, 40) found two disclosures against `44a037a` and one
+loss, all in round 2's `percentOpensAt`: "the renderer opens no `%%` block here" was
+read as "the `%%` is displayed text".
+- F1: a `%%` line inside the renderer's frontmatter block that `detectFrontmatter`
+  rejects (no key, a `----` / `---x` closer, CRLF) was spoken; `44a037a` hid it.
+- F2: the same inside a `$$` block the renderer takes and our `$$` rule does not (in
+  a quote, a list, or unclosed); `%` is a TeX comment, so the page shows nothing.
+- F3: an inline `<svg>`/`<math>` on a tight list item's paragraph line makes the next
+  line's `<![CDATA[` block a real CDATA section (displayed); the round-3 fail-close
+  tested only the block's own text, so it was hidden. A loss.
+- Fix: `rendererHiddenText.hiddenRawLines` (frontmatter and `math` lines off
+  `rawBlocks`, which now carries the tokenizer's name) joins the loop's risk set, so
+  our opener stands there (`44a037a`'s answer); `UNREAD_TAG` (raw-text tags plus
+  `svg`/`math`) drives the note-wide `rawTextFrom` scan, so a foreign tag anywhere
+  leaves later blocks and fence lines unread. Closes round 3's recorded `<svg>`
+  CDATA leftover as a side effect.
+- Siblings checked, not risks: fenced and indented code and table cells display `%%`
+  as written (probes identical on `44a037a` and `ef84044`); HTML blocks are risks
+  already. Pinned by 13 `pin-nrl166-r4-*` rows (RED on `ef84044`) and 3 guards.
+- Census (own differential generator, 300,000 notes, 2,121,154 cells, no renderer
+  judge): 3 cells spoken by neither `44a037a` nor `ef84044`, each hand-read as
+  displayed text; 0 newly disclosing against `44a037a`; 0 lost by this round that
+  `44a037a` spoke; 10,289 cells hidden by this round, all hidden on `44a037a` too.
+- Trap: a "renderer has no block here" answer is only as good as the reason. Before
+  trusting a negative from the transcription, list every block kind that can hold
+  the construct and ask what the page shows of each: frontmatter and `$$` show
+  nothing of a `%%` line, code and tables show it.
+- Trap: the round's census scripts were never committed, so round 4 had to write its
+  own and could not reproduce the judge figures. Keep census tooling in the repo or
+  a named scratch that survives the round.
+- Residual, present on `main`: `44a037a`'s own disclosures in these classes are kept
+  (a `%%` TeX comment inside `$$` after a rejected frontmatter block speaks QBQ on
+  both), since the `%` comment of a `$$` block is not modelled.
+
+NOT VERIFIED IN OBSIDIAN. Nothing re-rendered live this round. R-M08 is not met.
+
 One thing from NRL-63 is worth carrying separately, because it is what to re-run if anyone
 widens the lookahead. Its critique found a **real prose-loss defect** and fixed it before the
 commit: a `$$` display-math block between a label's opener and closer silenced the alt text

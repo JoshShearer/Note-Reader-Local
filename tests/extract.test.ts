@@ -4617,6 +4617,41 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl166-r3-g6-end-tag-name-after-slash", "</div =\">QAQ", "QAQ"],
 		["pin-nrl166-r3-g6-svg-cdata-not-read", "<div>\n<svg><text><![CDATA[QCQ]]></text></svg>", "<svg><text>< CDATA[QCQ ]></text></svg>", { stripTags: false }],
 		["pin-nrl166-r3-g6-open-bogus-fails-closed", "<p><?\n\n<div e='>QCQ", "<div e='>QCQ", { stripTags: false }],
+		// NRL-166 fix round 4 (/critique on ef84044). F1: a `%%` line inside the
+		// renderer's frontmatter block, which `detectFrontmatter` rejects (no key, a
+		// `----` or `---x` closer, CRLF), opens no `%%` block for the renderer but is
+		// no displayed text either; `percentOpensAt` read "no block" as text and
+		// spoke it. Such a line is a risk (`hiddenRawLines`), so our opener stands
+		// and 44a037a's answer holds. RED on ef84044.
+		["pin-nrl166-r4-f1-frontmatter-pct-no-key", "---\n%% QAQ\n---\nQBQ\n%%", ""],
+		["pin-nrl166-r4-f1-frontmatter-pct-four-dash-closer", "---\nkey: v\n%% QAQ\n----\nQBQ\n%%", "key: v"],
+		["pin-nrl166-r4-f1-frontmatter-pct-two-lines", "---\n%% QAQ\nQAZQ\n---\nQBQ\n%%", ""],
+		["pin-nrl166-r4-f1-frontmatter-pct-crlf", "---\r\n%% QAQ\r\n---\r\nQBQ\r\n%%", ""],
+		["pin-nrl166-r4-f1-frontmatter-pct-no-later-pct", "---\n%% QAQ\n---\nQBQ", ""],
+		["pin-nrl166-r4-f1-frontmatter-pct-dash-x-closer", "---\n%% QAQ\n---x\nQBQ\n%%", ""],
+		// Our opener re-pairs with the renderer's own `%%` block, whose text the
+		// hidden ranges drop anyway: nothing is spoken, where 44a037a speaks `C D`
+		// (a disclosure of its own) and ef84044 spoke `%% A`.
+		["pin-nrl166-r4-f1-frontmatter-pct-then-renderer-block", "---\n%% A\n---\n%% C\nD", ""],
+		// F2: the same for a `$$` block the renderer takes and extractChunks' own
+		// `$$` rule does not (in a quote, in a list item, or unclosed); `%` in TeX
+		// comments out the line, so QAQ is displayed nowhere.
+		["pin-nrl166-r4-f2-quote-math-pct", "> $$\n> %% QAQ\n> $$\n> QBQ\n%%", "$$"],
+		["pin-nrl166-r4-f2-list-math-pct", "- $$\n  %% QAQ\n  $$\n  QBQ\n%%", "$$"],
+		["pin-nrl166-r4-f2-unclosed-math-pct", "$$\n%% QAQ\nQBQ", "$$"],
+		// Siblings checked and not risks: fenced and indented code, and a table
+		// cell, display `%%` as written, so the renderer's "no block" is exact.
+		["guard-nrl166-r4-fenced-code-pct-is-displayed", "```\n%% QAQ\n```\nQBQ\n%%", "%% QAQ QBQ", { skipCodeBlocks: false }],
+		["guard-nrl166-r4-indented-code-pct-in-quote-is-displayed", "> P\n>\n>     %% QAQ\n> QBQ\n%%", "P %% QAQ QBQ"],
+		["guard-nrl166-r4-table-pct-is-displayed", "| a | b |\n|---|---|\n| %% QAQ | x |\nQBQ\n%%", "| a | b | |---|---| | %% QAQ | x | QBQ", { skipTables: false }],
+		// F3: an inline `<svg>` or `<math>` on a tight list item's paragraph line is
+		// still open when the next line's `<![CDATA[` block arrives, so that is a
+		// real CDATA section whose text displays; the block was read as a bogus
+		// comment and hidden. A foreign-content tag anywhere now leaves every later
+		// block unread (`UNREAD_TAG`), 44a037a's answer. RED on ef84044.
+		["pin-nrl166-r4-f3-inline-svg-cdata-displays", "- P <svg><text>\n  <![CDATA[ QAQ ]]>", "P <svg><text> < CDATA[ QAQ ]>"],
+		["pin-nrl166-r4-f3-inline-svg-lazy-cdata-displays", "- P <svg><text>\n<![CDATA[ QAQ ]]>", "P <svg><text> < CDATA[ QAQ ]>"],
+		["pin-nrl166-r4-f3-inline-math-cdata-displays", "- P <math><mtext>\n  <![CDATA[ QAQ ]]>", "P <math><mtext> < CDATA[ QAQ ]>"],
 		["pin-nrl166-r3-g4-bang-bogus-comment", "<div>\n<! <b title=\"x>QKQ", "QKQ"],
 		["pin-nrl166-r3-g4-slash-bogus-comment", "<div>\n</ <b title=\"x> QAQ", "QAQ"],
 		["pin-nrl166-r3-g4-bang-dash-bogus-comment", "<div>\n<!- <!-- -> QAQ", "QAQ"],
