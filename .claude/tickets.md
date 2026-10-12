@@ -3,8 +3,7 @@
 backend: linear
 
 Operations are in `.claude/workflow/tickets-linear.md`. This file holds the values and the
-Local TTS Reader-specific conventions. (`.claude/linear.md` is a symlink here for `/run-tickets`
-and `opencode.json`.)
+Local TTS Reader-specific conventions. (`.claude/linear.md` is a symlink here for `opencode.json`.)
 
 Single source of truth for how the `/`-commands talk to Linear. Every command refers here
 instead of restating it, so a status rename is one edit.
@@ -158,7 +157,7 @@ Linear appends a title slug and rewrites the path when an issue moves team.
 |---|---|---|
 | Feature | `feature/nrl-{N}-{slug}` | `feature/nrl-12-read-from-cursor` |
 | Fix | `fix/nrl-{N}-{slug}` | `fix/nrl-19-wikilink-brackets` |
-| Docs | `docs/nrl-{N}-{slug}`; `/run-tickets` Finish uses `docs/<id>-finish` | `docs/nrl-130-finish` |
+| Docs | `docs/nrl-{N}-{slug}` | `docs/nrl-130-release-notes` |
 
 ID regex for the branch: `(?:feature|fix|docs)/(?:nrl|NRL)-(\d+)-`
 

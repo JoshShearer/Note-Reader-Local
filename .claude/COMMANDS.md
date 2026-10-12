@@ -12,7 +12,9 @@ Don't edit a linked file: the edit would land in every project. Instead:
 - To fork a command outright, replace its link with a real file. `install.sh` will leave it
   alone.
 
-`/run-tickets` is still local to this repo.
+`/run-tickets` is shared too: its script is `.claude/claude-workflow/core/scripts/ticket-ops.mjs`,
+its facts are `.claude/project.md` `## Autonomous runs`, and the deploy lock, CDP smoke and
+speech-dispatcher steps are in `.claude/overrides/run-tickets.md`.
 
 **These files work in both Claude Code and opencode.** `.opencode/command/` holds per-file
 symlinks to `.claude/commands/`, which `install.sh link --opencode` maintains.
@@ -54,7 +56,7 @@ never deploys.
 | Command | Purpose |
 |---|---|
 | `/worktrees` | Parallel sessions - list, inspect, create, remove; file-overlap and deploy-slot ownership. Owns the `note-reader-local-nrl-*` pool only |
-| `/run-tickets` | Run a batch of tickets end to end in fresh subagents, fully autonomously, in a disposable `note-reader-local-run-*` lane it creates and removes; anything needing a human blocks that ticket and is reported at the end |
+| `/run-tickets` | Run a batch of tickets end to end, fully autonomously (scripted start/ship/merge/finish, Build, Critic and Verify agents and a Fix loop), in a disposable `note-reader-local-run-*` lane it creates and removes; anything needing a human blocks that ticket and is reported at the end |
 
 ---
 
@@ -83,7 +85,7 @@ names any red PR in its end-of-run report and leaves the triage to you.
 | `/test-issue` has no `known-failures.json` | ShroomSpy triages CI against a hand-maintained baseline file. Here the triage is measured: reproduce the failing gate locally, then on `origin/main` in a throwaway tree. The one structural exception is already written down - a red `release.yml` on a branch push is expected for refs predating `01c9a84` (`AGENTS.md`, NRL-79). |
 | `/spec-check` is new | This project has a written spec with MoSCoW IDs. Compliance drift is the main risk, and no other repo in the portfolio has that shape. |
 | `/critique` risk factors are rewritten | Scored on source-offset edits, log call sites, the worker's network guards, rate handling, settings normalisation and node-builtin imports, not on generic churn. |
-| Bugs must be reproduced before they are fixed | `AGENTS.md` rule 12, enforced in `/create-issue` and in `/run-tickets` Phase 3. |
+| Bugs must be reproduced before they are fixed | `AGENTS.md` rule 12, enforced in `/create-issue` and in `/run-tickets`' Build phase. |
 | No `deslop`, no `update-packages` | `deslop` is 3279 lines of React and Firebase patterns that do not apply. Dependency updates here are rare enough to do by hand. |
 
 ## Setup

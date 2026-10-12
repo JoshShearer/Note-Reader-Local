@@ -135,3 +135,18 @@ docs-only commits to the default branch: allowed (`/update-docs` and `/finish` d
 - `README.md`
 - `docs/adr/` - new decision records only. Don't diff these. Write one when a deviation needs it
 - `.claude/COMMANDS.md`
+
+## Autonomous runs
+
+`/run-tickets` facts. The Obsidian deploy, the CDP smoke and the speech-dispatcher checks are in
+`overrides/run-tickets.md`.
+
+| Field | Value |
+|---|---|
+| Gate-defining files | `package.json`, `package-lock.json`, `tsconfig.json`, `eslint.config.mjs`, `esbuild.config.mjs`, `run-tests.mjs`, `run-tests.d.mts`, `build-tests.mjs`, `tests/suiteRegistry.test.ts`, `tests/release.test.ts`, `tests/adrNumbers.test.ts` |
+| Pipeline files | `deploy.mjs` (it writes the owner's vault) |
+| Owner-only files | `.github/workflows/release.yml`, `versions.json` (the release surface) |
+| Verify-only gates | `inline-worker` |
+| Target from a lane | Lock `.claude/deploy.lock/`. It binds `/run-tickets` lanes only: interactive sessions check it but never take it (`overrides/verify.md`). A lane deploys only while holding it, then writes `.deployed-from` |
+| Target guard files | `deploy.mjs` |
+| Forbidden unattended actions | `git tag`, `gh release`, `npm version`, `npm publish`, starting, stopping or restarting Obsidian, writing the vault other than by `npm run deploy` under the lock |
