@@ -3045,6 +3045,20 @@ const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
  */
 const LINK_REF_DEF =
 	/^ {0,3}\[(?!\^)(?:[^[\]\\]|\\.)+\]:[ \t]*(?:<(?:[^<>\\\n]|\\.)*>|[^\s<][^\s]*)(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
+/**
+ * The same definition behind a lead of one to three spaces, a tab, then any
+ * spaces and tabs (NRL-146, ADR 0018 amendment). `LINK_REF_DEF`'s `^ {0,3}` is
+ * CommonMark's lead, not the renderer's: module 1616's definition tokenizer
+ * skips any run of spaces and tabs before `[`, and the indented-code tokenizer
+ * ahead of it takes only four spaces, a tab, or a tab then a space. So
+ * ` \t[a]: d.png` renders as nothing in Obsidian 1.13.7 and was spoken here.
+ *
+ * Built from `LINK_REF_DEF`'s own source so the two tails cannot drift. Its one
+ * reader also requires the renderer transcription to call the line a one-line
+ * definition (`definitionOneLine`), because inside a list item the lead that
+ * survives depends on the item's dedent, which no per-line regex models.
+ */
+const LINK_REF_DEF_TAB_LEAD = new RegExp("^ {1,3}\\t[ \\t]*" + LINK_REF_DEF.source.replace(/^\^ \{0,3\}/, ""));
 
 /**
  * Does this line leave a comment open, so that the lines after it are hidden?
@@ -6402,6 +6416,10 @@ export function extractChunks(
 	// Document start counts as a blank line for indented code, and so does the
 	// line right after frontmatter, which is skipped without updating these.
 	let prevBlank = true;
+	// NRL-146: the previous line was a link reference definition dropped at top
+	// level. A definition ends its block, so an indented line right after it
+	// opens indented code exactly as one after a blank line does.
+	let prevDef = false;
 	// The previous line was plain paragraph text, so a setext underline here
 	// turns the buffered paragraph into a heading.
 	let prevPara = false;
@@ -7135,6 +7153,8 @@ export function extractChunks(
 		}
 
 		const wasBlank = prevBlank;
+		const wasDef = prevDef;
+		prevDef = false;
 		const wasPara = prevPara;
 		const wasContainer = prevContainer;
 		// NRL-158: read before computing `blank`, which needs to know whether
@@ -7175,7 +7195,11 @@ export function extractChunks(
 				}
 				inIndentedCode = false;
 				flushParagraph();
-			} else if (!blank && !inList && wasBlank && INDENTED_CODE.test(raw)) {
+			} else if (!blank && !inList && (wasBlank || wasDef) && INDENTED_CODE.test(raw)) {
+				// `wasDef` (NRL-146): `[q]: r.png` / `    See.` renders the second
+				// line as `<pre><code>`, so skipCodeBlocks governs it, and a `---`
+				// after it is a rule rather than a setext underline for a paragraph
+				// that does not exist.
 				flushParagraph();
 				inIndentedCode = true;
 				if (!opts.skipCodeBlocks) appendToParagraph(verbatimLine(raw, lineStart), lineStart);
@@ -7542,7 +7566,30 @@ export function extractChunks(
 		// provably be a no-op. And when `carriedCode` is live the previous line
 		// was a buffered paragraph line, so `paraText !== ""` and this branch
 		// cannot fire - a soft-wrapped code span can never be cut short here.
-		if (blockType !== "heading" && paraText === "" && !wasPara && !wasContainer && LINK_REF_DEF.test(body)) {
+		//
+		// NRL-146 (ADR 0018 amendment). Three renderer rules this branch did not
+		// model, each read off the Obsidian 1.13.7 parser:
+		// - setext runs before definition, so a definition-shaped top-level line
+		//   above an exact `===`/`---` underline is heading TEXT the page shows
+		//   (`[a]: zb.png` / `---` renders `<h2>[a]: zb.png</h2>`). It is kept
+		//   and spoken, except when the line holds a `<` anywhere: the heading
+		//   then carries a raw tag or entity (`[a]: <zb one.png>` / `===` renders
+		//   `<h1>[a]: <zb one.png></h1>`), so the destination is not displayed
+		//   and base's drop is the safer reading. Containers keep base's drop.
+		// - a tab-bearing lead (`LINK_REF_DEF_TAB_LEAD`), gated on the renderer
+		//   transcription's own definition verdict for this line. A null
+		//   transcription (lone CR, too deep) falls back to the space lead only.
+		// - `prevDef` lets the next indented line open indented code (above).
+		const setextText = prefixChars === 0 && !inList && !body.includes("<") && lineNo + 1 < lines.length && SETEXT_UNDERLINE_EXACT.test(lines[lineNo + 1]!);
+		if (
+			blockType !== "heading" &&
+			paraText === "" &&
+			!wasPara &&
+			!wasContainer &&
+			!setextText &&
+			(LINK_REF_DEF.test(body) || (rendererHidden?.definitionOneLine[lineNo] === true && LINK_REF_DEF_TAB_LEAD.test(body)))
+		) {
+			prevDef = prefixChars === 0 && !inList;
 			continue;
 		}
 		// Output exclusions do not exclude parsing: an HTML or Obsidian comment

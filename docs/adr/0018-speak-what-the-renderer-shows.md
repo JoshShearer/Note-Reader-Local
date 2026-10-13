@@ -56,8 +56,9 @@ rather than one being an exception to the other.
    `(?!\^)` is what keeps the two apart. This is consistency with clause 1, not
    an exception to it.
 
-3. **Recognition demands the complete one-line CommonMark shape AND an empty
-   paragraph buffer.** A destination is required, and an optional title must be
+3. **Recognition demands the complete one-line shape AND an empty paragraph
+   buffer** (amended by NRL-146 below: the lead is the renderer's, not
+   CommonMark's `^ {0,3}`). A destination is required, and an optional title must be
    the last thing on the line, so `[see also]: not a definition, just a
    sentence` fails the shape and stays spoken. CommonMark also forbids a
    definition from interrupting a paragraph, so `Prose text.` followed by
@@ -122,6 +123,79 @@ rather than one being an exception to the other.
     `# [a]: x.png` is inline content the renderer shows. Table rows and fenced
     or indented code already leave the loop before this point, so a heading is
     the only container needing an explicit guard.
+
+## Amendment (NRL-146, 2026-10-13)
+
+Every verdict here is the Obsidian 1.13.7 reading-view parser run in Node (the
+parser harness, `app.js` sha256 `8efbf581...9898`). Nothing was observed in a
+live Obsidian.
+
+**The lead rule is the renderer's.** Module 1616's definition tokenizer skips
+any run of spaces and tabs before `[`. What reaches it is decided by the block
+methods ahead of it: indented code takes four spaces, a tab, or a tab then a
+space; setext heading runs before definition; a definition never interrupts a
+paragraph. So a lead of one to three spaces, a tab, then any spaces and tabs is
+hidden at document start, in a fresh block, on a quote's first line and after
+another definition. `LINK_REF_DEF_TAB_LEAD` (built from `LINK_REF_DEF`'s own
+source) accepts it, gated on `rendererHiddenText`'s new `definitionOneLine`,
+which is true only where the transcribed block parser made a one-line
+definition. The space-only arm is NOT gated on it: gating both (prototype fixE)
+newly disclosed `>[x]: <y one.png>`. A null transcription (lone CR, too deep)
+falls back to the space arm.
+
+**Setext before definition.** A top-level, non-list definition-shaped line
+above an exact underline (`SETEXT_UNDERLINE_EXACT`) is heading text
+(`[a]: zb.png` / `---` renders `<h2>[a]: zb.png</h2>`), so it is not dropped.
+Except when the line holds a `<` anywhere: the heading then carries a raw tag or
+entity (`[a]: <zb one.png>` / `===` renders `<h1>[a]: <zb one.png></h1>`), the
+destination is not displayed, and keeping it spoke it (prototypes fixJ and fixL,
+2,048 structured cells newly disclosing). Base's drop is kept there.
+
+**A definition ends its block.** An indented line right after a top-level,
+non-list definition opens indented code, as one after a blank line does
+(`[q]: zr.png` / `\tSee ZU.` / `---` renders `<pre><code>See ZU.</code></pre><hr>`).
+Base read that line as setext heading text and dropped it. The reviewed plan
+(prototype fixN) kept the line as prose and only blocked the setext; the plan
+critique's F1 measured that it then newly SPOKE the code under `skipCodeBlocks`
+in **1,024** structured cells (position codetab, leads "" to three spaces,
+every mask with `skipCodeBlocks` and `skipHeadings` on), where base was silent
+only by accident. So the line is read as code (prototype fixM's reading,
+restricted to `prefixChars === 0 && !inList`), and that shape is pinned as
+`nrl146-code-after-def-then-rule-skipped-code`.
+
+**Battery, base 642afa3 against this change.** Structured, 14 positions x 15
+leads x 2 shapes x 512 masks = 215,040 cells: 52,736 fixed, 0 newly disclosing,
+0 newly lost exclusion-aware, 0 newly speaking excluded content (fixN: 1,024),
+12,288 raw-only losses, each a cell where base spoke text the renderer shows
+only inside `<pre>` under `skipCodeBlocks` (positions toptwo, codetab, code4),
+and the same 12,288 cells count as fixed in the excluded-content direction.
+Fuzz seed 146, 4,000 notes x masks 0, 511, 170, 341 (88,612 cells): fixed leak
+3,438, fixed loss 16, newly disclosing 0 raw and exclusion-aware, newly lost 0
+exclusion-aware, newly speaking excluded content 0; 126 raw-only (6 heading
+text under `skipHeadings`, 120 `<pre>` code under `skipCodeBlocks`). Seed
+20261013 (88,632 cells): fixed leak 3,148, fixed loss 20, the same three zeros,
+146 raw-only, all `<pre>` under `skipCodeBlocks`. No raw-only cell is
+unexplained. The exclusion-aware rule: a sentinel the renderer shows only inside
+an element the mask excludes is neither required nor hidden; the third
+direction counts such a sentinel spoken by the change and not by base.
+`sourceIndex` lockstep by numeric UTF-16 index: 0 unmutated failures on both
+arms structurally (5,126,144 units on the change), every mutator nonzero on
+both; the fuzz's 16 unmutated `inDropped` on seed 20261013 are identical on base
+and are the probe's span heuristic, not a mapping defect.
+
+**Rejected.** fixA, fixB, fixC (ungated or `^[ \t]*` leads: prose loss), fixD
+(class (b) loss), fixE (disclosure), fixF to fixL (disclosure or loss, each
+measured), fixN (the 1,024 above).
+
+**Residuals, pre-existing and pinned.** A definition line containing `<`
+anywhere, above an exact underline (`pin-nrl146-angle-def-setext-label-lost`,
+`pin-nrl146-lt-title-def-setext-lost`); a definition above an underline in a
+quote or list (`pin-nrl146-quote-def-setext-lost`,
+`pin-nrl146-list-def-setext-lost`); a lone-CR note
+(`pin-nrl146-lone-cr-fallback-speaks`); a block opener between the definition
+and the indented line, which resets `prevDef` so the line is setext text again
+(`pin-nrl146-opener-between-def-and-code-lost`); and decision 8's second
+definition in a quote.
 
 ## Consequences
 

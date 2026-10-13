@@ -449,6 +449,7 @@ class BlockScanner {
 	// with the tokenizer's name, and of every paragraph.
 	readonly rawBlocks: Array<readonly [number, number, string]> = [];
 	readonly paragraphs: Array<readonly [number, number]> = [];
+	readonly definitions: Array<readonly [number, number]> = [];
 	private lastMethod = "";
 	// The note as scanned, and each of its lines' end offset, when the caller
 	// gives them (`setNote`): what the browser-comment carry reads between blocks.
@@ -595,6 +596,14 @@ class BlockScanner {
 				if (eaten > 0) break;
 			}
 			if (eaten <= 0) throw new Error("renderer block scan made no progress");
+			// NRL-146: where the renderer made a link reference definition, so
+			// `extractChunks` can accept a tab-bearing lead only on lines the
+			// renderer itself consumed (`definitionOneLine`).
+			if (this.lastMethod === "definition") {
+				let last = line;
+				for (let k = pos; k < pos + eaten - 1; k++) if (value.charCodeAt(k) === 10) last++;
+				this.definitions.push([line, last]);
+			}
 			// Blocks whose text is never inline-parsed, so a `[^x]` in them is no
 			// footnote reference (measured: one in fenced, indented or `$$` code,
 			// frontmatter or an HTML block leaves its definition hidden).
@@ -1762,6 +1771,11 @@ export interface RendererHiddenText {
 	 * fenced and indented code blocks, whose text the page displays as written.
 	 */
 	hiddenRawLines: boolean[];
+	/**
+	 * 0-based note lines on which the renderer's block parser made a link
+	 * reference definition that starts and ends on that same line (NRL-146).
+	 */
+	definitionOneLine: boolean[];
 }
 
 /**
@@ -2126,7 +2140,9 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	}
 	const hiddenRawLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	for (const [a, b, kind] of scanner.rawBlocks) if (HIDDEN_RAW_BLOCKS.has(kind)) for (let l = a; l <= b && l < lineCount; l++) hiddenRawLines[l] = true;
-	return { ranges, percentStarts, percentEnds, footnoteLines, browserRiskLines, openRiskThrough, frontmatterLastLine: scanner.frontmatterLastLine, hiddenRawLines };
+	const definitionOneLine: boolean[] = new Array<boolean>(lineCount).fill(false);
+	for (const [a, b] of scanner.definitions) if (a === b && a < lineCount) definitionOneLine[a] = true;
+	return { ranges, percentStarts, percentEnds, footnoteLines, browserRiskLines, openRiskThrough, frontmatterLastLine: scanner.frontmatterLastLine, hiddenRawLines, definitionOneLine };
 }
 
 /**

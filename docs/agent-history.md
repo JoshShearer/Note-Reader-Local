@@ -3680,6 +3680,35 @@ rediscover them:
   (`pin-nrl113-space-tab-link-ref-def-leaks-destination` plus its control), not fixed, because
   widening a second predicate in the same diff is what makes a measured result unattributable.
 
+  **CLOSED BY NRL-146 (2026-10-13), and the reviewed plan was changed by its own critique.**
+  `pin-nrl113-space-tab-link-ref-def-leaks-destination` now expects `ZPROSEZ a .` (name kept);
+  its control did not move. Oracle: Obsidian 1.13.7 harness, `app.js` `8efbf581...9898`;
+  reading-view path only, NOT VERIFIED IN OBSIDIAN. The renderer's definition lead is any run of
+  spaces and tabs; `LINK_REF_DEF_TAB_LEAD` takes the tab-bearing lead only where
+  `rendererHiddenText().definitionOneLine` says the transcribed parser made a one-line
+  definition. Owner decision B also fixed two pre-existing loss classes: (a) a top-level
+  definition-shaped line above an exact underline is setext heading text and is spoken, except
+  when the line holds `<` anywhere (prototypes fixJ/fixL disclosed 2,048 structured cells
+  without that guard: `<h1>[a]: <zb one.png></h1>` hides the destination); (b) an indented line
+  right after a top-level definition is indented code. **Corpus blindness, again**: the 9 v0
+  positions and two fuzz seeds missed both fixJ's 2,048 disclosures and fixD's 1,792 losses; the
+  five structural positions added in v1 (setexteq, setextdash, codetab, code4, quotecode) found
+  them. **And a metric was blind**: the raw and exclusion-aware tallies both scored "renderer
+  shows it, we speak it" as fine, so neither could see EXCLUDED content newly spoken. The plan
+  critique's F1 measured it: the reviewed arm fixN (code line kept as prose, setext blocked)
+  newly spoke code under `skipCodeBlocks` in **1,024** structured cells (codetab, leads "" to
+  three spaces), the shape now pinned as `nrl146-code-after-def-then-rule-skipped-code`. With
+  that third direction added to `cells.cjs` and `fuzzX.cjs`, fixM's code-as-code reading
+  (restricted to `prefixChars === 0 && !inList`) measured 0 newly disclosing, 0 newly lost
+  exclusion-aware and 0 newly speaking excluded content on 215,040 structured cells and fuzz
+  seeds 146 and 20261013 (4,000 notes x 4 masks each), so it shipped instead of fixN. Its raw-only
+  losses (12,288 structured, 126 and 146 fuzz) are each base speaking text shown only inside
+  `<pre>` or `<hN>` that the mask excludes. An earlier version of the exclusion-aware metric
+  stripped `<code>` inside `<pre>` under `skipInlineCode` and hid a real loss; the
+  `(?<!<pre>)` lookbehind fixed it before any figure was taken. Figures, rejected arms (fixA to
+  fixN) and residual pins are in ADR 0018's NRL-146 amendment; probes and logs are in
+  `.claude/runs/NRL-146/`.
+
   **SHIP REVIEW FOUND THAT THE CONSTRUCT AXIS WAS THE CORPUS'S REAL BLIND SPOT, and three more
   residuals came out of widening it.** The measured corpus had three constructs - `<!--`, `%%`
   and the image/link label - while the branch being narrowed carries the comment "Checked before

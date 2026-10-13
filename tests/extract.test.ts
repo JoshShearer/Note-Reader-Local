@@ -1,5 +1,5 @@
 import { extractChunks } from "../src/text/extract.ts";
-import { rendererPercentBlocks } from "../src/text/obsidianBlocks.ts";
+import { rendererHiddenText, rendererPercentBlocks } from "../src/text/obsidianBlocks.ts";
 import {
 	graphemeBoundaries,
 	legacySentenceBoundaries,
@@ -3297,40 +3297,99 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// `<p>Before x.<br>&#x3C;!--<br>HIDDEN1<br>more</p>`, and every line is displayed.
 		// It was green on both NRL-113 arms as base behaviour, not as a correctness claim.
 		["guard-nrl113-space-tab-paragraph-continuation-unmoved", "Before x.\n \t<!--\nHIDDEN1\nmore", "Before x. <!-- HIDDEN1 more"],
-		// A TRIPWIRE AND NOT EVIDENCE OF A FIX, in the style of
-		// `pin-nrl74-container-label-still-leaks-destination`. This is the one class
-		// the structured corpora could not see and the 4,000-note fuzz did: a
-		// 1-3-space-plus-tab-led LINK REFERENCE DEFINITION. It is a DISCLOSURE - we
-		// speak a destination the renderer never shows, because module 1616 consumes
-		// the definition and renders nothing at all (real HTML for the first fixture
-		// is `<p>ZPROSEZ <a href="zdestz.png" title="t">a</a>.</p>`, destination in an
-		// attribute only).
-		//
-		// MECHANISM. Base ate the line as indented code, so it was silent for the
-		// wrong reason. The narrowing lets the line reach the `LINK_REF_DEF` branch,
-		// whose own lead rule is `^ {0,3}\[` - spaces only, capped at three, the same
-		// CommonMark-shaped assumption this ticket removed one predicate over. It
-		// declines a tab-bearing lead, so the line falls through to prose.
-		//
-		// IT IS NOT A NEW LEAK CLASS, and the CONTROL is what establishes that rather
-		// than an argument. The second fixture is the ADR 0018 decision-Q8 shape with
-		// NO LEAD ANYWHERE: the second of two consecutive definitions inside a
-		// blockquote fails the branch's empty-paragraph guard, falls through, and
-		// speaks its destination on BASE and on the fix alike. Measured over 6
-		// positions x 15 leads x 512 content-key masks = 46,080 cells: 2,560 cells
-		// newly speak the destination, all in the doc-start and fresh-block positions
-		// with a tab-bearing lead; the SAME shape already leaks 256 of each row's 512
-		// cells on base, at `skipCodeBlocks: false`, where base spoke the destination
-		// as verbatim code content; and the in-quote and two-definition rows leak
-		// 512 of 512 on BOTH arms with or without a tab. 0 cells newly speak a
-		// destination anywhere the renderer displays it.
-		//
-		// NOT FIXED HERE, deliberately: widening a second predicate in the same diff
-		// is what makes a measured result unattributable, and `LINK_REF_DEF`'s lead
-		// needs ADR 0018's own battery re-run. WHEN IT CLOSES, the first expectation
-		// must change on purpose; the control's must not move at all.
-		["pin-nrl113-space-tab-link-ref-def-leaks-destination", " \t[a]: zdestz.png \"t\"\n\nZPROSEZ [a].", "a : zdestz.png \"t\" ZPROSEZ a ."],
+		// FIXED by NRL-146; the name is kept by the NRL-66/NRL-67 convention. Filed by
+		// NRL-113 as a tripwire: a 1-3-space-plus-tab-led LINK REFERENCE DEFINITION
+		// spoke its destination where the renderer shows nothing (real HTML from the
+		// Obsidian 1.13.7 harness is `<p>ZPROSEZ <a href="zdestz.png" title="t">a</a>.</p>`,
+		// destination in an attribute only). `LINK_REF_DEF`'s lead is CommonMark's
+		// `^ {0,3}`; module 1616 skips any run of spaces and tabs before `[`, so the
+		// line fell through to prose. `LINK_REF_DEF_TAB_LEAD` now takes the tab lead,
+		// gated on the renderer transcription's own definition verdict for the line.
+		// Measured RED on the unfixed tree. The CONTROL below is ADR 0018 decision 8's
+		// lead-free shape and must not move.
+		["pin-nrl113-space-tab-link-ref-def-leaks-destination", " \t[a]: zdestz.png \"t\"\n\nZPROSEZ [a].", "ZPROSEZ a ."],
 		["guard-nrl113-link-ref-def-fallthrough-control-no-lead", "> [a]: zdestz.png \"t\"\n> [b]: zdestz.png \"u\"\n\nZPROSEZ.", "b : zdestz.png \"u\" ZPROSEZ."],
+		// NRL-146 (ADR 0018 amendment). Every verdict below is real rendered HTML
+		// from the Obsidian 1.13.7 parser harness (app.js sha256 8efbf581...9898).
+		// CORE CASES, each measured RED on the unfixed tree: the seven tab-bearing
+		// leads the renderer hides at document start (`<p>ZPROSEZ.</p>` for each).
+		["nrl146-tab-lead-def-hidden-s-tab", " \t[a]: zdestz.png \"t\"\n\nZPROSEZ.", "ZPROSEZ."],
+		["nrl146-tab-lead-def-hidden-ss-tab", "  \t[a]: zdestz.png \"t\"\n\nZPROSEZ.", "ZPROSEZ."],
+		["nrl146-tab-lead-def-hidden-sss-tab", "   \t[a]: zdestz.png \"t\"\n\nZPROSEZ.", "ZPROSEZ."],
+		["nrl146-tab-lead-def-hidden-s-tab-s", " \t [a]: zdestz.png \"t\"\n\nZPROSEZ.", "ZPROSEZ."],
+		["nrl146-tab-lead-def-hidden-ss-tab-s", "  \t [a]: zdestz.png \"t\"\n\nZPROSEZ.", "ZPROSEZ."],
+		["nrl146-tab-lead-def-hidden-s-tab-tab", " \t\t[a]: zdestz.png \"t\"\n\nZPROSEZ.", "ZPROSEZ."],
+		["nrl146-tab-lead-def-hidden-sss-tab-sss", "   \t   [a]: zdestz.png \"t\"\n\nZPROSEZ.", "ZPROSEZ."],
+		// A fresh block and a quote's first line: `<p>ZB.</p><p>ZP.</p>` and
+		// `<blockquote></blockquote><p>ZP.</p>`.
+		["nrl146-tab-lead-def-hidden-fresh", "ZB.\n\n  \t[a]: zdestz.png \"t\"\n\nZP.", "ZB. ZP."],
+		["nrl146-tab-lead-def-hidden-quote", ">   \t[a]: zdestz.png\n\nZP.", "ZP."],
+		// CLASS (a), owner decision B: setext runs before definition in the
+		// renderer, so a top-level definition-shaped line above an exact underline
+		// is HEADING TEXT. `   [i]: zj.png "ZK"` / `===` renders
+		// `<h1>[i]: zj.png "ZK"</h1>` (after a hidden tab-lead definition); base
+		// dropped the heading text and spoke the hidden definition. skipHeadings
+		// then governs it like any other heading.
+		["nrl146-setext-after-tab-def", "   \t[g]: zh.png\n   [i]: zj.png \"ZK\"\n===\n\nZP.", "i : zj.png \"ZK\" ZP."],
+		["nrl146-setext-after-tab-def-skipped-heading", "   \t[g]: zh.png\n   [i]: zj.png \"ZK\"\n===\n\nZP.", "ZP.", { skipHeadings: true }],
+		// `<h2>[a]: zb.png</h2>`; base spoke only `ZP.`.
+		["nrl146-space-def-setext-dash-shown", "[a]: zb.png\n---\n\nZP.", "a : zb.png ZP."],
+		// CLASS (b), owner decision B: a definition ends its block, so an indented
+		// line right after it is indented code, and a `---` after that is a rule.
+		// Each renders `<pre><code>See ZU.</code></pre><hr>` (or `<p>===</p>` for the
+		// `===` row); base read the code line as setext heading text and dropped it.
+		["nrl146-code-after-tab-def-then-rule", " \t[q]: zr.png\n\tSee ZU.\n---\n\nZP.", "See ZU. ZP.", { skipCodeBlocks: false, skipHeadings: true }],
+		["nrl146-code-after-space-def-then-rule", "[q]: zr.png\n    See ZU.\n---\n\nZP.", "See ZU. ZP.", { skipCodeBlocks: false, skipHeadings: true }],
+		["nrl146-code-after-def-then-eq", "[q]: zr.png\n    See ZU.\n===\n\nZP.", "See ZU. === ZP.", { skipCodeBlocks: false, skipHeadings: true }],
+		// THE PLAN CRITIQUE'S F1 SHAPE, and the reason the code line is read as CODE
+		// rather than kept as prose with only the setext blocked (the reviewed
+		// fixN arm). That arm newly spoke `See ZU.` here under skipCodeBlocks, in
+		// 1,024 structured cells where base was silent only because it took the
+		// line for a skipped heading. With the line read as indented code the
+		// code key governs it. Base passes this row for the wrong reason; the
+		// default-settings row after it is the one base fails. Keep both: if the
+		// code reading is ever narrowed back to prose, this is the tripwire.
+		["nrl146-code-after-def-then-rule-skipped-code", "[q]: zr.png\n\tSee ZU.\n---\n\nZP.", "ZP.", { skipCodeBlocks: true, skipHeadings: true }],
+		["nrl146-code-after-def-then-rule-default", "[q]: zr.png\n\tSee ZU.\n---\n\nZP.", "ZP."],
+		["nrl146-code-after-def-skipped-code", "[q]: zr.png\n    See ZU.\n\nZP.", "ZP."],
+		// A definition-shaped line behind a code lead after a definition is code
+		// the renderer displays (`<pre><code>[a]: zdestz.png</code></pre>`), so it
+		// is spoken verbatim with the code key off and silent with it on. Base
+		// cleaned it as prose in both.
+		["nrl146-code-lead-after-def-is-code", "[o]: zo.png\n\t[a]: zdestz.png\n\nZP.", "[a]: zdestz.png ZP.", { skipCodeBlocks: false }],
+		["nrl146-code-lead-after-def-is-code-skipped", "[o]: zo.png\n\t[a]: zdestz.png\n\nZP.", "ZP."],
+		// GUARDS, unchanged from base. A list continuation's lead depends on the
+		// item's dedent (`<pre><code>[a]: zdestz.png</code></pre>` inside the item;
+		// the tab arm's renderer gate leaves it to base), a paragraph continuation
+		// cannot be interrupted (`<p>ZB.<br>[a]: zdestz.png</p>`), an angle
+		// destination in a quote is hidden (`<blockquote></blockquote>`; the shape
+		// that disclosed when both arms were renderer-gated), plain setext prose,
+		// and code after a definition inside a quote, which ends the quote.
+		["guard-nrl146-listcont-space-tab-spoken", "- ZI\n\n  \t[a]: zdestz.png\n\nZP.", "ZI a : zdestz.png ZP."],
+		["guard-nrl146-paracont-space-tab-spoken", "ZB.\n \t[a]: zdestz.png\n\nZP.", "ZB. a : zdestz.png ZP."],
+		["guard-nrl146-quote-angle-def-hidden", ">[zx]: <zy one.png>\n\nZP.", "ZP."],
+		["guard-nrl146-prose-setext-unchanged", "ZQ prose.\n===\n\nZP.", "ZQ prose. ZP."],
+		["guard-nrl146-quote-def-then-code", "> [a]: zb.png\n\tSee ZU.\n\nZP.", "See ZU. ZP.", { skipCodeBlocks: false }],
+		// RESIDUAL PINS, pre-existing and byte-identical on base: the renderer
+		// differs from what we speak, and NRL-146 does not move them. WHEN ONE
+		// CLOSES, its expectation must change on purpose.
+		// A `<` anywhere on the line keeps the drop above an underline, because the
+		// heading can carry a raw tag: `<h1>[a]: <zb one.png></h1>` hides the
+		// destination. The title case shows its text (`<h2>[a]: zb.png "t&#x3C;u"</h2>`)
+		// and is lost (plan critique F2).
+		["pin-nrl146-angle-def-setext-label-lost", "[a]: <zb one.png>\n===\n\nZP.", "=== ZP."],
+		["pin-nrl146-lt-title-def-setext-lost", "[a]: zb.png \"t<u\"\n---\n\nZP.", "ZP."],
+		// Inside a quote or list the underline is heading text too
+		// (`<blockquote><h1>[a]: zb.png</h1></blockquote>`); containers keep base.
+		["pin-nrl146-quote-def-setext-lost", "> [a]: zb.png\n> ===\n\nZP.", "=== ZP."],
+		["pin-nrl146-list-def-setext-lost", "- [a]: zb.png\n===\n\nZP.", "=== ZP."],
+		// A lone CR makes the renderer transcription decline (null), so the tab arm
+		// falls back to the space lead and the destination is spoken.
+		["pin-nrl146-lone-cr-fallback-speaks", " \t[a]: zdestz.png\r \n\nZP.\rQ", "a : zdestz.png ZP. Q"],
+		// An opener between the definition and the code (plan critique F3) resets
+		// `prevDef`, so the code line is setext text again and lost:
+		// `<!--...--><pre><code>See ZU.</code></pre><hr>`.
+		["pin-nrl146-opener-between-def-and-code-lost", "[a]: zb.png\n<!--\nhid\n-->\n\tSee ZU.\n---\n\nZP.", "ZP.", { skipCodeBlocks: false, skipHeadings: true }],
 		// NRL-113, SHIP REVIEW. The ticket's own corpus had a CONSTRUCT axis three
 		// wide - `<!--`, `%%`, and the image/link label - and the branch this change
 		// narrows carries the comment "Checked before fences, rules, math and
@@ -4811,11 +4870,34 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["space-tab-table-spoken", "Before x.\n\n \t| a | b |\n| - | - |\n| TCELL | y |\n\nAFTER", { skipCodeBlocks: false }],
 		["space-tab-wikilink", "Before x.\n\n \t[[folder/Note]] tail.\n\nAFTER"],
 		["space-tab-image", "Before x.\n\n \t![alt](zdestz.png) tail.\n\nAFTER"],
+		// NRL-146: the shapes whose spoken text moved - a dropped tab-lead
+		// definition, setext heading text kept, and code after a definition.
+		["nrl146-tab-lead-def-pin", " \t[a]: zdestz.png \"t\"\n\nZPROSEZ [a]."],
+		["nrl146-tab-lead-def-fresh", "ZB.\n\n  \t[a]: zdestz.png \"t\"\n\nZP."],
+		["nrl146-setext-after-tab-def", "   \t[g]: zh.png\n   [i]: zj.png \"ZK\"\n===\n\nZP."],
+		["nrl146-code-after-tab-def-then-rule", " \t[q]: zr.png\n\tSee ZU.\n---\n\nZP.", { skipCodeBlocks: false }],
+		["nrl146-code-lead-after-def-is-code", "[o]: zo.png\n\t[a]: zdestz.png\n\nZP.", { skipCodeBlocks: false }],
+		["nrl146-angle-def-setext", "[a]: <zb one.png>\n===\n\nZP."],
 	];
 	for (const [id, src, overrides] of nrl113Lockstep) {
 		check(`NRL-113 ${id}: sourceIndex lockstep by UTF-16 unit`, extractChunks(src, { ...OPTS, ...overrides }).every(
 			(k) => k.sourceIndex.length === k.text.length && unitsMatch(k.text, k.sourceIndex, src),
 		));
+	}
+	// NRL-146: `rendererHiddenText`'s `definitionOneLine`, which gates the tab-lead
+	// arm. True only where the transcribed renderer made a one-line definition: a
+	// tab-led one at document start, and not a definition-shaped line the
+	// renderer makes setext heading text.
+	{
+		const rows: Array<[string, string, boolean[]]> = [
+			["tab-lead-def", " \t[a]: b\n\nx", [true, false, false]],
+			["setext-text-not-def", "[a]: b\n===", [false, false]],
+			["code-lead-not-def", "    [a]: b\n\nx", [false, false, false]],
+		];
+		for (const [id, src, want] of rows) {
+			const got = rendererHiddenText(src, src.split("\n").length)?.definitionOneLine;
+			check(`NRL-146 rendererHiddenText definitionOneLine: ${id}`, JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got));
+		}
 	}
 	// NRL-113 TRIPWIRE, asserted here rather than in the table above because it
 	// synthesises an "equation" chunk and so needs ADR 0004's text-keyed exemption.
