@@ -226,7 +226,31 @@ function hostSpan(url: string): { start: number; end: number } {
 	return { start, end };
 }
 
-const FOOTNOTE_REF = /^\[\^[^\]\s]+\]/;
+/**
+ * The length of the footnote reference `[^label]` starting at `i`, or -1 when
+ * there is none. Callers have already checked `raw[i] === "["` and
+ * `raw[i + 1] === "^"`.
+ *
+ * Exactly the old `/^\[\^[^\]\s]+\]/` on `raw.slice(i)`: the label runs to the
+ * first `]` or whitespace (the same `\s` class) and matches only when it is
+ * non-empty and that stop is a `]`. The regex form re-ran the label scan from
+ * every `[^`, and on a line of `[^` with no `]` every scan ran to the end of
+ * the line, which made the line quadratic (NRL-172: 4,652 ms at 20,000 on
+ * 499038d). `stop` caches the last answer: a stop found from `from` at `at` is
+ * also the first stop from any start in `[from, at]`, so one line's scans walk
+ * each character once. A new `{ from: 1, at: 0 }` per line is empty.
+ */
+export function footnoteRefEnd(raw: string, i: number, stop: { from: number; at: number }): number {
+	const s0 = i + 2;
+	if (!(stop.from <= s0 && s0 <= stop.at)) {
+		let j = s0;
+		while (j < raw.length && raw[j] !== "]" && !/\s/.test(raw[j]!)) j += 1;
+		stop.from = s0;
+		stop.at = j;
+	}
+	const j = stop.at;
+	return j > s0 && raw[j] === "]" ? j + 1 - i : -1;
+}
 
 /**
  * An embed alias that is display sizing rather than prose: `200` or `200x100`.
@@ -433,11 +457,113 @@ function inlineCodeBounds(raw: string, open: number): { start: number; close: nu
 }
 
 /**
+ * Where a comment that opens before `from` closes: the first `closer` at or
+ * after `from`, or -1.
+ *
+ * `cache` holds the last answer per closer. A closer first found from `from`
+ * at `at` is also the first one from any start in `[from, at]`, and -1 from
+ * `from` is -1 from anything later, so a line's scans search each stretch
+ * once. Without it, one `[` before many unclosed `<!--` searched to the end
+ * of the line for every comment, and a line of `[<!--` was worse than
+ * quadratic (16,708 ms at 2,000 on 499038d; NRL-172).
+ */
+type CloserCache = { from: number; at: number };
+function commentCloser(raw: string, closer: string, from: number, cache: CloserCache | undefined): number {
+	if (!cache) return raw.indexOf(closer, from);
+	if (!(cache.from <= from && (cache.at === -1 || from <= cache.at))) {
+		cache.from = from;
+		cache.at = raw.indexOf(closer, from);
+	}
+	return cache.at;
+}
+
+/** A memo slot no scan has written yet. Real answers are -1 or an index. */
+const UNSCANNED = -2;
+
+/** One CloserScan call's state: its kind's memo, if allocated, and the line's comment-closer caches. */
+type ScanState = { memo: Int32Array | undefined; html: CloserCache; pct: CloserCache };
+
+/**
+ * CloserScan's closer scan: inlineContainerClose's step (or, with `escapes`
+ * false, wikiTargetClose's), plus the memo and the comment-closer caches. Keep
+ * the step identical to those two; see inlineContainerClose for why they are
+ * separate loops and for the test that holds them together.
+ *
+ * `escapes` is false only for a wikilink target (see wikiTargetClose). With a
+ * `memo`, every position the scan visits is recorded with the result. That is
+ * exact because the scan's state is its position alone: the escape skip, the
+ * code-span skip and the complete-comment skip each depend only on the
+ * characters from that position on, so a scan reaching position p ends where a
+ * scan started at p ends. Each position is then walked once per memo, and a
+ * whole line's scans are linear instead of one walk to the end per opener.
+ */
+function scanToCloser(
+	raw: string,
+	from: number,
+	delimiter: string,
+	escapes: boolean,
+	state: ScanState | undefined,
+): number {
+	const memo = state?.memo;
+	const html = state?.html;
+	const pct = state?.pct;
+	let i = from;
+	let result = -1;
+	const path: number[] | undefined = memo ? [] : undefined;
+	while (i < raw.length) {
+		if (memo) {
+			const known = memo[i]!;
+			if (known !== UNSCANNED) {
+				result = known;
+				break;
+			}
+			path!.push(i);
+		}
+		if (escapes && raw[i] === "\\") {
+			i += 2;
+			continue;
+		}
+		if (raw[i] === "`") {
+			i = inlineCodeBounds(raw, i).end;
+			continue;
+		}
+		const isHtml = raw.startsWith("<!--", i);
+		if (isHtml || raw.startsWith("%%", i)) {
+			const closer = isHtml ? "-->" : "%%";
+			const close = commentCloser(raw, closer, i + (isHtml ? 4 : 2), isHtml ? html : pct);
+			if (close !== -1) {
+				i = close + closer.length;
+				continue;
+			}
+		}
+		if (raw.startsWith(delimiter, i)) {
+			result = i;
+			break;
+		}
+		i += 1;
+	}
+	if (memo) for (const p of path!) memo[p] = result;
+	return result;
+}
+
+/**
  * A hidden or literal delimiter cannot end its enclosing label/highlight.
  * Otherwise recursive cleaning sees half a comment and speaks the other half.
  * Unclosed comments remain local to the label, as in cleanLine.
+ *
+ * One scan from `from`. A caller that asks many times on one line uses
+ * CloserScan instead, which gives the same answers in linear total time.
+ *
+ * This loop and wikiTargetClose's are deliberately kept apart from
+ * scanToCloser, CloserScan's memoised copy of the same step, and the three
+ * must change together; the extract suite's NRL-172 differential compares them
+ * from every start. Routing these through scanToCloser was measured slower on
+ * the hot cross-line path (labelClose on every later line of a paragraph):
+ * +6.5% on 4,000 `[^1: x` lines against 499038d, and parity with this loop
+ * kept as it was. Exported, with wikiTargetClose, CloserScan and
+ * footnoteRefEnd, only for that test.
  */
-function inlineContainerClose(raw: string, from: number, delimiter: string): number {
+export function inlineContainerClose(raw: string, from: number, delimiter: string): number {
 	let i = from;
 	while (i < raw.length) {
 		if (raw[i] === "\\") {
@@ -467,28 +593,29 @@ function inlineContainerClose(raw: string, from: number, delimiter: string): num
  * Where a `[[wikilink]]` or `![[embed]]` target closes, or -1 if it does not
  * close on this line.
  *
- * A near-copy of inlineContainerClose, and the one difference is the whole
- * reason it exists: this does NOT honour `\` as an escape. A target ending in a
- * backslash puts `\]]` on the line; the shared helper ate the `\]`, never found
- * a `]]`, and the construct fell through to prose with its vault path intact -
- * so `[[private/folder/Note\]]` read the folder segments aloud, which is the
- * one thing R-M09 and ADR 0017 promise it will not (NRL-66). Recognising it
- * instead needs no new reduction code at all: `finalSegment` already steps back
- * over a trailing separator and the emission loop already drops it.
+ * The same scan as inlineContainerClose with one difference, and that
+ * difference is the whole reason it exists: this does NOT honour `\` as an
+ * escape. A target ending in a backslash puts `\]]` on the line; the escaping
+ * scan ate the `\]`, never found a `]]`, and the construct fell through to
+ * prose with its vault path intact - so `[[private/folder/Note\]]` read the
+ * folder segments aloud, which is the one thing R-M09 and ADR 0017 promise it
+ * will not (NRL-66). Recognising it instead needs no new reduction code at
+ * all: `finalSegment` already steps back over a trailing separator and the
+ * emission loop already drops it.
  *
  * Inside a wikilink target a backslash is a path separator far more often than
- * an escape - isFileTarget and finalSegment both already split on it - so this
- * is not a parameter on the shared helper but a separate function, deliberately
- * local to these two branches. For a markdown image, link or highlight, `\]`
- * failing to close the label is CommonMark-correct, and their destination sits
- * after the `]` and is already dropped, so changing them would diverge from the
- * renderer for no privacy gain.
+ * an escape - isFileTarget and finalSegment both already split on it - so the
+ * non-escaping scan is used only by these two branches (cleanLine now asks
+ * through CloserScan's `wiki` key, which answers exactly as this does; NRL-172). For a markdown image, link or highlight,
+ * `\]` failing to close the label is CommonMark-correct, and their destination
+ * sits after the `]` and is already dropped, so changing them would diverge
+ * from the renderer for no privacy gain.
  *
  * Code spans and complete comment spans are skipped exactly as
  * inlineContainerClose skips them: a `]]` that is hidden or literal cannot end
  * the target.
  */
-function wikiTargetClose(raw: string, from: number): number {
+export function wikiTargetClose(raw: string, from: number): number {
 	let i = from;
 	while (i < raw.length) {
 		if (raw[i] === "`") {
@@ -508,6 +635,44 @@ function wikiTargetClose(raw: string, from: number): number {
 		i += 1;
 	}
 	return -1;
+}
+
+/**
+ * The closer scans of one line, memoised: `close(from, delimiter, wiki)` is
+ * exactly `wiki ? wikiTargetClose(raw, from) : inlineContainerClose(raw, from,
+ * delimiter)`, but a line's scans together walk each position once per kind.
+ *
+ * NRL-172: cleanLine asked once per opener, and with no closer each answer was
+ * a walk to the end of the line, so `"![".repeat(20000)` took 7,518 ms and
+ * `"![[".repeat(20000)` 11,561 ms on 499038d. Each memo is allocated only on
+ * its kind's second call, so the common line that asks once pays nothing
+ * extra: eager allocation measured about 1.3-2x slower on a note of many short
+ * lines in the plan's prototype, and labelClose, which runs on every later
+ * line of a paragraph, builds one only once it loops.
+ */
+export class CloserScan {
+	private readonly memos: Array<Int32Array | undefined> = [];
+	private readonly asked: boolean[] = [];
+	private readonly html: CloserCache = { from: 1, at: 0 };
+	private readonly pct: CloserCache = { from: 1, at: 0 };
+
+	constructor(private readonly raw: string) {}
+
+	close(from: number, delimiter: string, wiki: boolean): number {
+		// The wiki scan does not skip escapes, so its answers are its own even
+		// for the same delimiter.
+		const key = wiki ? 0 : delimiter === "]" ? 1 : delimiter === "[" ? 2 : delimiter === "==" ? 3 : -1;
+		let memo: Int32Array | undefined;
+		if (key !== -1) {
+			memo = this.memos[key];
+			if (!memo && this.asked[key]) {
+				memo = new Int32Array(this.raw.length + 1).fill(UNSCANNED);
+				this.memos[key] = memo;
+			}
+			this.asked[key] = true;
+		}
+		return scanToCloser(this.raw, from, wiki ? "]]" : delimiter, !wiki, { memo, html: this.html, pct: this.pct });
+	}
 }
 
 /**
@@ -1399,6 +1564,10 @@ function cleanLine(
 		}
 	}
 
+	// One memoised closer scan and footnote stop per line (NRL-172). A label
+	// is cleaned by a recursive call on its own string, with its own.
+	let closers: CloserScan | undefined;
+	const footnoteStop = { from: 1, at: 0 };
 	while (i < raw.length) {
 		const ch = raw[i]!;
 
@@ -1662,7 +1831,7 @@ function cleanLine(
 		// only this note's source, and sourceIndex is an offset into it, so text
 		// from another file has nowhere to map back to.
 		if (ch === "!" && raw[i + 1] === "[" && raw[i + 2] === "[") {
-			const close = wikiTargetClose(raw, i + 3);
+			const close = (closers ??= new CloserScan(raw)).close(i + 3, "]]", true);
 			if (close !== -1) {
 				if (opts.speakEmbeds) {
 					pushSpace(rawStart + i);
@@ -1681,7 +1850,7 @@ function cleanLine(
 		// Only a double bracket lands here, so a single `[` (including callouts
 		// like `[!note]`) still reaches the link branch below.
 		if (ch === "[" && raw[i + 1] === "[") {
-			const close = wikiTargetClose(raw, i + 2);
+			const close = (closers ??= new CloserScan(raw)).close(i + 2, "]]", true);
 			if (close === -1) {
 				// No closer on this line (wikilinks never span lines). Drop just the
 				// brackets so the rest of the line is still read as prose.
@@ -1700,10 +1869,10 @@ function cleanLine(
 		// "word." At the start of a line followed by `:` it is a definition, and
 		// only the marker goes; whether footnote text is read is out of scope.
 		if (ch === "[" && raw[i + 1] === "^") {
-			const m = FOOTNOTE_REF.exec(raw.slice(i));
-			if (m) {
+			const length = footnoteRefEnd(raw, i, footnoteStop);
+			if (length !== -1) {
 				const atLineStart = i === 0;
-				i += m[0].length;
+				i += length;
 				if (atLineStart && raw[i] === ":") {
 					i += 1;
 					while (i < raw.length && /\s/.test(raw[i]!)) i += 1;
@@ -1724,7 +1893,7 @@ function cleanLine(
 		// inlineContainerClose has already refused to end the label on a
 		// delimiter hidden inside a comment or a code span.
 		if (ch === "!" && raw[i + 1] === "[") {
-			const close = inlineContainerClose(raw, i + 2, "]");
+			const close = (closers ??= new CloserScan(raw)).close(i + 2, "]", false);
 			if (close === -1) {
 				// No `]` on this line. If extractChunks has confirmed that a later
 				// line closes this label, the rest of the line is label content and
@@ -1767,7 +1936,7 @@ function cleanLine(
 
 		// Link: keep the label, drop the target. Covers inline and reference form.
 		if (ch === "[") {
-			const close = inlineContainerClose(raw, i + 1, "]");
+			const close = (closers ??= new CloserScan(raw)).close(i + 1, "]", false);
 			if (close === -1) {
 				// The same soft-wrap carry the image branch above takes, by the same
 				// scanner, because a link label crosses a break the same way (NRL-63).
@@ -1849,7 +2018,7 @@ function cleanLine(
 			raw[i + 2] !== "=" &&
 			!isSpaceOrEdge(raw[i + 2])
 		) {
-			const close = inlineContainerClose(raw, i + 2, "==");
+			const close = (closers ??= new CloserScan(raw)).close(i + 2, "==", false);
 			if (close !== -1 && !/\s/.test(raw[close - 1]!) && raw[close + 2] !== "=") {
 				const inner = cleanLine(raw.slice(i + 2, close), rawStart + i + 2, opts);
 				for (let k = 0; k < inner.text.length; k++) {
@@ -4337,17 +4506,38 @@ function opensMathBlock(lines: string[], n: number, quoteBudget = 0): boolean {
  * instead: 0 new leaks and 0 fixtures moved. The cost is one named residual,
  * pinned by guard-nrl88-unbalanced-open-residual.
  *
- * Two inlineContainerClose calls per step rather than a second scanner of its
- * own, so the escape, code-span and complete-comment-span skipping is byte for
- * byte what the single-line branches already do. A `[` or `]` hidden inside a
+ * Two inlineContainerClose calls per step (through CloserScan once it loops,
+ * which answers identically) rather than a second scanner of its own, so the
+ * escape, code-span and complete-comment-span skipping is byte for byte what
+ * the single-line branches already do. A `[` or `]` hidden inside a
  * code span or a comment cannot move the depth.
  */
 function labelClose(line: string, from: number, depth: number): { close: number; depth: number } {
+	// The first step with two plain scans, and the loop only if it comes round
+	// again (NRL-172). This runs for every later line of a paragraph and most
+	// calls return here, so it stays as small as it was; see
+	// inlineContainerClose for the measurement.
+	if (from >= line.length) return { close: -1, depth };
+	const open = inlineContainerClose(line, from, "[");
+	const shut = inlineContainerClose(line, from, "]");
+	if (shut === -1) return { close: -1, depth };
+	if (open !== -1 && open < shut) return labelCloseLoop(line, open + 1, depth + 1);
+	if (depth > 0) return labelCloseLoop(line, shut + 1, depth - 1);
+	return { close: shut, depth };
+}
+
+/**
+ * labelClose's remaining steps, on one memoised CloserScan: a label line of
+ * many `[` before its `]` asked both scans once per opener, each to the end
+ * of the line, which was quadratic in the line (NRL-172).
+ */
+function labelCloseLoop(line: string, from: number, depth: number): { close: number; depth: number } {
+	const scan = new CloserScan(line);
 	let d = depth;
 	let i = from;
 	while (i < line.length) {
-		const open = inlineContainerClose(line, i, "[");
-		const shut = inlineContainerClose(line, i, "]");
+		const open = scan.close(i, "[", false);
+		const shut = scan.close(i, "]", false);
 		if (shut === -1) return { close: -1, depth: d };
 		if (open !== -1 && open < shut) {
 			d += 1;
