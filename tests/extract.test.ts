@@ -7953,11 +7953,12 @@ console.log("NRL-180: a leading colour emoji of a ==highlight== is hidden, as Ob
 
 console.log("NRL-180 round 1: the colour emoji is dropped only where the renderer opens the mark");
 {
-	// Each row is a shape where Obsidian 1.14.4 forms no colour <mark> at that
-	// emoji and SHOWS it (checked against the 1.14.4 harness), so dropping it
-	// would silently lose displayed content. Extract keeps the emoji, as the
-	// build before NRL-180 did. The harness is not run here (bare Node); the
-	// shapes are its recorded verdicts.
+	// Rows (a)-(c) and (e) are shapes where Obsidian 1.14.4 forms no colour
+	// <mark> at that emoji and SHOWS it (checked against the 1.14.4 harness), so
+	// dropping it would silently lose displayed content. Extract keeps the
+	// emoji, as the build before NRL-180 did. Row (d) is NOT that: see its
+	// comment. The harness is not run here (bare Node); the shapes are its
+	// recorded verdicts.
 	const spoken = (src: string): { text: string; ok: boolean } => {
 		const cs = extractChunks(src, OPTS);
 		return {
@@ -7978,9 +7979,6 @@ console.log("NRL-180 round 1: the colour emoji is dropped only where the rendere
 		["[[N|==\u{1F7EA}x==]]", "\u{1F7EA}x"],
 		["see [[N|==\u{1F534}x==]] now", "see \u{1F534}x now"],
 		["[![==\u{1F7E9}y==]", "[\u{1F7E9}y"],
-		// (d) an opener that cannot close before the second `==`
-		["==\u{1F534} ==\u{1F535}\u{FE0F}fox==", "==\u{1F534} \u{1F535} fox"],
-		["==\u{1F534} ==\u{1F7E5}x==", "==\u{1F534} \u{1F7E5}x"],
 		// (e) an image alt, where `==` is literal
 		["![==\u{1F534}x==](http://e.com/i.png)", "\u{1F534}x"],
 		["![==\u{1F7E2}x==](i.png)", "\u{1F7E2}x"],
@@ -8001,6 +7999,124 @@ console.log("NRL-180 round 1: the colour emoji is dropped only where the rendere
 	for (const [src, want] of rows) {
 		const r = spoken(src);
 		check(`NRL-180 r1 ${JSON.stringify(src)} speaks ${JSON.stringify(want)}`, r.text.trim() === want && r.ok, JSON.stringify(r));
+	}
+	// (d) an opener that cannot close before the second `==`. The renderer
+	// opens a red mark at the FIRST `==` and hides its 🔴, showing `==🔵️fox`
+	// and `==🟥x`. Only the second emoji, which the renderer SHOWS, is pinned.
+	// Extract does not pair that first `==`, so it also speaks the hidden 🔴:
+	// a known disclosure, deliberately not asserted either way, since hiding it
+	// means changing extract's general `==` pairing (ADR 0037).
+	for (const [src, shown] of [
+		["==\u{1F534} ==\u{1F535}\u{FE0F}fox==", "\u{1F535}"],
+		["==\u{1F534} ==\u{1F7E5}x==", "\u{1F7E5}"],
+	] as Array<[string, string]>) {
+		const r = spoken(src);
+		check(`NRL-180 r1 (d) ${JSON.stringify(src)} speaks the shown ${shown}`, r.text.includes(shown) && r.ok, JSON.stringify(r));
+	}
+}
+
+console.log("NRL-180 round 2: the colour emoji is kept unless the renderer provably opens the mark there");
+{
+	// Default keep, prove to drop (ADR 0037). Every verdict below is the 1.14.4
+	// harness's (renderer visible text), recorded here because the harness does
+	// not run in bare Node. "keep" rows: the renderer SHOWS the emoji, and the
+	// build before NRL-180 spoke it; dropping it loses displayed content. Each
+	// one dropped the emoji on a124388.
+	const spoken = (src: string, opts = OPTS): { text: string; ok: boolean } => {
+		const cs = extractChunks(src, opts);
+		return {
+			text: cs.map((c) => c.text).join(" "),
+			ok: cs.every((c) => unitsMatch(c.text, c.sourceIndex, src)),
+		};
+	};
+	const keep: Array<[string, string]> = [
+		// A raw HTML block, types 1-7, at top level and in containers: no inline parsing.
+		['<div align="center">\n==\u{1F534} Important==\n</div>', "\u{1F534} Important"],
+		["<details>\n<summary>S</summary>\n==\u{1F7E2} done==\n</details>", "S \u{1F7E2} done"],
+		["<center>==\u{1F534}x==</center>", "\u{1F534}x"],
+		["<div>==\u{1F534}x==", "\u{1F534}x"],
+		["<div>==\u{1F534}x==</div>", "\u{1F534}x"],
+		["<p>==\u{1F534}x==</p>", "\u{1F534}x"],
+		["<p>\n==\u{1F534}x==\n</p>", "\u{1F534}x"],
+		['<span style="color:red">\n==\u{1F534}x==\n</span>', "\u{1F534}x"],
+		["<br>\n==\u{1F534}x==", "\u{1F534}x"],
+		["</i>\n==\u{1F534}x==", "\u{1F534}x"],
+		['<a href="x">\n==\u{1F534}x==', "\u{1F534}x"],
+		["> <div>\n> ==\u{1F534}x==", "\u{1F534}x"],
+		["> <div>==\u{1F534}x==</div>", "\u{1F534}x"],
+		["- <div>\n  ==\u{1F534}x==", "\u{1F534}x"],
+		["- <div>==\u{1F534}x==</div>", "\u{1F534}x"],
+		["text\n<div>\n==\u{1F534}x==", "text \u{1F534}x"],
+		['<div align="center">\n==\u{1F534}Important== note\n</div>', "\u{1F534}Important note"],
+		["<details><summary>S</summary>\n==\u{1F534}x==", "S \u{1F534}x"],
+		['Intro.\n\n<div class="box">==\u{1F7E2}Done== shipping</div>\n\nAfter.', "Intro. \u{1F7E2}Done shipping After."],
+		["<?x ?> ==\u{1F534}x==", "\u{1F534}x"],
+		["<!-- a\nb --> ==\u{1F534}x==", "\u{1F534}x"],
+		["<!--\n==a\n\n--> ==\u{1F534}b==", "\u{1F534}b"],
+		// A whitespace-only line does not end an HTML block; only an empty one does.
+		["<div>\n  \n==\u{1F534}x==", "\u{1F534}x"],
+		// Extract's pairing or block reading already differed from the renderer's.
+		["*==\u{1F534} a*==", "\u{1F534} a"],
+		["Total $a==\u{1F534}b==\nc$", "Total $a\u{1F534}b c$"],
+		["[link\n==\u{1F534}x]==", "[link \u{1F534}x]"],
+		["![==\u{1F7E7}==\n]", "[\u{1F7E7} ]"],
+		["> \t==\u{1F534}x==", "\u{1F534}x"],
+		["- item\n\n      ==\u{1F534}x==", "item \u{1F534}x"],
+		[">`==\u{1F534}==\n`", "\u{1F534}"],
+		// Indented code: a list marker or task box followed by five spaces, a
+		// lazy four-space line under a quote, and display math opened by a list
+		// item after a heading's inline `$`.
+		["-       ==\u{1F535}x==", "\u{1F535}x"],
+		["- [ ]       ==\u{1F7E7}x==", "\u{1F7E7}x"],
+		[">==\u{1F7E7}a==\n    ==\u{1F535}go==", "a \u{1F535}go"],
+	];
+	for (const [src, want] of keep) {
+		const r = spoken(src);
+		check(`NRL-180 r2 keep ${JSON.stringify(src)} speaks ${JSON.stringify(want)}`, r.text.trim() === want && r.ok, JSON.stringify(r));
+	}
+	// A property value is shown literally by Obsidian, so with frontmatter spoken
+	// the emoji stays.
+	{
+		const r = spoken("---\ntitle: ==\u{1F534}x==\n---\nbody", { ...OPTS, skipFrontmatter: false });
+		check("NRL-180 r2 keep a frontmatter value's emoji", r.text.trim() === "title: \u{1F534}x body" && r.ok, JSON.stringify(r));
+	}
+	// "drop" rows: the renderer forms the mark and hides the emoji. An earlier
+	// stray `==` in a block that has ended no longer keeps it (a124388 kept it
+	// past a list item, heading or quote opening), and every clean of one line
+	// reaches the same verdict (a124388 let a `==` later on the line, or inside
+	// a confirmed code tail, keep it on the re-clean).
+	const drop: Array<[string, string]> = [
+		["a ===b\n- Buy ==\u{1F534}milk== today", "a ===b Buy milk today"],
+		["- a ===b\n- Buy ==\u{1F534}milk==", "a ===b Buy milk"],
+		["# Head ===x\nBuy ==\u{1F534}milk== today", "Head ===x Buy milk today"],
+		["a ===b\n# Buy ==\u{1F534}milk==", "a ===b Buy milk"],
+		["> a ===b\n>\n> Buy ==\u{1F534}milk==", "a ===b Buy milk"],
+		["Para ===x\n> ==\u{1F534}q==", "Para ===x q"],
+		["x ==a\n- ==\u{1F534}b==", "x ==a b"],
+		["==\u{1F534}a== x ===y z", "a x ===y z"],
+		["==\u{1F534}a== x ===y `code\nmore` z", "a x ===y z"],
+		["==\u{1F534}a== x `a ==b\nc` z", "a x z"],
+		["<div>\n\n==\u{1F534}x==\n\n</div>", "x"],
+		["- [ ] Buy ==\u{1F534}milk==", "Buy milk"],
+		["- a\n    - ==\u{1F534}x==", "a x"],
+		["  - ==\u{1F534}x==", "x"],
+		["a == b ==\u{1F534}c==", "a == b c"],
+	];
+	for (const [src, want] of drop) {
+		const r = spoken(src);
+		check(`NRL-180 r2 drop ${JSON.stringify(src)} speaks ${JSON.stringify(want)}`, r.text.trim() === want && r.ok, JSON.stringify(r));
+	}
+	// Disclosures accepted by the default-keep rule (the renderer hides the
+	// emoji, extract speaks it, as the build before NRL-180 did): recorded so a
+	// change to them is a visible decision, not drift.
+	const disclose: Array<[string, string]> = [
+		["1. one ===x\n2. ==\u{1F534}two==", "one ===x \u{1F534}two"],
+		["%% ===x %%\nBuy ==\u{1F534}milk==", "Buy \u{1F534}milk"],
+		["<span>a</span>\n==\u{1F534}x==", "a \u{1F534}x"],
+	];
+	for (const [src, want] of disclose) {
+		const r = spoken(src);
+		check(`NRL-180 r2 known disclosure ${JSON.stringify(src)} speaks ${JSON.stringify(want)}`, r.text.trim() === want && r.ok, JSON.stringify(r));
 	}
 }
 

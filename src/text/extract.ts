@@ -1002,36 +1002,240 @@ function opensObsidianBlock(view: string, at: number, dedentedByList: boolean): 
 }
 
 /**
- * State for one decision only: does Obsidian 1.14.4's renderer open a colour
- * `<mark>` at the `==` extract is about to strip (ADR 0037)? Extract's own
- * `==` pairing is deliberately not the renderer's, so the leading colour emoji
- * is dropped only where the renderer is known to open the mark there. It is
- * shared across cleanLine's recursion (a label inside the line still sees an
- * earlier `==`), and reset at the outermost call, i.e. per line. Where this
- * is unsure the emoji is kept, which is what the base build did.
+ * Where Obsidian 1.14.4 opens a colour `<mark>` (ADR 0037). Extract's `==`
+ * pairing is not the renderer's, and the renderer shows the emoji wherever it
+ * forms no mark there (an HTML block, code, a label, a `==` it pairs another
+ * way). Losing a shown glyph is worse than speaking a hidden one, so the
+ * emoji is KEPT unless every condition below proves the mark opens at it.
+ * The proof is a pure function of the raw line and of `colourLinesOk`, a
+ * per-note array computed from the raw lines alone, so the re-clean passes
+ * over one line all reach the same answer.
  */
-const highlightColour = {
-	depth: 0,
-	/** An earlier `==` in this paragraph that could open a mark and that extract did not pair. */
-	strayOpen: false,
-	/** Inside a wikilink alias or an image alt, where `==` stays literal. */
-	literalLabel: 0,
-	/** The line is raw HTML for the renderer, which never parses `==` in it. */
-	rawHtml: false,
-};
+interface ColourLine {
+	line: string;
+	lineStart: number;
+}
 
-function cleanLine(raw: string, ...rest: Parameters<typeof cleanLineImpl> extends [string, ...infer R] ? R : never): Cleaned {
-	const outer = highlightColour.depth === 0;
-	if (outer) {
-		highlightColour.literalLabel = 0;
-		highlightColour.rawHtml = /^[ \t]{0,3}<!--/.test(raw);
+/** StripOptions as the main body clean passes them, carrying the line under proof. */
+type ColourStripOptions = StripOptions & { colourLine?: ColourLine };
+
+/**
+ * Characters whose constructs bind tighter than `==` or can span a line and
+ * swallow it: code, math, links and wikilinks, inline and block HTML,
+ * comments, escapes and table cells. One in the inline block before the
+ * opener means extract cannot show which construct the opener falls in.
+ */
+const COLOUR_PREFIX_RISK = /[`$[\]<>%\\|]/;
+/** Inside the mark, any emphasis-family delimiter could pair across the closer. */
+const COLOUR_INNER_RISK = /[`$[\]<>%\\|*_~=]/;
+/** A clean earlier `==x==` pair, which the renderer pairs the same way. */
+const COLOUR_CLEAN_PAIR = /(^|[\s*_("'])==([^\s`$[\]<>%\\|*_~=](?:[^`$[\]<>%\\|*_~=]*[^\s`$[\]<>%\\|*_~=])?)==(?=$|[\s.,;:!?)*_'"-])/g;
+/** A list marker, with an optional task box, and any quote markers. */
+const COLOUR_STRUCTURE = /^(?:[ ]{0,3}(?:>[ ]?|(?:[-*+]|\d{1,9}[.)])[ ]+(?:\[.\][ ]+)?))*(?:\[![\w-]+\][+-]?[ ]*)?/;
+
+/**
+ * `t` with its code spans replaced by a space, pairing backtick runs of equal
+ * length left to right as the renderer does. Null when a run is left
+ * unpaired, since it may open a span that a later line or the opener's own
+ * text closes.
+ */
+function dropClosedCodeSpans(t: string): string | null {
+	let out = "";
+	let i = 0;
+	while (i < t.length) {
+		if (t[i] !== "`") {
+			out += t[i];
+			i++;
+			continue;
+		}
+		let j = i;
+		while (t[j] === "`") j++;
+		let k = j;
+		let end = -1;
+		while (k < t.length && end === -1) {
+			if (t[k] !== "`") {
+				k++;
+				continue;
+			}
+			let m = k;
+			while (t[m] === "`") m++;
+			if (m - k === j - i) end = m;
+			k = m;
+		}
+		if (end === -1) return null;
+		out += " ";
+		i = end;
 	}
-	highlightColour.depth += 1;
-	try {
-		return cleanLineImpl(raw, ...rest);
-	} finally {
-		highlightColour.depth -= 1;
+	return out;
+}
+
+/** Text with code spans, clean pairs, inert `==` runs and a leading structure removed. */
+function colourProse(text: string, atLineStart: boolean): string | null {
+	let t = atLineStart ? text.slice(COLOUR_STRUCTURE.exec(text)![0].length) : text;
+	if (/\t/.test(atLineStart ? text.slice(0, text.length - t.length) : "")) return null;
+	// A code span that opens and closes before the opener cannot hold it.
+	const spans = dropClosedCodeSpans(t);
+	if (spans === null) return null;
+	t = spans.replace(COLOUR_CLEAN_PAIR, "$1");
+	// A lone `==` with space or a line edge on both sides can neither open nor
+	// close. A longer run can: `=== a ==🟧b==` shows the emoji (1.14.4 harness).
+	t = t.replace(/(^|\s)==(?=\s|$)/g, "$1");
+	if (/==/.test(t) || COLOUR_PREFIX_RISK.test(t)) return null;
+	return t;
+}
+
+/** True only where the mark provably opens at `line[open]` and closes at `line[close]`. */
+function colourMarkProven(c: ColourLine, absOpen: number, absClose: number, emojiLen: number): boolean {
+	const open = absOpen - c.lineStart;
+	const close = absClose - c.lineStart;
+	const L = c.line;
+	if (open < 0 || close <= open || close + 2 > L.length || L.slice(open, open + 2) !== "==" || L.slice(close, close + 2) !== "==") return false;
+	const inner = L.slice(open + 2 + emojiLen, close);
+	if (COLOUR_INNER_RISK.test(inner)) return false;
+	if (inner !== "" && /\s/.test(inner[inner.length - 1]!)) return false;
+	// The whole label of an inline link, `[==🟠l==](url)`: the link binds
+	// first and its label is parsed as inline text, so the mark opens there.
+	const label = L[open - 1] === "[" && L[open - 2] !== "!" && L[open - 2] !== "[" && /^\]\([^\s()<>\\]*\)/.test(L.slice(close + 2));
+	const prefixTo = label ? open - 1 : open;
+	if (colourProse(L.slice(0, prefixTo), true) === null) return false;
+	const atContent = COLOUR_STRUCTURE.exec(L)![0].length === prefixTo;
+	const before = L[prefixTo - 1];
+	if (!atContent && before !== undefined && !/[\s*_("']/.test(before)) return false;
+	if (label) return true;
+	const after = L[close + 2];
+	return after === undefined || /[\s.,;:!?)*_'"-]/.test(after);
+}
+
+/**
+ * How the line's quote, list, task and callout markers leave its content:
+ * "code" where a tab, four or more spaces after a quote marker, or five or
+ * more after a list marker, task box or callout header may make it indented
+ * code (or, for a callout, odd title text), "indent" where four or more
+ * leading spaces would be indented code unless a paragraph is open, and "ok"
+ * otherwise. Over-reporting only keeps an emoji.
+ */
+function colourLead(line: string): "code" | "indent" | "ok" {
+	let i = 0;
+	for (;;) {
+		const ws = /^[ \t]*/.exec(line.slice(i))![0];
+		if (ws.includes("\t")) return "code";
+		if (ws.length >= 4) return i === 0 ? "indent" : "code";
+		i += ws.length;
+		if (line[i] === ">") {
+			i += line[i + 1] === " " ? 2 : 1;
+			continue;
+		}
+		const marker = /^(?:(?:[-*+]|\d{1,9}[.)])(?:[ ]{1,4}\[.\])?|\[![\w-]*\][+-]?)([ \t]+)(?=\S)/.exec(line.slice(i));
+		if (marker) {
+			if (marker[1]!.includes("\t") || marker[1]!.length >= (marker[0].startsWith("[!") ? 2 : 5)) return "code";
+			i += marker[0].length;
+			continue;
+		}
+		return "ok";
 	}
+}
+
+/**
+ * Per line: may a mark on this line be proven at all? False in frontmatter,
+ * in a fenced, math or `%%` block (any doubt runs to the end of the note), in
+ * an HTML block (types 1-5 until their end marker's line, 6 and 7 until an
+ * empty line), on a line that may be indented code, and after an earlier line
+ * of the same paragraph that holds a risky construct or a stray `==`.
+ */
+function colourLinesOk(lines: string[]): boolean[] {
+	const ok = new Array<boolean>(lines.length).fill(false);
+	let k = 0;
+	while (k < lines.length && lines[k]!.replace(/^\uFEFF/, "").trim() === "") k++;
+	let from = 0;
+	if (k < lines.length && lines[k]!.replace(/^\uFEFF/, "").trimEnd() === "---") {
+		for (let n = k + 1; n < lines.length; n++) {
+			if (/^(?:---|\.\.\.)\s*$/.test(lines[n]!)) {
+				from = n + 1;
+				break;
+			}
+		}
+	}
+	let fence: string | null = null;
+	let math = false;
+	let comment = false;
+	let htmlEnd: RegExp | "blank" | null = null;
+	let carry = false;
+	let prevParaOpen = false;
+	// Lines since the last blank line include a quote line: a later `>` line
+	// may then continue that quote's paragraph through a lazy line.
+	let quoteRun = false;
+	for (let n = from; n < lines.length; n++) {
+		const raw = lines[n]!;
+		const blank = raw.trim() === "";
+		const quoteless = raw.replace(/^(?:[ ]{0,3}>[ ]?)*/, "");
+		const rest = quoteless.slice(COLOUR_STRUCTURE.exec(quoteless)![0].length);
+		const startsItem = /^[ ]*(?:[-*+]|1[.)])[ ]+\S/.test(quoteless);
+		const heading = /^[ ]{0,3}#{1,6}(?:[ \t]|$)/.test(rest);
+		let lineOk = !blank;
+		if (fence !== null) {
+			lineOk = false;
+			if (new RegExp(`^[ ]{0,3}${fence[0] === "`" ? "`" : "~"}{${fence.length},}[ \\t]*$`).test(rest)) fence = null;
+		} else if (/^[ ]{0,3}(`{3,}|~{3,})/.test(rest)) {
+			fence = /^[ ]{0,3}(`{3,}|~{3,})/.exec(rest)![1]!;
+			lineOk = false;
+		}
+		// Any odd `$$` line may open display math, but only a bare `$$` line is
+		// trusted to close it: after `# $$`, `- $$` opens math at the list item.
+		const dollars = (raw.match(/\$\$/g)?.length ?? 0) % 2 === 1;
+		if (dollars) {
+			lineOk = false;
+			math = !math || raw.trim() !== "$$";
+		}
+		if ((raw.match(/%%/g)?.length ?? 0) % 2 === 1) {
+			comment = !comment;
+			lineOk = false;
+		}
+		if (math || comment) lineOk = false;
+		// Only an empty line ends it: `<div>` / two spaces / `==🔴x==` shows the
+		// emoji in the 1.14.4 harness, where a paragraph would end there.
+		if (htmlEnd === "blank" && raw === "") htmlEnd = null;
+		if (htmlEnd === null && !blank && /^[ ]{0,3}<[A-Za-z/!?]/.test(rest)) {
+			htmlEnd = /^[ ]{0,3}<(?:script|pre|style|textarea)(?:[\s>]|$)/i.test(rest)
+				? /<\/(?:script|pre|style|textarea)>/i
+				: /^[ ]{0,3}<!--/.test(rest)
+					? /-->/
+					: /^[ ]{0,3}<\?/.test(rest)
+						? /\?>/
+						: /^[ ]{0,3}<!\[CDATA\[/.test(rest)
+							? /\]\]>/
+							: /^[ ]{0,3}<![A-Za-z]/.test(rest)
+								? />/
+								: "blank";
+			if (htmlEnd !== "blank" && htmlEnd.test(raw.slice(raw.indexOf("<")))) {
+				// Ends on its own line; the line itself is still raw HTML.
+				htmlEnd = null;
+				lineOk = false;
+			}
+		} else if (htmlEnd instanceof RegExp && htmlEnd.test(raw)) {
+			htmlEnd = null;
+			lineOk = false;
+		}
+		if (htmlEnd !== null) lineOk = false;
+		const isQuote = COLOUR_STRUCTURE.exec(raw)![0].includes(">");
+		const prevQuote = n > 0 && COLOUR_STRUCTURE.exec(lines[n - 1]!)![0].includes(">");
+		// Four leading spaces are indented code unless an open paragraph
+		// continues (indented code cannot interrupt one). A lazy line under a
+		// quote is not trusted: `>a` / four spaces / `==🔵x==` shows the emoji
+		// in the 1.14.4 harness.
+		const leadKind = colourLead(raw);
+		if (leadKind === "code" || (leadKind === "indent" && (!prevParaOpen || prevQuote))) lineOk = false;
+		// A blank line, a quote-blank line, a heading, a new bullet or `1.` item
+		// and a quote opening after no quote since the last blank line all end
+		// the paragraph.
+		const quoteStarts = isQuote && !quoteRun;
+		quoteRun = !blank && (quoteRun || isQuote);
+		if (blank || quoteless.trim() === "" || heading || startsItem || quoteStarts) carry = false;
+		if (carry) lineOk = false;
+		ok[n] = lineOk;
+		carry = !blank && !heading && quoteless.trim() !== "" && (carry || !lineOk || colourProse(raw, true) === null);
+		prevParaOpen = lineOk && !heading && !blank && quoteless.trim() !== "" && !/^[ ]{0,3}(?:[-*_][ ]*){3,}$/.test(rest);
+	}
+	return ok;
 }
 
 /**
@@ -1102,7 +1306,7 @@ function cleanLine(raw: string, ...rest: Parameters<typeof cleanLineImpl> extend
  * recursive label sites and `appendRemainder` pass a slice whose start is not the
  * line's start, where the claim would not hold.
  */
-function cleanLineImpl(
+function cleanLine(
 	raw: string,
 	rawStart: number,
 	opts: StripOptions,
@@ -1182,9 +1386,7 @@ function cleanLineImpl(
 		if (useAlias) {
 			// The alias is display text the author wrote, so nested markup in
 			// it is stripped the same way as a markdown link label.
-			highlightColour.literalLabel += 1;
 			const inner = cleanLine(alias, rawStart + pipe + 1, opts);
-			highlightColour.literalLabel -= 1;
 			for (let k = 0; k < inner.text.length; k++) {
 				emit(inner.text[k]!, inner.index[k] ?? rawStart + pipe + 1);
 			}
@@ -1329,9 +1531,7 @@ function cleanLineImpl(
 	const emitLabelRegion = (from: number, to: number, kind: BracketKind): void => {
 		if (kind === "image" && !opts.speakImageAlt) return;
 		pushSpace(rawStart + from);
-		if (kind === "image") highlightColour.literalLabel += 1;
 		const inner = cleanLine(raw.slice(from, to), rawStart + from, opts);
-		if (kind === "image") highlightColour.literalLabel -= 1;
 		for (let k = 0; k < inner.text.length; k++) {
 			emit(inner.text[k]!, inner.index[k] ?? rawStart + from);
 		}
@@ -1652,10 +1852,6 @@ function cleanLineImpl(
 				}
 				break;
 			}
-			// A comment extract drops may be literal text to the renderer (an
-			// invalid inline `<!--...--->`), and a `==` inside it can then open
-			// the mark a later `==` closes.
-			if (raw.slice(i, close).includes("==")) highlightColour.strayOpen = true;
 			pushSpace(rawStart + i);
 			i = close + closer.length;
 			continue;
@@ -1736,14 +1932,10 @@ function cleanLineImpl(
 			if (close === -1) {
 				// No closer on this line (wikilinks never span lines). Drop just the
 				// brackets so the rest of the line is still read as prose.
-				highlightColour.strayOpen = true;
 				pushSpace(rawStart + i);
 				i += 2;
 				continue;
 			}
-			// An unclosed or empty `[[` is where the renderer's wikilink scan can
-			// swallow a later `]]` and leave the `==` after it literal.
-			if (raw.slice(i + 2, close).trim() === "") highlightColour.strayOpen = true;
 			pushSpace(rawStart + i);
 			emitWikiLabel(i + 2, close, false);
 			i = close + 2;
@@ -1810,9 +2002,7 @@ function cleanLineImpl(
 			}
 			if (opts.speakImageAlt) {
 				pushSpace(rawStart + i);
-				highlightColour.literalLabel += 1;
 				const inner = cleanLine(raw.slice(i + 2, close), rawStart + i + 2, opts);
-				highlightColour.literalLabel -= 1;
 				for (let k = 0; k < inner.text.length; k++) {
 					emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 2);
 				}
@@ -1849,14 +2039,8 @@ function cleanLineImpl(
 				const refClose = raw.indexOf("]", after);
 				after = refClose === -1 ? after : refClose + 1;
 			}
-			// An unresolved `[[` or a label opening on an unclosed image is parsed
-			// by the renderer as literal text, `==` included (ADR 0037).
-			const literal = label.startsWith("![");
-			if (raw[i + 1] === "[") highlightColour.strayOpen = true;
-			if (literal) highlightColour.literalLabel += 1;
 			// Re-clean the label so nested markup inside link text is handled too.
 			const inner = cleanLine(label, rawStart + i + 1, opts);
-			if (literal) highlightColour.literalLabel -= 1;
 			for (let k = 0; k < inner.text.length; k++) {
 				emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 1);
 			}
@@ -1915,14 +2099,16 @@ function cleanLineImpl(
 			const close = inlineContainerClose(raw, i + 2, "==");
 			if (close !== -1 && !/\s/.test(raw[close - 1]!) && raw[close + 2] !== "=") {
 				// The renderer hides a leading colour emoji (a surrogate pair, two
-				// raw units). Skipping it by offset keeps sourceIndex exact.
+				// raw units) where it opens the mark here. Only the main body clean
+				// carries the line to prove that against; every other call keeps it.
+				// Skipping it by offset keeps sourceIndex exact.
 				const lead = raw.codePointAt(i + 2);
+				const colourLine = (opts as ColourStripOptions).colourLine;
 				const skip =
 					lead !== undefined &&
+					colourLine !== undefined &&
 					HIGHLIGHT_COLOUR_EMOJI.has(String.fromCodePoint(lead)) &&
-					!highlightColour.strayOpen &&
-					highlightColour.literalLabel === 0 &&
-					!highlightColour.rawHtml
+					colourMarkProven(colourLine, rawStart + i, rawStart + close, 2)
 						? 2
 						: 0;
 				const innerFrom = i + 2 + skip;
@@ -1933,12 +2119,6 @@ function cleanLineImpl(
 				i = close + 2;
 				continue;
 			}
-		}
-		// A `==` that could open a mark but was not paired above: the renderer
-		// may pair it differently (`===`, an unclosable first opener), so a later
-		// `==` is not known to be where its mark opens.
-		if (ch === "=" && raw[i + 1] === "=" && !isSpaceOrEdge(raw[i + 2])) {
-			highlightColour.strayOpen = true;
 		}
 
 		// Emphasis and strikethrough markers: dropped, contents kept. A marker
@@ -5587,7 +5767,6 @@ export function extractChunks(
 	filePath: string = "",
 ): SpeechChunk[] {
 	const chunks: SpeechChunk[] = [];
-	highlightColour.strayOpen = false;
 	const lines = source.split("\n");
 	// Whether line k may hold an inline construct that hides text, a code span
 	// whose backticks may pair across a line break included (`backtickCrossRisk`,
@@ -6493,6 +6672,7 @@ export function extractChunks(
 	// rule. Getting this wrong let skipHeadings drop the continuation text.
 	let prevContainer = false;
 	const frontmatter = detectFrontmatter(lines);
+	const colourOk = colourLinesOk(lines);
 	// A line's WINDOW for fix round 1's refinements (fix round 2 scopes to it
 	// what round 1 gated note-wide): the line itself, every earlier line back to
 	// the last blank one, and every later line up to the old bound's `-->`. A
@@ -7223,9 +7403,6 @@ export function extractChunks(
 		// a paragraph is open to tell a tab-bearing lazy continuation from
 		// the blank line that would end it (blankEndsParagraph).
 		const blank = blankEndsParagraph(raw, wasPara);
-		// A paragraph is where the renderer pairs `==`, so a stray opener is
-		// only remembered up to the next blank line.
-		if (blank) highlightColour.strayOpen = false;
 		// Read before the list-end check below, which ends the list on this very
 		// "---" line and would otherwise hide that the paragraph was in it.
 		const wasInList = inList;
@@ -7521,7 +7698,11 @@ export function extractChunks(
 			htmlBlockLine(body, listStrip[lineNo]!, htmlParaOpen[lineNo]!)
 				? "block"
 				: "none";
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens);
+		// The one clean that may drop a highlight's colour emoji (ADR 0037), and
+		// only on a line colourLinesOk did not rule out. Every pass of this line
+		// gets the same options, so the passes agree.
+		const bodyOpts: StripOptions = colourOk[lineNo] ? ({ ...stripOpts, colourLine: { line: raw, lineStart } } as ColourStripOptions) : stripOpts;
+		let cleaned = cleanLine(body, lineStart + prefixChars, bodyOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
@@ -7529,7 +7710,7 @@ export function extractChunks(
 			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlClosesLaterAt, listDedented, htmlLeadIndented, listStrip)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens);
+			cleaned = cleanLine(body, lineStart + prefixChars, bodyOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -7574,7 +7755,7 @@ export function extractChunks(
 			cleaned = cleanLine(
 				body,
 				lineStart + prefixChars,
-				stripOpts,
+				bodyOpts,
 				true,
 				carriedCode,
 				undefined,
