@@ -324,7 +324,7 @@ criterion in real Obsidian is NOT VERIFIED**: the Flatpak sandbox here has no `s
 **NRL-141**
 (PR #181, `47cf18d`, ADR 0010's NRL-141 amendment): the Web Speech probe used to wait its
 full 5,000 ms timeout on **every** call when the host had no voices, so every Auto read here
-reached `playing` at about +5.1 s, against the 1,000 ms acceptable bound in srs.md's Android Acceptance section. The
+reached `playing` at about +5.1 s, against the 1,000 ms acceptable bound in srs.md's Performance Targets, Native/System TTS ("Target command-to-speech latency"). The
 confirmed-empty outcome is now cached per `WebSpeechEngine` behind one shared in-flight
 poll, invalidated by a persistent `voiceschanged` listener and by a synchronous
 `getVoices()` read on every call, so the local-voice gate stays fail-closed. Measured with
@@ -2300,7 +2300,7 @@ probe does not read it as new. **A token fused to an unmatched `<!--` on a label
 stops being spoken at `speakImageAlt: true` too** (256 cells per kind), which looks like a new
 silencing until the control is run: the stray-free form drops the same token on base, so it is
 pre-existing and in the silencing direction, and the mechanism is already pinned by
-`local-html-state` and srs.md's R-M08 HTML comments bullet. **ADR 0019's deliberately-literal class moved 2,048 ->
+`local-html-state` and srs.md's R-M08 "Comments are non-nesting" bullet. **ADR 0019's deliberately-literal class moved 2,048 ->
 1,536 in Verify's corpus**, a *decrease* and therefore in the silencing direction, all of it at
 `speakImageAlt: false` with the control agreeing on base - do not reconcile it against the
 `1,024 on both sides` figure above, which is the ship corpus and a different one.
@@ -3373,7 +3373,7 @@ rediscover them:
   part way through a line at all; the inline tokenizer `/^%%(.*?)%%/` is anchored and `.` does
   not match a newline. So `HIDEME` is displayed in Obsidian, speaking it is renderer-faithful,
   and the ticket's own Caveat named this outcome. The spec sentence needed the citation, not
-  the code: `src/text/extract.ts` did not change, srs.md's R-M08 HTML and Obsidian comment bullets and ADR 0006 clause 2 now carry
+  the code: `src/text/extract.ts` did not change, srs.md's R-M08 Obsidian comments bullet and ADR 0006 clause 2 now carry
   the tokenizer evidence, and `pin-nrl68-midline-opener-is-literal` in `tests/extract.test.ts`
   pins the correct behaviour so it cannot be "fixed" back. Read off the installed parser, **NOT
   VERIFIED IN OBSIDIAN**. Of the three `%%` **disclosure** gaps that were open when this

@@ -36,7 +36,7 @@ Spec vocabulary differs from the code: `srs.md` says `TTSBackend` / `TTSCapabili
 `VoiceInfo` / `SpeechChunk`. They are approximate, not exact, synonyms. All four of
 `id`, `sequence`, `blockType` and `filePath` now exist on `SpeechChunk`; what still
 differs is shape. `SpeechSegment` nests the location as `source: { filePath, from, to }`
-(srs.md, R-M10 Speech Segmentation, the conceptual `SpeechSegment` shape) where `SpeechChunk` flattens it to a `filePath` plus flat
+(srs.md, R-M11 Source Mapping, the conceptual `SpeechSegment` shape) where `SpeechChunk` flattens it to a `filePath` plus flat
 `sourceStart`/`sourceEnd` (`src/audio/types.ts:139-152`).
 
 ---

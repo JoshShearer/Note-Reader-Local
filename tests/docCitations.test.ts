@@ -286,6 +286,13 @@ for (const a of ALLOWED_UNRESOLVED) {
 		`a second citation inside the record paragraph still fails the count: ${a.name}`,
 		!allowanceHolds(real.replace(a.recordMarker, `${a.recordMarker} \`${a.name}\``), a),
 	);
+	// Mutation: the allowed occurrences moved out of the record paragraph (count unchanged)
+	// must fail, which is what the paragraph scoping in allowanceHolds() is for.
+	const moved = `${real.split(a.name).join("(name removed)")}${`\n\nPinned as \`${a.name}\`.\n`.repeat(a.count)}`;
+	check(
+		`the allowed count moved out of the record paragraph fails: ${a.name}`,
+		extractNames(moved).filter((n) => n === a.name).length === a.count && !allowanceHolds(moved, a),
+	);
 }
 
 // --- 5. No srs.md line-number citation survives (NRL-152) -------------------

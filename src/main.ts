@@ -446,7 +446,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 	/**
 	 * SPIKE-ANDROID-001 (NRL-35): the acceptance-criteria artifact itself, not
-	 * just a doc. Investigates the four routes the spec orders (srs.md, Android Backend, "Investigate, in order"),
+	 * just a doc. Investigates the four routes the spec orders (srs.md, SPIKE-ANDROID-001, "Investigate, in order"),
 	 * in order, and reports PASS or BLOCKED_BY_HOST via Notice.
 	 *
 	 * Steps 1 and 2 are not runtime-checkable: there is no documented Obsidian
