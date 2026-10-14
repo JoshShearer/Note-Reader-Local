@@ -1002,6 +1002,39 @@ function opensObsidianBlock(view: string, at: number, dedentedByList: boolean): 
 }
 
 /**
+ * State for one decision only: does Obsidian 1.14.4's renderer open a colour
+ * `<mark>` at the `==` extract is about to strip (ADR 0037)? Extract's own
+ * `==` pairing is deliberately not the renderer's, so the leading colour emoji
+ * is dropped only where the renderer is known to open the mark there. It is
+ * shared across cleanLine's recursion (a label inside the line still sees an
+ * earlier `==`), and reset at the outermost call, i.e. per line. Where this
+ * is unsure the emoji is kept, which is what the base build did.
+ */
+const highlightColour = {
+	depth: 0,
+	/** An earlier `==` in this paragraph that could open a mark and that extract did not pair. */
+	strayOpen: false,
+	/** Inside a wikilink alias or an image alt, where `==` stays literal. */
+	literalLabel: 0,
+	/** The line is raw HTML for the renderer, which never parses `==` in it. */
+	rawHtml: false,
+};
+
+function cleanLine(raw: string, ...rest: Parameters<typeof cleanLineImpl> extends [string, ...infer R] ? R : never): Cleaned {
+	const outer = highlightColour.depth === 0;
+	if (outer) {
+		highlightColour.literalLabel = 0;
+		highlightColour.rawHtml = /^[ \t]{0,3}<!--/.test(raw);
+	}
+	highlightColour.depth += 1;
+	try {
+		return cleanLineImpl(raw, ...rest);
+	} finally {
+		highlightColour.depth -= 1;
+	}
+}
+
+/**
  * Strip inline markdown from a single line, recording source offsets.
  *
  * `incomingCode` is the length of a backtick run opened on an earlier line
@@ -1069,7 +1102,7 @@ function opensObsidianBlock(view: string, at: number, dedentedByList: boolean): 
  * recursive label sites and `appendRemainder` pass a slice whose start is not the
  * line's start, where the claim would not hold.
  */
-function cleanLine(
+function cleanLineImpl(
 	raw: string,
 	rawStart: number,
 	opts: StripOptions,
@@ -1149,7 +1182,9 @@ function cleanLine(
 		if (useAlias) {
 			// The alias is display text the author wrote, so nested markup in
 			// it is stripped the same way as a markdown link label.
+			highlightColour.literalLabel += 1;
 			const inner = cleanLine(alias, rawStart + pipe + 1, opts);
+			highlightColour.literalLabel -= 1;
 			for (let k = 0; k < inner.text.length; k++) {
 				emit(inner.text[k]!, inner.index[k] ?? rawStart + pipe + 1);
 			}
@@ -1294,7 +1329,9 @@ function cleanLine(
 	const emitLabelRegion = (from: number, to: number, kind: BracketKind): void => {
 		if (kind === "image" && !opts.speakImageAlt) return;
 		pushSpace(rawStart + from);
+		if (kind === "image") highlightColour.literalLabel += 1;
 		const inner = cleanLine(raw.slice(from, to), rawStart + from, opts);
+		if (kind === "image") highlightColour.literalLabel -= 1;
 		for (let k = 0; k < inner.text.length; k++) {
 			emit(inner.text[k]!, inner.index[k] ?? rawStart + from);
 		}
@@ -1615,6 +1652,10 @@ function cleanLine(
 				}
 				break;
 			}
+			// A comment extract drops may be literal text to the renderer (an
+			// invalid inline `<!--...--->`), and a `==` inside it can then open
+			// the mark a later `==` closes.
+			if (raw.slice(i, close).includes("==")) highlightColour.strayOpen = true;
 			pushSpace(rawStart + i);
 			i = close + closer.length;
 			continue;
@@ -1695,10 +1736,14 @@ function cleanLine(
 			if (close === -1) {
 				// No closer on this line (wikilinks never span lines). Drop just the
 				// brackets so the rest of the line is still read as prose.
+				highlightColour.strayOpen = true;
 				pushSpace(rawStart + i);
 				i += 2;
 				continue;
 			}
+			// An unclosed or empty `[[` is where the renderer's wikilink scan can
+			// swallow a later `]]` and leave the `==` after it literal.
+			if (raw.slice(i + 2, close).trim() === "") highlightColour.strayOpen = true;
 			pushSpace(rawStart + i);
 			emitWikiLabel(i + 2, close, false);
 			i = close + 2;
@@ -1765,7 +1810,9 @@ function cleanLine(
 			}
 			if (opts.speakImageAlt) {
 				pushSpace(rawStart + i);
+				highlightColour.literalLabel += 1;
 				const inner = cleanLine(raw.slice(i + 2, close), rawStart + i + 2, opts);
+				highlightColour.literalLabel -= 1;
 				for (let k = 0; k < inner.text.length; k++) {
 					emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 2);
 				}
@@ -1802,8 +1849,14 @@ function cleanLine(
 				const refClose = raw.indexOf("]", after);
 				after = refClose === -1 ? after : refClose + 1;
 			}
+			// An unresolved `[[` or a label opening on an unclosed image is parsed
+			// by the renderer as literal text, `==` included (ADR 0037).
+			const literal = label.startsWith("![");
+			if (raw[i + 1] === "[") highlightColour.strayOpen = true;
+			if (literal) highlightColour.literalLabel += 1;
 			// Re-clean the label so nested markup inside link text is handled too.
 			const inner = cleanLine(label, rawStart + i + 1, opts);
+			if (literal) highlightColour.literalLabel -= 1;
 			for (let k = 0; k < inner.text.length; k++) {
 				emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 1);
 			}
@@ -1865,7 +1918,13 @@ function cleanLine(
 				// raw units). Skipping it by offset keeps sourceIndex exact.
 				const lead = raw.codePointAt(i + 2);
 				const skip =
-					lead !== undefined && HIGHLIGHT_COLOUR_EMOJI.has(String.fromCodePoint(lead)) ? 2 : 0;
+					lead !== undefined &&
+					HIGHLIGHT_COLOUR_EMOJI.has(String.fromCodePoint(lead)) &&
+					!highlightColour.strayOpen &&
+					highlightColour.literalLabel === 0 &&
+					!highlightColour.rawHtml
+						? 2
+						: 0;
 				const innerFrom = i + 2 + skip;
 				const inner = cleanLine(raw.slice(innerFrom, close), rawStart + innerFrom, opts);
 				for (let k = 0; k < inner.text.length; k++) {
@@ -1874,6 +1933,12 @@ function cleanLine(
 				i = close + 2;
 				continue;
 			}
+		}
+		// A `==` that could open a mark but was not paired above: the renderer
+		// may pair it differently (`===`, an unclosable first opener), so a later
+		// `==` is not known to be where its mark opens.
+		if (ch === "=" && raw[i + 1] === "=" && !isSpaceOrEdge(raw[i + 2])) {
+			highlightColour.strayOpen = true;
 		}
 
 		// Emphasis and strikethrough markers: dropped, contents kept. A marker
@@ -5522,6 +5587,7 @@ export function extractChunks(
 	filePath: string = "",
 ): SpeechChunk[] {
 	const chunks: SpeechChunk[] = [];
+	highlightColour.strayOpen = false;
 	const lines = source.split("\n");
 	// Whether line k may hold an inline construct that hides text, a code span
 	// whose backticks may pair across a line break included (`backtickCrossRisk`,
@@ -7157,6 +7223,9 @@ export function extractChunks(
 		// a paragraph is open to tell a tab-bearing lazy continuation from
 		// the blank line that would end it (blankEndsParagraph).
 		const blank = blankEndsParagraph(raw, wasPara);
+		// A paragraph is where the renderer pairs `==`, so a stray opener is
+		// only remembered up to the next blank line.
+		if (blank) highlightColour.strayOpen = false;
 		// Read before the list-end check below, which ends the list on this very
 		// "---" line and would otherwise hide that the paragraph was in it.
 		const wasInList = inList;

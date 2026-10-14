@@ -7951,6 +7951,59 @@ console.log("NRL-180: a leading colour emoji of a ==highlight== is hidden, as Ob
 	}
 }
 
+console.log("NRL-180 round 1: the colour emoji is dropped only where the renderer opens the mark");
+{
+	// Each row is a shape where Obsidian 1.14.4 forms no colour <mark> at that
+	// emoji and SHOWS it (checked against the 1.14.4 harness), so dropping it
+	// would silently lose displayed content. Extract keeps the emoji, as the
+	// build before NRL-180 did. The harness is not run here (bare Node); the
+	// shapes are its recorded verdicts.
+	const spoken = (src: string): { text: string; ok: boolean } => {
+		const cs = extractChunks(src, OPTS);
+		return {
+			text: cs.map((c) => c.text).join(" "),
+			ok: cs.every((c) => unitsMatch(c.text, c.sourceIndex, src)),
+		};
+	};
+	const rows: Array<[string, string]> = [
+		// (a) an earlier `==` of `===` is where the renderer's mark opens
+		["a === b ==\u{1F7EA}x== c", "a === b \u{1F7EA}x c"],
+		["if x === y then ==\u{1F534}urgent== now", "if x === y then \u{1F534}urgent now"],
+		["a ==== b ==\u{1F7E2}x== c", "a ==== b \u{1F7E2}x c"],
+		// (b) a line opening with an HTML comment is a raw HTML block
+		["<!-- c -->==\u{1F7EA}x==", "\u{1F7EA}x"],
+		["<!-- todo --> ==\u{1F7E2}done== ok", "\u{1F7E2}done ok"],
+		["- <!-- c --> ==\u{1F534}x==", "\u{1F534}x"],
+		// (c) a wikilink alias and a link label opening on an unclosed image
+		["[[N|==\u{1F7EA}x==]]", "\u{1F7EA}x"],
+		["see [[N|==\u{1F534}x==]] now", "see \u{1F534}x now"],
+		["[![==\u{1F7E9}y==]", "[\u{1F7E9}y"],
+		// (d) an opener that cannot close before the second `==`
+		["==\u{1F534} ==\u{1F535}\u{FE0F}fox==", "==\u{1F534} \u{1F535} fox"],
+		["==\u{1F534} ==\u{1F7E5}x==", "==\u{1F534} \u{1F7E5}x"],
+		// (e) an image alt, where `==` is literal
+		["![==\u{1F534}x==](http://e.com/i.png)", "\u{1F534}x"],
+		["![==\u{1F7E2}x==](i.png)", "\u{1F7E2}x"],
+		// an empty wikilink or a comment holding `==` leaves the renderer's pairing open
+		["[[]]==\u{1F7E7}y==]]", "\u{1F7E7}y]]"],
+		["a<!--==--->==\u{1F7E7}==", "a \u{1F7E7}"],
+		// kept: where the renderer does open the mark, the emoji is still dropped
+		["==\u{1F534}\u{FE0F}x==", "x"],
+		["a = b ==\u{1F534}x==", "a = b x"],
+		["x == y and ==\u{1F534}z==", "x == y and z"],
+		["==a== ==\u{1F534}b==", "a b"],
+		["**==\u{1F534}x==**", "x"],
+		["# ==\u{1F534}x==", "x"],
+		["> [!note] ==\u{1F534}x==", "x"],
+		["`a` ==\u{1F534}x==", "x"],
+		["A\n\n==\u{1F534}x==", "A x"],
+	];
+	for (const [src, want] of rows) {
+		const r = spoken(src);
+		check(`NRL-180 r1 ${JSON.stringify(src)} speaks ${JSON.stringify(want)}`, r.text.trim() === want && r.ok, JSON.stringify(r));
+	}
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);
