@@ -396,6 +396,38 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### Parser harness versions: 1.13.7 and 1.14.4 (NRL-171, 2026-10-14)
+
+The installed Obsidian loads the updater asar
+`~/.var/app/md.obsidian.Obsidian/config/obsidian/obsidian-1.14.4.asar`. The flatpak's own
+`resources/obsidian.asar` is still 1.13.7. Every renderer figure before 2026-10-14 came from the
+1.13.7 harness (`~/.local/share/note-reader-local/obsidian-parser-harness`, `app.js` sha256
+`8efbf581...9898`). That harness is kept unchanged. A second harness,
+`obsidian-parser-harness-1.14.4` (`app.js` sha256 `958ce57f...2df9`, equal to the asar's
+integrity hash), has the same `WT`/`GT`/`oracle111.cjs` API. Both pass `selftest.cjs` (6) and
+`oracle-selftest.cjs` (9).
+
+**What changed, measured.** Diffed under alpha-renaming (`canon.cjs`):
+- The 189 shared webpack modules, Obsidian's link helpers, the mdast-to-hast span and the
+  dimension helpers are all equal.
+- In the parser-extension region, exactly one tokenizer changed. `==mark==` now strips a leading
+  colour emoji (🔴🟥🟠🟧🟡🟨🟢🟩🔵🟦🟣🟪) into `data-highlight`.
+
+The two harnesses were run differentially (`xdiff.cjs`) on:
+- every `extractChunks` input in `tests/extract.test.ts` (7,710 unique), and
+- 40,000 fuzz notes (seeds 31337 and 20261014).
+
+Every visible-text disagreement involves a colour emoji: 0 without one, on both corpora. So
+**a 1.13.7 verdict carries over to 1.14.4 except for `==<colour emoji>...==`**. The extractor still
+passes that emoji to the engine: that is NRL-180.
+
+Limits:
+- NRL-166's own F1 census and F2 fuzz generators did not survive, so they were not replayed.
+  The fuzz above uses a different generator.
+- Reading view only. NOT VERIFIED IN OBSIDIAN.
+
+New renderer verdicts should name the harness version they came from.
+
 ### Android playback throughput, and the native-TTS bridge (2026-10-01)
 
 Every number in this section was measured on 2026-09-30 / 2026-10-01 against `main` at
