@@ -959,7 +959,7 @@ console.log("block markup (NRL-8)");
 	//    and not NRL-115's: the defused twin `- > \txx ZHIDEZ` speaks
 	//    `xx ZHIDEZ` on base under the same options, because no branch of ours
 	//    treats indented code inside a container as code.
-	add("- > \t<!-- ZHIDEZ\nmore ZPROSEZ", ["<!-- ZHIDEZ", "more ZPROSEZ"], OPTS, " (nrl115-replaces-tripwire: a nested tab-indented <!-- is displayed code)");
+	add("- > \t<!-- ZHIDEZ\nmore ZPROSEZ", ["<!-- ZHIDEZ", "more ZPROSEZ"], OPTS, " (pin-nrl115-nested-tab-comment-displayed; nrl115-replaces-tripwire: a nested tab-indented <!-- is displayed code)");
 	// 2. Was a second TRIPWIRE, filed against NRL-118. NRL-118 relabels it a GUARD
 	//    rather than moving it, because the renderer agrees with it: the
 	//    unprefixed line is a LAZY continuation that stays inside both the item

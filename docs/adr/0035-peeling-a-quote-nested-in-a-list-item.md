@@ -184,7 +184,7 @@ lines.** Per part: 5,481 test-file literals (1 differing), 9,354 fuzz lines
 
 | property | statement | failures |
 |---|---|---|
-| (a) FIXED POINT | `NEW(L)` equals `iterate(OLD)(L)` for every line, where `iterate` applies OLD to the remaining body until it consumes nothing, summing `chars` and `quotes`, taking `callout` from the round that returned early, `blockType` = quote if any round said quote else list if any said list else paragraph, and honouring HEADING on round 1 only. This makes the loop definitionally "OLD, iterated", which is the honest successor to "an exact refactor". | **309**, all guard-caused and all fail-closed - **this row used to read 0 and that reading is superseded; see the amendment below** |
+| (a) FIXED POINT | `NEW(L)` equals `iterate(OLD)(L)` for every line, where `iterate` applies OLD to the remaining body until it consumes nothing, summing `chars` and `quotes`, taking `callout` from the round that returned early, `blockType` = quote if any round said quote else list if any said list else paragraph, and honouring HEADING on round 1 only. This makes the loop definitionally "OLD, iterated", which is the honest successor to "an exact refactor". | **309**, all caused by the guard and all fail-closed - **this row used to read 0 and that reading is superseded; see the amendment below** |
 | (b) MONOTONE EXTENSION | `NEW.chars >= OLD.chars` and `NEW.quotes >= OLD.quotes` on every line, and all four old fields are EQUAL wherever `NEW.chars === OLD.chars`. The peel can only grow. | **0** |
 | (c) SIDE-EFFECT PRESERVATION | wherever the four old fields agree, `NEW.outerList === (OLD.blockType === "list")`. Computed, because this is the whole argument that decision 4's fifth field changes nothing on a non-nested line. | **0** |
 | (d) THE DIRECTION | every differing line is one where OLD's own peeled body still begins with a container marker, or is a callout reached after a nested quote; and every differing line falls in a NAMED shape class. A differing line in no named class FAILS. | **0**, 0 unclassified |
@@ -314,8 +314,11 @@ one**, and that is measured by the un-nested controls rather than argued:
 So `> \t<!-- ...` already spoke nothing on base, identical on both arms, and the
 fix makes `- > \t<!-- ...` agree with it. The class belongs to
 NRL-93 and NRL-115 - NRL-115 is the ticket that fixes an over-hidden indented
-`<!--` line - and `opensHtmlBlock` is byte-identical here. Pinned as
-`pin-nrl131-nested-tab-comment-overhides`.
+`<!--` line - and `opensHtmlBlock` is byte-identical here. Filed as a TRIPWIRE
+asserting the over-hide; NRL-115 then replaced it in place and the pin that
+survives is `pin-nrl115-nested-tab-comment-displayed` (see the NRL-150
+paragraph at the end of this ADR for why the name first cited here was never
+real).
 
 **One sentence that used to sit here was WRONG and is corrected rather than
 deleted, because it is the reason the defect below got as far as Ship.** It read
@@ -436,8 +439,9 @@ waved at. Minimally reduced to `- > %%` / `ZHIDEZ a %% ZHIDEZ b`: the peel makes
 `%%` line-start, `opensObsidianBlock` recognises it, and a later `%%` at a
 different container depth closes a block Obsidian keeps open. That is **NRL-118**,
 whose note-scope is container-blind for us, and the three un-nested twins `%%`,
-`- %%` and `> %%` all already speak exactly `ZHIDEZ b` on BASE. Pinned as
-`pin-nrl131-nested-percent-note-scope`.
+`- %%` and `> %%` all already speak exactly `ZHIDEZ b` on BASE. Filed as a
+TRIPWIRE and since relabelled, so the pin that survives is
+`guard-nrl118-lazy-line-closes-in-nested-quote` (next paragraph).
 
 **Corrected by NRL-118: that reduced shape is NOT a leak, and the fixture did not
 move.** Run through the renderer, `- > %%` / `ZHIDEZ a %% ZHIDEZ b` displays
@@ -616,8 +620,23 @@ in every cell (0 differing), and so is the un-nested control `>     - x` over it
 512. The renderer shows `- x` as indented code; both arms speak `x` and drop the
 displayed `-`, exactly as this ADR signed off.
 
-`pin-nrl131-nested-tab-comment-overhides` and
-`pin-nrl131-nested-percent-note-scope` are cited by name above and in `srs.md`
-and **neither exists under `tests/`** - a documentation-to-test integrity gap
-tracked as NRL-150 and deliberately not fixed here. NRL-114 built its own
-tripwires for the tab-after-`>` shapes rather than relying on them.
+**Closed by NRL-150: two pin names this ADR and `srs.md` cited were never
+written.** The names first cited here, `pin-nrl131-nested-tab-comment-overhides`
+and `pin-nrl131-nested-percent-note-scope`, never appeared in `tests/`: `git log
+-S` on each over `tests/` finds nothing on any ref. NRL-131's own fixtures
+(PR #193) were labelled `(TRIPWIRE: ...)`, and both were later moved on purpose,
+so a pin under the cited name cannot be written now (the tab-comment one would
+have to assert the OVER-HIDE that NRL-115 fixed).
+
+- Tab-comment: FOLDED into the existing fixture, which NRL-115 replaced in place.
+  It asserts the displayed reading (`<!-- ZHIDEZ` and `more ZPROSEZ` both spoken)
+  and now carries the name `pin-nrl115-nested-tab-comment-displayed`.
+- Percent-note-scope: RENAMED by NRL-118 to
+  `guard-nrl118-lazy-line-closes-in-nested-quote`, the same fixture, same
+  expectation (`ZHIDEZ b`).
+
+No expectation changed; only the tab-comment label gained a name. The citations
+here and in `srs.md` now point at names that exist, and
+`tests/docCitations.test.ts` fails if a cited `pin-*` / `guard-*` name stops
+resolving under `tests/`. NRL-114 built its own tripwires for the tab-after-`>`
+shapes rather than relying on these.
