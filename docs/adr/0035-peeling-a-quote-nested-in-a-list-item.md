@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-01
-- Ticket: NRL-131 (R-M08 and R-M09; `srs.md:317`, `:328` and `:370` amended)
+- Ticket: NRL-131 (R-M08 and R-M09; `srs.md` amended at R-M08 Markdown Processing (the Images and Obsidian comments bullets) and R-M09 Configurable Content Exclusions)
 
 ## Context
 
@@ -622,8 +622,9 @@ displayed `-`, exactly as this ADR signed off.
 
 **Closed by NRL-150: two pin names this ADR and `srs.md` cited were never
 written.** The names first cited here, `pin-nrl131-nested-tab-comment-overhides`
-and `pin-nrl131-nested-percent-note-scope`, never appeared in `tests/`: `git log
--S` on each over `tests/` finds nothing on any ref. NRL-131's own fixtures
+and `pin-nrl131-nested-percent-note-scope`, never appeared in `tests/`: before NRL-150 landed, `git log
+-S` on each over `tests/` found nothing on any ref (it now matches
+`tests/docCitations.test.ts`'s own literals, so read that as "outside that file"). NRL-131's own fixtures
 (PR #193) were labelled `(TRIPWIRE: ...)`, and both were later moved on purpose,
 so a pin under the cited name cannot be written now (the tab-comment one would
 have to assert the OVER-HIDE that NRL-115 fixed).

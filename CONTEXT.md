@@ -36,7 +36,7 @@ Spec vocabulary differs from the code: `srs.md` says `TTSBackend` / `TTSCapabili
 `VoiceInfo` / `SpeechChunk`. They are approximate, not exact, synonyms. All four of
 `id`, `sequence`, `blockType` and `filePath` now exist on `SpeechChunk`; what still
 differs is shape. `SpeechSegment` nests the location as `source: { filePath, from, to }`
-(`srs.md:392-396`) where `SpeechChunk` flattens it to a `filePath` plus flat
+(srs.md, R-M11 Source Mapping, the conceptual `SpeechSegment` shape) where `SpeechChunk` flattens it to a `filePath` plus flat
 `sourceStart`/`sourceEnd` (`src/audio/types.ts:139-152`).
 
 ---
@@ -268,9 +268,9 @@ The row order is the check order, and `element` is first for the reason bullet 5
 gives: testing `!ownsPlayback` before the pair is what makes the `engine` route's premise
 an invariant rather than a coincidence.
 
-The differences are deliberate and are `srs.md:250` verbatim: where a backend cannot pause
-an active utterance, the controller may pause by stopping synthesis while retaining the
-segment and position. So no ADR: this is the spec's own fallback, not a deviation from it.
+The differences are deliberate and are the spec's own words (srs.md, R-M07 Playback Controls):
+"Where a backend cannot pause an active utterance, the controller MAY implement pause by stopping synthesis while retaining the current segment and position."
+So no ADR: this is the spec's own fallback, not a deviation from it.
 Five consequences worth knowing before touching any of it:
 
 - The route is **never** decided from `SynthResult.kind`. On an engine that owns playback

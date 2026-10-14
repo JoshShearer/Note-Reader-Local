@@ -5,7 +5,9 @@
  * This repo's method for not re-breaking a fixed shape is the named pin, and a
  * later ticket reads an ADR, sees "pinned as `pin-x`" and believes the shape is
  * covered. ADR 0035 and srs.md cited two such names that had never existed in
- * tests/ (`git log -S` finds nothing, on any ref): a citation to a pin that does
+ * tests/ (before NRL-150 added this file, `git log -S` found nothing for them on
+ * any ref; this file's own synthetic literals now match it, so read that claim
+ * as "outside tests/docCitations.test.ts"): a citation to a pin that does
  * not exist is worse than none, because it stops the next ticket building its
  * own tripwire. NRL-131's fixtures were labelled TRIPWIRE and later renamed or
  * folded by NRL-115 and NRL-118, and the prose kept the name it first invented.
@@ -31,10 +33,14 @@
  *     so a document must cite a name a reader can grep for.
  *   - It does not check that a name is cited next to the right ticket.
  *
- * Scope: docs/**.md, srs.md, AGENTS.md, CONTEXT.md and README.md. NRL-152 is
- * expected to add a "no `srs.md:<digit>` citation in src/ and tests/" check
- * here; sections are numbered so it can follow section 5, and walk() /
- * readText() are the shared helpers for it. It is not added in this ticket.
+ * Scope: docs/**.md, srs.md, AGENTS.md, CONTEXT.md and README.md. Section 5
+ * (NRL-152) also asserts that no `srs.md` line-number citation survives in
+ * src/, tests/ or those documents: a line number goes stale the next time srs.md
+ * gains a paragraph, a requirement ID plus heading does not.
+ *
+ * A name hard-wrapped at a hyphen across a line break is joined before
+ * extraction (NRL-152). Without that, the extractor stopped at the break and the
+ * truncated head resolved as a family stem, so a wrong tail passed.
  */
 
 import * as fs from "node:fs";
@@ -58,22 +64,39 @@ const EXTRACT_NAME = /(?<![\w-])(?:pin|guard)-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w])/g
 
 /**
  * Cited names that are deliberately allowed to stay unresolved, keyed by the
- * file that cites them. Each needs a reason, and section 4 fails if an entry no
- * longer matches a citation in its file, so the list cannot rot into a blanket
- * pass. Empty entries are not accepted.
+ * file that cites them. Each entry is scoped to an exact occurrence count AND to
+ * the record paragraph: every occurrence must sit in a paragraph containing
+ * `recordMarker`, so a later citation of the same dead name as a live pin ("Pinned
+ * as `<name>`" elsewhere in the file) fails instead of riding the allowance.
+ * Section 4 fails if an entry no longer matches, so the list cannot rot into a
+ * blanket pass. Empty entries are not accepted.
  */
-const ALLOWED_UNRESOLVED: Array<{ file: string; name: string; reason: string }> = [
+interface Allowance {
+	file: string;
+	name: string;
+	reason: string;
+	/** Exact number of times the name occurs in the file. */
+	count: number;
+	/** Text every paragraph holding the name must contain. */
+	recordMarker: string;
+}
+const NRL150_RECORD = "never appeared in `tests/`";
+const NRL150_REASON =
+	"NRL-150 records here that this name was invented and never written; the ADR must be able to say so by name.";
+const ALLOWED_UNRESOLVED: Allowance[] = [
 	{
 		file: "docs/adr/0035-peeling-a-quote-nested-in-a-list-item.md",
 		name: "pin-nrl131-nested-tab-comment-overhides",
-		reason:
-			"NRL-150 records here that this name was invented and never written; the ADR must be able to say so by name.",
+		reason: NRL150_REASON,
+		count: 1,
+		recordMarker: NRL150_RECORD,
 	},
 	{
 		file: "docs/adr/0035-peeling-a-quote-nested-in-a-list-item.md",
 		name: "pin-nrl131-nested-percent-note-scope",
-		reason:
-			"NRL-150 records here that this name was invented and never written; the ADR must be able to say so by name.",
+		reason: NRL150_REASON,
+		count: 1,
+		recordMarker: NRL150_RECORD,
 	},
 ];
 
@@ -88,8 +111,23 @@ function check(name: string, cond: boolean, detail = ""): void {
 
 // --- Helpers (pure over strings, so section 2 can drive them synthetically) --
 
+/**
+ * Re-join a name that a hard wrap split after a hyphen. Only text that is
+ * already inside a `pin-`/`guard-` name is joined, so ordinary prose that ends a
+ * line in a hyphen is left alone. Repeated until stable for a name wrapped twice.
+ */
+const WRAPPED_NAME = /((?<![\w-])(?:pin|guard)-[a-z0-9]+(?:-[a-z0-9]+)*-)[ \t]*\r?\n[ \t]*(?=[a-z0-9])/gi;
+function joinWrappedNames(text: string): string {
+	let prev = text;
+	for (;;) {
+		const next = prev.replace(WRAPPED_NAME, "$1");
+		if (next === prev) return next;
+		prev = next;
+	}
+}
+
 function extractNames(text: string): string[] {
-	return [...text.matchAll(EXTRACT_NAME)].map((m) => m[0]);
+	return [...joinWrappedNames(text).matchAll(EXTRACT_NAME)].map((m) => m[0]);
 }
 
 /** Does `name` resolve against the set of tokens found under tests/? */
@@ -97,6 +135,24 @@ function resolves(name: string, testTokens: ReadonlySet<string>): boolean {
 	if (testTokens.has(name)) return true;
 	for (const t of testTokens) if (t.startsWith(`${name}-`)) return true;
 	return false;
+}
+
+/**
+ * Does the allowance still describe `text` exactly: the name occurs `count`
+ * times, and each occurrence is inside a paragraph that carries the record
+ * marker? Pure over a string so section 4 can mutate the real document.
+ */
+function allowanceHolds(text: string, a: Allowance): boolean {
+	const joined = joinWrappedNames(text);
+	const paragraphs = joined.split(/\n[ \t]*\n/);
+	let seen = 0;
+	for (const para of paragraphs) {
+		const here = extractNames(para).filter((n) => n === a.name).length;
+		if (here === 0) continue;
+		if (!para.replace(/\s+/g, " ").includes(a.recordMarker)) return false;
+		seen += here;
+	}
+	return seen === a.count;
 }
 
 function walk(dir: string, skip: ReadonlySet<string>): string[] {
@@ -173,6 +229,24 @@ check(
 	"family stem resolves, a bare shared prefix does not",
 	resolves("pin-nrl118-per-item-opener", testTokens) && !resolves("pin-nrl118-per-item-open", testTokens),
 );
+const WRAPPED_REAL = "pin-nrl117-shallower-than-content-indent-still-silenced";
+const wrappedSet = new Set([WRAPPED_REAL]);
+check(
+	"a name hard-wrapped at a hyphen is joined before extraction",
+	extractNames("see `pin-nrl117-shallower-than-content-\n   indent-still-silenced`.").join("|") === WRAPPED_REAL,
+);
+check(
+	"a correctly wrapped real name resolves",
+	extractNames("see `pin-nrl117-shallower-than-content-\nindent-still-silenced`").every((n) => resolves(n, wrappedSet)),
+);
+check(
+	"a wrapped name with a bogus tail FAILS (it used to pass as a stem)",
+	extractNames("see `pin-nrl117-shallower-than-content-\n   indent-bogus-tail`").every((n) => !resolves(n, wrappedSet)),
+);
+check(
+	"prose ending a line in a hyphen is not joined into a name",
+	extractNames("a well-\nknown fact, and pin-x-y\nnext").join("|") === "pin-x-y",
+);
 check(
 	"a synthetic dead citation is reported unresolved",
 	extractNames("see `pin-zz-dead-name`").every((n) => !resolves(n, new Set([KNOWN]))),
@@ -181,7 +255,9 @@ check(
 // --- 3. The real check: every cited name resolves ---------------------------
 console.log("cited names resolve under tests/");
 const allowed = (file: string, name: string): boolean =>
-	ALLOWED_UNRESOLVED.some((a) => a.file === file && a.name === name);
+	ALLOWED_UNRESOLVED.some(
+		(a) => a.file === file && a.name === name && allowanceHolds(readText(path.join(ROOT, file)), a),
+	);
 let totalCited = 0;
 for (const [file, names] of cited) {
 	for (const name of names) {
@@ -199,9 +275,51 @@ for (const a of ALLOWED_UNRESOLVED) {
 	check(`allowlist reason present: ${a.name}`, a.reason.trim().length > 0);
 	check(`allowlist entry is still cited in ${a.file}: ${a.name}`, cited.get(a.file)?.has(a.name) === true);
 	check(`allowlist entry is still unresolved (else drop it): ${a.name}`, !resolves(a.name, testTokens));
+	const real = readText(path.join(ROOT, a.file));
+	check(`allowlist entry matches its exact count and record paragraph: ${a.name}`, allowanceHolds(real, a));
+	// Mutation: a second, live-sounding citation of the dead name must NOT ride the allowance.
+	check(
+		`a second "Pinned as" citation of ${a.name} fails the allowance`,
+		!allowanceHolds(`${real}\n\nPinned as \`${a.name}\`.\n`, a),
+	);
+	check(
+		`a second citation inside the record paragraph still fails the count: ${a.name}`,
+		!allowanceHolds(real.replace(a.recordMarker, `${a.recordMarker} \`${a.name}\``), a),
+	);
+	// Mutation: the allowed occurrences moved out of the record paragraph (count unchanged)
+	// must fail, which is what the paragraph scoping in allowanceHolds() is for.
+	const moved = `${real.split(a.name).join("(name removed)")}${`\n\nPinned as \`${a.name}\`.\n`.repeat(a.count)}`;
+	check(
+		`the allowed count moved out of the record paragraph fails: ${a.name}`,
+		extractNames(moved).filter((n) => n === a.name).length === a.count && !allowanceHolds(moved, a),
+	);
 }
 
-// --- 5. (reserved) NRL-152 adds its srs.md:<digit> citation check here -------
+// --- 5. No srs.md line-number citation survives (NRL-152) -------------------
+console.log("no srs.md line-number citations");
+// `srs.md:` followed by a digit, with an optional backtick or space. A requirement
+// ID plus heading, a function name or a quoted sentence is the durable anchor.
+const SRS_LINE_CITATION = /srs\.md[`*]?:\s?\d/g;
+const srsScan = [
+	...walk(path.join(ROOT, "src"), SKIP_DIRS).filter((f) => /\.(ts|mts|mjs|js)$/.test(f)),
+	...testFiles,
+	...docFiles,
+].filter((f) => f !== SELF && fs.existsSync(f));
+const srsOffenders: string[] = [];
+for (const f of new Set(srsScan)) {
+	const n = (readText(f).match(SRS_LINE_CITATION) ?? []).length;
+	if (n > 0) srsOffenders.push(`${rel(f)} (${n})`);
+}
+check(
+	"the detector matches a synthetic line-number citation",
+	("see `srs.md:250` and (srs.md:1197-1207)".match(SRS_LINE_CITATION) ?? []).length === 2,
+);
+check(
+	"the detector ignores an anchored citation",
+	!new RegExp(SRS_LINE_CITATION.source).test("(srs.md, R-M02 Linux Support)"),
+);
+check("src/ was scanned", srsScan.some((f) => rel(f).startsWith("src/")));
+check("src/, tests/ and the documents hold no srs.md line-number citation", srsOffenders.length === 0, srsOffenders.join(", "));
 
 if (failures > 0) {
 	console.log(`\n${failures} doc citation check(s) FAILED`);

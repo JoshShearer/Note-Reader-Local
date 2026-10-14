@@ -27,8 +27,8 @@ const CAPABILITIES: EngineCapabilities = {
 	desktopOnly: true,
 	// True, but not by pausing anything: `spd-say` has no pause, only `-S` to
 	// stop, so this engine deliberately implements neither SpeechEngine.pause()
-	// nor resume(). The player recognises that and pauses it the way srs.md:250
-	// sanctions instead - stop the utterance, keep the index, and re-read the
+	// nor resume(). The player recognises that and pauses it the way the spec
+	// (srs.md, R-M07 Playback Controls, the pause-by-stopping sentence) sanctions instead - stop the utterance, keep the index, and re-read the
 	// sentence from its start on resume. So the sound really does stop and the
 	// reading really does come back, which is what this field is asked; what
 	// differs from the other engines is only how far back the resume picks up.

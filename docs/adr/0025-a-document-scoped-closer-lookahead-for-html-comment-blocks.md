@@ -1765,9 +1765,10 @@ leaking cells in 3 notes -> 1 cell in 1 note**, and **6 newly lost in 1 note -> 
 1 note**, all reproducing on base defused. Both surviving notes carry an indented
 backtick fence line (six spaces in one, a list-continuation fence in the other), the
 shape PR #169 traced to `FENCE` accepting any indent (NRL-132); that root was not
-re-derived here, only the defusal attribution was. Its two unmasked-quote-in-list tripwires (never written under a
-`pin-` name) are
-not carried over: on this base both shapes agree with the renderer.
+re-derived here, only the defusal attribution was. Its two unmasked-quote-in-list tripwires (and their two `-control` guards) were
+written, as the `nrl115-unmasked-quote-in-list-leak` and
+`nrl115-unmasked-quote-in-list-destination` pins, on commit `baf8a85` (branch
+`audit/pr169`, never merged to main) and are not carried over: on this base both shapes agree with the renderer.
 
 **One pre-existing expectation moved, replaced in place.** NRL-131's tripwire
 `- > \t<!-- ZHIDEZ` / `more ZPROSEZ` asserted `[]` and asked to change when NRL-115

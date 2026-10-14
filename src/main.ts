@@ -446,7 +446,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 	/**
 	 * SPIKE-ANDROID-001 (NRL-35): the acceptance-criteria artifact itself, not
-	 * just a doc. Investigates the four routes the spec orders (srs.md:1197),
+	 * just a doc. Investigates the four routes the spec orders (srs.md, SPIKE-ANDROID-001, "Investigate, in order"),
 	 * in order, and reports PASS or BLOCKED_BY_HOST via Notice.
 	 *
 	 * Steps 1 and 2 are not runtime-checkable: there is no documented Obsidian
@@ -678,7 +678,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// such an offset found no chunk and startAtSource stayed -1, which Player
 		// read as "the top of the note" - a stored position from inside a code
 		// block restarted the note. Past-the-end was the same hole, and Player
-		// owns the nearest-valid fallback for it too (srs.md:441, R-M12).
+		// owns the nearest-valid fallback for it too (srs.md, R-M12 Reading Position: restore the nearest valid source position).
 		let startAtSource = -1;
 		const filePath = current.filePath;
 		const storedPosition = this.pluginData.positions?.[filePath];

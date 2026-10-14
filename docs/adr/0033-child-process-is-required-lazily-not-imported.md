@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-01
-- Ticket: NRL-135 (R-M02 `srs.md:154`, "Linux desktop MUST support local speech synthesis")
+- Ticket: NRL-135 (R-M02 Linux Support, srs.md, "Linux desktop MUST support local speech synthesis")
 - Amends: `AGENTS.md` non-negotiable 7 (the `main.js` `require()` allowlist), the
   `Assert main.js require() list` step in `.github/workflows/ci.yml`, and the rule 7 rows in
   `.claude/commands/` (`ship.md`, `start-issue.md`, `orient.md`, `create-issue.md`,

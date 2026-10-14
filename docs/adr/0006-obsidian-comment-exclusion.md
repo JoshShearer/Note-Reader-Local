@@ -538,7 +538,7 @@ evidence, not a live Obsidian reading or highlighting observation.
    before `<!--`" must not be read as "a fresh-block `\t<!--` opens an HTML
    comment block": it does not, it is code, rendered
    `<pre><code>&#x3C;!--</code></pre>` with the following lines DISPLAYED as a
-   paragraph. `AGENTS.md`, `srs.md:328` and `docs/adr/0025` all drew that wrong
+   paragraph. `AGENTS.md`, `srs.md` (R-M08, the Obsidian comments bullet) and `docs/adr/0025` all drew that wrong
    conclusion from this true premise and are corrected.
 
    The evidence standing is **stronger** than the paragraph above: NRL-113 did

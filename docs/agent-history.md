@@ -324,7 +324,7 @@ criterion in real Obsidian is NOT VERIFIED**: the Flatpak sandbox here has no `s
 **NRL-141**
 (PR #181, `47cf18d`, ADR 0010's NRL-141 amendment): the Web Speech probe used to wait its
 full 5,000 ms timeout on **every** call when the host had no voices, so every Auto read here
-reached `playing` at about +5.1 s, against `srs.md:2282`'s 1,000 ms acceptable bound. The
+reached `playing` at about +5.1 s, against the 1,000 ms acceptable bound in srs.md's Performance Targets, Native/System TTS ("Target command-to-speech latency"). The
 confirmed-empty outcome is now cached per `WebSpeechEngine` behind one shared in-flight
 poll, invalidated by a persistent `voiceschanged` listener and by a synchronous
 `getVoices()` read on every call, so the local-voice gate stays fail-closed. Measured with
@@ -593,7 +593,7 @@ plugin reload as the escape hatches.
 
 **No requirement moves and the `2 of 16` MUST count does not move.** This ticket cites no
 requirement ID, and `srs.md` was not amended. State the reason in its corrected form:
-`grep -n thread srs.md` is zero matches, but `kokoroThreads` **does** appear at `srs.md:509`,
+`grep -n thread srs.md` is zero matches, but `kokoroThreads` **does** appear in srs.md's R-M13 Persistent Settings shape listing,
 in the Settings shape listing with no behavioural contract attached. The case-sensitive grep
 that missed it was caught by critique as a rule 13 violation and corrected in ADR 0034, so
 quote the corrected form rather than the bare zero.
@@ -936,7 +936,7 @@ trust anchor used was Fulcio's root fetched over TLS, Rekor's signed entry times
 and no policy engine ran - so this is **not** "verified to SLSA Level 3" in the conventional
 sense, and nobody has run the check a downstream consumer would run. **Nothing was installed
 into Obsidian**: the Release was world-readable for about two and a half minutes and was
-digested and deleted, never installed from, so `srs.md:106`'s "MUST install as an ordinary
+digested and deleted, never installed from, so R-M01's (srs.md, R-M01 Standard Obsidian Community Plugin) "MUST install as an ordinary
 Obsidian Community Plugin" is still unobserved and is now the binding gap on R-M01, together
 with whatever NRL-96 does to clause 3. And the **`2 of 16` headline count does not move** -
 not because the evidence is thin, but because R-M01 was already one of the two met MUSTs
@@ -1029,7 +1029,7 @@ once in the whole asar** and is fetched through `Dy(repo, "versions.json")` =
 greatest key whose value satisfies the running app version. So `versions.json` is read **from
 the repository at `HEAD`**, never from the Release.
 **R-M01 does not move and the `2 of 16` headline count does not move.** R-M01's binding gap is
-still `srs.md:106`'s "MUST install as an ordinary Obsidian Community Plugin", which nobody has
+still R-M01's (srs.md, R-M01 Standard Obsidian Community Plugin) "MUST install as an ordinary Obsidian Community Plugin", which nobody has
 ever observed - nothing has been installed into Obsidian from a Release - and NRL-105 does not
 touch that. What closed is a hazard on the path, not the gap.
 **NRL-76 is fixed** (`8797745`), and the defect it closed was worse than the ticket recorded.
@@ -1140,7 +1140,7 @@ code. (Measured at `ad1027d` by bundling the real `extract.ts` and sweeping all 
 combinations of the nine content keys.) Its *reduction* half is split in two, and only one
 of the two halves has moved.
 
-The **path** half moved with NRL-46 (`docs/adr/0017`, `srs.md:309` and `:366`). A
+The **path** half moved with NRL-46 (`docs/adr/0017`, `srs.md`, R-M08 Markdown Processing's wikilinks bullet and R-M09 Configurable Content Exclusions). A
 `[[wikilink]]` or `![[embed]]` whose target had no dot in its final segment used to speak the
 whole target, so a note filed under a private folder read the folder structure aloud. The
 label is now the target's final path segment only, in **both** branches - the separator set is
@@ -1215,7 +1215,7 @@ unknown; both decisions rest on never speaking a path (ADR 0017, ADR 0021) rathe
 renderer fidelity, and rule 11 applies in full to every number above.
 
 The **image** half moved **partway** with NRL-63 (`0e44050`, `docs/adr/0023`), and "partway"
-is the whole of it. `srs.md:313` and `:366` promise that an image's "destination and any
+is the whole of it. `srs.md`'s R-M08 Images bullet and R-M09 Configurable Content Exclusions promise that an image's "destination and any
 quoted title are never spoken", and an alt text crossing a soft line break did not honour that
 (NRL-44 F9, which **survived NRL-44** because that fix made the confirmed region verbatim and
 did not make the scanner recognise a construct across a break at all). A soft-wrapped image or
@@ -1480,7 +1480,7 @@ and 2's three non-container shapes, and the two pre-existing image shapes
 `![a [[N|l]] b](dest.png)` and `![alt](dest(1).png)` all stay open against it.
 
 **A blockquote NESTED inside a list item is now peeled, as of NRL-131** (PR #193, squash
-`04022bd`, `docs/adr/0035`, `srs.md:317`, `:328` and `:370` amended). `containerPrefix` is now a
+`04022bd`, `docs/adr/0035`, `srs.md` amended at R-M08's Images and Obsidian comments bullets and at R-M09). `containerPrefix` is now a
 **LOOP** - quote levels, then a callout marker if a quote was consumed in that same round, else a
 list marker and its task checkbox, then round again - and **not an extra arm**. That is why the fix
 went there rather than into a second predicate: `containerPrefix`'s own comment exists so there is
@@ -1539,7 +1539,7 @@ regressions.
 prose loss.** NRL-93's census was re-run in shape rather than replayed, because its own 140-cell
 corpus is described but not enumerated in ADR 0006 and is **NOT reconstructable** (the same caveat
 NRL-98's corpus carries): 10 opener positions x 14 container contexts, which also comes to 140
-cells by construction. On it, **disclosure 20 -> 0 and prose loss 32 -> 58**, and `srs.md:328`'s
+cells by construction. On it, **disclosure 20 -> 0 and prose loss 32 -> 58**, and srs.md's R-M08 Obsidian comments bullet's
 "a blockquote nested inside a list item (6 more)" row **does NOT close, it GROWS**, to **22 of its
 50 quote-in-list cells** from 6 on base, against 16 disclosure cells on base and 0 on the fix. The
 root of the growth is named rather than guessed: `opensObsidianBlock`'s `dedentedByList` term is
@@ -1653,7 +1653,7 @@ and now **NRL-145**. (NRL-118 was on this list and has since closed; see the NRL
 after the NRL-116 section.)
 
 **A list marker's LEAD is peeled separately from the marker, as of NRL-116** (PR #200, squash
-`efcf5cc`, `docs/adr/0006` clause 2's NRL-116 amendment, `srs.md:328` amended). `containerPrefix`'s
+`efcf5cc`, `docs/adr/0006` clause 2's NRL-116 amendment, `srs.md` R-M08 Obsidian comments bullet amended). `containerPrefix`'s
 list arm peeled with the shared `LIST_BULLET`, whose trailing `\s+` consumed a marker's WHOLE lead,
 and with the shared `TASK`, whose trailing `\s*` did the same after a checkbox. Obsidian's list
 tokenizer, module 745, takes at most four spaces not followed by a fifth, or one space, or one tab,
@@ -1688,7 +1688,7 @@ With both added, the same arm measures the 314,880, of which that one unreachabl
 renderer run in Node: 14 shapes x 12 leads x 6 markers x 6 constructs x all 512 content-key
 combinations = **3,096,576 cells per arm**, with **0 newly lost, 0 newly leaking, 313,344 losses
 closed**, 2,949,120 cells byte-identical, and 0 newly lost in every one of the 14 shapes. **The
-`3 cells` that `srs.md:328` recorded this row at was far too small, by about five orders of
+`3 cells` that srs.md's R-M08 Obsidian comments bullet recorded this row at was far too small, by about five orders of
 magnitude**, and that is a property of NRL-93's 140-cell position census being described but not
 enumerated, and so not reconstructable, rather than an arithmetic mistake. Quote the corpus with
 the number or do not quote the number. **The faithful lead rule is observationally equivalent to
@@ -1736,7 +1736,7 @@ item's content indent makes it indented code first. **This sentence used to end 
 indent as a boolean rather than an amount", attributing the twin to NRL-117; that half is now wrong
 and is corrected rather than left standing.** NRL-117 has since made the `%%` side an AMOUNT, and
 `opensHtmlBlock` had **no dedent term at all** - so the twin stayed open, but not for the reason
-recorded here. `srs.md:328` carries the same correction. **NRL-115 then closed the twin's prose loss**
+recorded here. srs.md's R-M08 Obsidian comments bullet carries the same correction. **NRL-115 then closed the twin's prose loss**
 with its own container model (`rendererLeads`, feeding `opensHtmlBlock` only and kept separate from
 NRL-117's `listDedented`), and the NRL-116 and two NRL-117 `html-twin` pins were replaced in place.
 
@@ -1744,7 +1744,7 @@ NRL-117's `listDedented`), and the NRL-116 and two NRL-117 `html-twin` pins were
 the renderer side is Obsidian's own parser and renderer EXECUTED in Node, which is stronger than a
 transcription and is still not the application, and it is the READING-VIEW path only. Rule 11
 applies to every figure above. **R-M08 is NOT met and the `2 of 16` MUST headline count does NOT
-move**: this closed one named residual of `srs.md:328`, not the requirement. What stays open against
+move**: this closed one named residual of srs.md's R-M08 Obsidian comments bullet, not the requirement. What stays open against
 R-M08 is unchanged by it (NRL-118 and NRL-117, both named here when this was written, have since
 closed; the next two paragraphs).
 
@@ -1796,7 +1796,7 @@ Node against the reading-view parser executed out of the bundle, Live Preview wa
 no reload exercised this change. **R-M08 is NOT met and the `2 of 16` count does not move.**
 
 **The list dedent is an AMOUNT rather than a boolean, as of NRL-117** (PR #209, squash `d53aa1d`,
-`docs/adr/0006` clause 2 term C's NRL-117 amendment, `srs.md:328` rewritten; no new ADR, per the
+`docs/adr/0006` clause 2 term C's NRL-117 amendment, `srs.md` R-M08 Obsidian comments bullet rewritten; no new ADR, per the
 ADR-number race NRL-113 recorded). NRL-93 gave term C a boolean - "this line is a list item's
 content, so keep the old any-whitespace line-start test" - which is right for one level of nesting
 and too coarse beyond it, and NRL-93 took it deliberately because under-estimating the dedent
@@ -1936,7 +1936,7 @@ the oracle is Obsidian's own parser and HTML renderer EXECUTED in Node out of th
 which is stronger than a transcription and is still not the application, and it is the
 **READING-VIEW path only** - Live Preview's CodeMirror/Lezer parser was neither read nor run. Rule 11
 applies to every figure above. **No requirement moves. R-M08 is NOT met and the `2 of 16` MUST
-headline count does NOT move**: this closed one named residual of `srs.md:328`, not the requirement.
+headline count does NOT move**: this closed one named residual of srs.md's R-M08 Obsidian comments bullet, not the requirement.
 What stays open against R-M08 is otherwise unchanged - NRL-63's roots 3 and 5, root 4's named
 residuals, roots 1 and 2's three non-container shapes (NRL-109), NRL-45's `[a]: x.png "%%"` leftover,
 NRL-114's 8 quote-in-list cells, and NRL-137 and NRL-159 on the NRL-118
@@ -2300,7 +2300,7 @@ probe does not read it as new. **A token fused to an unmatched `<!--` on a label
 stops being spoken at `speakImageAlt: true` too** (256 cells per kind), which looks like a new
 silencing until the control is run: the stray-free form drops the same token on base, so it is
 pre-existing and in the silencing direction, and the mechanism is already pinned by
-`local-html-state` and `srs.md:327`. **ADR 0019's deliberately-literal class moved 2,048 ->
+`local-html-state` and srs.md's R-M08 "Comments are non-nesting" bullet. **ADR 0019's deliberately-literal class moved 2,048 ->
 1,536 in Verify's corpus**, a *decrease* and therefore in the silencing direction, all of it at
 `speakImageAlt: false` with the control agreeing on base - do not reconcile it against the
 `1,024 on both sides` figure above, which is the ship corpus and a different one.
@@ -2350,11 +2350,11 @@ One thing R-M10 does *not* cover, recorded so it is not mistaken for it. The gra
 is on the hard split only: `splitOversized` snaps every cut back to a cluster boundary and
 `splitSentences` does not, so a non-ASCII terminator followed directly by a combining mark
 can still end a chunk inside a combining sequence. Degenerate text only, no natural prose
-reaches it, and it is already written down in three places - `srs.md:376`, ADR 0009's
+reaches it, and it is already written down in three places - srs.md's R-M10 Speech Segmentation (the hard chunk cap bullet), ADR 0009's
 grapheme-safety consequence, and the comment on `splitSentences` itself.
 
 Word granularity inside a run of Han used to sit beside that one. It no longer does. NRL-47
-(`docs/adr/0014-cjk-word-granularity.md`, `srs.md:689` under R-S03) made `findWords`
+(`docs/adr/0014-cjk-word-granularity.md`, `srs.md` R-S03 Current Segment Highlighting) made `findWords`
 subdivide a regex span containing Han, Kana or Hangul instead of leaving a whole CJK sentence
 as one span, so the word highlight advances inside a CJK sentence. The evidence is bare-Node
 measurement at `02cd72f` against base `d7e64df`, bundling the real modules: Chinese went from
@@ -2762,7 +2762,7 @@ rediscover them:
   `0455aa9`, `docs/adr/0032`). The bar used to be `position: fixed; top: 0` with no mobile
   branch anywhere in the UI layer, so on a phone it sat behind the device safe-area inset and
   Obsidian's own view header, with 28x28 transport buttons and 20x20 speed buttons against
-  `srs.md:1768`'s touch-target MUST. The fix is **CSS only** under `body.is-mobile`: `top:
+  srs.md's User Interface section's touch-target MUST. The fix is **CSS only** under `body.is-mobile`: `top:
   calc(var(--safe-area-inset-top) + var(--view-header-height))`, which on the Pixel 9 Pro XL
   resolved to **110.333px** from two Obsidian-owned variables measured on device
   (66.333336 + 44), and `min-width`/`min-height: 44px` on all seven controls (authority:
@@ -2810,7 +2810,7 @@ rediscover them:
   since CLOSED it** - see the next bullet, and read its pre-fix figure (46 of 46px occluded on
   its own note) rather than this one, because how much of the mark the bar covers depends on
   where that note's first line sits.
-  **No requirement moves and the `2 of 16` MUST headline count does not move.** `srs.md:1768`'s
+  **No requirement moves and the `2 of 16` MUST headline count does not move.** srs.md's User Interface section's
   touch-target MUST is satisfied on the one device tested, but R-M07 is a MUST about exposing
   the five transport controls and was never on the met list; this fixes the bar's reachability,
   which is a necessary part of it rather than the whole.
@@ -3373,7 +3373,7 @@ rediscover them:
   part way through a line at all; the inline tokenizer `/^%%(.*?)%%/` is anchored and `.` does
   not match a newline. So `HIDEME` is displayed in Obsidian, speaking it is renderer-faithful,
   and the ticket's own Caveat named this outcome. The spec sentence needed the citation, not
-  the code: `src/text/extract.ts` did not change, `srs.md:326` and ADR 0006 clause 2 now carry
+  the code: `src/text/extract.ts` did not change, srs.md's R-M08 Obsidian comments bullet and ADR 0006 clause 2 now carry
   the tokenizer evidence, and `pin-nrl68-midline-opener-is-literal` in `tests/extract.test.ts`
   pins the correct behaviour so it cannot be "fixed" back. Read off the installed parser, **NOT
   VERIFIED IN OBSIDIAN**. Of the three `%%` **disclosure** gaps that were open when this

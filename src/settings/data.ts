@@ -178,7 +178,7 @@ export function covers(key: string, path: string): boolean {
  * make. Callers must check identity rather than comparing contents.
  *
  * Each moved value's own `filePath` is rewritten to match its new key, so the
- * key and the field cannot disagree. srs.md:425 includes filePath in the
+ * key and the field cannot disagree. srs.md (R-M12 Reading Position, `ReadingPosition`) includes filePath in the
  * persisted shape; the code never reads it back today, but it is part of the
  * contract and a rename is the one moment it is knowable to be wrong.
  *

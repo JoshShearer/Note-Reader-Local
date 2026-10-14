@@ -37,7 +37,7 @@ reproduced against the real bundled modules rather than read:
    layer that can ever work, a stored `enabled: false` therefore left the note
    with no highlight and no reachable control to bring it back.
 
-Recording this is not optional book-keeping. `srs.md:477` declares
+Recording this is not optional book-keeping. `srs.md`'s R-M13 Persistent Settings shape declares
 
 ```ts
 highlight: { enabled: boolean; color: string };

@@ -1,7 +1,7 @@
 /*
  * What the UI is allowed to offer, given what the active engine can do.
  *
- * R-M14 (srs.md:484) requires that controls the current backend cannot honour
+ * R-M14 (srs.md, R-M14 Backend Capability Detection) requires that controls the current backend cannot honour
  * are disabled, hidden, or clearly marked unavailable. This module picks
  * "disabled, with a reason": a button that vanishes when the engine changes is
  * more confusing than one that stays put and explains itself, and a tooltip is

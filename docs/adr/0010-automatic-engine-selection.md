@@ -19,8 +19,8 @@ speech-dispatcher sitting unused on the same Linux machine.
 
 This deliberately does not follow `srs.md`. Two lines say a fixed order:
 
-- `srs.md:86`: "Native/system TTS is preferred."
-- `srs.md:1068`: "Linux desktop SHALL preferentially use Speech Dispatcher."
+- (srs.md, Background): "Native/system TTS is preferred."
+- (srs.md, Linux Backend): "Linux desktop SHALL preferentially use Speech Dispatcher."
 
 Both are amended by this ADR (see Consequences).
 
@@ -98,7 +98,7 @@ coerced to `"auto"` (AGENTS.md non-negotiable 10).
 
 ## Justification for the deviation
 
-`srs.md:86` and `srs.md:1068`'s native-first rule exists to guarantee
+The Background and Linux Backend sentences of `srs.md` quoted above and their native-first rule exists to guarantee
 zero-download, zero-cloud operation - not because native TTS is
 categorically the best-sounding voice. Automatic ranked selection preserves
 that property exactly:
@@ -118,7 +118,7 @@ that property exactly:
 
 ## Consequences
 
-- `srs.md:86` and `srs.md:1068` are amended with a note that automatic
+- The two `srs.md` sentences quoted above (Background; Linux Backend) are amended with a note that automatic
   selection may rank a confirmed-live GPU/fp32 Kokoro ahead of native/system
   TTS and ahead of Speech Dispatcher respectively; native/system TTS (and,
   on Linux, Speech Dispatcher) remains the default whenever that GPU path is

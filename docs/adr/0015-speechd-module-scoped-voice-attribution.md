@@ -2,7 +2,7 @@
 
 Status: accepted (NRL-55)
 
-Requirement: R-S01 (`srs.md:636-663`), narrowed rather than closed.
+Requirement: R-S01 (srs.md, R-S01 Voice Selection), narrowed rather than closed.
 
 ## Context
 

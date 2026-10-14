@@ -69,7 +69,7 @@ export interface EngineCapabilities {
 	 * own playback and both are now pausable. What differs between engines is
 	 * the *granularity* a resume comes back at, not whether the sound stops:
 	 * a buffer engine and webspeech resume mid-utterance, while speechd stops
-	 * the sentence and re-reads it from the start (srs.md:250). Anything that
+	 * the sentence and re-reads it from the start (srs.md, R-M07 Playback Controls, the pause-by-stopping sentence). Anything that
 	 * needs to know which, asks the player, not this field.
 	 */
 	pause: boolean;
@@ -281,7 +281,7 @@ export interface SpeechEngine {
 	 * the utterance. A pause there is no way back from is the defect this exists
 	 * to remove. An engine that owns playback and implements neither is not
 	 * thereby unpausable: it gets the player's stop-and-retain fallback
-	 * (srs.md:277), which is exactly what speechd relies on.
+	 * (srs.md, R-M07 Playback Controls, the pause-by-stopping sentence), which is exactly what speechd relies on.
 	 *
 	 * Synchronous, idempotent, and must not throw.
 	 */
