@@ -114,6 +114,13 @@ const RAW_TEXT_TAG = /<(?:script|style|textarea|title|xmp|iframe|noembed|noframe
  * round 4).
  */
 const FOREIGN_TAG = /<(?:svg|math)(?![A-Za-z0-9-])/i;
+/**
+ * Inline markup a browser ends earlier than the renderer does: a processing
+ * instruction or CDATA section runs to `?>` or `]]>` for the renderer, but the
+ * browser reads either as a bogus comment ending at its first `>` (NRL-178 fix
+ * round 1). Read only by the gate on fence heads holding `-->`.
+ */
+const INLINE_BOGUS_OPENER = /<\?|<!\[CDATA\[/i;
 /** Either of the above: from its first match on, no HTML block or fence line is read. */
 const UNREAD_TAG = new RegExp(`${RAW_TEXT_TAG.source}|${FOREIGN_TAG.source}`, "i");
 /** The raw blocks whose text the page shows nothing of as written, so a `%%` line inside one opens no block and is displayed nowhere (see `RendererHiddenText.hiddenRawLines`). */
@@ -437,6 +444,14 @@ class BlockScanner {
 	// still counts as a footnote reference for the renderer, one in markup does
 	// not.
 	readonly bogus = new Set<number>();
+	// Fence lines `hideFenceLines` could not decide (NRL-178): an opening line
+	// holding `-->` or `--!>`, with its closing line, the head's note line, and
+	// whether the fence sits in a footnote definition. `rendererHiddenText`
+	// commits them to `hidden` once every HTML block in the note is known.
+	readonly commentFences: Array<{ parts: HiddenSpan[]; line: number; footnote: boolean }> = [];
+	// Whether the last non-silent `fencedCode` call ended its block on a closing
+	// fence, read by `hideFenceLines` right after it.
+	private fenceClosed = false;
 	readonly defs: FootnoteDef[] = [];
 	// First and last note line of every HTML block, of any kind, and whether
 	// its raw text leaves a comment or a tag open past its end.
@@ -636,23 +651,33 @@ class BlockScanner {
 		const lead = /^[ \t]*/.exec(head)![0].length;
 		const fence = /^(`{3,}|~{3,})/.exec(head.slice(lead));
 		if (fence === null) return;
+		const parts: HiddenSpan[] = [{ start: scanPos(block, line, lead), end: scanPos(block, line, head.length) }];
+		const body = block.replace(/\n$/, "");
+		const lastStart = body.lastIndexOf("\n") + 1;
+		// The last line is a closer only if the tokenizer ended the block on it.
+		// A line of fence characters indented four spaces or by a tab is content
+		// the renderer displays (fix round 1, /critique on d0442e5, second run,
+		// F1: `` ```QXQ `` / `QBQ` / `    ``` `` shows `QBQ ```` `).
+		if (this.fenceClosed && firstEnd !== -1 && lastStart > firstEnd) {
+			parts.push({ start: scanPos(block, line, lastStart + /^ */.exec(body.slice(lastStart))![0].length), end: scanPos(block, line, body.length) });
+		}
 		// The renderer writes the info string into a `class` attribute, so a
 		// `-->` or `--!>` in it reaches the page and closes a browser comment an
 		// earlier block left open, after which the rest is displayed (/critique
 		// on 3702b0f, F5, and its census: `- <!-- a` / ... / ```` ```<!--->[[aQAGQ ````
-		// displays `[[aQAGQ">`). Such an opening line is left to the old answer.
-		if (/--!?>/.test(head)) return;
-		this.bogus.add(this.hidden.length);
-		this.hidden.push({ start: scanPos(block, line, lead), end: scanPos(block, line, head.length) });
-		if (firstEnd === -1) return;
-		const body = block.replace(/\n$/, "");
-		const lastStart = body.lastIndexOf("\n") + 1;
-		if (lastStart <= firstEnd) return;
-		const tail = body.slice(lastStart);
-		const close = new RegExp(`^[ \\t]*${fence[1]![0] === "`" ? "`" : "~"}{${fence[1]!.length},}[ \\t]*$`);
-		if (!close.test(tail)) return;
-		this.bogus.add(this.hidden.length);
-		this.hidden.push({ start: scanPos(block, line, lastStart + /^[ \t]*/.exec(tail)![0].length), end: scanPos(block, line, body.length) });
+		// displays `[[aQAGQ">`). Whether one can be open is known only once the
+		// whole note is scanned (a footnote's fence renders after every block),
+		// so such a fence is deferred, not left to the old answer outright: that
+		// spoke the hidden info string wherever nothing was open (NRL-178,
+		// `- Q<!--` / `    ```QKZQ--->`).
+		if (/--!?>/.test(head)) {
+			this.commentFences.push({ parts, line, footnote: this.inFootnote > 0 });
+			return;
+		}
+		for (const p of parts) {
+			this.bogus.add(this.hidden.length);
+			this.hidden.push(p);
+		}
 	}
 
 	private interrupts(set: readonly InterruptEntry[], text: string): boolean {
@@ -861,6 +886,7 @@ class BlockScanner {
 		p = t.charAt(x);
 		if (p && p !== "\n") return 0;
 		if (silent) return 1;
+		this.fenceClosed = false;
 		T += d;
 		if (m) T += m;
 		m = "";
@@ -904,7 +930,10 @@ class BlockScanner {
 							w += p;
 							x++;
 						}
-						if (!p || p === "\n") break;
+						if (!p || p === "\n") {
+							this.fenceClosed = true;
+							break;
+						}
 					}
 				}
 			} else {
@@ -1776,6 +1805,11 @@ export interface RendererHiddenText {
  *   that starts inside a browser comment an earlier one left open read from
  *   inside it; but nothing past a block for an attribute value it leaves open
  *   (`openRiskThrough` reports how far it may reach instead; fix round 3);
+ * - the opening and closing lines of every fenced code block: the info string
+ *   becomes a `class` and the closer is markup. A head holding `-->` or `--!>`,
+ *   which may close a browser comment, only before the first line an HTML block
+ *   or a raw-text or foreign tag may leave open, and in a footnote definition
+ *   only when nothing in the note may (NRL-178);
  * - every footnote definition the note never references, and every earlier
  *   definition of a label defined twice. The renderer lists only referenced
  *   definitions, and only the last of a label, which nothing else here models:
@@ -1817,6 +1851,61 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 		at = nl + 1;
 	}
 	const offset = (p: ScanPos): number => Math.max(lineStart[p.line] ?? source.length, (lineEnd[p.line] ?? source.length) - p.fromEnd);
+	// From which line a browser may be inside something an HTML block left open
+	// (`openFrom`), and whether anything anywhere is (`anyOpen`): the first line
+	// after a block that leaves a comment, tag or bogus comment open, and the line
+	// of a raw-text or foreign tag anywhere, inline included. A raw-text tag may
+	// swallow the rest of the page (an unclosed `<script>`), which nothing here
+	// models (fix round 3); inside a foreign-content tag (`<svg>`, `<math>`) a
+	// later block's `<![CDATA[` is displayed text (fix round 4, `UNREAD_TAG`).
+	let openFrom = lineCount;
+	let anyOpen = false;
+	for (const [, b, open] of scanner.htmlBlocks) {
+		if (open === null) continue;
+		anyOpen = true;
+		openFrom = Math.min(openFrom, b + 1);
+	}
+	const rawTextAt = UNREAD_TAG.exec(source)?.index ?? -1;
+	if (rawTextAt !== -1) {
+		anyOpen = true;
+		let l = 0;
+		while (l + 1 < lineCount && lineStart[l + 1]! <= rawTextAt) l++;
+		openFrom = Math.min(openFrom, l);
+	}
+	// Inline markup can leave a browser comment open too, which no HTML block
+	// records: the renderer passes a processing instruction or CDATA section
+	// through verbatim, the browser ends either at its first `>` as a bogus
+	// comment, and a `<!--` after that `>` opens a comment (fix round 1,
+	// /critique on d0442e5, F1: `QpaQ <?x > <!-- QpbQ ?>` / blank /
+	// ```` > ```QhQ-->QiQ ```` displays `QiQ">`). Every other inline construct
+	// ends where the browser's does. Whether one is real markup, or what follows
+	// its `>`, is not modelled: any `<?` or `<![CDATA[` in the note counts from
+	// its line, which keeps the old answer there. Only the deferred fences read
+	// this; `openFrom` keeps its meaning for `browserRiskLines` below.
+	let fenceOpenFrom = openFrom;
+	let fenceAnyOpen = anyOpen;
+	const inlineBogusAt = INLINE_BOGUS_OPENER.exec(source)?.index ?? -1;
+	if (inlineBogusAt !== -1) {
+		fenceAnyOpen = true;
+		let l = 0;
+		while (l + 1 < lineCount && lineStart[l + 1]! <= inlineBogusAt) l++;
+		fenceOpenFrom = Math.min(fenceOpenFrom, l);
+	}
+	// NRL-178: a deferred fence (`commentFences`) is hidden where no browser
+	// comment can be open for its class's `-->` to close: before `fenceOpenFrom`
+	// in the body, and in a footnote only when nothing anywhere is open, since
+	// the renderer moves footnotes after every block. Not `fenceOpenFrom ===
+	// lineCount` for that: a block left open on the note's last line has `b + 1
+	// === lineCount`, and its comment still reaches the footnotes
+	// (`guard-nrl178-footnote-fence-open-block-on-last-line`). Elsewhere the old
+	// answer stands, so this only adds hidden ranges where nothing can be open.
+	for (const f of scanner.commentFences) {
+		if (f.footnote ? fenceAnyOpen : f.line >= fenceOpenFrom) continue;
+		for (const p of f.parts) {
+			scanner.bogus.add(scanner.hidden.length);
+			scanner.hidden.push(p);
+		}
+	}
 	const ranges: Array<readonly [number, number]> = scanner.hidden.map((h) => [offset(h.start), offset(h.end)] as const);
 	const sortRanges = (): void => {
 		ranges.sort((x, y) => x[0] - y[0]);
@@ -1849,22 +1938,8 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	};
 	const footnoteLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	const browserRiskLines: boolean[] = new Array<boolean>(lineCount).fill(false);
-	let openFrom = lineCount;
-	for (const [a, b, open] of scanner.htmlBlocks) {
-		for (let l = a; l <= b && l < lineCount; l++) browserRiskLines[l] = true;
-		if (open !== null) openFrom = Math.min(openFrom, b + 1);
-	}
-	// A raw-text element's tag anywhere, inline included, may swallow the rest
-	// of the page (an unclosed `<script>`), which nothing here models: from its
-	// line on, every line is a risk, and no refinement stands (fix round 3). A
-	// foreign-content tag (`<svg>`, `<math>`) likewise, since inside it a later
-	// block's `<![CDATA[` is displayed text (fix round 4, `UNREAD_TAG`).
-	const rawTextAt = UNREAD_TAG.exec(source)?.index ?? -1;
-	if (rawTextAt !== -1) {
-		let l = 0;
-		while (l + 1 < lineCount && lineStart[l + 1]! <= rawTextAt) l++;
-		openFrom = Math.min(openFrom, l);
-	}
+	for (const [a, b] of scanner.htmlBlocks) for (let l = a; l <= b && l < lineCount; l++) browserRiskLines[l] = true;
+	// From `openFrom` on, every line is a risk, and no refinement stands.
 	for (let l = openFrom; l < lineCount; l++) browserRiskLines[l] = true;
 	// The last line of a definition kept only because a reference to it MAY count
 	// (see `maybeReferenced`), or -1.

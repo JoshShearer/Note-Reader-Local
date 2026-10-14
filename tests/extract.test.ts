@@ -2948,12 +2948,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl166-min-div-block-unquoted-control", " <div>      <!--  QCQ\n-    --> ", ""],
 		["pin-nrl166-min-div-block-holds-quoted-item-pct-closer", " <div>      <!--  QCQ\n> -  %%  --> QEQ", ""],
 		["guard-nrl166-min-div-block-pct-unquoted-control", " <div>      <!--  QCQ\n-  %%  --> QEQ", ""],
-		// (ii) A quoted fence at a quote start keeps its info string spoken
-		// (`pin-nrl114-f2-quote-start-fence-still-spoken`). Control: the `-->`
-		// defused, which base speaks byte-identically modulo that token.
-		// Fix round 3: a fence line holding `-->` is left to the old answer, since
-		// the renderer writes it into a `class` where it can close a browser comment.
-		["pin-nrl166-min-quote-start-fence-info-spoken", " text <!--  QCQ\r\n> ```    QEQ -->", "text <!-- QCQ QEQ -->"],
+		// (ii) A quoted fence at a quote start. NRL-166 fix round 3 left a fence
+		// line holding `-->` to the old answer, which spoke `QEQ -->`; the renderer
+		// writes it into a `class` and displays only `text <!-- QCQ`. NRL-178 hides
+		// it again wherever no HTML block before it leaves anything open, as here
+		// (the inline `<!--` is escaped text, not a comment).
+		["pin-nrl178-quote-start-fence-info-hidden", " text <!--  QCQ\r\n> ```    QEQ -->", "text <!-- QCQ"],
 		// (iii) An unreferenced footnote definition the renderer hides (NRL-163).
 		// Control, mask ALL: the unquoted twin; mask DEF: the `-->` defused.
 		["pin-nrl166-min-unreferenced-footnote-spoken", ">\t     <!--\n [^1]:  QBQ -->", "<!--"],
@@ -4663,6 +4663,76 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// where that opener keeps its own answer, the refinement is withheld.
 		["pin-nrl166-r3-c-exposed-pct-beside-html-block", "1. > QGQ ``` <!---> \n  > [!note] %%\n\t--> QJZQ\n> > </pre>", "QGQ QJZQ"],
 		["pin-nrl166-r3-c-exposed-pct-before-div-block", "- >> P QAQ <!-- QXQ <!-- QYQ\n> [!note] %% QBQ\n> \t--> QCQ\n\n<div>\nQGQ", "P QAQ QCQ QGQ"],
+		// NRL-178: round 3's early return in `hideFenceLines` left every fence
+		// head holding `-->` or `--!>` spoken, even where no browser comment can be
+		// open for the class to close. Its two rows, each the 1.13.7 renderer's
+		// visible text and RED on 6f4afc2 (which speaks `QKZQ--->` and
+		// `~~~-->QIQ`). Row B's `[!e]` is shown by the renderer and lost on every
+		// revision since 44a037a: the callout-marker mechanism, NRL-182, not this.
+		["pin-nrl178-row-a-list-inline-comment-fence-info-hidden", "- Q<!--\n    ```QKZQ--->", "Q<!--"],
+		["pin-nrl178-row-a-list-inline-comment-fence-info-hidden-code", "- Q<!--\n    ```QKZQ--->", "Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl178-row-b-callout-pct-fence-info-hidden", ">[!e]%%\n>~~~-->QIQ", "%%"],
+		["pin-nrl178-row-b-callout-pct-fence-info-hidden-code", ">[!e]%%\n>~~~-->QIQ", "%%", { skipCodeBlocks: false, skipInlineCode: false }],
+		// `--!>` also ends a comment, and both fence kinds and lengths take the
+		// same path. RED on 6f4afc2.
+		["pin-nrl178-bang-closer-fence-info-hidden", "- Q<!--\n    ```QKZQ--!>QLQ", "Q<!--", { skipCodeBlocks: false }],
+		["pin-nrl178-tilde-quote-fence-info-hidden", "> Q<!--\n> ~~~QKZQ-->QLQ", "Q<!--", { skipCodeBlocks: false }],
+		["pin-nrl178-long-backtick-pct-fence-info-hidden", "> Q%%\n> ````QKZQ--!>QLQ", "Q%%", { skipCodeBlocks: false }],
+		// A closed fence: the head and the closer are hidden, the body is still
+		// displayed code and spoken under CODE.
+		["guard-nrl178-closed-fence-body-still-spoken", "- Q<!--\n  ```QKZQ-->QLQ\n  QBODYQ\n  ```", "Q<!-- QBODYQ", { skipCodeBlocks: false }],
+		["pin-nrl178-closed-tilde-fence-then-tail", "> Q%%\n> ~~~QKZQ-->QLQ\n> QBODYQ\n> ~~~\n\nQTAILQ", "Q%% QBODYQ QTAILQ", { skipCodeBlocks: false }],
+		// A footnote's content renders at the page's end, after every body block,
+		// so its fence is hidden only when no HTML block anywhere leaves anything
+		// open. Here none does. RED on 6f4afc2.
+		["pin-nrl178-footnote-fence-info-hidden", "QlaQ[^1]\n\n[^1]: ```QdQ-->QeQ", "QlaQ", { skipCodeBlocks: false }],
+		["pin-nrl178-footnote-closed-fence-info-hidden", "QlaQ[^1]\n\n[^1]: ~~~QdQ-->QeQ\n    QgQ\n    ~~~\n\nQjQ", "QlaQ QgQ QjQ", { skipCodeBlocks: false }],
+		// Guards: an open comment after the footnote reaches it on the page, and
+		// the class's `-->` closes it, so QeQ is displayed (`QeQ">`) and must stay
+		// spoken. The second and third leave the comment open on the note's LAST
+		// line (`b+1 === lineCount`), which a whole-note test written as
+		// `riskFrom < lineCount` misses. QdQ spoken is base's disclosure, kept.
+		// So is the first row's QbQ: the open `<!-- QkaQ` swallows the footnote's
+		// paragraph and the renderer shows only `QlaQ[1] QeQ">`. A later fix that
+		// hides QbQ there is not a regression of this guard.
+		["guard-nrl178-footnote-fence-open-block-after", "QlaQ[^1]\n\n[^1]: QbQ<!--QcQ\n    ```QdQ-->QeQ\n\n<!-- QkaQ\n\nQjQ", "QlaQ QbQ QeQ", { skipCodeBlocks: false }],
+		["guard-nrl178-footnote-fence-open-block-on-last-line", "QlaQ[^1]\n\n[^1]: ```QdQ-->QeQ\n\n<!-- QkaQ", "QlaQ QdQ-->QeQ", { skipCodeBlocks: false }],
+		["guard-nrl178-footnote-fence-open-item-block-on-last-line", "QlaQ[^1]\n\n[^1]: ```QdQ-->QeQ\n\n- <!-- QkaQ", "QlaQ QdQ-->QeQ", { skipCodeBlocks: false }],
+		// Guards: an HTML block before the fence leaves a comment open, the class
+		// closes it, and QLQ is displayed. The fence keeps the old answer.
+		["guard-nrl178-open-block-before-list-fence", "<!-- QaQ\n\n- Q<!--\n    ```QKZQ-->QLQ\n\nQjQ", "QLQ QjQ", { skipCodeBlocks: false }],
+		["guard-nrl178-open-block-before-quote-fence", "<!-- QaQ\n\n> ~~~QKZQ-->QLQ", "QLQ", { skipCodeBlocks: false }],
+		// NRL-178 fix round 1 (/critique on d0442e5, F1). An inline processing
+		// instruction or CDATA section is passed to the page verbatim, and the
+		// browser ends either at its first `>` as a bogus comment, so a `<!--`
+		// after that `>` opens a comment no HTML block records. The class's `-->`
+		// closes it and QiQ is displayed (`QiQ">`). Each row keeps 6f4afc2's
+		// answer, its spoken QpbQ and QhQ included, and is RED on d0442e5, which
+		// dropped QiQ: body (quote, list item, setext, quote line) and footnote.
+		["pin-nrl178-r1-inline-pi-before-quote-fence", "QpaQ <?x > <!-- QpbQ ?>\n\n> ```QhQ-->QiQ", "QpaQ <?x > <!-- QpbQ ?> QhQ-->QiQ", { skipCodeBlocks: false }],
+		["pin-nrl178-r1-inline-cdata-before-quote-fence", "QpaQ <![CDATA[ x > <!-- QpbQ ]]>\n\n> ```QhQ-->QiQ", "QpaQ < CDATA[ x > ]> QhQ-->QiQ", { skipCodeBlocks: false }],
+		["pin-nrl178-r1-inline-pi-before-row-a-list-fence", "QpaQ <?x > <!-- QpbQ ?>\n\n- Q<!--\n    ```QhQ-->QiQ", "QpaQ <?x > <!-- QpbQ ?> Q QiQ", { skipCodeBlocks: false }],
+		["pin-nrl178-r1-inline-pi-setext-before-quote-fence", "<?x QpaQ > <!-- QpbQ ?>\n===\n\n> ```QhQ-->QiQ", "<?x QpaQ > <!-- QpbQ ?> QhQ-->QiQ", { skipCodeBlocks: false }],
+		["pin-nrl178-r1-inline-cdata-quote-line-before-fence", "> QpaQ <![CDATA[ x > <!-- QpbQ ]]>\n>\n> ~~~QhQ--!>QiQ", "QpaQ < CDATA[ x > ]> ~~~QhQ--!>QiQ", { skipCodeBlocks: false }],
+		["pin-nrl178-r1-inline-cdata-before-footnote-fence", "QraQ <![CDATA[ x > <!-- QpbQ ]]>[^1]\n\n[^1]: ```QhQ-->QiQ", "QraQ < CDATA[ x > ]> QhQ-->QiQ", { skipCodeBlocks: false }],
+		["pin-nrl178-r1-inline-pi-before-footnote-fence", "QraQ <?x > <!-- QpbQ ?>[^1]\n\n[^1]: ```QhQ-->QiQ", "QraQ <?x > <!-- QpbQ ?> QhQ-->QiQ", { skipCodeBlocks: false }],
+		["pin-nrl178-r1-inline-pi-in-footnote-before-footnote-fence", "QraQ[^1] QrbQ[^2]\n\n[^1]: QpaQ <?x > <!-- QpbQ ?>\n\n[^2]: ```QhQ-->QiQ", "QraQ QrbQ QpaQ <?x > <!-- QpbQ ?> QhQ-->QiQ", { skipCodeBlocks: false }],
+		// Guards the other way: a PI after the fence opens nothing before it, and
+		// an inline declaration or closed comment ends where the browser's does,
+		// so these heads stay hidden as d0442e5 hides them.
+		["guard-nrl178-r1-inline-pi-after-fence", "> ```QhQ-->QiQ\n\nQpaQ <?x > <!-- QpbQ ?>", "QpaQ <?x > <!-- QpbQ ?>", { skipCodeBlocks: false }],
+		["guard-nrl178-r1-inline-declaration-before-fence", "QpaQ <!X x > <!-- QpbQ\n\n> ```QhQ-->QiQ", "QpaQ <!X x > <!-- QpbQ", { skipCodeBlocks: false }],
+		["guard-nrl178-r1-inline-closed-comment-before-fence", "QpaQ <!-- QpbQ --> QpcQ\n\n> ```QhQ-->QiQ", "QpaQ QpcQ", { skipCodeBlocks: false }],
+		// Fix round 1 (/critique on d0442e5, second run, F1). The last line of an
+		// unterminated fence is its closer only under the tokenizer's own rule (at
+		// most three leading spaces, no tab); indented four or by a tab it is
+		// content the renderer displays. RED on d0442e5 for a `-->` head, and on
+		// 6f4afc2 too for any other head (`QBQ` only).
+		["pin-nrl178-r1-indented-closer-is-content", "```QXQ-->QYQ\nQBQ\n    ```", "QBQ ```", { skipCodeBlocks: false }],
+		["pin-nrl178-r1-indented-closer-is-content-list", "- a\n  ```QXQ-->QYQ\n  QBQ\n      ```", "a QBQ ```", { skipCodeBlocks: false }],
+		["pin-nrl178-r1-indented-closer-is-content-plain-head", "```QXQ\nQBQ\n    ```", "QBQ ```", { skipCodeBlocks: false }],
+		["pin-nrl178-r1-tab-closer-is-content", "```QXQ-->QYQ\nQBQ\n\t```", "QBQ ```", { skipCodeBlocks: false }],
+		["guard-nrl178-r1-three-space-closer-hidden", "```QXQ-->QYQ\nQBQ\n   ```\n\nQZQ", "QBQ QZQ", { skipCodeBlocks: false }],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
