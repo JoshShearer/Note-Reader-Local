@@ -1495,7 +1495,7 @@ console.log("an engine that owns playback reaches state playing while it speaks"
 
 console.log("pause stops the sound on an engine that cannot pause itself");
 {
-	// srs.md:250: where a backend cannot pause an active utterance, the
+	// (srs.md, R-M07 Playback Controls, the pause-by-stopping sentence) where a backend cannot pause an active utterance, the
 	// controller may pause by stopping synthesis and retaining the position.
 	// That is speechd, and the stop reaches the daemon through the same abort
 	// signal NRL-41 already wired up.
@@ -1971,7 +1971,7 @@ console.log("pause and resume on an engine that owns playback prefetch nothing, 
 		void player.resume();
 		await tick();
 		check(`${route}: resume is playing`, player.getState() === "playing", player.getState());
-		// restart re-speaks the sentence (srs.md:250); engine picks the same
+		// restart re-speaks the sentence (srs.md, R-M07 Playback Controls, the pause-by-stopping sentence); engine picks the same
 		// utterance back up, so it is never synthesised twice.
 		check(
 			`${route}: resume issued no prefetch`,

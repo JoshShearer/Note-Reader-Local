@@ -2349,7 +2349,7 @@ Acceptable:
 
 **Status: Awaiting Live Obsidian Testing**
 
-The following 18-item hardening matrix from Phase 7 (srs.md:2024-2049) requires execution in real Obsidian with the plugin deployed and speech-dispatcher running. Verification blocks on CDP debugging interface (Obsidian must be launched with `--remote-debugging-port=9222`).
+The following 18-item hardening matrix from Phase 7 (this document, "Phase 7 — Hardening") requires execution in real Obsidian with the plugin deployed and speech-dispatcher running. Verification blocks on CDP debugging interface (Obsidian must be launched with `--remote-debugging-port=9222`).
 
 **Matrix Items (Linux-Applicable):**
 

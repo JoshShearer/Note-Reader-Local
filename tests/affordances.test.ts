@@ -198,8 +198,8 @@ console.log("the four real engines declare their new capabilities honestly");
 	//               in place and resumes mid-word.
 	//   speechd   - no pause exists in spd-say, so the player stops the
 	//               utterance and retains the index, and resume re-reads the
-	//               current sentence from its start. That is srs.md:250's
-	//               sanctioned fallback, not a second-class pause.
+	//               current sentence from its start. That is the spec's
+	//               sanctioned fallback (srs.md, R-M07 Playback Controls, the pause-by-stopping sentence), not a second-class pause.
 	// `pause` stays a separate field from `ownsPlayback`: both of these own
 	// playback and both can now be paused, so inferring one from the other
 	// would be wrong in both directions.

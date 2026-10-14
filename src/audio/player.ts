@@ -26,7 +26,8 @@ export type PlayerState = "idle" | "preparing" | "playing" | "paused" | "finishe
  * `element`  the player holds the audio, so pausing the element is the pause.
  * `engine`   the engine can hold its own utterance in place (speechSynthesis).
  * `restart`  nothing can hold the utterance, so it is stopped and the index
- *            retained; resume re-reads the sentence (srs.md:250).
+ *            retained; resume re-reads the sentence
+ *            (srs.md, R-M07 Playback Controls, the pause-by-stopping sentence).
  */
 type PauseRoute = "element" | "engine" | "restart";
 
@@ -213,7 +214,7 @@ export class Player {
 			// Past the end is the LAST chunk, not the first. A stored offset from a
 			// longer version of the note, or from one that has since been
 			// truncated, must resume at the end rather than restart from the top
-			// (srs.md:441, R-M12).
+			// (srs.md, R-M12 Reading Position: restore the nearest valid source position).
 			start = found === -1 ? chunks.length - 1 : found;
 		}
 		// ORDERING IS LOAD BEARING, and this is the only thing making the line

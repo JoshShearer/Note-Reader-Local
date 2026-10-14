@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-01
-- Ticket: NRL-112 (R-M07 `srs.md:262`; `srs.md:1768` "Mobile controls MUST have touch-friendly hit targets"; R-M03 `srs.md:185` engaged)
+- Ticket: NRL-112 (R-M07 Playback Controls; srs.md, User Interface: "Mobile controls MUST have touch-friendly hit targets"; R-M03 Android Support engaged)
 - Amends: nothing. `srs.md` needs no amendment - this is a gap against it, not a deviation from it.
 
 ## Context
@@ -65,7 +65,7 @@ Two further measurements make "unreachable" a demonstration rather than an infer
   specifically that a finger cannot reach, because the system UI owns them.
 
 Separately, 28 x 28 and 20 x 20 are both below any touch target size, which
-`srs.md:1768` requires and which the ticket cites directly.
+`srs.md`'s User Interface section requires and which the ticket cites directly.
 
 ## Decision
 
@@ -121,7 +121,7 @@ desktop, so the desktop-unchanged-by-construction argument is preserved exactly.
 
 ### 3. 44 x 44, sourced to the host
 
-`srs.md:1768` requires touch-friendly targets and names no number. The authority used
+`srs.md`'s User Interface section requires touch-friendly targets and names no number. The authority used
 is Obsidian's own `--input-height`, **measured at 44px on this device**, so the
 plugin's targets match the host's own controls rather than an imported guideline.
 

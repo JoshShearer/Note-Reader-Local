@@ -7,16 +7,16 @@
   The evidence for "no amendment" was first written as "`grep -n thread srs.md`
   returns zero matches". That grep is case-sensitive and the claim is
   **misleading**, so it is corrected here rather than repeated: `grep -ni thread
-  srs.md` returns **one** match, `kokoroThreads: number;` at `srs.md:509`. That
+  srs.md` returns **one** match, `kokoroThreads: number;` in the R-M13 Persistent Settings shape listing. That
   line is inside the `Settings` shape listing and declares the key's existence
   and type; it states no contract about what the engine does with the value, and
   the key is still read, still honoured on a fresh load, and still honoured on a
   deliberate change. The two nearby behavioural sentences do not reach this
   either: "A change to a content setting SHALL apply on the next read"
-  (`srs.md:521`) is scoped to content settings and `kokoroThreads` is not one,
-  and the normalisation sentence at `:525` is about preserving unknown keys,
+  (srs.md, R-M13 Persistent Settings) is scoped to content settings and `kokoroThreads` is not one,
+  and the normalisation sentence ("Settings normalisation MUST preserve keys it does not recognise") is about preserving unknown keys,
   which decision 2 below satisfies by persisting nothing at all. So there is
-  genuinely nothing to amend - but by reading `:509`, not by a grep that never
+  genuinely nothing to amend - but by reading the shape listing, not by a grep that never
   saw it.
 
 ## Scope, stated first

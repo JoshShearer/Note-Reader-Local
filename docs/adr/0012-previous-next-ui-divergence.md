@@ -6,7 +6,7 @@
 
 ## Context
 
-`srs.md:266-267` specifies that previous and next buttons shall be part of the
+`srs.md` (R-M07 Playback Controls) specifies that previous and next buttons shall be part of the
 control interface to move between chunks during playback:
 
 > The control bar shall include ... Previous (skip back one chunk) and Next
@@ -52,5 +52,5 @@ requirement.
   - `next()` at the last chunk is a no-op.
   - `previous()` mid-run decrements the chunk index and replays.
   - `previous()` at the first chunk is a no-op.
-- `srs.md:266-267` is clarified to note that buttons are implemented in the
+- `srs.md`'s R-M07 Playback Controls is clarified to note that buttons are implemented in the
   controlBar and navigation bounds are checked by the player itself.

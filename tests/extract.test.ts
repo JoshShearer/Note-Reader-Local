@@ -3266,7 +3266,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// by running the real construction: `indentedCode` sits at index 2 and `html`
 		// at index 11, so module 134 consumes the line before module 8776 is consulted.
 		// Module 8776's skip loop does accept a tab, but it never gets to decide this
-		// shape, which is why `AGENTS.md`, `srs.md:328` and `docs/adr/0025` all drew the
+		// shape, which is why `AGENTS.md`, `srs.md` (R-M08, the Obsidian comments bullet) and `docs/adr/0025` all drew the
 		// wrong conclusion from a true premise until NRL-113 ran the parser.
 		["guard-nrl113-fresh-block-tab-html-is-indented-code", "Before x.\n\n\t<!--\nHIDDEN1\nmore", "Before x. HIDDEN1 more"],
 		["guard-nrl113-fresh-block-tab-html-is-indented-code-spoken", "Before x.\n\n\t<!--\nHIDDEN1\nmore", "Before x. <!-- HIDDEN1 more", { skipCodeBlocks: false }],

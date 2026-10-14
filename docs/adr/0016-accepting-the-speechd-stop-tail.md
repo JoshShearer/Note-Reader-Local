@@ -6,7 +6,7 @@
 
 ## Context
 
-`R-M07` (`srs.md:258`) requires a Stop control. On the `speechd` backend, Stop
+`R-M07` (srs.md, R-M07 Playback Controls) requires a Stop control. On the `speechd` backend, Stop
 does not produce silence: roughly 800 ms of speech continues after it.
 
 NRL-41 reduced this from about 7.5 s to its current size by making the abort

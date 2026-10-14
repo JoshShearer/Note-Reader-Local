@@ -19,7 +19,7 @@
 
 ---
 
-## Investigation Order (per srs.md:1197-1207)
+## Investigation Order (per srs.md, Android Backend, "Investigate, in order")
 
 ### Step 1: Existing Obsidian mobile facility
 **Result: none found.**
@@ -49,7 +49,7 @@ Measured directly in the live page via `Runtime.evaluate`. This is a known limit
 of Android's stock WebView component (distinct from full Chrome for Android): the Web
 Speech *synthesis* API has historically not shipped in WebView regardless of the
 underlying Chromium version. Because the API is absent outright, none of the six
-`srs.md:1256-1263` conditions (speech output, voice availability, long-form playback,
+conditions in srs.md, Android Backend ("A successful test MUST establish") (speech output, voice availability, long-form playback,
 rate changes, repeated-utterance reliability, background/foreground safety) are
 reachable to test - there is nothing to call.
 
