@@ -418,6 +418,14 @@ seeds 20261014 / 31337 x 20,000 notes, 0 newly disclosing and 0 newly lost again
   needs no whitespace after `]`; 1.13.7 renders `>[!e]x` as a plain quote): NRL-182.
 - **Residual.** The class under an open comment holds only the first word, entity-
   decoded, which is not modelled: NRL-183. Remaining census disclosures are all on base.
+- **Trap: inline markup opens comments too (fix round 1).** An inline `<?x > <!-- b ?>`
+  or `<![CDATA[ > <!-- b ]]>` is written verbatim and the browser ends it at the first
+  `>`, so the `<!--` opens a comment no HTML block records. The first census had no such
+  atom and read 0 / 0; the critic's generator found 2,352 newly lost cells. The gate now
+  also counts any `<?` / `<![CDATA[` (`INLINE_BOGUS_OPENER`), and the grading set gained
+  `.claude/runs/NRL-178/fix1/census-inline.cjs inline`. Figures in ADR 0025's fix round 1.
+- **Trap: the closer regex.** A last line indented four spaces or by a tab is content,
+  not a closer; read the tokenizer's own `fenceClosed`, not a looser regex.
 
 NOT VERIFIED IN OBSIDIAN: lanes never deploy.
 

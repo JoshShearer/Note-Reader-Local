@@ -114,6 +114,13 @@ const RAW_TEXT_TAG = /<(?:script|style|textarea|title|xmp|iframe|noembed|noframe
  * round 4).
  */
 const FOREIGN_TAG = /<(?:svg|math)(?![A-Za-z0-9-])/i;
+/**
+ * Inline markup a browser ends earlier than the renderer does: a processing
+ * instruction or CDATA section runs to `?>` or `]]>` for the renderer, but the
+ * browser reads either as a bogus comment ending at its first `>` (NRL-178 fix
+ * round 1). Read only by the gate on fence heads holding `-->`.
+ */
+const INLINE_BOGUS_OPENER = /<\?|<!\[CDATA\[/i;
 /** Either of the above: from its first match on, no HTML block or fence line is read. */
 const UNREAD_TAG = new RegExp(`${RAW_TEXT_TAG.source}|${FOREIGN_TAG.source}`, "i");
 /** The raw blocks whose text the page shows nothing of as written, so a `%%` line inside one opens no block and is displayed nowhere (see `RendererHiddenText.hiddenRawLines`). */
@@ -442,6 +449,9 @@ class BlockScanner {
 	// whether the fence sits in a footnote definition. `rendererHiddenText`
 	// commits them to `hidden` once every HTML block in the note is known.
 	readonly commentFences: Array<{ parts: HiddenSpan[]; line: number; footnote: boolean }> = [];
+	// Whether the last non-silent `fencedCode` call ended its block on a closing
+	// fence, read by `hideFenceLines` right after it.
+	private fenceClosed = false;
 	readonly defs: FootnoteDef[] = [];
 	// First and last note line of every HTML block, of any kind, and whether
 	// its raw text leaves a comment or a tag open past its end.
@@ -644,10 +654,12 @@ class BlockScanner {
 		const parts: HiddenSpan[] = [{ start: scanPos(block, line, lead), end: scanPos(block, line, head.length) }];
 		const body = block.replace(/\n$/, "");
 		const lastStart = body.lastIndexOf("\n") + 1;
-		if (firstEnd !== -1 && lastStart > firstEnd) {
-			const tail = body.slice(lastStart);
-			const close = new RegExp(`^[ \\t]*${fence[1]![0] === "`" ? "`" : "~"}{${fence[1]!.length},}[ \\t]*$`);
-			if (close.test(tail)) parts.push({ start: scanPos(block, line, lastStart + /^[ \t]*/.exec(tail)![0].length), end: scanPos(block, line, body.length) });
+		// The last line is a closer only if the tokenizer ended the block on it.
+		// A line of fence characters indented four spaces or by a tab is content
+		// the renderer displays (fix round 1, /critique on d0442e5, second run,
+		// F1: `` ```QXQ `` / `QBQ` / `    ``` `` shows `QBQ ```` `).
+		if (this.fenceClosed && firstEnd !== -1 && lastStart > firstEnd) {
+			parts.push({ start: scanPos(block, line, lastStart + /^ */.exec(body.slice(lastStart))![0].length), end: scanPos(block, line, body.length) });
 		}
 		// The renderer writes the info string into a `class` attribute, so a
 		// `-->` or `--!>` in it reaches the page and closes a browser comment an
@@ -874,6 +886,7 @@ class BlockScanner {
 		p = t.charAt(x);
 		if (p && p !== "\n") return 0;
 		if (silent) return 1;
+		this.fenceClosed = false;
 		T += d;
 		if (m) T += m;
 		m = "";
@@ -917,7 +930,10 @@ class BlockScanner {
 							w += p;
 							x++;
 						}
-						if (!p || p === "\n") break;
+						if (!p || p === "\n") {
+							this.fenceClosed = true;
+							break;
+						}
 					}
 				}
 			} else {
@@ -1856,16 +1872,35 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 		while (l + 1 < lineCount && lineStart[l + 1]! <= rawTextAt) l++;
 		openFrom = Math.min(openFrom, l);
 	}
+	// Inline markup can leave a browser comment open too, which no HTML block
+	// records: the renderer passes a processing instruction or CDATA section
+	// through verbatim, the browser ends either at its first `>` as a bogus
+	// comment, and a `<!--` after that `>` opens a comment (fix round 1,
+	// /critique on d0442e5, F1: `QpaQ <?x > <!-- QpbQ ?>` / blank /
+	// ```` > ```QhQ-->QiQ ```` displays `QiQ">`). Every other inline construct
+	// ends where the browser's does. Whether one is real markup, or what follows
+	// its `>`, is not modelled: any `<?` or `<![CDATA[` in the note counts from
+	// its line, which keeps the old answer there. Only the deferred fences read
+	// this; `openFrom` keeps its meaning for `browserRiskLines` below.
+	let fenceOpenFrom = openFrom;
+	let fenceAnyOpen = anyOpen;
+	const inlineBogusAt = INLINE_BOGUS_OPENER.exec(source)?.index ?? -1;
+	if (inlineBogusAt !== -1) {
+		fenceAnyOpen = true;
+		let l = 0;
+		while (l + 1 < lineCount && lineStart[l + 1]! <= inlineBogusAt) l++;
+		fenceOpenFrom = Math.min(fenceOpenFrom, l);
+	}
 	// NRL-178: a deferred fence (`commentFences`) is hidden where no browser
-	// comment can be open for its class's `-->` to close: before `openFrom` in
-	// the body, and in a footnote only when nothing anywhere is open, since the
-	// renderer moves footnotes after every block. Not `openFrom === lineCount`
-	// for that: a block left open on the note's last line has `b + 1 ===
-	// lineCount`, and its comment still reaches the footnotes
+	// comment can be open for its class's `-->` to close: before `fenceOpenFrom`
+	// in the body, and in a footnote only when nothing anywhere is open, since
+	// the renderer moves footnotes after every block. Not `fenceOpenFrom ===
+	// lineCount` for that: a block left open on the note's last line has `b + 1
+	// === lineCount`, and its comment still reaches the footnotes
 	// (`guard-nrl178-footnote-fence-open-block-on-last-line`). Elsewhere the old
 	// answer stands, so this only adds hidden ranges where nothing can be open.
 	for (const f of scanner.commentFences) {
-		if (f.footnote ? anyOpen : f.line >= openFrom) continue;
+		if (f.footnote ? fenceAnyOpen : f.line >= fenceOpenFrom) continue;
 		for (const p of f.parts) {
 			scanner.bogus.add(scanner.hidden.length);
 			scanner.hidden.push(p);
