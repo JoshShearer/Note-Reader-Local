@@ -1588,13 +1588,13 @@ fields agree: 0 failures.** **(d) the direction: 1,547 differing lines over 2 na
 with 0 UNCLASSIFIED**, and the classifier shown falsifiable (dropping its quote arm leaves 542
 lines unclassified). **(a) the pure FIXED POINT property is 309 FAILURES, not 0**, and that is not
 a defect: **the F1 guard deliberately breaks it**, the guard existing precisely to stop peeling
-where `iterate(OLD)` would keep going. All 309 are guard-caused and **all 309 are fail-CLOSED**,
+where `iterate(OLD)` would keep going. All 309 are caused by the guard and **all 309 are fail-CLOSED**,
 with 0 fail-open, hand-checkable on `- <TAB>> x` (NEW stops at `chars` 3 where `iterate(OLD)`
 reaches 5). ADR 0035 first recorded 0 for (a), measured on the PRE-guard implementation and never
 re-run, and was **corrected in place before merge**: (a) as originally stated is superseded by the
 weaker property the guard is compatible with, namely `NEW === iterate(OLD)` on every line the guard
 does not stop and `NEW === OLD` on every line it does. Re-quoting 0 for (a) against a
-guard-carrying tree is forbidden. (d)'s corpus is Verify's own and is distinguished in the ADR from
+tree carrying the guard is forbidden. (d)'s corpus is Verify's own and is distinguished in the ADR from
 the implementer's 8,189 lines over 12 classes, so neither is quoted without its corpus.
 
 **The reconciliation with NRL-120, which merged first, and this part is reusable.**

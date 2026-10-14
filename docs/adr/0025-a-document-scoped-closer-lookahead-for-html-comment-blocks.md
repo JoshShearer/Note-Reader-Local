@@ -1765,7 +1765,8 @@ leaking cells in 3 notes -> 1 cell in 1 note**, and **6 newly lost in 1 note -> 
 1 note**, all reproducing on base defused. Both surviving notes carry an indented
 backtick fence line (six spaces in one, a list-continuation fence in the other), the
 shape PR #169 traced to `FENCE` accepting any indent (NRL-132); that root was not
-re-derived here, only the defusal attribution was. Its two `pin-nrl115-unmasked-quote-in-list-*` tripwires are
+re-derived here, only the defusal attribution was. Its two unmasked-quote-in-list tripwires (never written under a
+`pin-` name) are
 not carried over: on this base both shapes agree with the renderer.
 
 **One pre-existing expectation moved, replaced in place.** NRL-131's tripwire
@@ -3135,8 +3136,8 @@ base fuzz 26,207 / 8,305 -> 22,172 / 7,797; extended 72,788 / 10,781 -> 67,655 /
 fifth's 69,059 / 0 -> 59,977 / 0; `gen3` grid 39,263 / 23,024 -> 38,808 / 17,529;
 `gen3` rand 346,950 / 15,739 -> 312,281 / 10,749; F2 823 / 199 -> 784 / 164; F3,
 own-gen and twins unchanged. Rows that moved back to `44a037a`'s answer:
-`pin-nrl166-r2-open-attribute-swallows-later-blocks` (renamed
-`pin-nrl166-r3-open-attribute-not-hidden-past-the-block`), the two `r2f-f1` rows,
+`pin-nrl166-r3-open-attribute-not-hidden-past-the-block` (renamed
+from its earlier r2 label), the two `r2f-f1` rows,
 the `r2g-f2` CRLF/LF pair, `pin-nrl166-r2-l44-lazy-callout-pct-indented-tail`,
 `pin-nrl166-r2c-f2-code-span-reference-not-counted`,
 `pin-nrl166-min-quote-start-fence-info-spoken`, `pin-nrl166-r2c-f8-footnote-attribute-stays-in-footnotes`
@@ -4235,8 +4236,8 @@ predecessor - 0 under any of the other 5 predecessors, confirming the "no paragr
 axis is untouched, and 0 under the space-tab-led `<!--` follower, which NRL-155's own
 fixture already covered (not newly reachable, not newly broken). `spaces-only-3` closes
 nothing, as the harness census predicted. The 277 "both miss" cells are the pre-existing,
-out-of-scope `INDENTED_CODE`-masks-content miss this ticket's own `guard-nrl158-*no-
-paragraph-open` fixtures pin unchanged (`skipCodeBlocks: true` intentionally silences the
+out-of-scope `INDENTED_CODE`-masks-content miss this ticket's own `guardsNoParagraphOpen` fixtures (`tests/extract.test.ts`, labels
+`NRL-158 guard-<id>`) pin unchanged (`skipCodeBlocks: true` intentionally silences the
 `<!--` line itself; unrelated to the blank-line question here).
 
 **Container census, confirming unchanged rather than correct** (same harness, same two
