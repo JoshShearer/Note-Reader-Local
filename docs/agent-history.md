@@ -396,6 +396,31 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### Fence heads holding `-->` hidden where nothing is open (NRL-178, 2026-10-14)
+
+NRL-166 round 3's `if (/--!?>/.test(head)) return;` in `hideFenceLines` left every such
+fence head to the old answer, so `- Q<!--` / `    ```QKZQ--->` spoke `QKZQ--->` and
+`>[!e]%%` / `>~~~-->QIQ` spoke `~~~-->QIQ` on 6f4afc2 (DEF, CODE, ALL; the renderer
+hides both in a `class`). Now deferred to `BlockScanner.commentFences` and committed in
+`rendererHiddenText` before `openFrom` (body) or when nothing in the note is open
+(footnote). ADR 0025's NRL-178 section has the figures: census 1,900,080 cells and fuzz
+seeds 20261014 / 31337 x 20,000 notes, 0 newly disclosing and 0 newly lost against
+6f4afc2, chunks equal to the plan's prototype on every cell, wrong arm 62,540 / 18,400.
+
+- **Trap: the last-line edge.** A `<!--` HTML block runs to the note's end, so its
+  `b + 1 === lineCount`; testing footnote fences with `openFrom < lineCount` hides the
+  displayed `QeQ">` of `QlaQ[^1]` / blank / `[^1]: ```QdQ-->QeQ` / blank / `<!-- QkaQ`.
+  The `guard-nrl178-footnote-fence-open-block-*` rows go RED on that mutant (measured).
+- **Trap: the oracle.** oracle111's `visibleText` reads `<!--->` as open and does not
+  end a comment at `--!>`; the census grades with a browser-accurate copy
+  (`.claude/runs/NRL-178/plan/lib.cjs`, `browserVisible`).
+- **AC2 narrowed.** Row B's `[!e]` is lost by every revision since 44a037a (`CALLOUT`
+  needs no whitespace after `]`; 1.13.7 renders `>[!e]x` as a plain quote): NRL-182.
+- **Residual.** The class under an open comment holds only the first word, entity-
+  decoded, which is not modelled: NRL-183. Remaining census disclosures are all on base.
+
+NOT VERIFIED IN OBSIDIAN: lanes never deploy.
+
 ### extractChunks closer scans made linear (NRL-172, 2026-10-14)
 
 A line of many `[^` with no `]` froze the reader at read start. Base 499038d, Node 24.21.0, this

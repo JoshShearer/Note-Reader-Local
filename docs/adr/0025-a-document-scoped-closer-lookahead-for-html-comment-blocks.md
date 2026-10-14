@@ -3141,7 +3141,8 @@ own-gen and twins unchanged. Rows that moved back to `44a037a`'s answer:
 from its earlier r2 label), the two `r2f-f1` rows,
 the `r2g-f2` CRLF/LF pair, `pin-nrl166-r2-l44-lazy-callout-pct-indented-tail`,
 `pin-nrl166-r2c-f2-code-span-reference-not-counted`,
-`pin-nrl166-min-quote-start-fence-info-spoken`, `pin-nrl166-r2c-f8-footnote-attribute-stays-in-footnotes`
+`pin-nrl178-quote-start-fence-info-hidden` (then named for the info string it
+spoke; NRL-178 hides that string again where nothing can be open, and renamed it), `pin-nrl166-r2c-f8-footnote-attribute-stays-in-footnotes`
 and the two `r2d-f2` footnote-attribute rows; each comment says so.
 
 **Known leftovers.** Branch-caused, below the orchestrator's bound and recorded
@@ -3307,6 +3308,64 @@ already did: lost coverage at `44a037a`'s answer, not a regression.
 
 **NOT VERIFIED IN OBSIDIAN.** Bare Node only. Nothing was re-rendered live this
 round, nothing was deployed and Live Preview was not run. R-M08 is NOT met.
+
+### NRL-178 (2026-10-14): a `-->` fence head is hidden wherever no browser comment can be open
+
+**Mechanism.** Round 3 (/critique on 3702b0f, F5) made `hideFenceLines` return early
+on any fence head matching `--!?>`, because the renderer writes the info string into
+a `class` attribute, where a `-->` closes a browser comment an earlier HTML block
+left open and the rest is displayed (`pin-nrl166-r3-f5-fence-info-closer-not-hidden`).
+The return applied where no comment can be open too, and once rounds 1-2 read an
+inline `<!--` or a withheld `%%` as displayed text, nothing else hid the fence line.
+Verify 4's two notes, both renderers (1.13.7 and 1.14.4) rendering identical HTML:
+`- Q<!--` / `    ```QKZQ--->` shows `Q<!--`, and 6f4afc2 (byte-identical to
+642afa3 on every cell measured) spoke `Q<!-- | QKZQ--->` at DEF, CODE and ALL;
+`>[!e]%%` / `>~~~-->QIQ` shows `[!e]%%`, and 6f4afc2 spoke `%% | ~~~-->QIQ`.
+44a037a spoke `Q` and nothing.
+
+**Change.** `hideFenceLines` defers such a fence (head, and closer when there is
+one) to `BlockScanner.commentFences` with its note line and whether it sits in a
+footnote definition. `rendererHiddenText` commits it to `hidden` (and `bogus`, as
+every fence line already is) after the scan: in the body when its line is before
+`openFrom`, the first line after an HTML block that leaves a comment, tag or bogus
+comment open, or the line of the first raw-text or foreign tag (`UNREAD_TAG`); in a
+footnote only when nothing in the whole note is open, because footnotes render after
+every block. `openFrom` is the existing quantity, hoisted above `ranges`. Elsewhere
+the old answer stands, so the change only adds hidden ranges, only where nothing can
+be open. The footnote test is `anyOpen`, not `openFrom < lineCount`: a comment block
+runs to the note's end, so `b + 1 === lineCount` and the mutant hides the displayed
+`QeQ">` (`guard-nrl178-footnote-fence-open-block-on-last-line`, RED on that mutant).
+
+**Evidence.** Bare Node, the extractor bundled from this tree, graded against the
+1.13.7 harness with a browser-accurate copy of oracle111 (comments end at `--!>`;
+`<!-->` / `<!--->` are closed empty comments), cells = sentinel x option set
+(DEF, CODE, ALL). Census grid, 114,400 notes, 1,900,080 cells: 0 newly disclosing,
+0 newly lost against 6f4afc2, 157,344 disclosing cells closed (298,812 -> 141,468).
+Fuzz seed 20261014, 20,000 notes: 0 / 0 / 4,884 closed; seed 31337: 0 / 0 / 5,052.
+Every chunk's text and `sourceIndex` equal the plan's prototype arm on all
+343,200 + 60,000 + 60,000 note x option cells; lockstep failures 0 on every arm.
+Wrong arm (every fence deferred, gate inverted) reaches the leaking side: census
+62,540 newly disclosing and 18,400 newly lost; fuzz 7,399 / 83 and 7,252 / 87.
+1.14.4 sentinel verdicts differed from 1.13.7 on 0 cells. One existing row moved:
+`pin-nrl178-quote-start-fence-info-hidden` (renamed, see round 3's list above).
+
+**AC2 narrowed (run decision).** The ticket asks that Row B not lose `[!e]%%`. Every
+revision since 44a037a drops `[!e]`: `CALLOUT` in `extract.ts` needs no whitespace
+after `]`, while 1.13.7 renders `>[!e]QaQ` as a plain quote, not a callout (the plan's
+`callout-marker.out` probes: `>[!e]QaQ`, `>[!e] QaQ`, `> [!e]QaQ` / `> QbQ`). That is a different mechanism, filed
+as NRL-182. AC2 is graded as "no text lost against 6f4afc2, and not 44a037a's
+answer": this tree speaks `%%` for Row B and `Q<!--` for Row A.
+
+**Residuals, all on 6f4afc2 too.** Under an open comment only the class's first
+word is written and entities are decoded, so `- <!-- a` / blank / ```` ``` QdQ -->QeQ ````
+still speaks QeQ, and a fence info string under an open comment keeps the old
+answer: NRL-183. The plan's sample of 3,092 remaining census disclosures, on its
+prototype arm (cell-identical to this tree), was mostly a
+footnote section swallowed by a later open comment block, a line-start `<!--` block
+in a footnote, and an HTML-block `<!--` hiding the tail. None is this mechanism.
+
+**NOT VERIFIED IN OBSIDIAN.** Lanes never deploy; the owner verifies after the
+end-of-run deploy and a full restart. R-M08 is NOT met.
 
 ### CLOSED by NRL-119: a list marker alone on its line ends the paragraph
 
