@@ -29,6 +29,16 @@ const MIN_CHUNK_CHARS = 40;
 const EMOJI =
 	/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]|\u{FE0F}/u;
 
+/**
+ * The 12 code points Obsidian 1.14.4's `==highlight==` tokenizer (`im`, table
+ * `nm` in app.js) cuts from the front of a highlight and turns into
+ * `data-highlight`. Only the first code point after the opening `==` is
+ * tested, and a following U+FE0F is not part of the match (ADR 0037).
+ */
+const HIGHLIGHT_COLOUR_EMOJI = new Set(
+	Array.from("\u{1F534}\u{1F7E5}\u{1F7E0}\u{1F7E7}\u{1F7E1}\u{1F7E8}\u{1F7E2}\u{1F7E9}\u{1F535}\u{1F7E6}\u{1F7E3}\u{1F7EA}"),
+);
+
 type CommentCloser = "-->" | "%%";
 
 interface Cleaned {
@@ -1851,9 +1861,15 @@ function cleanLine(
 		) {
 			const close = inlineContainerClose(raw, i + 2, "==");
 			if (close !== -1 && !/\s/.test(raw[close - 1]!) && raw[close + 2] !== "=") {
-				const inner = cleanLine(raw.slice(i + 2, close), rawStart + i + 2, opts);
+				// The renderer hides a leading colour emoji (a surrogate pair, two
+				// raw units). Skipping it by offset keeps sourceIndex exact.
+				const lead = raw.codePointAt(i + 2);
+				const skip =
+					lead !== undefined && HIGHLIGHT_COLOUR_EMOJI.has(String.fromCodePoint(lead)) ? 2 : 0;
+				const innerFrom = i + 2 + skip;
+				const inner = cleanLine(raw.slice(innerFrom, close), rawStart + innerFrom, opts);
 				for (let k = 0; k < inner.text.length; k++) {
-					emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 2);
+					emit(inner.text[k]!, inner.index[k] ?? rawStart + innerFrom);
 				}
 				i = close + 2;
 				continue;

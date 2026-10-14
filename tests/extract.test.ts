@@ -7920,6 +7920,37 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 	}
 }
 
+console.log("NRL-180: a leading colour emoji of a ==highlight== is hidden, as Obsidian 1.14.4 does");
+{
+	const spokenOf = (src: string): { text: string; ok: boolean } => {
+		const cs = extractChunks(src, OPTS);
+		return {
+			text: cs.map((c) => c.text).join(" "),
+			ok: cs.every((c) => unitsMatch(c.text, c.sourceIndex, src)),
+		};
+	};
+	const table = ["\u{1F534}", "\u{1F7E5}", "\u{1F7E0}", "\u{1F7E7}", "\u{1F7E1}", "\u{1F7E8}", "\u{1F7E2}", "\u{1F7E9}", "\u{1F535}", "\u{1F7E6}", "\u{1F7E3}", "\u{1F7EA}"];
+	for (const e of table) {
+		const r = spokenOf(`Buy ==${e}milk== today`);
+		check(`NRL-180 ${e} is dropped and sourceIndex is exact`, r.text === "Buy milk today" && r.ok, JSON.stringify(r));
+	}
+	const rows: Array<[string, string]> = [
+		["Buy ==\u{1F534}milk== today", "Buy milk today"],
+		["==\u{1F7E6}blue note== end", "blue note end"],
+		["==\u{1F534}== x", "x"],
+		["== \u{1F534}x==", "== \u{1F534}x=="],
+		["==\u{1F7E4}brown==", "\u{1F7E4}brown"],
+		["==a\u{1F534}b==", "a\u{1F534}b"],
+		["- ==\u{1F7E2}item==", "item"],
+		["> ==\u{1F7E3}q==", "q"],
+		["[==\u{1F7E0}l==](http://x.y)", "l"],
+	];
+	for (const [src, want] of rows) {
+		const r = spokenOf(src);
+		check(`NRL-180 ${JSON.stringify(src)} speaks ${JSON.stringify(want)}`, r.text.trim() === want && r.ok, JSON.stringify(r));
+	}
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);
