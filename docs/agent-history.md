@@ -396,6 +396,53 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### extractChunks closer scans made linear (NRL-172, 2026-10-14)
+
+A line of many `[^` with no `]` froze the reader at read start. Base 499038d, Node 24.21.0, this
+workstation, one run per cell: `"[^".repeat(n)` 344 / 1,207 / 4,652 ms at 5k / 10k / 20k; the `> `,
+`- `, `> - ` and `> [!note]` prefixes about 7 s at 20k; `"<div>\n" + "<![CDATA[ ".repeat(n)` 4,042 ms
+at 4k. Three independent quadratic sites in cleanLine, each needed (the plan's ablation):
+
+- the closer scan (`inlineContainerClose` for `![`, `[`, `==`; `wikiTargetClose` for `![[`, `[[`;
+  labelClose's loop), one walk to the end of the line per opener;
+- inside it, `indexOf("-->")` / `indexOf("%%")` per comment opener. `"[<!--".repeat(n)` was worse
+  than quadratic: 2,191 ms at 1k and 16,708 ms at 2k (the plan critic saw 132,511 ms at 4k);
+- the footnote reference `FOOTNOTE_REF.exec(raw.slice(i))`, whose label run reached the end of the line.
+
+Fix, exact rather than bounded: `CloserScan` memoises per kind (`]`, `[`, `==`, wiki `]]`) and
+path-compresses, because the scan's state is its position alone; one `CloserCache` per comment
+closer answers any start in `[from, at]`; `footnoteRefEnd` does the same for the label stop. After,
+one run per cell: `[^` 112 ms at 80k, the four prefixes 90-105 ms, CDATA 219 ms, every sibling under
+300 ms at 80k.
+
+- **Parity trap.** Routing the plain `inlineContainerClose` / `wikiTargetClose` through the memoised
+  scan, or growing labelClose's first step, cost 4-11% on the cross-line shapes below (V8 stops
+  inlining them into bracketClosesLater; `[^1: x` x 4,000 lines, medians of five in one
+  session: 2,957 base against 3,293 with the shared scan).
+  So the two plain loops stay verbatim, `scanToCloser` is a copy of their step, labelClose's later
+  steps moved to `labelCloseLoop`, and the extract suite's differential row ("memoised closer scans
+  answer exactly as the plain scans") holds the copies together. It catches a memo-only escape
+  mutant (1,072 of 54,865 differing) and a footnote whitespace mutant (91).
+- **Identity evidence.** Census over the extract, engine, player and readSelection suites, base
+  pinned to 499038d: 22,983 + 8 + 20 + 27 calls, 0 differing in text or sourceIndex (the census'
+  extract run shows the 17 NRL-172 timing rows failing because its shim also runs base). Fuzz seeds
+  1-4 x 50,000 notes: 0 differing. Direct scan differential, every start in shuffled order on one
+  scanner, seeds 1-4 x 20,000 strings: about 10.1M calls, 5.98M of them memo hits at a position an
+  earlier scan only passed through, 0 differing.
+- **Timing rows.** Ratio rule as the house rows (4x input, under 10x time or under 50 ms) with a
+  1 s fail-fast per call, then a 1 s ceiling at 80k; the plan critic measured the fixed code's
+  5k->20k ratio at 2.6-6.4 under load, so a tighter ratio flakes. Red on base: 17 failures, 2 m 11 s.
+  Extract suite wall time with the old test file: 8.11-8.21 s base, 8.16-8.69 s fixed; the new rows
+  add about 2 s.
+- **Residual, out of scope: the cross-line quadratic is still there.** bracketClosesLater re-walks
+  every later line of the paragraph for each line with an unmatched opener. Medians of five, base /
+  fix at 4,000 lines: `[^a` 2,467 / 2,515 ms; `[a` (about 12 KB) 2,466 / 2,465 ms; `> [^a` (about
+  24 KB) 4,954 / 4,990 ms; `[^1: x` 2,855 / 2,827 ms. A note-content freeze of seconds is still
+  reachable with notes far smaller than the ticket's 80 KB. The fix needs a cross-line memo keyed on
+  container prefix, depth and peel budget, with its own differential.
+
+NOT VERIFIED IN OBSIDIAN: lanes never deploy.
+
 ### Parser harness versions: 1.13.7 and 1.14.4 (NRL-171, 2026-10-14)
 
 The installed Obsidian loads the updater asar
@@ -2023,7 +2070,9 @@ exactly the accepted 90 (fuzz 34 + F3 56), the same rows as `44a037a`. Against
 - ReDoS trap: these gates run on every line. `[ \t]+[ \t>]*` inside a repeated
   group was exponential (17.8 s on 28 list markers), and `/\[\^[^\]]*\]:/` was
   quadratic. Write any new per-line pattern so adjacent quantifiers cannot share
-  characters, and keep the timing rows in `tests/extract.test.ts`.
+  characters, and keep the timing rows in `tests/extract.test.ts`. A per-opener
+  scan to the end of the line is the same trap without a regex: see "extractChunks
+  closer scans made linear (NRL-172)" for the memo that fixed it.
 - A note whose first line is `---` also takes no refinements, because of
   unrecognised frontmatter (critique round 3).
 - Lesson: an old over-hiding comment can be covering text that a DIFFERENT
@@ -2162,7 +2211,7 @@ disclosure paid in the note.
   lone-CR modelling.
 - `"<div>\n" + "<![CDATA[ ".repeat(n)` is quadratic on `44a037a` and here alike, in
   cleanLine's `[` label scan (`inlineContainerClose`), not in this round's code:
-  NRL-172's family.
+  NRL-172's family, fixed there (219 ms at 80,000).
 
 NOT VERIFIED IN OBSIDIAN. R-M08 is not met.
 

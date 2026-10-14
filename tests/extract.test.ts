@@ -1,4 +1,4 @@
-import { extractChunks } from "../src/text/extract.ts";
+import { CloserScan, extractChunks, footnoteRefEnd, inlineContainerClose, wikiTargetClose } from "../src/text/extract.ts";
 import { rendererPercentBlocks } from "../src/text/obsidianBlocks.ts";
 import {
 	graphemeBoundaries,
@@ -7840,7 +7840,7 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 	// (382 ms at 24 markers, doubling per marker), and the footnote-shape regex
 	// was quadratic on a callout line of many `[^` (7.7 s at 80,000). Generous
 	// bounds: each must finish far under one second. The plain `"[^".repeat(n)`
-	// note is a separate, pre-existing quadratic on main and is NOT tested here.
+	// note was a separate quadratic, fixed and tested under NRL-172 below.
 	const timed: Array<[string, string]> = [
 		["many-list-markers-before-callout", "- > a <!-- b\n" + "-  ".repeat(28) + "x\n> c -->"],
 		["many-footnote-openers-in-callout", "- > a <!-- b\n> [!tip] " + "[^".repeat(80000) + "\n> c -->"],
@@ -7865,10 +7865,13 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 	// bound, which a loaded machine can miss: four times the input must take well
 	// under sixteen times as long (linear is four, quadratic sixteen). Measured
 	// before the fix, the open-attribute scan was quadratic (8,280 ms at 20,000
-	// blocks against 975 ms on 44a037a). A note of many `[^` with no `]`, or of
-	// many definition lines, is the pre-existing NRL-172 quadratic in cleanLine's
-	// footnote branch, as slow on 44a037a (6,144 ms at 20,000 definitions against
-	// 6,341 here), and is not checked here.
+	// blocks against 975 ms on 44a037a). A line of many `[^` with no `]` was the
+	// NRL-172 quadratic in cleanLine, checked in its own rows below. A note of
+	// many definition lines is still quadratic, but across lines, not in the
+	// footnote branch: bracketClosesLater re-walks every later line of the
+	// paragraph for each line with an unmatched `[` (`[^1: x` x 4,000 lines took
+	// 2,855 ms on 499038d and 2,827 ms with the NRL-172 fix, medians of five). It
+	// is out of NRL-172's scope and is not checked here.
 	const scaled: Array<[string, (n: number) => string]> = [
 		["many-footnote-references", (n) => "a [^1] ".repeat(n) + "\n\n[^1]: x"],
 		["many-open-attribute-blocks", (n) => "<div title='a\n\nb\n\n".repeat(n)],
@@ -7917,6 +7920,141 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 		const small = timeOf(make(2000));
 		const large = timeOf(make(8000));
 		check(`NRL-166 ${id}: four times the input takes under ten times as long`, large < 50 || large < 10 * Math.max(small, 1), `${small.toFixed(0)} ms -> ${large.toFixed(0)} ms`);
+	}
+
+	// NRL-172: one line of many `[^` with no `]`. Every opener rescanned the rest
+	// of the line twice, once in the footnote-reference match and once in the
+	// label closer scan, so the line was quadratic. Measured on 499038d (Node
+	// 24.21.0, one run per cell): `[^` x 5,000 / 10,000 / 20,000 took 344 /
+	// 1,207 / 4,652 ms, the quote, list, quote-list and callout prefixes about
+	// 7 s at 20,000, and the CDATA repeat 4,042 ms at only 4,000. Fixed, each is
+	// linear and about 100-250 ms at 80,000.
+	//
+	// The ratio uses the house rule above (four times the input, under ten times
+	// the time, or under 50 ms outright): a plan-review measurement put the
+	// fixed code's 5k->20k ratio anywhere from 2.6 to 6.4 under load, so a
+	// tighter bound flakes. Base still fails, and fails fast: any single call
+	// over a second stops the shape there instead of running the whole ladder.
+	const nrl172TimeOf = (src: string): number => {
+		const t0 = performance.now();
+		extractChunks(src, OPTS);
+		return performance.now() - t0;
+	};
+	const nrl172Median = (make: () => string, runs: number): number | undefined => {
+		const times: number[] = [];
+		for (let r = 0; r < runs; r++) {
+			const ms = nrl172TimeOf(make());
+			if (ms > 1000) return undefined;
+			times.push(ms);
+		}
+		times.sort((a, b) => a - b);
+		return times[Math.floor(times.length / 2)];
+	};
+	const nrl172Family: Array<[string, (n: number) => string]> = [
+		["bare", (n) => "[^".repeat(n)],
+		["quote", (n) => "> " + "[^".repeat(n)],
+		["list", (n) => "- " + "[^".repeat(n)],
+		["quote-list", (n) => "> - " + "[^".repeat(n)],
+		["callout", (n) => "> [!note]\n> " + "[^".repeat(n)],
+		["cdata", (n) => "<div>\n" + "<![CDATA[ ".repeat(n)],
+	];
+	for (const [id, make] of nrl172Family) {
+		nrl172TimeOf(make(1000));
+		let small: number | undefined;
+		let large: number | undefined;
+		let linear = false;
+		for (let attempt = 0; attempt < 2 && !linear; attempt++) {
+			small = nrl172Median(() => make(5000), 3);
+			large = small === undefined ? undefined : nrl172Median(() => make(20000), 3);
+			linear = small !== undefined && large !== undefined && (large < 50 || large < 10 * Math.max(small, 1));
+			if (small === undefined || large === undefined) break;
+		}
+		const shown = (ms: number | undefined) => (ms === undefined ? "over 1000 ms" : `${ms.toFixed(0)} ms`);
+		check(`NRL-172 ${id}: four times the input takes under ten times as long`, linear, `${shown(small)} -> ${shown(large)}`);
+		if (!linear) continue;
+		const ceiling = nrl172TimeOf(make(80000));
+		check(`NRL-172 ${id}: 80,000 repeats extract under 1000 ms`, ceiling < 1000, `${ceiling.toFixed(0)} ms`);
+	}
+	// The same rescan from the other openers that share the closer scan, each
+	// over a second on 499038d: at 20,000, `![` 7,518 ms, `[[` 3,990, `![[`
+	// 11,561, `[^ ` 6,140, `[x][` 9,886, `` [`]` `` 9,375, `[\]` 2,606, `==[`
+	// 3,885, and one `[` before many `<!--` 2,504. An opener before an unclosed
+	// comment, repeated, was worse than quadratic (every opener's scan also
+	// re-searched for each comment's closer): `[<!--` took 2,191 ms at 1,000 and
+	// 16,708 at 2,000, and `[%%<!--` 4,232 ms at 2,000, so those rows stay small.
+	const nrl172Siblings: Array<[string, string]> = [
+		["image-openers", "![".repeat(20000)],
+		["wikilink-openers", "[[".repeat(20000)],
+		["embed-openers", "![[".repeat(20000)],
+		["footnote-openers-before-spaces", "[^ ".repeat(20000)],
+		["reference-label-openers", "[x][".repeat(20000)],
+		["openers-with-code-span-closers", "[`]`".repeat(20000)],
+		["openers-with-escaped-closers", "[\\]".repeat(20000)],
+		["highlight-and-link-openers", "==[".repeat(20000)],
+		["one-opener-before-many-comment-openers", "[" + "<!--".repeat(20000)],
+		["openers-before-unclosed-comments", "[<!--".repeat(1000)],
+		["openers-before-pct-and-unclosed-comments", "[%%<!--".repeat(2000)],
+	];
+	for (const [id, src] of nrl172Siblings) {
+		const ms = nrl172TimeOf(src);
+		check(`NRL-172 ${id}: extractChunks finishes under 1000 ms`, ms < 1000, `${ms.toFixed(0)} ms`);
+	}
+	// The fix memoises the closer scans in CloserScan, whose step is a copy of
+	// inlineContainerClose's and wikiTargetClose's (kept apart for speed; see
+	// inlineContainerClose). This holds the copies together: on seeded strings
+	// of the characters the step reacts to, every start position is asked of
+	// every kind in a shuffled order on one scanner, so most answers come from
+	// a memo written by an earlier scan that passed through that position.
+	// footnoteRefEnd is held to the regex it replaced the same way.
+	{
+		let seed = 172;
+		const rnd = () => {
+			seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+			return seed / 0x7fffffff;
+		};
+		const pieces = ["[", "]", "[^", "![", "[[", "]]", "==", "=", "<!--", "-->", "%%", "`", "``", "\\", " ", "a", "\t", "-"];
+		const kinds: Array<[string, boolean]> = [["]", false], ["[", false], ["==", false], ["]]", true]];
+		const footnoteRef = /^\[\^[^\]\s]+\]/;
+		let asked = 0;
+		let differing = 0;
+		let example = "";
+		for (let k = 0; k < 400; k++) {
+			let raw = "";
+			const count = Math.floor(rnd() * 40);
+			for (let t = 0; t < count; t++) raw += pieces[Math.floor(rnd() * pieces.length)]!;
+			const scan = new CloserScan(raw);
+			const jobs: Array<[number, number]> = [];
+			for (let p = 0; p <= raw.length + 1; p++) for (let q = 0; q < kinds.length; q++) jobs.push([p, q]);
+			for (let a = jobs.length - 1; a > 0; a--) {
+				const b = Math.floor(rnd() * (a + 1));
+				[jobs[a], jobs[b]] = [jobs[b]!, jobs[a]!];
+			}
+			for (const [p, q] of jobs) {
+				const [delimiter, wiki] = kinds[q]!;
+				const want = wiki ? wikiTargetClose(raw, p) : inlineContainerClose(raw, p, delimiter);
+				asked++;
+				if (scan.close(p, delimiter, wiki) !== want) {
+					differing++;
+					example ||= `kind ${q} from ${p} in a ${raw.length}-character string`;
+				}
+			}
+			const stop = { from: 1, at: 0 };
+			const starts: number[] = [];
+			for (let i = 0; i + 1 < raw.length; i++) if (raw[i] === "[" && raw[i + 1] === "^") starts.push(i);
+			for (let a = starts.length - 1; a > 0; a--) {
+				const b = Math.floor(rnd() * (a + 1));
+				[starts[a], starts[b]] = [starts[b]!, starts[a]!];
+			}
+			for (const i of starts) {
+				const m = footnoteRef.exec(raw.slice(i));
+				asked++;
+				if (footnoteRefEnd(raw, i, stop) !== (m ? m[0].length : -1)) {
+					differing++;
+					example ||= `footnote from ${i} in a ${raw.length}-character string`;
+				}
+			}
+		}
+		check("NRL-172 memoised closer scans answer exactly as the plain scans, from every start", asked > 50000 && differing === 0, `${asked} asked, ${differing} differing ${example}`);
 	}
 }
 
