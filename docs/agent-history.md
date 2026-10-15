@@ -396,6 +396,67 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### bracketClosesLater made linear across a paragraph's lines (NRL-181, 2026-10-15)
+
+A paragraph of many lines each holding an unmatched `[` froze read start: bracketClosesLater
+re-walked every later line of the paragraph for each such line. Base 028ef10, Node 24.22.0, this
+workstation, medians of five at 1,000 / 4,000 lines: `[a` 150 / 2,413 ms, `[^a` 167 / 2,503,
+`> [^a` 331 / 4,878, `[^1: x` 180 / 2,705 (about 14x for 4x the lines).
+
+Fix, exact rather than bounded: `BracketCarryMemo`, one per extractChunks call. The walk's state at
+line n is (n, quote budget, containerInPlay, depth) and every per-line input it reads is an array
+filled before the main loop (`CarryLines`), so per class (budget, containerInPlay) a line is either
+a stop or a label profile. `labelProfile` gives, in one walk, the `]` that closes at each incoming
+depth below `closes.length` and the net depth change above it (labelClose reads depth only at a
+`]` with no inner `[` outstanding). With S the running net sum and K = S - closes.length (minus
+infinity at a stop), a walk entering line i ends at the first n >= i with K[n] < S[i]; a doubling
+min segment tree answers that per opener. A class's window resets when a query starts before it or
+past its end, so a short paragraph pays only for itself.
+
+- **After, medians of five at 1k / 4k / 16k lines:** `[a` 18 / 50 / 178 ms, `[^a` 11 / 39 / 168,
+  `> [^a` 23 / 81 / 319, `[^1: x` 10 / 43 / 186. Siblings (base 4k medians of three, then branch
+  4k / 16k): depth drift `[a\n[b] [c` 4,909 -> 39 / 162; `> [a\n[a` 2,176 -> 81 / 324;
+  `[!note] [a` 8,676 -> 54 / 205; the deep chain 3,176 -> 41 / 171; `> > > [a` 8,584 -> 84 / 367;
+  `<div>[a` 3,678 -> 35 / 152; `[a <!--` 3,279 -> 62 / 190; `[a %%` 2,757 -> 43 / 168; `[a $$`
+  2,650 -> 45 / 171; `[a |` 2,574 -> 42 / 177; `[a\r` 2,448 -> 34 / 139; `*a [b` 3,032 -> 43 /
+  186; `  [a` 3,217 -> 44 / 177; `[a [b] [c` 8,394 -> 53 / 221; depthSaw 3,326 -> 47 / 199;
+  eight cycling quote depths 1,452 -> 127 / 563.
+- **Residual: cost is lines x distinct quote classes per paragraph.** 32 quote depths cycling line
+  by line: 1,345 ms base at 4k, 297 / 1,336 ms fixed at 4k / 16k. Linear, never worse than base
+  (each class's window costs at most base's walk), but over a second at 16k lines. Not in the suite
+  rows (measurement only).
+- **Exactness in CI.** The pre-NRL-181 walk stays in the source as `bracketWalkFresh` (verbatim but
+  for `op.quotes` becoming a parameter), and `auditBracketCarry` is a test seam that hands every
+  armed opener's memo and fresh answers to the suite. The extract suite runs 6,000 seeded notes of
+  whole lines from a small mlc-style set (list, quote, plain, `<div>` and indented prefixes;
+  `[a`, `]`, `](d)`, `<div>](d) z`, `$$`) through it (about 17,300 openers) and holds
+  `labelProfile` to `labelClose` at every depth on 4,000 seeded lines. Plus one pinned note per
+  mutant. Against the final code each plan mutant fails the audit row: depth0 138 differing, nocip
+  29, nonet 244, nomath 5, noreset 649, rawtail 324; firstclose (`<=` for `===`) passes and is
+  equivalent. An edit that writes a `CarryLines` array inside the main loop makes the memo stale;
+  the audit row is the guard.
+- **Identity evidence, base 028ef10 against the branch, full chunk JSON.** Census of the extract,
+  engine, player and readSelection suites: 43,262 + 8 + 20 + 27 calls, 0 differing (the census'
+  extract run shows the 20 NRL-181 timing rows failing because its shim also runs base). NRL-172 fuzz
+  seeds 1-4 x 50,000: 0. The plan's fuzz181 `ml` 11-14 x 30,000, `ml2` 21-23 x 30,000, `mlc` 31-32 x
+  100,000: 0. The plan critic's generator, five modes x 60,000 (seed 181): 0. NRL-153 spike grids
+  (42,494 notes x 3 option sets) and NRL-128 corpora (census 247,104, casc 80,000, casc2 40,000,
+  real 40,000, x 3): 0. Scripts and logs under `.claude/runs/NRL-181/build/` in the primary.
+- **Parity on ordinary notes, alternating arms.** Owner vault, 2,328 notes (54.9 MB), identical
+  under three option sets; medians of five 24,161 ms base against 24,202 ms fixed. Repo docs, 39
+  notes, medians of seven: 558 against 581 ms (+4%, inside the run-to-run spread of 542-637).
+- **Timing rows.** The four ticket shapes plus drift, `> [a\n[a`, `[!note] [a` and the deep chain:
+  4,000 lines under 1 s (the acceptance, and what makes base fail fast), then 2,000 -> 8,000 lines
+  under the house ratio, medians of three, 1 s fail-fast per call, two attempts. The 1k leg the plan
+  proposed ran 13-31 ms fixed, where noise dominated the ratio. Twelve sibling shapes at 4,000 lines
+  under 1 s. Red on base: all 20 timing rows fail (1,527-9,298 ms at 4k); the extract suite took
+  98 s. Green: the new section adds about 6 s to the extract suite on the fixed code (three
+  alternating runs: 11.3-11.7 s with the 028ef10 test file, 17.5-17.9 s with this one). Of that,
+  the eight family rows measured about 4 s, the siblings 0.8 s and the audit row (6,000 notes, cut
+  from 20,000, which took 4.3-5.9 s) the rest. Full `npm test`: 39 s.
+
+NOT VERIFIED IN OBSIDIAN: lanes never deploy.
+
 ### One whitespace model for the lead predicates (NRL-153 spike, 2026-10-15)
 
 NRL-153 ran as a spike, with no `src/` change: NRL-113 and NRL-114 had already landed
@@ -566,7 +627,9 @@ one run per cell: `[^` 112 ms at 80k, the four prefixes 90-105 ms, CDATA 219 ms,
   fix at 4,000 lines: `[^a` 2,467 / 2,515 ms; `[a` (about 12 KB) 2,466 / 2,465 ms; `> [^a` (about
   24 KB) 4,954 / 4,990 ms; `[^1: x` 2,855 / 2,827 ms. A note-content freeze of seconds is still
   reachable with notes far smaller than the ticket's 80 KB. The fix needs a cross-line memo keyed on
-  container prefix, depth and peel budget, with its own differential.
+  container prefix, depth and peel budget, with its own differential. **Corrected: fixed under
+  NRL-181** (see "bracketClosesLater made linear across a paragraph's lines"); the memo is keyed on
+  quote budget and containerInPlay, and depth is carried by a running sum rather than a key.
 
 NOT VERIFIED IN OBSIDIAN: lanes never deploy.
 
