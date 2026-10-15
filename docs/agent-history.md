@@ -423,9 +423,27 @@ newly lost prose and newly spoken code and headings on 4ae003f (next bullet).
   gains non-heading speech, with no quote-ending code line and no underline below;
   otherwise ee80121's answer for the whole note. 10 corpora x 7 masks (author, plan
   critic, both code critics, a cascade generator; 54.5M cells) read 0 new disc / lost /
-  excl against ee80121 (ADR 0025, fix round 1). Cost: a note with a candidate is
-  extracted twice (about 1.9x measured). A grader that only checks DEF and ALL cannot see
-  the skipHeadings cases; use the 7-mask `g2.cjs`.
+  excl against ee80121 (ADR 0025, fix round 1), on LF and CRLF notes. Cost: a note with
+  a candidate is extracted twice; round 2's measured cost is in the next bullet. A grader
+  that only checks DEF and ALL cannot see the skipHeadings cases; use the 7-mask `g2.cjs`.
+  The fallback is whole-note: an edit far below a comment can switch its reading back to
+  ee80121's (fail-closed, never a new loss).
+- **Fix round 2: lone CR, linear check, pinned terms.** Round 1 missed three shapes, each
+  with a lone CR inside the started code run (code critic 1 F1-F3). Lone CRs stay
+  unmodelled (see "A lone CR cannot reach `extractChunks`" below): any note holding one
+  now gets ee80121's reading in a single pass (`NOTE_LONE_CR` in `extractChunks`). The
+  check's underline lookahead was quadratic on a blank-free run (critic 2 F1: 13.7 s on
+  a 230,669-char note); it is now linear (a backward `underlineBelow` pass and per-offset
+  block-type masks), and the flag-independent work (`rendererHiddenText`, both walker
+  runs) is shared between the passes (`PassShared`). Measured on a 200 KB vault-style
+  note with a candidate every 10 sections, medians of 5: 134 ms on ee80121, 362 ms on
+  2127af9, 246 ms on round 2 (1.83x); no candidate, 170 vs 165 ms; the full table is in
+  ADR 0025, fix round 2. Each term of the predicate has a direct row that only it
+  decides, mutation-checked (ADR 0025 lists which mutant each row kills).
+- **Trap: a timing row that only a generator could reach.** The quadratic sat in a
+  check that runs only when a candidate exists, so no existing scaling row reached it.
+  Any code that runs only behind a rare trigger needs its own scaling row with that
+  trigger present.
 - **Guards that test nothing:** two NRL-170 guards passed with their gate terms removed
   (`paraSure` held them). Mutation-check every new guard against the term it names.
   `!leads.unsureFresh[k]` in `quoteCodeEndSure` is unreachable (the line above a
@@ -452,7 +470,12 @@ newly lost prose and newly spoken code and headings on 4ae003f (next bullet).
   line; (iii) `%%` openers, and a code line holding `<!--`; (iv) the NRL-166 F2
   list-item fence class; (v) lazy indented code after a quote in a NESTED frame is still
   spoken under skipCodeBlocks (`> > P` / `> \tfoo`); (vi) a quoted fence opener with a
-  tab in its lead is misread by the per-line loop.
+  tab in its lead is misread by the per-line loop. And the classes behind the 13 rows of
+  "NRL-170 fix round 1", whose notes keep ee80121's reading: (vii) a `%%` code line
+  read as prose, (viii) a quoted setext h1 under skipHeadings, (ix) a mid-quote
+  `[!note] <!--->` / `<!-->` line read as a callout, (x) quoted indented code read as
+  prose (all NRL-185); (xi) a code start drops `inList`, so the note keeps base's
+  reading (NRL-170). The rows pin ee80121's speech and name the wrong words.
 
 ### Fence heads holding `-->` hidden where nothing is open (NRL-178, 2026-10-14)
 

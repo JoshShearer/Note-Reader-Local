@@ -3522,7 +3522,8 @@ or a line where the change only ADDS non-heading speech, on a line the walker tr
 paragraph (`RendererLeads.para`), that is no quote-ending code line, gated or not, and
 has no underline-shaped line in its run below. Any other difference keeps ee80121's
 answer for the whole note. That is fail-closed: the note reads exactly as on ee80121,
-whose prose loss stays, and nothing new is lost or spoken. The per-line gates
+whose prose loss stays, and nothing new is lost or spoken, on LF and CRLF notes (a lone
+CR broke it; see fix round 2). The per-line gates
 (`<!--`/`%%` on the line, `tabFenceAhead`, the root frame) are kept as they were.
 
 **Cost.** A note with a candidate is extracted twice. Medians of 5 runs on this machine,
@@ -3576,6 +3577,136 @@ quotes, quoted code, `<!--`/`%%`/`-->` lines, fences, definitions; 10% CRLF. Rou
 closes fewer cells than 4ae003f on several corpora: those are notes where 4ae003f's
 change was right on some lines and wrong on others, and round 1 keeps ee80121 for the
 whole note. These are generator corpora, not every note; NOT VERIFIED IN OBSIDIAN.
+
+#### NRL-170 fix round 2: a lone CR falls back, the check is linear, its terms are pinned
+
+Code critics on 2127af9: BLOCK 40 (critic 1) and BLOCK 45 (critic 2). Round 2 is the last
+allowed round.
+
+**Lone CR (critic 1 F1-F3).** All three need a CR not followed by `\n`. The per-line loop
+and `quoteCodeChangeContained` split on `\n` only, so a code-run line holding a lone CR
+was accepted whole: F1 spoke the hidden `QFQ -->` (DEF) and `<!-- QEQ` (ALL), F2 lost the
+shown `QEQ shown` (DEF), F3 spoke the `<h2>` `QDQ --> QEQ` under skipHeadings.
+`docs/agent-history.md` records from a CDP check that a lone CR cannot reach
+`extractChunks` in the product (Verify 3), and NRL-164 was closed as unreachable on the
+same grounds, so the shapes are not modelled. Run decision: since one `/\r(?!\n)/` test
+costs nothing and keeps fail-closed, `extractChunks` now returns ee80121's reading in a
+single pass (`QuoteCodePass.enabled` false) for any note holding a lone CR. That makes
+F1-F3 moot. The four inputs (F3 in both of its forms) are rows pinned to ee80121's
+speech under DEF, ALL, DEF+skipHeadings and ALL+skipCodeBlocks; each is red without the
+fallback (mutant M10) and green with it. `crAbove` in `quoteCodeEndSure` is now
+unreachable and is kept as defence in depth. Every 0 / 0 / 0 claim in this ADR for
+NRL-170 rounds 0 and 1 holds for LF and CRLF notes only; from round 2 a lone-CR note is
+byte-identical to ee80121 (checked per corpus below: `loneCRdiff` 0).
+
+**Linear check (critic 2 F1).** The underline lookahead walked to the end of the
+blank-free run once per line that gained speech: one candidate above a long run was
+quadratic. It is now one backward pass (`underlineBelow`), and the per-line comparison
+reads two per-offset block-type masks (`Uint8Array`, one bit per `BlockType`) instead of
+building string sets and binary-searching each offset's line. The verdict is unchanged
+by construction (a set of `offset:blockType` keys per line is the same information as a
+mask per offset), and r2's chunks equal 2127af9's on every shape timed below. Two
+scaling rows in `tests/extract.test.ts` ("NRL-170 fix round 2: the containment check
+is linear", the NRL-166/172 house rule: warm-up, medians of 3, four times the input
+under ten times the time or under 50 ms, any call over a second fails fast) were red on
+2127af9 (`100 ms -> over 1000 ms` and `167 ms -> over 1000 ms`) and are green here.
+
+**Shared work (critic 2 F2).** `rendererHiddenText`, its merged ranges and the two walker
+runs (`rendererLeads`, plain and refined) do not depend on `QuoteCodePass.enabled`; the
+first pass computes them into `PassShared` and the second reuses them. A CPU profile of
+2127af9 on the 200 KB note below (8 runs) put the containment check at 23% of
+`extractChunks` and those four calls at about 10%.
+
+**Cost, measured** (`.claude/runs/NRL-170/fix2/perf.cjs`, critic 2's shapes plus one,
+DEF, medians of 5 on this machine, idle):
+
+| note | chars | ee80121 | 2127af9 | round 2 | round 2 / ee80121 |
+|---|---|---|---|---|---|
+| vault-style, no candidate | 200,129 | 170 ms | 159 ms | 165 ms | 0.97 |
+| vault-style, a candidate every 10 sections | 200,423 | 134 ms | 362 ms | 246 ms | 1.83 |
+| vault-style, a candidate every section | 200,699 | 124 ms | 331 ms | 231 ms | 1.87 |
+| 6,000 candidate blocks, blank-separated | 236,668 | 375 ms | 918 ms | 740 ms | 1.97 |
+| 6,000 candidate blocks, no blank lines | 230,669 | 304 ms | 13,472 ms | 592 ms | 1.95 |
+| 3,000 candidates then 3,000 quote lines, no blanks | 148,559 | 199 ms | 5,597 ms | 373 ms | 1.87 |
+| one candidate above 4,000 plain lines, no blanks | 82,921 | 32 ms | 922 ms | 93 ms | 2.88 |
+
+The vault-style note (critic 2's generator: headings, paragraphs, lists, quotes,
+callouts, fences, comments, tables) is the realistic figure: a 200 KB note with a
+candidate is read in about 1.8-1.9x ee80121's time. The last row is a small note whose
+second pass dominates. A note with no candidate costs what it did.
+
+**Predicate terms (critic 1 F4).** Rows "NRL-170 fix round 2: every term of the
+containment check decides a row" call `quoteCodeChangeContained` (now exported) with
+hand-built passes, so each term alone decides its row. On critic 1's seed 3, M1, M3
+and M5 changed no output and M7 only closed more cells, so these rows, not corpus
+notes, are what make the terms load-bearing. Mutation run
+(`.claude/runs/NRL-170/fix2/mutants.py`, `mutants.out`), each through the whole extract
+suite:
+
+| mutant | rows that fail |
+|---|---|
+| M1 key on the spoken character, not its offset | `same-text-shifted-offset-rejects` |
+| M2 drop the block type | `same-offsets-another-block-type-rejects`, `new-heading-speech-rejects` |
+| M3 drop the new-heading check | `new-heading-speech-rejects` |
+| M4 drop `para` | `new-speech-on-an-untrusted-line-rejects`, both `c2f2` rows |
+| M5 drop `quoteCodeEnd` | `new-speech-on-a-quote-code-end-line-rejects` |
+| M6 drop the underline lookahead | both underline rows, `c1f3` rows |
+| M6b lookahead of one line only | `underline-further-down-the-run-rejects` |
+| M6c lookahead crosses a blank line | `underline-past-a-blank-line-accepts` |
+| M7 drop the loss check | `a-line-that-loses-speech-rejects` (and M2's, M1's rows) |
+| M8 drop the code-run skip | both code-run rows, every `pin-nrl170-*` row |
+| M9 `return fixed` | all 13 round-1 rows |
+| M10 no lone-CR fallback | all 4 lone-CR rows |
+
+The table is from an idle run, where each mutant failed only the rows listed. A first
+run that shared the CPU with the corpus grading also tripped timing rows (NRL-166 rows
+under M6b, M7 and M8, and this round's many-blocks row under M6c, whose lookahead stays
+linear); those were load, not kills, and the idle rerun shows none.
+
+**Whole-note fallback (critic 2 F4).** The fallback is per note, so the reading of a
+line is no longer a function of its neighbourhood alone: an edit anywhere in a note,
+such as an underline added far below, can switch an earlier comment's reading from
+NRL-170's back to ee80121's. That is fail-closed: the switch goes to ee80121's answer,
+never to a new loss or disclosure.
+
+**Known residuals (critic 2 F3).** The 13 rows of "NRL-170 fix round 1" pin ee80121's
+speech, which is wrong against the renderer. NRL-185 owns the per-line loop's
+misreadings that the false pairing masks: a `%%` code line read as prose (c1f1, both
+rows, loses `Q ZEZ`, `T -->`), a quoted setext h1 under skipHeadings (c1f3, speaks the
+`===` and loses `<!-- ZBZ`), a mid-quote `[!note] <!--->` / `<!-->` line read as a
+callout (c2f1, speaks the code `foo QF` / `-->QF` under DEF), and quoted indented code
+read as prose (c2f2, speaks the code `foo`, `P`, `QD` under DEF). NRL-170 owns c1f2
+`code-start-drops-list-state`: its own code start drops `inList`, so the note keeps
+ee80121's reading, which speaks the code `li ZCZ` and `d ZEZ` under DEF. c1f2
+`code-then-rule` (CODEH) matches the renderer. NRL-185 is not in this run's pipeline
+state, so its scope is taken from the orchestrator's brief, not read from the tracker.
+
+**Evidence** (`.claude/runs/NRL-170/fix2/`, `g2.cjs`, `corp2.cjs`, `runall.sh`, `sum.out`).
+Round 1's grader and 7 masks, round 2 vs ee80121. `cr1` and `cr2` are both round-1 code
+critics' own generators (`critic-r1-1/gen.cjs`, `critic-r1-2/gen.cjs`), cut out of their
+scripts unchanged; they label with upper-case `Q..Q` sentinels.
+
+| corpus | notes | lone-CR / CRLF notes | cells | round 2 new disc / lost / excl | round 2 closed lost / excl |
+|---|---|---|---|---|---|
+| author census | 175,680 | 0 / 0 | 5,064,276 | **0 / 0 / 0** | 61,038 / 16,294 |
+| author fuzz, 20 seeds x 3,000 | 59,986 | 0 / 0 | 811,300 | **0 / 0 / 0** | 100 / 2,049 |
+| author gen170, 20 x 6,000 | 119,942 | 13,266 / 15,940 | 4,797,737 | **0 / 0 / 0** | 51,537 / 19,054 |
+| author tab attack | 7,560 | 0 / 0 | 238,140 | **0 / 0 / 0** | 11,200 / 0 |
+| plan critic gen.cjs, seeds 1-20 x 3,000 | 60,000 | 6,504 / 8,112 | 3,218,845 | **0 / 0 / 0** | 20,498 / 4,600 |
+| plan critic tabs.cjs | 144,500 | 0 / 0 | 5,563,250 | **0 / 0 / 0** | 133,560 / 7,560 |
+| plan critic body.cjs | 15,000 | 0 / 0 | 950,250 | **0 / 0 / 0** | 8,712 / 20,736 |
+| code critic 1 (4ae003f) gen.cjs, seeds 1-8 x 25,000 | 193,899 | 0 / 29,732 | 6,621,594 | **0 / 0 / 0** | 106,481 / 258,062 |
+| code critic 2 (4ae003f), reconstructed, seeds 11/22/33/44 x 40,000 | 159,690 | 0 / 7,962 | 5,916,631 | **0 / 0 / 0** | 5,281 / 48,923 |
+| cascade generator (round 1), seeds 1-16 x 25,000 | 399,998 | 0 / 40,220 | 21,324,625 | **0 / 0 / 0** | 209,135 / 438,777 |
+| code critic 1 (2127af9) `critic-r1-1/gen.cjs`, seeds 1-16 x 25,000 | 400,000 | 23,804 / 40,315 | 15,667,155 | **0 / 0 / 0** | 228,016 / 252,045 |
+| code critic 2 (2127af9) `critic-r1-2/gen.cjs`, seeds 11/22/33/44 x 20,000 | 79,894 | 0 / 7,936 | 3,283,560 | **0 / 0 / 0** | 95,591 / 83,386 |
+
+Every corpus: 0 renderer crashes, 0 lockstep failures, and every lone-CR note's chunks
+(text, offsets, block types) equal ee80121's under all 7 masks (43,574 notes). On the ten
+round-1 corpora the closed counts equal round 1's exactly, as the unchanged verdict
+predicts. 1.13.7 and 1.14.4 disagree on 6 cells of `c2` and 2 of `cr2`; grading uses
+1.13.7. These are generator corpora, not every note. NOT VERIFIED IN OBSIDIAN: lanes do
+not deploy.
 
 ### CLOSED by NRL-119: a list marker alone on its line ends the paragraph
 
