@@ -396,6 +396,30 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### One whitespace model for the lead predicates (NRL-153 spike, 2026-10-15)
+
+NRL-153 ran as a spike, with no `src/` change: NRL-113 and NRL-114 had already landed
+separately. The record is `docs/spikes/SPIKE-WHITESPACE-001.md`. Read it before touching
+`INDENTED_CODE`, `HEADING`, `BLOCKQUOTE` or another quote-peel copy, `LIST_BULLET`, `TABLE_ROW`,
+`FENCE` / `fenceOpensAt`, `opensMathBlock` or the HTML opener set.
+
+- **Renderer rules were executed, not transcribed.** Both harnesses (1.14.4 and 1.13.7) passed
+  `selftest.cjs` and agreed on all 13,860 grid notes (15 + 6 constructs x 33 leads x 10
+  containers x 2 positions). Indented code is literal `^(?: {4}|\t)`. Block-start constructs
+  take any spaces and tabs. Interrupts take 0-3 spaces, and a tab refuses them. A setext
+  underline takes no lead. `%%` and top-level `$$` take 0-3 spaces even at block start. The
+  quote peel is `>` plus one space, never a tab, so every `>\t` line is code.
+- **On `60ff058`, 4,720 of 55,440 cells diverge** (two profiles x two sentinels). There is one
+  disclosure family: `- > Para.` / `  > Title <!--` / `  > ===` (66 cells). The largest
+  prose-loss family is setext over `<!--` inside a list item, which loses the rest of the note
+  (672 cells).
+- **Composition re-checked with four shadow mutants.** Undoing NRL-113's `INDENTED_CODE` gives
+  44 disclosures. Widening `HEADING` alone loses 39 cells. Narrowing both math sites without the
+  list dedent moves 192 cells to excluded speech. Narrowing `BLOCKQUOTE` and
+  `BLOCKQUOTE_ONE_LEVEL` alone moves nothing.
+- The spike's "Recommended order" sequences the child tickets and NRL-147, 157, 173 and 179.
+  Reading view only. NOT VERIFIED IN OBSIDIAN.
+
 ### A container spanning a mid-paragraph `<!--` makes it text (NRL-128, 2026-10-15)
 
 `a ==x` / `Prose <!--` / `HIDDENQ` / `y== b` / `--> VISIBLEQ.` spoke `a ==x Prose VISIBLEQ.`
