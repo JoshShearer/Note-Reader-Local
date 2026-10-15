@@ -1,4 +1,4 @@
-import { CloserScan, extractChunks, footnoteRefEnd, inlineContainerClose, wikiTargetClose } from "../src/text/extract.ts";
+import { CloserScan, extractChunks, footnoteRefEnd, inlineContainerClose, quoteCodeChangeContained, wikiTargetClose } from "../src/text/extract.ts";
 import { rendererPercentBlocks } from "../src/text/obsidianBlocks.ts";
 import {
 	graphemeBoundaries,
@@ -8188,6 +8188,9 @@ console.log("NRL-170: a quote ended by lazy indented code does not pair a commen
 		["guard-nrl170-top-level-block-hidden", "Plain QPQ\n<!-- QAQ\n\t```\nQBQ -->\nTAIL QDQ", "Plain QPQ TAIL QDQ", "Plain QPQ TAIL QDQ"],
 		// A lone CR above and a table-shaped line above: the opener is no
 		// `paraSure` line, so base's answer (prose loss, fail-closed) stands.
+		// Since fix round 2 any lone CR in the note keeps ee80121's reading before
+		// either term is asked (`extractChunks`), so the lone-CR rows here are held
+		// by that first; mutant M10 in ADR 0025 does not redden them alone.
 		["guard-nrl170-lone-cr-above-keeps-base", "> Pl\rain QPQ\n> \t<!-- QAQ\n\t```\n> QBQ -->\nTAIL QDQ", "Pl ain QPQ | TAIL QDQ", "Pl ain QPQ | TAIL QDQ"],
 		["guard-nrl170-table-shaped-above-keeps-base", "> | a |\n> \t<!-- QAQ\n\t```\n> QBQ -->\nTAIL QDQ", "| a | | TAIL QDQ", "| a | | TAIL QDQ"],
 		// The rows above are held by `paraSure` (no trusted paragraph opener), not
@@ -8195,7 +8198,9 @@ console.log("NRL-170: a quote ended by lazy indented code does not pair a commen
 		// tests its `crAbove` term: a lone CR ON the code line is a line break for
 		// the renderer, which shows `foo` as code and then `bar QBQ` as a new
 		// paragraph. Our `\n` split sees one indented line, so a code start there
-		// would skip `bar QBQ`. Base's reading (which speaks `foo`) stands.
+		// would skip `bar QBQ`. Base's reading (which speaks `foo`) stands. Fix
+		// round 2's note-wide lone-CR fallback now decides this row before
+		// `crAbove` is reached; the term stays as defence in depth.
 		["guard-nrl170-lone-cr-on-code-line-keeps-base", "> P QPQ\n\tfoo\rbar QBQ\nTAIL QDQ", "P QPQ | foo bar QBQ TAIL QDQ", "P QPQ | foo bar QBQ TAIL QDQ"],
 		// Residual (iii): the code line holds a comment opener itself.
 		["guard-nrl170-opener-on-code-line-keeps-base", "> P QPQ <!-- QAQ\n      --><!--QCQ\n> QBQ -->\nTAIL QDQ", "P QPQ | TAIL QDQ", "P QPQ | TAIL QDQ"],
@@ -8227,6 +8232,12 @@ console.log("NRL-170 fix round 1: a change that would cascade keeps ee80121's an
 	// below it). `quoteCodeChangeContained` sees the difference and keeps base's
 	// answer for the whole note, so every row pins ee80121's speech, NOT the
 	// renderer's: several still speak code or lose a word, as ee80121 did.
+	//
+	// KNOWN RESIDUALS (NRL-170 fix round 2, code critic 2 F3). Each row's comment
+	// names the words that are wrong against the renderer (1.13.7) and the ticket
+	// that owns them. NRL-185 owns the per-line loop's misreadings that the false
+	// pairing masks; NRL-170 owns the one that its own code start causes. A fix
+	// there will turn these rows red on purpose: re-derive them from the renderer.
 	const CODE = { ...OPTS, skipCodeBlocks: false, skipInlineCode: false };
 	const ALL = { ...CODE, stripTags: false, speakUrls: true, skipTables: false, skipFrontmatter: false, speakEmbeds: true };
 	const masks = {
@@ -8243,25 +8254,36 @@ console.log("NRL-170 fix round 1: a change that would cascade keeps ee80121's an
 	const rows: Array<[string, string, keyof typeof masks, string]> = [
 		// 4ae003f spoke the code `%% ZDZ` (and `ZFZ %%`): a gated quote-ending code
 		// line shared a window with an ungated one, so it was read as prose.
+		// Wrong: the shown `<!-- ZBZ`, `Q ZEZ` and `T -->` (and callout `<!-- x`,
+		// `Q`, `lazy -->`) are lost, class (e). Owner: NRL-185 (a `%%` code line
+		// read as prose).
 		["guard-nrl170r1-c1f1-gated-code-line-in-window", "> P ZAZ <!-- ZBZ\n\tc ZFZ\n> Q ZEZ\n\t%% ZDZ\nT -->", "DEF", "P ZAZ"],
 		["guard-nrl170r1-c1f1-gated-code-line-in-window", "> P ZAZ <!-- ZBZ\n\tc ZFZ\n> Q ZEZ\n\t%% ZDZ\nT -->", "ALLC", "P ZAZ"],
 		["guard-nrl170r1-c1f1-callout-nested-quote", "> [!note] T\n> body <!-- x\n\t~~~\n> > Q\n\tZFZ %%\nlazy -->", "DEF", "T | body"],
 		// 4ae003f read `\t- li` as code (right) and so dropped `inList`; `\td` /
 		// `===` after the table then read as a setext heading and lost `===`.
+		// Wrong under DEF: the code `li ZCZ` and `d ZEZ` are spoken (CODEH matches
+		// the renderer). Owner: NRL-170 (its code start drops `inList`).
 		["guard-nrl170r1-c1f2-code-start-drops-list-state", "> P ZAZ\n\t- li ZCZ\n| a | b |\n|---|---|\n| ZDZ | c |\n\td ZEZ\n===\nTail ZGZ", "DEF", "P ZAZ | li ZCZ | d ZEZ === Tail ZGZ"],
 		["guard-nrl170r1-c1f2-code-start-drops-list-state", "> P ZAZ\n\t- li ZCZ\n| a | b |\n|---|---|\n| ZDZ | c |\n\td ZEZ\n===\nTail ZGZ", "CODEH", "P ZAZ | li ZCZ | d ZEZ === Tail ZGZ"],
+		// Matches the renderer under CODEH; 4ae003f lost words here.
 		["guard-nrl170r1-c1f2-code-then-rule", "> P\n> Q <!-- x\n\t===\n%%\n\tZEZ %%\n\td ZFZ\n---", "CODEH", "P | Q <!-- x | === d ZFZ"],
 		// The renderer makes `> Q ZDZ -->` / `===` an h1; un-pairing spoke it
-		// under skipHeadings.
+		// under skipHeadings. Wrong: the shown `<!-- ZBZ` is lost and the underline
+		// `===` is spoken. Owner: NRL-185 (a quoted setext heading).
 		["guard-nrl170r1-c1f3-setext-in-quote-unmasked", "> P ZAZ <!-- ZBZ\n    c ZCZ\n> Q ZDZ -->\n===\nTail ZFZ", "DEFH", "P ZAZ | === Tail ZFZ"],
 		["guard-nrl170r1-c1f3-setext-in-quote-unmasked", "> P ZAZ <!-- ZBZ\n    c ZCZ\n> Q ZDZ -->\n===\nTail ZFZ", "CODEH", "P ZAZ | === Tail ZFZ"],
 		// A mid-quote `[!note] <!--->` / `<!-->` line, misread on base, was spoken
-		// only through the false pairing; 4ae003f lost QC and `y -->`.
+		// only through the false pairing; 4ae003f lost QC and `y -->`. Wrong under
+		// DEF: the code `foo QF` and `-->QF` are spoken. Owner: NRL-185 (a mid-quote
+		// `[!note]` line read as a callout).
 		["guard-nrl170r1-c2f1-empty-comment-callout-line", "> P\n> [!note] <!---> QC\n\tfoo QF\n> y -->", "DEF", "P | <!---> QC | foo QF | y -->"],
 		["guard-nrl170r1-c2f1-empty-comment-callout-line", "> P\n> [!note] <!---> QC\n\tfoo QF\n> y -->", "ALL", "P | <!---> QC | foo QF | y -->"],
 		["guard-nrl170r1-c2f1-abrupt-comment-callout-line", "> P\n> [!note] <!--> QC\n\t-->QF", "DEF", "P | <!--> QC | -->QF"],
 		// A `<!--` on a continuation line of the started code run no longer
 		// opened a comment, which exposed quoted indented code read as prose.
+		// Wrong under DEF: the code `foo` (and `P`, `QD`) is spoken. Owner: NRL-185
+		// (quoted indented code read as prose).
 		["guard-nrl170r1-c2f2-opener-in-code-run", "> P\n\tfoo\n\t<!-- x\n>>\tQJ", "DEF", "P | foo"],
 		["guard-nrl170r1-c2f2-opener-in-code-run-nested", ">>\tP\n     QD\n     <!-- QG\n> \tQH", "DEF", "P | QD"],
 	];
@@ -8270,6 +8292,143 @@ console.log("NRL-170 fix round 1: a change that would cascade keeps ee80121's an
 		check(`NRL-170 ${id} (${mask})`, got === want, JSON.stringify(got));
 		const lockstep = extractChunks(src, masks[mask]).every((c) => unitsMatch(c.text, c.sourceIndex, src));
 		check(`NRL-170 ${id} sourceIndex lockstep (${mask})`, lockstep);
+	}
+}
+
+console.log("NRL-170 fix round 2: a lone CR keeps ee80121's reading for the whole note");
+{
+	// Code critic 1 (round 1) F1-F3. A lone CR is a line break for the renderer
+	// but not for the per-line loop's `\n` split, so on 2127af9 the started code
+	// run swallowed the CR's second half: F1 spoke the hidden `QFQ -->` under
+	// DEF (and `<!-- QEQ` under ALL), F2 lost the shown `QEQ shown` under DEF,
+	// F3 spoke the `<h2>` `QDQ --> QEQ` under skipHeadings. `docs/agent-history.md`
+	// records that a lone CR cannot reach `extractChunks` in the product (Verify
+	// 3, CDP), so these are not modelled: the note gets ee80121's reading whole.
+	// Every row pins ee80121's speech under all four masks (checked against the
+	// ee80121 bundle), which still speaks code `foo QCQ bar QDQ` under DEF and
+	// loses F3's QDQ: known residuals of a shape the product does not produce.
+	const CODE = { ...OPTS, skipCodeBlocks: false, skipInlineCode: false };
+	const ALL = { ...CODE, stripTags: false, speakUrls: true, skipTables: false, skipFrontmatter: false, speakEmbeds: true };
+	const masks = { DEF: OPTS, ALL, DEFH: { ...OPTS, skipHeadings: true }, ALLC: { ...ALL, skipCodeBlocks: true } };
+	const rows: Array<[string, string, string]> = [
+		["guard-nrl170r2-c1f1-lone-cr-in-code-run-comment", "> P QAQ\n\tfoo QCQ\n\tbar QDQ\r<!-- QEQ\nQFQ -->\nTAIL QGQ", "P QAQ | foo QCQ bar QDQ TAIL QGQ"],
+		["guard-nrl170r2-c1f2-lone-cr-in-code-run-prose", "> P QAQ\n\tfoo QCQ\n\tbar QDQ\rQEQ shown\nTAIL QFQ", "P QAQ | foo QCQ bar QDQ QEQ shown TAIL QFQ"],
+		["guard-nrl170r2-c1f3-lone-cr-before-underline", "> P QAQ <!-- QBQ\n\tfoo QCQ\nQDQ --> QEQ\r---\nTAIL QFQ", "P QAQ | QEQ --- TAIL QFQ"],
+		["guard-nrl170r2-c1f3-lone-cr-after-underline", "> P QAQ <!-- QBQ\n\tfoo QCQ\nQDQ --> QEQ\n---\rTAIL QFQ", "P QAQ | QEQ --- TAIL QFQ"],
+	];
+	for (const [id, src, want] of rows) {
+		for (const [mask, o] of Object.entries(masks)) {
+			const got = extractChunks(src, o)
+				.map((c) => c.text)
+				.join(" | ");
+			check(`NRL-170 ${id} (${mask})`, got === want, JSON.stringify(got));
+			check(`NRL-170 ${id} sourceIndex lockstep (${mask})`, extractChunks(src, o).every((c) => unitsMatch(c.text, c.sourceIndex, src)));
+		}
+	}
+}
+
+console.log("NRL-170 fix round 2: every term of the containment check decides a row");
+{
+	// Code critic 1 (round 1) F4: deleting the loss check, the new-heading check
+	// or the `quoteCodeEnd` term, keying on text instead of source offset, or
+	// dropping the block type all left the suite green, and no generator note
+	// was found whose output any of them changes. These rows call the predicate
+	// directly, with hand-built passes, so each term is the only one that
+	// decides its row; the mutant each row kills is named (mutation-checked in
+	// fix round 2, ADR 0025).
+	//
+	// Note lines: 0 `> P a <!--`, 1 `\tfoo` (the started code run, a quote-ending
+	// code line), 2 `b c b` (a trusted paragraph line), 3 `d`.
+	const note = "> P a <!--\n\tfoo\nb c b\nd";
+	const at = (text: string, from: number, blockType: SpeechChunk["blockType"]): SpeechChunk => ({
+		id: "",
+		sequence: 0,
+		blockType,
+		filePath: "",
+		text,
+		sourceIndex: Array.from(text, (_, i) => from + i),
+		sourceStart: from,
+		sourceEnd: from + text.length,
+	});
+	const qc = (over: Partial<{ codeRun: boolean[]; para: boolean[]; quoteCodeEnd: boolean[] }> = {}) => ({
+		codeRun: [false, true, false, false],
+		para: [true, false, true, true],
+		quoteCodeEnd: [false, true, false, false],
+		...over,
+	});
+	const head = at("P a", 2, "quote");
+	const rows: Array<[string, string, SpeechChunk[], SpeechChunk[], ReturnType<typeof qc>, boolean]> = [
+		// [id, source, base, fixed, pass facts, contained]
+		["accepts-code-run-and-new-paragraph-speech", note, [head], [head, at("foo", 12, "other"), at("b c b", 16, "paragraph")], qc(), true],
+		// Mutant: drop the `codeRun` skip. Line 1 loses speech but is the code run.
+		["code-run-line-may-lose-speech", note, [head, at("foo", 12, "paragraph")], [head], qc(), true],
+		// Mutant: drop the loss check (critic 1 M7). Line 2 keeps `b` and loses `c b`.
+		["a-line-that-loses-speech-rejects", note, [head, at("b c b", 16, "paragraph")], [head, at("b", 16, "paragraph")], qc(), false],
+		// Mutant: drop the new-heading check (M3). Line 2 newly speaks as a heading.
+		["new-heading-speech-rejects", note, [head], [head, at("b c b", 16, "heading")], qc(), false],
+		// Mutant: drop the block type from the key (M2). Same offsets, now a list.
+		["same-offsets-another-block-type-rejects", note, [head, at("b c b", 16, "paragraph")], [head, at("b c b", 16, "list")], qc(), false],
+		// Mutant: key on the spoken character instead of its offset (M1). The same
+		// `b` spoken from the line's other `b`.
+		["same-text-shifted-offset-rejects", note, [head, at("b", 16, "paragraph")], [head, at("b", 20, "paragraph")], qc(), false],
+		// Mutant: drop `para` (M4). New speech on a line the walker does not trust.
+		["new-speech-on-an-untrusted-line-rejects", note, [head], [head, at("b c b", 16, "paragraph")], qc({ para: [true, false, false, true] }), false],
+		// Mutant: drop `|| qc.quoteCodeEnd[k]` (M5). New speech on a quote-ending
+		// code line the gate refused, outside the code run.
+		["new-speech-on-a-quote-code-end-line-rejects", note, [head], [head, at("b c b", 16, "paragraph")], qc({ quoteCodeEnd: [false, true, true, false] }), false],
+		// Mutant: drop the underline lookahead (M6), or stop it after one line.
+		["underline-right-below-rejects", "> P a <!--\n\tfoo\nb c b\n===", [head], [head, at("b c b", 16, "paragraph")], qc(), false],
+		["underline-further-down-the-run-rejects", "> P a <!--\n\tfoo\nb c b\nd\n> e\n---", [head], [head, at("b c b", 16, "paragraph")], qc({ para: [true, false, true, true, true, true] }), false],
+		// Mutant: let the lookahead cross a blank (or quote-only) line.
+		["underline-past-a-blank-line-accepts", "> P a <!--\n\tfoo\nb c b\n>\n===", [head], [head, at("b c b", 16, "paragraph")], qc(), true],
+	];
+	for (const [id, src, base, fixed, facts, want] of rows) {
+		check(`NRL-170 containment ${id}`, quoteCodeChangeContained(src, base, fixed, facts) === want);
+	}
+}
+
+console.log("NRL-170 fix round 2: the containment check is linear");
+{
+	// Code critic 2 (round 1) F1: on 2127af9 the underline scan in
+	// `quoteCodeChangeContained` walked to the end of the blank-free run once per
+	// line that gained speech, so one candidate above a long run was quadratic
+	// (one `> P <!--` / `\tfoo` above 4,000 plain lines: 66 ms on ee80121,
+	// 1,561 ms on 2127af9, critic 2's single run under load). The house rule of
+	// the NRL-166 and NRL-172 rows: warm up, take medians of three, four times
+	// the input must take under ten times as long or under 50 ms outright, and
+	// any single call over a second stops the shape there.
+	const timeOf = (src: string): number => {
+		const t0 = performance.now();
+		extractChunks(src, OPTS);
+		return performance.now() - t0;
+	};
+	const median = (make: () => string): number | undefined => {
+		const times: number[] = [];
+		for (let r = 0; r < 3; r++) {
+			const ms = timeOf(make());
+			if (ms > 1000) return undefined;
+			times.push(ms);
+		}
+		times.sort((a, b) => a - b);
+		return times[1];
+	};
+	const shapes: Array<[string, (n: number) => string, number]> = [
+		["one-candidate-above-a-long-blank-free-run", (n) => "> P start <!-- a\n\tfoo\n" + Array.from({ length: n }, (_, i) => `line ${i} of the log`).join("\n") + "\n> end -->", 1000],
+		["many-candidate-blocks-without-blank-lines", (n) => Array.from({ length: n }, (_, i) => `> P ${i} <!-- a\n\tfoo ${i}\n> b ${i} -->`).join("\n"), 500],
+	];
+	for (const [id, make, n] of shapes) {
+		timeOf(make(n / 4));
+		let small: number | undefined;
+		let large: number | undefined;
+		let linear = false;
+		for (let attempt = 0; attempt < 2 && !linear; attempt++) {
+			small = median(() => make(n));
+			large = small === undefined ? undefined : median(() => make(4 * n));
+			linear = small !== undefined && large !== undefined && (large < 50 || large < 10 * Math.max(small, 1));
+			if (small === undefined || large === undefined) break;
+		}
+		const shown = (ms: number | undefined) => (ms === undefined ? "over 1000 ms" : `${ms.toFixed(0)} ms`);
+		check(`NRL-170 ${id}: four times the input takes under ten times as long`, linear, `${shown(small)} -> ${shown(large)}`);
 	}
 }
 

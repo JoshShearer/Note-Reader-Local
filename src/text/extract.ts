@@ -5722,11 +5722,38 @@ export function extractChunks(
 	src: SegmenterSource = platformSegmenters,
 	filePath: string = "",
 ): SpeechChunk[] {
-	const qc: QuoteCodePass = { enabled: true, candidate: false, codeRun: [], para: [], quoteCodeEnd: [] };
+	const shared: PassShared = {};
+	// A lone CR is a line break for the renderer but not for the per-line loop,
+	// which splits on `\n` only, so NRL-170's code start and `quoteCodeChangeContained`
+	// would read a different line structure from the one displayed (NRL-170 code
+	// critic 1, round 1: F1-F3 spoke hidden and heading text and lost shown text
+	// on such notes). The note gets ee80121's reading, in one pass. That is the
+	// fail-closed direction, and costs nothing: `docs/agent-history.md` records
+	// from a CDP check that a lone CR cannot reach `extractChunks` in the product.
+	if (NOTE_LONE_CR.test(source)) return extractChunksPass(source, opts, src, filePath, quoteCodePass(false, shared));
+	const qc = quoteCodePass(true, shared);
 	const fixed = extractChunksPass(source, opts, src, filePath, qc);
 	if (!qc.candidate) return fixed;
-	const base = extractChunksPass(source, opts, src, filePath, { enabled: false, candidate: false, codeRun: [], para: [], quoteCodeEnd: [] });
+	const base = extractChunksPass(source, opts, src, filePath, quoteCodePass(false, shared));
 	return quoteCodeChangeContained(source, base, fixed, qc) ? fixed : base;
+}
+
+// A CR anywhere in the note that is not half of a CRLF.
+const NOTE_LONE_CR = /\r(?!\n)/;
+
+/**
+ * Work a pass does that does not depend on `QuoteCodePass.enabled`, computed by
+ * whichever pass runs first and reused by the second (NRL-170 fix round 2,
+ * code critic 2 F2). Every field is read-only once set.
+ */
+interface PassShared {
+	/** `rendererHiddenText(source)`, null where the transcription has no answer. */
+	rendererHidden?: ReturnType<typeof rendererHiddenText>;
+	/** The merged ranges every spoken character is checked against. */
+	hiddenSpans?: Array<[number, number]>;
+	/** The two walker runs, without and with NRL-166 fix round 1's refinements. */
+	leadsPlain?: RendererLeads;
+	leadsRefined?: RendererLeads;
 }
 
 /**
@@ -5745,12 +5772,21 @@ interface QuoteCodePass {
 	para: boolean[];
 	/** Out: every quote-ending code line the walker saw, gated or not. */
 	quoteCodeEnd: boolean[];
+	/** In/out: flag-independent work shared between the two passes. */
+	shared: PassShared;
+}
+
+function quoteCodePass(enabled: boolean, shared: PassShared): QuoteCodePass {
+	return { enabled, candidate: false, codeRun: [], para: [], quoteCodeEnd: [], shared };
 }
 
 // A setext-underline-shaped line once quote markers are stripped. The renderer
 // may make the paragraph above it a heading (`> Q` / `===` is an h1 inside the
 // quote), which the per-line loop does not always read.
 const QC_UNDERLINE = /^[ \t>]*(?:=+|-+)[ \t]*\r?$/;
+
+// One bit per block type, so a source offset's spoken block types are a mask.
+const QC_BLOCK_BIT: Record<BlockType, number> = { heading: 1, paragraph: 2, list: 4, quote: 8, other: 16 };
 
 /**
  * Whether NRL-170's pass may stand in for base's (fix round 1, ADR 0025).
@@ -5777,56 +5813,67 @@ const QC_UNDERLINE = /^[ \t>]*(?:=+|-+)[ \t]*\r?$/;
  * base's answer for the whole note: the fail-closed direction, prose loss
  * already present on ee80121, never new.
  *
- * Linear in the note and the spoken text; the caller runs it, and the second
- * pass, only when a candidate line exists.
+ * Characters are compared by source offset, never by text: the same words
+ * spoken from another place on the line are a different reading. How often an
+ * offset is spoken is not compared, only which block types speak it.
+ *
+ * Linear in the note and the spoken text (fix round 2: the underline lookahead
+ * was a scan to the end of the run per line, quadratic on a long blank-free
+ * run, code critic 2 F1). Exported for its term-by-term rows in the tests.
  */
-function quoteCodeChangeContained(source: string, base: readonly SpeechChunk[], fixed: readonly SpeechChunk[], qc: QuoteCodePass): boolean {
-	const lines = source.split("\n");
-	const starts: number[] = [];
-	for (let k = 0, at = 0; k < lines.length; k++) {
-		starts.push(at);
-		at += lines[k]!.length + 1;
-	}
-	const lineOf = (off: number): number => {
-		let lo = 0;
-		let hi = starts.length - 1;
-		while (lo < hi) {
-			const mid = (lo + hi + 1) >> 1;
-			if (starts[mid]! <= off) lo = mid;
-			else hi = mid - 1;
-		}
-		return lo;
-	};
-	// Per line, the set of "offset:blockType" keys of its spoken non-space
-	// characters. Joining spaces are left out: where they map is not content.
-	const byLine = (chunks: readonly SpeechChunk[]): Map<number, Set<string>> => {
-		const out = new Map<number, Set<string>>();
+export function quoteCodeChangeContained(
+	source: string,
+	base: readonly SpeechChunk[],
+	fixed: readonly SpeechChunk[],
+	qc: Pick<QuoteCodePass, "codeRun" | "para" | "quoteCodeEnd">,
+): boolean {
+	const n = source.length;
+	// Per source offset, the mask of block types that speak a non-space character
+	// from it. Joining spaces are left out: where they map is not content.
+	const spokenAt = (chunks: readonly SpeechChunk[]): Uint8Array => {
+		const out = new Uint8Array(n + 1);
 		for (const c of chunks) {
+			const bit = QC_BLOCK_BIT[c.blockType];
 			for (let i = 0; i < c.text.length; i++) {
-				if (/\s/.test(c.text[i]!)) continue;
+				const code = c.text.charCodeAt(i);
+				if (code === 32 || (code >= 9 && code <= 13) || (code > 127 && /\s/.test(c.text[i]!))) continue;
 				const off = c.sourceIndex[i]!;
-				const k = lineOf(off);
-				let set = out.get(k);
-				if (!set) out.set(k, (set = new Set<string>()));
-				set.add(`${off}:${c.blockType}`);
+				const at = off < 0 ? 0 : off > n ? n : off;
+				out[at] = out[at]! | bit;
 			}
 		}
 		return out;
 	};
-	const b = byLine(base);
-	const f = byLine(fixed);
-	const touched = new Set<number>([...b.keys(), ...f.keys()]);
-	for (const k of touched) {
-		const bs = b.get(k) ?? new Set<string>();
-		const fs = f.get(k) ?? new Set<string>();
-		if (bs.size === fs.size && [...bs].every((x) => fs.has(x))) continue;
-		if (qc.codeRun[k]) continue;
-		for (const x of bs) if (!fs.has(x)) return false;
-		for (const x of fs) if (!bs.has(x) && x.endsWith(":heading")) return false;
-		if (!qc.para[k] || qc.quoteCodeEnd[k]) return false;
-		for (let j = k + 1; j < lines.length && lines[j]!.replace(/^[ \t>]*/, "").trim() !== ""; j++) {
-			if (QC_UNDERLINE.test(lines[j]!)) return false;
+	const b = spokenAt(base);
+	const f = spokenAt(fixed);
+	const lines = source.split("\n");
+	// Whether a line below k, in k's run of non-blank lines, is underline-shaped:
+	// one backward pass.
+	const underlineBelow = new Array<boolean>(lines.length).fill(false);
+	for (let k = lines.length - 2; k >= 0; k--) {
+		const next = lines[k + 1]!;
+		if (next.replace(/^[ \t>]*/, "").trim() === "") continue;
+		underlineBelow[k] = QC_UNDERLINE.test(next) || underlineBelow[k + 1]!;
+	}
+	// Line k owns offsets [at, at + length] (its `\n` included); the last line
+	// also owns `n`, where an offset past the end is clamped.
+	for (let k = 0, at = 0; k < lines.length; at += lines[k]!.length + 1, k++) {
+		const end = Math.min(at + lines[k]!.length + 1, n + 1);
+		let differs = false;
+		let lost = false;
+		let newHeading = false;
+		for (let o = at; o < end; o++) {
+			const x = b[o]!;
+			const y = f[o]!;
+			if (x === y) continue;
+			differs = true;
+			if (x & ~y) lost = true;
+			if (y & ~x & QC_BLOCK_BIT.heading) newHeading = true;
 		}
+		if (!differs || qc.codeRun[k]) continue;
+		if (lost || newHeading) return false;
+		if (!qc.para[k] || qc.quoteCodeEnd[k]) return false;
+		if (underlineBelow[k]) return false;
 	}
 	return true;
 }
@@ -5845,8 +5892,13 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// offset falls in one of its ranges is dropped before segmentation (`speak`), and
 	// its `%%` block starts withhold our own block opener where the renderer has
 	// none (`percentOpensAt`).
-	const rendererHidden = rendererHiddenText(source, lines.length);
-	const hiddenSpans = mergeRanges(rendererHidden?.ranges ?? fallbackHtmlHidden(source));
+	const shared = qc.shared;
+	if (shared.hiddenSpans === undefined) {
+		shared.rendererHidden = rendererHiddenText(source, lines.length);
+		shared.hiddenSpans = mergeRanges(shared.rendererHidden?.ranges ?? fallbackHtmlHidden(source));
+	}
+	const rendererHidden = shared.rendererHidden ?? null;
+	const hiddenSpans = shared.hiddenSpans;
 	const speak = (text: string, index: number[], start: number, blockType: BlockType): SpeechChunk[] => {
 		const kept = hiddenSpans.length === 0 ? { text, index } : dropHiddenText(text, index, hiddenSpans);
 		return splitSentences(kept.text, kept.index, start, segmentCtx, blockType);
@@ -6810,8 +6862,8 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// is sound; what the gate guards is the text a refined answer stops hiding,
 	// which lies in that line's own window.
 	const walkFrom = frontmatter ? frontmatter.endLine + 1 : 0;
-	const leadsPlain = rendererLeads(lines, walkFrom, false);
-	const leadsRefined = rendererLeads(lines, walkFrom, true);
+	const leadsPlain = (shared.leadsPlain ??= rendererLeads(lines, walkFrom, false));
+	const leadsRefined = (shared.leadsRefined ??= rendererLeads(lines, walkFrom, true));
 	const pick = <T>(a: T[], b: T[]): T[] => a.map((v, k) => (refineWindowClean[k]! ? b[k]! : v));
 	const leads: RendererLeads = {
 		lead: pick(leadsPlain.lead, leadsRefined.lead),
@@ -6949,6 +7001,8 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			qc.enabled &&
 			v &&
 			!leads.unsureFresh[k]! &&
+			// Unreachable since fix round 2 (a note with a lone CR never runs an
+			// enabled pass, see `extractChunks`); kept as defence in depth.
 			!crAbove[k]! &&
 			!tabFenceAhead[k]! &&
 			!lines[k]!.includes("<!--") &&
