@@ -399,26 +399,48 @@ forbade.
 ### One whitespace model for the lead predicates (NRL-153 spike, 2026-10-15)
 
 NRL-153 ran as a spike, with no `src/` change: NRL-113 and NRL-114 had already landed
-separately. The record is `docs/spikes/SPIKE-WHITESPACE-001.md`. Read it before touching
-`INDENTED_CODE`, `HEADING`, `BLOCKQUOTE` or another quote-peel copy, `LIST_BULLET`, `TABLE_ROW`,
-`FENCE` / `fenceOpensAt`, `opensMathBlock` or the HTML opener set.
+separately. The record is `docs/spikes/SPIKE-WHITESPACE-001.md` (corrected in fix round 1
+after two critiques). Read it before touching `INDENTED_CODE`, `HEADING`, `HR`, `BLOCKQUOTE` or
+another quote-peel copy, `LIST_BULLET`, `TABLE_ROW`, `LINK_REF_DEF`, `FENCE` / `fenceOpensAt`,
+`opensMathBlock`, the frontmatter skip or the HTML opener set.
 
 - **Renderer rules were executed, not transcribed.** Both harnesses (1.14.4 and 1.13.7) passed
-  `selftest.cjs` and agreed on all 13,860 grid notes (15 + 6 constructs x 33 leads x 10
-  containers x 2 positions). Indented code is literal `^(?: {4}|\t)`. Block-start constructs
-  take any spaces and tabs. Interrupts take 0-3 spaces, and a tab refuses them. A setext
-  underline takes no lead. `%%` and top-level `$$` take 0-3 spaces even at block start. The
-  quote peel is `>` plus one space, never a tab, so every `>\t` line is code.
-- **On `60ff058`, 4,720 of 55,440 cells diverge** (two profiles x two sentinels). There is one
-  disclosure family: `- > Para.` / `  > Title <!--` / `  > ===` (66 cells). The largest
-  prose-loss family is setext over `<!--` inside a list item, which loses the rest of the note
-  (672 cells).
-- **Composition re-checked with four shadow mutants.** Undoing NRL-113's `INDENTED_CODE` gives
-  44 disclosures. Widening `HEADING` alone loses 39 cells. Narrowing both math sites without the
-  list dedent moves 192 cells to excluded speech. Narrowing `BLOCKQUOTE` and
-  `BLOCKQUOTE_ONE_LEVEL` alone moves nothing.
-- The spike's "Recommended order" sequences the child tickets and NRL-147, 157, 173 and 179.
-  Reading view only. NOT VERIFIED IN OBSIDIAN.
+  `selftest.cjs` and agreed on all 43,560 grid notes. Indented code is literal `^(?: {4}|\t)`
+  on the peeled remainder. Block-start constructs take any spaces and tabs. Interrupts (ATX,
+  HR, fence, HTML, list and quote markers, top-level `$$`, `%%`) take 0-3 spaces, and a tab
+  refuses them, also inside a paragraph that spans an inline `<!--`. A setext underline takes
+  no lead. `%%` and top-level `$$` take 0-3 spaces even at block start. In a quote or list
+  paragraph `$$` is an inline math span at every lead. A `$$` with no closer runs to the end
+  of the note. The quote peel is `>` plus one space, never a tab, so every `>\t` line is
+  container indented code. A table with a lead on every row drops its last column; a lead on
+  the first row only makes a paragraph. Frontmatter delimiters take no lead.
+- **On `60ff058`:** main + hazard grids 4,720 of 55,440 cells diverge; the extra grid
+  (interrupts inside a comment-spanning paragraph, HR, link reference and footnote
+  definitions, unclosed `$$`, table leads) 3,122 of 39,600; frontmatter 96 of 132. Four
+  disclosure families: a tab-led ATX / HR / fence inside a paragraph that spans `<!--`
+  (`Title <!--` / `\t# x` / `ZQSX` / `-->` speaks ZQSX; 165 cells), `LINK_REF_DEF` refusing a
+  tab lead (118), a led table's dropped last column (126), and `- > Para.` / `  > Title <!--` /
+  `  > ===` (66). The largest lead prose-loss family is setext over `<!--` in a list item
+  (540, not the 672 first reported: 132 of those were `>\t` excluded speech). A closed fenced
+  code block inside a list item loses the rest of the note at skip code on, at every lead
+  (`- ```` / `  x` / `  ```` / `  ZQSX` speaks only `x`).
+- **Causes builders get wrong.** The 1,386 `>\t` cells are container indented code, not the
+  peel regexes: `QUOTE_PREFIX_PEEL` / `QUOTE_LEVEL_PEEL` already refuse the tab, and widening
+  them moved 0 main/hazard cells (M2b). The 116-cell top-level math cascade is the renderer's
+  unclosed-`$$`-to-EOF rule, which the code refuses deliberately ("a stray `$$` cannot swallow
+  the rest of the note"); narrowing both math sites to `^ {0,3}\$\$` fixes 80 cells, moves 0
+  of the 116 and breaks 192 list cells (M4).
+- **Composition.** Undoing NRL-113's `INDENTED_CODE` gives 44 disclosures (M1). Widening
+  `HEADING` alone loses 39 cells (M3). `LINK_REF_DEF` to the block-start rule fixes all 118
+  disclosures and moves nothing else (M5). The spike's "Sets that must change together" and
+  "Recommended order" bind NRL-147, 157, 173, 179, 187-192 and the new children into diffs.
+- **Position gap, measured.** Directly after `# Head`, `***`, a closed fence or a setext
+  heading (no blank line), 2,806 of 79,200 cells diverge where the same cell after a blank
+  line does not. `# Head` / `\t<!-- a` / blank / `ZQSX` / `-->` loses ZQSX at skip code on (the
+  renderer makes `<!-- a` indented code). A census that runs only the main and hazard grids
+  will not see these; run the four `POS=` grids too.
+- Reading view only. `sourceIndex` lockstep and Live Preview were not measured. NOT VERIFIED
+  IN OBSIDIAN.
 
 ### A container spanning a mid-paragraph `<!--` makes it text (NRL-128, 2026-10-15)
 
