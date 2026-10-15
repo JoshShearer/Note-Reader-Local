@@ -396,6 +396,54 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A container spanning a mid-paragraph `<!--` makes it text (NRL-128, 2026-10-15)
+
+`a ==x` / `Prose <!--` / `HIDDENQ` / `y== b` / `--> VISIBLEQ.` spoke `a ==x Prose VISIBLEQ.`
+on ee80121 (DEF, CODE, ALL); both harnesses display `a x Prose <!-- HIDDENQ y b --> VISIBLEQ.`.
+The mark, strong, emphasis and delete tokenizers (built-parser.js `OE(e,"mark",...)`, remark
+modules 5702, 439, 1134) scan raw characters to their closer, skipping no comment, then
+tokenize only their slice, where the `<!--` has no `-->` and stays text. Fix:
+`containerScopedOpeners` (extractChunks pre-pass) marks such `<!--` offsets and cleanLine emits
+them as four literal characters (cross-line through NRL-166's refinement, same-line directly).
+
+- **Gate, fail closed.** Paragraph start known (note start or after a blank line); every line
+  to the `-->` line `refineAt`, no stop, no leading whitespace; exactly that `<!--` and `-->`;
+  exactly two runs of one of `== ** * _ __ ~~`, opener before the `<!--` and closer inside the
+  comment, ASCII alphanumerics beside them; the rest only `\p{L}\p{N}`, space, newline,
+  `.,;:?!'"()` and `’‘“”`, a hyphen inside a word, and a CR before a newline (CRLF). The
+  plan's "or at a stop" start was unreachable (a stop line is a break) and is gone.
+- **Acceptance 4 deviation.** `inlineContainerClose(ticketWindow, 4, "==")` returns -1: it
+  jumps past a complete comment (`i = close + closer.length`), which the mark tokenizer does
+  not. Its sibling at the same-line highlight site already diverges (residual below). No closer
+  scan was added: the gate admits exactly two runs. inlineContainerClose, scanToCloser,
+  wikiTargetClose, inlineCommentFacts, opensHtmlBlock, codeSpanClosesLater and labelClose are
+  byte-identical to ee80121 (`hash128.cjs`; e.g. wikiTargetClose `d3ff513a8f8e6580`).
+- **Numbers (vs ee80121, 7 masks, cls8 on 1.13.7).** 0 newly disclosing, 0 newly lost, 0 newly
+  speaking excluded content on: census 9,189,180 cells (fixed lost 2,604); casc 440,370 (0);
+  casc2 1,060,297 (81,347); the plan critic's generator 1,068,816 (117,707); a realistic-prose
+  generator `real128.cjs` 916,958 (233,268). Lockstep (`lock128.cjs`, 7,946 notes x 5 masks)
+  CLEAN 0/0/0/0 on both arms, every mutator nonzero on both, equation exemption 40 on both.
+  Graders and corpora: `.claude/runs/NRL-128/plan/` (`g128b.cjs`, `corp128b.cjs`).
+- **Coverage, honestly.** Under ALL, of base-lost cells in notes whose HTML holds a literal
+  `<!--` inside mark/strong/em/del: census 372 of 32,773 (1.1%; its noise and prefix rows are
+  refused), critic generator 16,819 of 30,568 (55%), realistic prose 33,324 of 50,466 (66%).
+  The realistic figure is for ticket-shaped windows written in everyday prose, not a vault
+  measurement. The F2 widening (Unicode, typographic quotes, `:`, `!`, word hyphens, CRLF)
+  graded 0/0/0 in every direction; the ASCII-only class fixed 980 cells of that corpus.
+- **Residual losses (measured, pinned in tests/extract.test.ts as "measured residual loss").**
+  For all six containers: `closerInComment` (`a ==QXAQ <!-- QHAQ== QHBQ` / `--> QVAQ==.`),
+  `nestedEq`, `outerNested`. Backtick: ticket, openSame, closesInside, nestedEq, outerNested,
+  codeBefore (codeSpanClosesLater against the comment, another mechanism). Three runs on one
+  line: `a ==x <!-- QHAQ y== QHBQ --> QVAQ z== b` loses QHAQ and QHBQ. Any markup, quote, list,
+  indent, lone CR or second comment in the window keeps today's loss. Follow-up to be filed.
+- **Leaks, argued (ADR 0007 clause 6).** The `==` delimiters of a cross-line pair are spoken
+  (`a ==x Prose <!-- HIDDENQ y== b --> VISIBLEQ.`), as are the displayed `<!--` and `-->`. A
+  leaked delimiter costs a syllable; the swallowed sentence was the whole paragraph's tail.
+- **Perf.** One pass back for next `-->` and next break, each paragraph examined once; three
+  scaled rows added to the NRL-166 scaling checks. The plan's first prototype was quadratic.
+
+NOT VERIFIED IN OBSIDIAN: lanes never deploy.
+
 ### Fence heads holding `-->` hidden where nothing is open (NRL-178, 2026-10-14)
 
 NRL-166 round 3's `if (/--!?>/.test(head)) return;` in `hideFenceLines` left every such

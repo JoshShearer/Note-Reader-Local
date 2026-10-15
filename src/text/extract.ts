@@ -770,6 +770,123 @@ function opensHtmlBlock(view: string, at: number, closesLater: boolean, setextCo
 }
 
 /**
+ * Inline containers whose opener, read before a mid-paragraph `<!--`, can make
+ * that `<!--` literal text (NRL-128). Longest first, so `**` is tried before `*`.
+ */
+const SCOPE_DELIMS = ["==", "**", "__", "~~", "*", "_"];
+/**
+ * What a scoped window may hold once its delimiter pair, `<!--` and `-->` are
+ * taken out: letters and digits of any script, spaces, newlines and sentence
+ * punctuation that starts no inline construct in either parser harness. The
+ * delimiters themselves still need ASCII alphanumerics beside them (below), so
+ * a non-ASCII letter or a typographic quote never touches a delimiter. A hyphen
+ * is admitted only inside a word (`Well-known`), where it can be neither a list
+ * marker, a setext underline nor part of `-->`. A `\r` is admitted only before
+ * a newline or at the window's end (a CRLF note); a lone CR is refused.
+ */
+const SCOPED_WINDOW_REST = /^[\p{L}\p{N} \n.,;:?!'"()‘’“”]*$/u;
+// No lookbehind: iOS before 16.4 cannot parse one (obsidianmd/regex-lookbehind).
+// The letter before the hyphen is captured and put back by the replacement.
+const WORD_HYPHEN = /([\p{L}\p{N}])-(?=[\p{L}\p{N}])/gu;
+const ASCII_ALNUM = /[A-Za-z0-9]/;
+/**
+ * `<!--` openers that the renderer reads as literal text because an inline
+ * container (`==`, `**`, `*`, `__`, `_`, `~~`) opened before them closes before
+ * their `-->` (NRL-128). Returns their source offsets.
+ *
+ * The mark, strong, emphasis and delete tokenizers in the parser harness
+ * (built-parser.js `OE(e,"mark",...)`; remark modules 5702, 439 and 1134) scan
+ * raw characters to their closer, skipping no comment, and then tokenize only
+ * the content they sliced. The opener comes first in the paragraph's walk, so
+ * the html tokenizer never runs at the `<!--` in paragraph scope, and inside the
+ * slice the `<!--` has no `-->`, so it stays text. inlineContainerClose cannot
+ * answer this: it skips a complete comment, which these tokenizers do not
+ * (measured: it returns -1 on the ticket's window). No closer scan is needed
+ * here either, because the gate admits exactly two runs of the delimiter.
+ *
+ * Fail closed: only a window the gate fully understands qualifies. It starts at
+ * the paragraph's first line (after a blank line or the note's start), every
+ * line from there to the `-->` line is a sure paragraph line (`refineAt`) with
+ * no stop and no leading whitespace, the window holds exactly that `<!--` and
+ * that `-->`, two delimiter runs each exactly the delimiter, the opener before
+ * the `<!--` and the closer between `<!--` and `-->`, and nothing else but
+ * SCOPED_WINDOW_REST. Inside it, no other construct can claim the opener, the
+ * closer or the comment, so the renderer's outcome is fixed. An empty set
+ * leaves extraction byte-identical to the behaviour before NRL-128.
+ *
+ * Linear: one backward pass finds each line's next `-->` line and next break,
+ * and each paragraph is examined once, since the window admits one `<!--`.
+ */
+function containerScopedOpeners(lines: readonly string[], refineAt: readonly boolean[], stops: readonly boolean[]): Set<number> {
+	const out = new Set<number>();
+	const n = lines.length;
+	const starts: number[] = [];
+	for (let k = 0, o = 0; k < n; k++) {
+		starts.push(o);
+		o += lines[k]!.length + 1;
+	}
+	const breaks = lines.map((l, k) => l.trim() === "" || !refineAt[k]! || stops[k]! || /^[ \t]/.test(l));
+	// For each line, the first `-->` line and the first break strictly after it.
+	const nextCloser: number[] = new Array<number>(n).fill(n);
+	const nextBreak: number[] = new Array<number>(n).fill(n);
+	for (let k = n - 1, c = n, b = n; k >= 0; k--) {
+		nextCloser[k] = c;
+		nextBreak[k] = b;
+		if (lines[k]!.includes("-->")) c = k;
+		if (breaks[k]!) b = k;
+	}
+	let s = 0;
+	let examined = false;
+	for (let k = 0; k < n; k++) {
+		// A paragraph whose first line is not after a blank line (it follows a
+		// break of another kind) has an unknown start, so it is refused whole.
+		if (k === 0 || lines[k - 1]!.trim() === "") {
+			s = k;
+			examined = false;
+		} else if (breaks[k - 1]!) {
+			s = k;
+			examined = true;
+		}
+		const at = lines[k]!.indexOf("<!--");
+		if (at === -1 || examined) continue;
+		examined = true;
+		if (breaks[s]! || nextBreak[s]! <= k) continue;
+		const c = lines[k]!.indexOf("-->", at + 4) !== -1 ? k : nextCloser[k]!;
+		if (c >= n || nextBreak[k]! <= c) continue;
+		const win = lines.slice(s, c + 1).join("\n");
+		const p = starts[k]! - starts[s]! + at;
+		const q = win.indexOf("-->", p + 4);
+		if (win.indexOf("<!--") !== p || win.indexOf("-->") !== q || win.indexOf("-->", q + 3) !== -1) continue;
+		// The comment's two ends become single placeholder characters, which no
+		// delimiter run, adjacency test or SCOPED_WINDOW_REST can match.
+		const rest = win.slice(0, p) + "\u0001" + win.slice(p + 4, q) + "\u0002" + win.slice(q + 3);
+		const open = rest.indexOf("\u0001");
+		const shut = rest.indexOf("\u0002");
+		// A CR counts as the newline it precedes, or as the window's end.
+		const newline = (i: number): boolean => rest[i] === "\n" || (rest[i] === "\r" && (i + 1 === rest.length || rest[i + 1] === "\n"));
+		for (const d of SCOPE_DELIMS) {
+			const runs = [...rest.matchAll(new RegExp(`\\${d[0]!}+`, "g"))];
+			if (runs.length !== 2 || runs.some((m) => m[0] !== d)) continue;
+			const oi = runs[0]!.index;
+			const ei = runs[1]!.index;
+			if (!(oi < open && ei > open && ei < shut)) continue;
+			const ea = ei + d.length;
+			if (!(oi === 0 || rest[oi - 1] === " " || rest[oi - 1] === "\n") || !ASCII_ALNUM.test(rest[oi + d.length] ?? "")) continue;
+			if (!ASCII_ALNUM.test(rest[ei - 1] ?? "") || !(ea === rest.length || /[ \n.,]/.test(rest[ea]!) || newline(ea))) continue;
+			const residual = (rest.slice(0, oi) + rest.slice(oi + d.length, ei) + rest.slice(ea))
+				.replace("\u0001", "")
+				.replace("\u0002", "")
+				.replace(/\r(?=\n|$)/g, "")
+				.replace(WORD_HYPHEN, "$1");
+			if (!SCOPED_WINDOW_REST.test(residual)) continue;
+			out.add(starts[k]! + at);
+			break;
+		}
+	}
+	return out;
+}
+
+/**
  * Text around an inline `<!--` that may hold an inline construct the renderer
  * displays as NOTHING (NRL-166 fix round 1): a raw tag, declaration, processing
  * instruction or CDATA (`<`; on a line of its own `<?`, `<!X` and `<![CDATA[` also
@@ -1242,6 +1359,7 @@ function cleanLine(
 	htmlContext: HtmlContext = "none",
 	htmlBodyOkLater: boolean | undefined = undefined,
 	percentOpens: boolean | undefined = undefined,
+	scopedOpeners: ReadonlySet<number> | undefined = undefined,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -1731,9 +1849,19 @@ function cleanLine(
 				htmlBodyOkLater !== undefined &&
 				!(commentFacts ??= inlineCommentFacts(raw)).prefixHolds(i) &&
 				!commentFacts.suffixHolds(i) &&
-				!(htmlBodyOkLater && commentFacts.bodyStartOk(i))
+				!(htmlBodyOkLater && commentFacts.bodyStartOk(i) && !(scopedOpeners?.has(rawStart + i) ?? false))
 			) {
 				blockOpens = false;
+			}
+			// NRL-128: an inline container opened before this `<!--` closes before
+			// its `-->`, so the renderer reads the `<!--` as text (see
+			// containerScopedOpeners). Across lines the refinement above already
+			// reaches the literal emit below; on one line the closer is found here,
+			// so the same four characters are emitted at their true offsets.
+			if (close !== -1 && htmlComment && blockComments && !htmlRawLine && (scopedOpeners?.has(rawStart + i) ?? false)) {
+				for (let k = 0; k < 4; k++) emit(raw[i + k]!, rawStart + i + k);
+				i += 4;
+				continue;
 			}
 			if (close === -1 && htmlComment && blockComments && !blockOpens && !htmlRawLine) {
 				for (let k = 0; k < 4; k++) emit(raw[i + k]!, rawStart + i + k);
@@ -6787,6 +6915,7 @@ export function extractChunks(
 	// fail-closed side for them.
 	const bodyOkLater = commentBodyOkAheadOf(term2StopOrCode);
 	const htmlBodyOkLaterAt: (boolean | undefined)[] = bodyOkLater.map((v, k) => (refineAt[k]! ? v : undefined));
+	const scopedOpeners = containerScopedOpeners(lines, refineAt, term2StopOrCode);
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,
@@ -7626,7 +7755,7 @@ export function extractChunks(
 			htmlBlockLine(body, listStrip[lineNo]!, htmlParaOpen[lineNo]!)
 				? "block"
 				: "none";
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens);
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens, scopedOpeners);
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
@@ -7634,7 +7763,7 @@ export function extractChunks(
 			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlClosesLaterAt, listDedented, htmlLeadIndented, listStrip)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens, scopedOpeners);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
