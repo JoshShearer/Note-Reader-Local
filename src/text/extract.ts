@@ -3329,13 +3329,16 @@ const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
  *   tabs, so ` \t[a]: x` is a definition, unless the line is indented code (it
  *   starts with four spaces or a tab). The old `^ {0,3}` refused the tab
  *   leads and spoke a definition the renderer hides (NRL-194, NRL-153 spike
- *   mutant M5). Block start only: the caller's paragraph guards are unchanged.
+ *   mutant M5). Block start only: the caller decides whether the line is at
+ *   one (see the drop site in extractChunks).
  * - `(?!\^)` - `[^1]:` is a footnote definition, whose body IS displayed, so
  *   it keeps cleanLine's own branch that drops only the marker.
  * - `(?:[^\[\]\\]|\\.)+` - a non-empty label with no unescaped bracket in it,
  *   so `[a [b] c]: x.png` is prose.
- * - a destination is REQUIRED, either `<...>` or a run of non-space
- *   characters. `[theref]:` alone is not a definition.
+ * - a destination is REQUIRED, either a non-empty `<...>` or a run of
+ *   non-space characters. `[theref]:` alone is not a definition, and neither
+ *   is `[a]: <>`, with or without a title: the renderer shows it as paragraph
+ *   text (NRL-194 fix round 1, measured on 1.13.7 and 1.14.4).
  * - the optional title must be the last thing on the line. That is what keeps
  *   `[see also]: not a definition, just a sentence` spoken: its destination
  *   ends at the first space and the rest is neither a title nor nothing.
@@ -3345,7 +3348,18 @@ const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
  * whole soft-wrap family needs.
  */
 const LINK_REF_DEF =
-	/^(?! {4}|\t)[ \t]*\[(?!\^)(?:[^[\]\\]|\\.)+\]:[ \t]*(?:<(?:[^<>\\\n]|\\.)*>|[^\s<][^\s]*)(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
+	/^(?! {4}|\t)[ \t]*\[(?!\^)(?:[^[\]\\]|\\.)+\]:[ \t]*(?:<(?:[^<>\\\n]|\\.)+>|[^\s<][^\s]*)(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
+
+/**
+ * `LINK_REF_DEF`'s shape with the empty destination `<>`, which the renderer
+ * does NOT take as a definition (`[a]: <>` and `[a]: <> "t"` render as
+ * paragraph text, NRL-194 fix round 1), so `LINK_REF_DEF` refuses it. Read only
+ * where such a line is the content of a setext heading inside a quote or list
+ * item, which is displayed as a heading either way and so is dropped under
+ * skipHeadings like a valid definition there.
+ */
+const EMPTY_DESTINATION_DEF =
+	/^(?! {4}|\t)[ \t]*\[(?!\^)(?:[^[\]\\]|\\.)+\]:[ \t]*<>(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
 
 /**
  * Does this line leave a comment open, so that the lines after it are hidden?
@@ -6732,6 +6746,8 @@ export function extractChunks(
 	// does not let a setext underline follow a lazy line: "---" there is a
 	// rule. Getting this wrong let skipHeadings drop the continuation text.
 	let prevContainer = false;
+	// The previous line was a paragraph line that spoke nothing (NRL-194).
+	let prevSilentPara = false;
 	const frontmatter = detectFrontmatter(lines);
 	// A line's WINDOW for fix round 1's refinements (fix round 2 scopes to it
 	// what round 1 gated note-wide): the line itself, every earlier line back to
@@ -7460,6 +7476,7 @@ export function extractChunks(
 		const wasBlank = prevBlank;
 		const wasPara = prevPara;
 		const wasContainer = prevContainer;
+		const wasSilentPara = prevSilentPara;
 		// NRL-158: read before computing `blank`, which needs to know whether
 		// a paragraph is open to tell a tab-bearing lazy continuation from
 		// the blank line that would end it (blankEndsParagraph).
@@ -7470,6 +7487,7 @@ export function extractChunks(
 		prevBlank = blank;
 		prevPara = false;
 		prevContainer = false;
+		prevSilentPara = false;
 
 		if (!inFence) {
 			// A list ends at an unindented line that is not an item, when a blank
@@ -7875,13 +7893,60 @@ export function extractChunks(
 		// lose a reading with skipCodeBlocks off. Measured: 22 cells (ul 15, ol 7)
 		// of that shape lose a displayed line without this carve-out. Those lines
 		// keep the pre-NRL-194 spaces-only test.
+		//
+		// NRL-194 fix round 1: the rest of the renderer's definition rule, each
+		// read off a signal already computed for NRL-120 / NRL-136 rather than a
+		// new classifier. Base had every one of these wrong at a 0-3 space lead;
+		// the widened lead had extended them to the tab-bearing ones.
+		//
+		// - Not inside an open paragraph. A line that opened or continued one but
+		//   SPOKE nothing (`#tag`, `%%c%%`, `$x$`, `![[img.png]]`) leaves
+		//   `wasPara` false while the renderer's paragraph is open: `#tag` /
+		//   `[a]: x` is one `<p>` showing `[a]: x`. The scanner's own
+		//   `wasSilentPara` must agree with the markdown-only `paraBefore`;
+		//   requiring both keeps a closed `<!-- c -->` (an HTML block, which
+		//   `paraBefore` ends) on the drop side, and a line that leaves a `%%` or
+		//   `<!--` comment open never sets `wasSilentPara`, so neither does the
+		//   closed block's closing line.
+		// - Not inside a raw HTML block (`inRawHtml`, the setext pre-pass's own
+		//   reckoning): `<div>` / `[a]: x` displays the line as raw HTML.
+		// - Not setext heading content. `[a]: x` / `---` is `<h2>[a]: x</h2>`. At
+		//   the top level outside a list the line is kept and the setext branch
+		//   above takes it on the next line, by that branch's own exact-underline
+		//   test, so skipHeadings and the underline are handled there. Inside a
+		//   quote or list item that branch never fires, so the line is dropped
+		//   exactly when the heading would be (skipHeadings) and otherwise
+		//   spoken, on `setextLike`'s quote-peeled, list-stripped test with the
+		//   underline in this line's quote or lazy under it.
+		// - A real destination: `<>` is no definition for the renderer
+		//   (LINK_REF_DEF refuses it), except as container heading content under
+		//   skipHeadings, where it is hidden like any heading. `setextLike` vetoes
+		//   a `-` underline under a list line (it may be the next item), so there
+		//   `maybeHiddenHeading` keeps base's drop of the `<>` line: it is either
+		//   hidden heading content or a displayed line base already dropped.
 		const listContinuation = inList && blockType === "paragraph";
+		const next = lines[lineNo + 1];
+		const topLevelSetext = blockType === "paragraph" && prefixChars === 0 && !inList && next !== undefined && SETEXT_UNDERLINE_EXACT.test(next);
+		const nextQuotes = next === undefined ? 0 : containerPrefix(next).quotes;
+		const sameQuote = nextQuotes === prefix.quotes || (nextQuotes === 0 && prefix.quotes > 0);
+		const containerSetext = (prefixChars > 0 || inList) && setextLike[lineNo]! && sameQuote;
+		const maybeHiddenHeading =
+			opts.skipHeadings &&
+			(prefixChars > 0 || inList) &&
+			sameQuote &&
+			next !== undefined &&
+			SETEXT_UNDERLINE_EXACT.test(next.replace(BLOCKQUOTE, "").slice(listStrip[lineNo + 1]));
 		if (
 			blockType !== "heading" &&
 			paraText === "" &&
 			!wasPara &&
 			!wasContainer &&
-			LINK_REF_DEF.test(body) &&
+			!(wasSilentPara && paraBefore[lineNo]!) &&
+			!inRawHtml[lineNo]! &&
+			!topLevelSetext &&
+			(containerSetext
+				? opts.skipHeadings && (LINK_REF_DEF.test(body) || EMPTY_DESTINATION_DEF.test(body))
+				: LINK_REF_DEF.test(body) || (maybeHiddenHeading && EMPTY_DESTINATION_DEF.test(body))) &&
 			(!listContinuation || /^ {0,3}\[/.test(body))
 		) {
 			continue;
@@ -7910,6 +7975,9 @@ export function extractChunks(
 		if (confirmed !== undefined && openBracket === undefined) openCode = confirmed;
 
 		if (cleaned.text.trim() === "") {
+			// See the LINK_REF_DEF drop above: a paragraph line that speaks
+			// nothing still holds the renderer's paragraph open.
+			if (blockType === "paragraph" && inComment === undefined) prevSilentPara = true;
 			continue;
 		}
 

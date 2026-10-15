@@ -468,6 +468,32 @@ footnotes, 54,302 sentinel cells, same totals on 1.13.7 and 1.14.4): 652 cells m
 sourceIndex lockstep (NRL-128's checker, 252 notes x 3 masks): clean 0 on both arms, four mutators nonzero
 on both arms. Scripts: `.claude/runs/NRL-194/spike/`. Not observed in a live Obsidian.
 
+**Correction (fix round 1).** The "0 newly lost" above held only on those generators. Two
+independent critic grids found the commit newly LOST displayed text against base 028ef10: 504 cells
+per profile where a line that speaks nothing (`#tag`, `%% c %%`, `%%c%%`) sits above the definition, 336
+where a setext underline sits below it, and 228 label cells for the empty destination `<>`. Each was a
+base defect at 0-3 space leads that the wider lead extended to tab-bearing ones. The renderer's rule:
+a definition is taken only at a real block start (a paragraph that SPOKE nothing is still open, so
+`#tag` / `[a]: x` is one `<p>`; inside a `<div>`-type raw HTML block the line is displayed), never as
+setext heading content (`[a]: x` / `---` is `<h2>`), and never with `<>` as its destination (with or
+without a title). Round 1 adds those to the drop, reusing `paraBefore`, `inRawHtml` and `setextLike`
+(NRL-120 / NRL-136 pre-pass signals) plus a `wasSilentPara` flag; a top-level heading goes through the
+existing setext branch, a container one is dropped only under skipHeadings. Measured against base on a
+new generator (`.claude/runs/NRL-194/spike-r1/g3.cjs`: silent lines and comment blocks before, 1-2
+definitions, underlines and lazy lines after, `<>`/`<x>` with and without titles, 10 shells, 12 leads,
+CRLF; 40,000 notes, 366,818 sentinel cells per seed, two seeds, both harnesses identical): 0 newly lost,
+0 newly disclosing, 9,486 cells toward the renderer (seed 777). The NRL-153 grids, fm.cjs, gen.cjs and
+cont.cjs show the same moves as before and nothing else; lockstep clean on 9,702 notes x 3 masks and on
+lock128's own corpus. Residual, as on base: a container setext heading over any line (not only a
+definition) is not skipped under skipHeadings (NRL-192), and its `===` underline is spoken.
+
+**Scope of the `listContinuation` carve-out.** `inList` holds across a blank line and an indented line
+that is not a list item, so a whitespace-led definition after a list that the renderer treats as a new
+top-level block also keeps the old spaces-only test. Critic 2's boundary sweep (2,232 notes) found that
+only keeps base's reading there (no newly lost or disclosing cells, 96 disclosure -> ok); it is a scope
+note, not a measured defect. The carve-out is pinned by two code-shaped rows (`- a` / blank /
+`  \t[x]: y` and `1. a` / blank / `  \t\t[x]: y`), both red when the carve-out is removed.
+
 ### A container spanning a mid-paragraph `<!--` makes it text (NRL-128, 2026-10-15)
 
 `a ==x` / `Prose <!--` / `HIDDENQ` / `y== b` / `--> VISIBLEQ.` spoke `a ==x Prose VISIBLEQ.`

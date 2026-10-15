@@ -8309,6 +8309,88 @@ console.log("NRL-194 link reference definition with a tab-bearing lead (R-M08)")
 		const src = "Para.[^1]\n\n \t[^1]: ZQSX footnote body\n\nZAFTX\n";
 		check("NRL-194 guard: a tab-led footnote definition is not dropped as a link definition", say(src, OFF).includes("ZAFTX"), say(src, OFF));
 	}
+	/*
+	 * Fix round 1. The drop now follows the renderer's whole definition rule, not
+	 * only its lead: base already got each of these wrong at a 0-3 space lead, and
+	 * the widened lead extended them to the tab-bearing ones. Every expectation
+	 * below was read off Obsidian 1.13.7 and 1.14.4 through the parser harness.
+	 */
+	const fr1Leads = ["", "   ", " \t", "  \t", "   \t"];
+	// A definition-shaped line over a setext underline is that heading's content:
+	// `[a]: x` / `---` renders `<h2>[a]: x</h2>`. Spoken with headings kept,
+	// skipped with them skipped, and the underline itself is never spoken.
+	for (const lead of fr1Leads) {
+		for (const [sname, open, cont] of [["top level", "", ""], ["quote", "> ", "> "]] as const) {
+			for (const under of ["---", "==="]) {
+				const src = ["Para.", "", open + lead + "[ZQSX]: https://example.com", cont + under, "", "ZAFTX", ""].join("\n");
+				const on = say(src, ON), off = say(src, OFF);
+				check(`NRL-194 r1 setext ${JSON.stringify(under)} under a ${JSON.stringify(lead)}-led definition in ${sname}, headings kept: heading spoken`, off.includes("ZQSX") && off.includes("ZAFTX"), off);
+				check(`NRL-194 r1 setext ${JSON.stringify(under)} under a ${JSON.stringify(lead)}-led definition in ${sname}, headings skipped: heading not spoken`, !on.includes("ZQSX") && on.includes("ZAFTX"), on);
+				if (open === "") check(`NRL-194 r1 setext ${JSON.stringify(under)} under a ${JSON.stringify(lead)}-led definition: underline not spoken`, !off.includes(under) && !on.includes(under), `${off} / ${on}`);
+			}
+		}
+	}
+	// A paragraph line that speaks nothing still holds the paragraph open, and a
+	// definition cannot interrupt one: `#tag` / `[a]: x` is one `<p>` showing
+	// `[a]: x`.
+	for (const lead of fr1Leads) {
+		for (const pre of ["#ZTAG", "%% c %%", "%%c%%", "$x$", "![[img.png]]"]) {
+			const src = [pre, lead + "[ZQSX]: ZDST", "", "ZAFTX", ""].join("\n");
+			for (const [pname, o] of [["skips on", ON], ["skips off", OFF]] as const) {
+				const out = say(src, o);
+				check(`NRL-194 r1 ${JSON.stringify(lead)}-led definition after ${JSON.stringify(pre)} (${pname}): paragraph text, spoken`, out.includes("ZQSX") && out.includes("ZAFTX"), out);
+			}
+		}
+	}
+	// Guards: a closed comment block is not a paragraph, so the definition after
+	// it is at block start and hidden.
+	for (const lead of fr1Leads) {
+		for (const pre of ["%%\nc\n%%", "<!-- c -->", "<!--\nc\n-->"]) {
+			const out = say([pre, lead + "[ZQSX]: ZDST", "", "ZAFTX", ""].join("\n"), OFF);
+			check(`NRL-194 r1 guard: ${JSON.stringify(lead)}-led definition after ${JSON.stringify(pre)} stays hidden`, !out.includes("ZQSX") && out.includes("ZAFTX"), out);
+		}
+	}
+	// Inside a raw HTML block (`<div>` up to a blank line) the line is raw HTML
+	// the renderer displays, never a definition.
+	for (const lead of fr1Leads) {
+		for (const next of ["", "  ---"]) {
+			const out = say(["<div>", lead + "[ZQSX]: ZDST", ...(next ? [next] : []), "", "ZAFTX", ""].join("\n"), OFF);
+			check(`NRL-194 r1 ${JSON.stringify(lead)}-led definition inside a <div> block${next ? " over " + JSON.stringify(next) : ""}: raw HTML text, spoken`, out.includes("ZQSX") && out.includes("ZAFTX"), out);
+		}
+	}
+	// A `<>` line over an underline in a list item is that heading's content:
+	// skipped with headings skipped, spoken with them kept.
+	for (const src of ["-\t[ZQSX]: <> \"ZTTL\"\n\t---\n\nZAFTX\n", "- [ZQSX]: <>\n  ---\n\nZAFTX\n", "> [ZQSX]: <>\n> ===\n\nZAFTX\n"]) {
+		check(`NRL-194 r1 ${JSON.stringify(src)}: heading skipped with headings skipped`, !say(src, ON).includes("ZQSX") && say(src, ON).includes("ZAFTX"), say(src, ON));
+		check(`NRL-194 r1 ${JSON.stringify(src)}: heading spoken with headings kept`, say(src, OFF).includes("ZQSX"), say(src, OFF));
+	}
+	// Guard: an underline in a quote the definition is not in does not make it a
+	// heading. `1. [a]: x` / `> ===` hides the definition and quotes `===`.
+	{
+		const out = say("1. [ZQSX]: <zdst>\n> ===\n\nZAFTX\n", OFF);
+		check("NRL-194 r1 guard: an underline in another quote leaves the definition hidden", !out.includes("ZQSX") && out.includes("ZAFTX"), out);
+	}
+	// The empty destination `<>` is not a definition for the renderer, with or
+	// without a title: `[a]: <>` renders as paragraph text. `<x>` is one.
+	for (const lead of fr1Leads) {
+		for (const tail of ["<>", '<> "ZTTL"', "<>  'ZTTL'"]) {
+			const out = say(["Para.", "", lead + "[ZQSX]: " + tail, "", "ZAFTX", ""].join("\n"), ON);
+			check(`NRL-194 r1 ${JSON.stringify(lead)}-led [x]: ${tail} is paragraph text, spoken`, out.includes("ZQSX") && out.includes("ZAFTX"), out);
+		}
+		const ctl = say(["Para.", "", lead + '[ZQSX]: <zdst> "ZTTL"', "", "ZAFTX", ""].join("\n"), ON);
+		check(`NRL-194 r1 guard: ${JSON.stringify(lead)}-led [x]: <zdst> "t" is a definition, hidden`, !ctl.includes("ZQSX") && !ctl.includes("ZTTL") && ctl.includes("ZAFTX"), ctl);
+	}
+	// The `listContinuation` carve-out (critique F3 / F2). A tab-led continuation
+	// line in a list item is indented code for the renderer at these leads
+	// (`<pre><code>[ZQSX]: ZDST</code></pre>` inside the item), so it is spoken
+	// with code kept. Without the carve-out both are dropped.
+	for (const [sname, src] of [
+		["bullet item, two spaces and a tab", "- Para.\n\n  \t[ZQSX]: ZDST\n\nZAFTX\n"],
+		["ordered item, two spaces and two tabs", "1. Para.\n\n  \t\t[ZQSX]: ZDST\n\nZAFTX\n"],
+	] as const) {
+		const out = say(src, OFF);
+		check(`NRL-194 r1 carve-out: ${sname} continuation is code, spoken with code kept`, out.includes("ZQSX") && out.includes("ZAFTX"), out);
+	}
 }
 
 console.log("");
