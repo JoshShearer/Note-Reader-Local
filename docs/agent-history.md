@@ -408,7 +408,29 @@ RL_QUOTE branch now records such a line (`quoteCodeEnd`, refined walk, frame vie
 it joins `term2StopOrCode` for `paraSure` openers only. ADR 0025's NRL-170 section has
 the figures: census 1,446,936 cells, fuzz 231,800, a build-phase generator 1,371,402 and
 a tab attack 68,040, all 0 newly disclosing, 0 newly lost, 0 newly speaking excluded
-content against ee80121; NRL-178's census replay is identical to base.
+content against ee80121 under DEF and ALL only; NRL-178's census replay is identical to
+base. Those figures are scoped to those corpora: both code critics' generators then found
+newly lost prose and newly spoken code and headings on 4ae003f (next bullet).
+
+- **Trap: per-shape gates over a cascade (fix round 1).** Ending a false comment pairing
+  displays the span it hid, and the per-line loop reads that span with misreadings the
+  pairing had masked (a gated `\t%% x` line as prose, a quoted setext h1 under
+  skipHeadings, a mid-quote `[!note] <!--->` line, quoted indented code); a code start
+  also drops `inList` for lines far below. Each gate 4ae003f added named one such shape.
+  Round 1 replaced the hunt with `quoteCodeChangeContained`: when any candidate exists,
+  extract the note with and without the change and keep the change only if every
+  differing line is a started code-run line or a walker-trusted paragraph line that only
+  gains non-heading speech, with no quote-ending code line and no underline below;
+  otherwise ee80121's answer for the whole note. 10 corpora x 7 masks (author, plan
+  critic, both code critics, a cascade generator; 54.5M cells) read 0 new disc / lost /
+  excl against ee80121 (ADR 0025, fix round 1). Cost: a note with a candidate is
+  extracted twice (about 1.9x measured). A grader that only checks DEF and ALL cannot see
+  the skipHeadings cases; use the 7-mask `g2.cjs`.
+- **Guards that test nothing:** two NRL-170 guards passed with their gate terms removed
+  (`paraSure` held them). Mutation-check every new guard against the term it names.
+  `!leads.unsureFresh[k]` in `quoteCodeEndSure` is unreachable (the line above a
+  quote-ending line is the quote's, never the ambiguous one): no output change over
+  175,130 notes x 7 masks.
 
 - **Trap: un-pairing exposes code as prose (plan critique F1).** The plan's prototype
   newly spoke the code line (`foo QcQ`) under skipCodeBlocks, because its grader EXCUSED

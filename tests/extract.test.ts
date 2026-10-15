@@ -8186,10 +8186,17 @@ console.log("NRL-170: a quote ended by lazy indented code does not pair a commen
 		// A space-led `<!--` opens an HTML block the browser hides through `-->`.
 		["guard-nrl170-space-lead-block-hidden", "> Plain QPQ\n> <!-- QAQ\n\t```\n> QBQ -->\nTAIL QDQ", "Plain QPQ | TAIL QDQ", "Plain QPQ | TAIL QDQ"],
 		["guard-nrl170-top-level-block-hidden", "Plain QPQ\n<!-- QAQ\n\t```\nQBQ -->\nTAIL QDQ", "Plain QPQ TAIL QDQ", "Plain QPQ TAIL QDQ"],
-		// A lone CR above and a table-shaped line above: the walker is unsure, so
-		// base's answer (prose loss, fail-closed) stands.
+		// A lone CR above and a table-shaped line above: the opener is no
+		// `paraSure` line, so base's answer (prose loss, fail-closed) stands.
 		["guard-nrl170-lone-cr-above-keeps-base", "> Pl\rain QPQ\n> \t<!-- QAQ\n\t```\n> QBQ -->\nTAIL QDQ", "Pl ain QPQ | TAIL QDQ", "Pl ain QPQ | TAIL QDQ"],
 		["guard-nrl170-table-shaped-above-keeps-base", "> | a |\n> \t<!-- QAQ\n\t```\n> QBQ -->\nTAIL QDQ", "| a | | TAIL QDQ", "| a | | TAIL QDQ"],
+		// The rows above are held by `paraSure` (no trusted paragraph opener), not
+		// by `quoteCodeEndSure`'s own terms (NRL-170 code critic 2 F4). This one
+		// tests its `crAbove` term: a lone CR ON the code line is a line break for
+		// the renderer, which shows `foo` as code and then `bar QBQ` as a new
+		// paragraph. Our `\n` split sees one indented line, so a code start there
+		// would skip `bar QBQ`. Base's reading (which speaks `foo`) stands.
+		["guard-nrl170-lone-cr-on-code-line-keeps-base", "> P QPQ\n\tfoo\rbar QBQ\nTAIL QDQ", "P QPQ | foo bar QBQ TAIL QDQ", "P QPQ | foo bar QBQ TAIL QDQ"],
 		// Residual (iii): the code line holds a comment opener itself.
 		["guard-nrl170-opener-on-code-line-keeps-base", "> P QPQ <!-- QAQ\n      --><!--QCQ\n> QBQ -->\nTAIL QDQ", "P QPQ | TAIL QDQ", "P QPQ | TAIL QDQ"],
 		// Residual (vi): a quoted tab-led fence opener ahead, which the per-line
@@ -8209,6 +8216,60 @@ console.log("NRL-170: a quote ended by lazy indented code does not pair a commen
 			const lockstep = extractChunks(src, o).every((c) => unitsMatch(c.text, c.sourceIndex, src));
 			check(`NRL-170 ${id} sourceIndex lockstep (${o === OPTS ? "DEF" : "ALL"})`, lockstep);
 		}
+	}
+}
+
+console.log("NRL-170 fix round 1: a change that would cascade keeps ee80121's answer for the note");
+{
+	// Code critics 1 and 2 found these with their own generators on 4ae003f.
+	// Each is a pre-existing per-line misreading that the false comment pairing
+	// had been masking (or, for c1-f2, per-line state a code start changed far
+	// below it). `quoteCodeChangeContained` sees the difference and keeps base's
+	// answer for the whole note, so every row pins ee80121's speech, NOT the
+	// renderer's: several still speak code or lose a word, as ee80121 did.
+	const CODE = { ...OPTS, skipCodeBlocks: false, skipInlineCode: false };
+	const ALL = { ...CODE, stripTags: false, speakUrls: true, skipTables: false, skipFrontmatter: false, speakEmbeds: true };
+	const masks = {
+		DEF: OPTS,
+		ALL,
+		DEFH: { ...OPTS, skipHeadings: true },
+		CODEH: { ...CODE, skipHeadings: true },
+		ALLC: { ...ALL, skipCodeBlocks: true },
+	};
+	const said = (src: string, o: typeof OPTS): string =>
+		extractChunks(src, o)
+			.map((c) => c.text)
+			.join(" | ");
+	const rows: Array<[string, string, keyof typeof masks, string]> = [
+		// 4ae003f spoke the code `%% ZDZ` (and `ZFZ %%`): a gated quote-ending code
+		// line shared a window with an ungated one, so it was read as prose.
+		["guard-nrl170r1-c1f1-gated-code-line-in-window", "> P ZAZ <!-- ZBZ\n\tc ZFZ\n> Q ZEZ\n\t%% ZDZ\nT -->", "DEF", "P ZAZ"],
+		["guard-nrl170r1-c1f1-gated-code-line-in-window", "> P ZAZ <!-- ZBZ\n\tc ZFZ\n> Q ZEZ\n\t%% ZDZ\nT -->", "ALLC", "P ZAZ"],
+		["guard-nrl170r1-c1f1-callout-nested-quote", "> [!note] T\n> body <!-- x\n\t~~~\n> > Q\n\tZFZ %%\nlazy -->", "DEF", "T | body"],
+		// 4ae003f read `\t- li` as code (right) and so dropped `inList`; `\td` /
+		// `===` after the table then read as a setext heading and lost `===`.
+		["guard-nrl170r1-c1f2-code-start-drops-list-state", "> P ZAZ\n\t- li ZCZ\n| a | b |\n|---|---|\n| ZDZ | c |\n\td ZEZ\n===\nTail ZGZ", "DEF", "P ZAZ | li ZCZ | d ZEZ === Tail ZGZ"],
+		["guard-nrl170r1-c1f2-code-start-drops-list-state", "> P ZAZ\n\t- li ZCZ\n| a | b |\n|---|---|\n| ZDZ | c |\n\td ZEZ\n===\nTail ZGZ", "CODEH", "P ZAZ | li ZCZ | d ZEZ === Tail ZGZ"],
+		["guard-nrl170r1-c1f2-code-then-rule", "> P\n> Q <!-- x\n\t===\n%%\n\tZEZ %%\n\td ZFZ\n---", "CODEH", "P | Q <!-- x | === d ZFZ"],
+		// The renderer makes `> Q ZDZ -->` / `===` an h1; un-pairing spoke it
+		// under skipHeadings.
+		["guard-nrl170r1-c1f3-setext-in-quote-unmasked", "> P ZAZ <!-- ZBZ\n    c ZCZ\n> Q ZDZ -->\n===\nTail ZFZ", "DEFH", "P ZAZ | === Tail ZFZ"],
+		["guard-nrl170r1-c1f3-setext-in-quote-unmasked", "> P ZAZ <!-- ZBZ\n    c ZCZ\n> Q ZDZ -->\n===\nTail ZFZ", "CODEH", "P ZAZ | === Tail ZFZ"],
+		// A mid-quote `[!note] <!--->` / `<!-->` line, misread on base, was spoken
+		// only through the false pairing; 4ae003f lost QC and `y -->`.
+		["guard-nrl170r1-c2f1-empty-comment-callout-line", "> P\n> [!note] <!---> QC\n\tfoo QF\n> y -->", "DEF", "P | <!---> QC | foo QF | y -->"],
+		["guard-nrl170r1-c2f1-empty-comment-callout-line", "> P\n> [!note] <!---> QC\n\tfoo QF\n> y -->", "ALL", "P | <!---> QC | foo QF | y -->"],
+		["guard-nrl170r1-c2f1-abrupt-comment-callout-line", "> P\n> [!note] <!--> QC\n\t-->QF", "DEF", "P | <!--> QC | -->QF"],
+		// A `<!--` on a continuation line of the started code run no longer
+		// opened a comment, which exposed quoted indented code read as prose.
+		["guard-nrl170r1-c2f2-opener-in-code-run", "> P\n\tfoo\n\t<!-- x\n>>\tQJ", "DEF", "P | foo"],
+		["guard-nrl170r1-c2f2-opener-in-code-run-nested", ">>\tP\n     QD\n     <!-- QG\n> \tQH", "DEF", "P | QD"],
+	];
+	for (const [id, src, mask, want] of rows) {
+		const got = said(src, masks[mask]);
+		check(`NRL-170 ${id} (${mask})`, got === want, JSON.stringify(got));
+		const lockstep = extractChunks(src, masks[mask]).every((c) => unitsMatch(c.text, c.sourceIndex, src));
+		check(`NRL-170 ${id} sourceIndex lockstep (${mask})`, lockstep);
 	}
 }
 

@@ -5722,6 +5722,116 @@ export function extractChunks(
 	src: SegmenterSource = platformSegmenters,
 	filePath: string = "",
 ): SpeechChunk[] {
+	const qc: QuoteCodePass = { enabled: true, candidate: false, codeRun: [], para: [], quoteCodeEnd: [] };
+	const fixed = extractChunksPass(source, opts, src, filePath, qc);
+	if (!qc.candidate) return fixed;
+	const base = extractChunksPass(source, opts, src, filePath, { enabled: false, candidate: false, codeRun: [], para: [], quoteCodeEnd: [] });
+	return quoteCodeChangeContained(source, base, fixed, qc) ? fixed : base;
+}
+
+/**
+ * NRL-170's two changes (a quote-ending indented-code line stops the term-2
+ * pairing, and the per-line loop starts code there) applied or withheld for a
+ * whole pass, and what that pass learned for `quoteCodeChangeContained`.
+ */
+interface QuoteCodePass {
+	/** False: the pass is ee80121's reading exactly (no stop, no code start). */
+	enabled: boolean;
+	/** Out: some line was a quote-ending code line the changes would act on. */
+	candidate: boolean;
+	/** Out: lines inside an indented-code run that a quote-code start began. */
+	codeRun: boolean[];
+	/** Out: the walker's trusted-paragraph lines (`RendererLeads.para`). */
+	para: boolean[];
+	/** Out: every quote-ending code line the walker saw, gated or not. */
+	quoteCodeEnd: boolean[];
+}
+
+// A setext-underline-shaped line once quote markers are stripped. The renderer
+// may make the paragraph above it a heading (`> Q` / `===` is an h1 inside the
+// quote), which the per-line loop does not always read.
+const QC_UNDERLINE = /^[ \t>]*(?:=+|-+)[ \t]*\r?$/;
+
+/**
+ * Whether NRL-170's pass may stand in for base's (fix round 1, ADR 0025).
+ *
+ * Ending a false comment pairing displays everything it hid, and every line
+ * of that span is then read by the per-line loop, whose pre-existing
+ * misreadings the pairing had been masking: a quoted setext heading spoken
+ * under skipHeadings, quoted indented code spoken as prose, a later `<!--`
+ * read as an opener where the renderer shows code. Starting code at a line
+ * also changes per-line state (`inList`, the paragraph above a setext
+ * underline) for everything after it. Each of those was found by a generator
+ * as a cascade far from the line the change targets, so the check here is a
+ * differential over the whole note rather than another per-shape gate.
+ *
+ * Every line whose spoken characters (source offset and block type) differ
+ * between the two passes must be one of:
+ * - a line of an indented-code run the change started (its intended effect:
+ *   skipped under skipCodeBlocks, spoken verbatim otherwise), or
+ * - a line where the change only ADDS speech, as paragraph text, on a line the
+ *   walker trusts as paragraph (`para`), that is no quote-ending code line
+ *   (gated or not), with no underline-shaped line in its run below.
+ * Anything else (a line that lost speech, a new heading, new speech on a line
+ * the walker does not trust as paragraph) returns false, and the caller keeps
+ * base's answer for the whole note: the fail-closed direction, prose loss
+ * already present on ee80121, never new.
+ *
+ * Linear in the note and the spoken text; the caller runs it, and the second
+ * pass, only when a candidate line exists.
+ */
+function quoteCodeChangeContained(source: string, base: readonly SpeechChunk[], fixed: readonly SpeechChunk[], qc: QuoteCodePass): boolean {
+	const lines = source.split("\n");
+	const starts: number[] = [];
+	for (let k = 0, at = 0; k < lines.length; k++) {
+		starts.push(at);
+		at += lines[k]!.length + 1;
+	}
+	const lineOf = (off: number): number => {
+		let lo = 0;
+		let hi = starts.length - 1;
+		while (lo < hi) {
+			const mid = (lo + hi + 1) >> 1;
+			if (starts[mid]! <= off) lo = mid;
+			else hi = mid - 1;
+		}
+		return lo;
+	};
+	// Per line, the set of "offset:blockType" keys of its spoken non-space
+	// characters. Joining spaces are left out: where they map is not content.
+	const byLine = (chunks: readonly SpeechChunk[]): Map<number, Set<string>> => {
+		const out = new Map<number, Set<string>>();
+		for (const c of chunks) {
+			for (let i = 0; i < c.text.length; i++) {
+				if (/\s/.test(c.text[i]!)) continue;
+				const off = c.sourceIndex[i]!;
+				const k = lineOf(off);
+				let set = out.get(k);
+				if (!set) out.set(k, (set = new Set<string>()));
+				set.add(`${off}:${c.blockType}`);
+			}
+		}
+		return out;
+	};
+	const b = byLine(base);
+	const f = byLine(fixed);
+	const touched = new Set<number>([...b.keys(), ...f.keys()]);
+	for (const k of touched) {
+		const bs = b.get(k) ?? new Set<string>();
+		const fs = f.get(k) ?? new Set<string>();
+		if (bs.size === fs.size && [...bs].every((x) => fs.has(x))) continue;
+		if (qc.codeRun[k]) continue;
+		for (const x of bs) if (!fs.has(x)) return false;
+		for (const x of fs) if (!bs.has(x) && x.endsWith(":heading")) return false;
+		if (!qc.para[k] || qc.quoteCodeEnd[k]) return false;
+		for (let j = k + 1; j < lines.length && lines[j]!.replace(/^[ \t>]*/, "").trim() !== ""; j++) {
+			if (QC_UNDERLINE.test(lines[j]!)) return false;
+		}
+	}
+	return true;
+}
+
+function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterSource, filePath: string, qc: QuoteCodePass): SpeechChunk[] {
 	const chunks: SpeechChunk[] = [];
 	const lines = source.split("\n");
 	// Whether line k may hold an inline construct that hides text, a code span
@@ -6810,7 +6920,15 @@ export function extractChunks(
 	// decides comment state for every later line, and the per-line loop would
 	// read it as prose, so its own `<!--` would open where the renderer shows
 	// code (`>> P <!--` / `      --><!--c` / ... spoke `--><!--c` in the fuzz).
-	// There the base reading stands whole (residual iii).
+	// Base's answer stands for that line (residual iii). These per-line gates do
+	// not make the change safe for the rest of the note on their own: another,
+	// ungated line in the same window can still end the pairing (code critic 1
+	// F1). `quoteCodeChangeContained` is what keeps base's answer then.
+	//
+	// `!leads.unsureFresh[k]` cannot hold on a quote-ending line today: the walker
+	// marks a code line unsure only when the line above it in its frame was the
+	// ambiguous one, and above a quote-ending line is the quote's own last line.
+	// Kept so a walker change cannot silently reach it; no test row can.
 	//
 	// Nor ahead of a quoted fence opener whose lead holds a tab, in the same run
 	// of non-blank lines (`tabFenceAhead`). The per-line loop misreads that
@@ -6828,6 +6946,7 @@ export function extractChunks(
 	}
 	const quoteCodeEndSure = leads.quoteCodeEnd.map(
 		(v, k) =>
+			qc.enabled &&
 			v &&
 			!leads.unsureFresh[k]! &&
 			!crAbove[k]! &&
@@ -6840,6 +6959,13 @@ export function extractChunks(
 	// prose under skipCodeBlocks (`> P <!-- a` / `\tfoo c` / `> d -->` spoke
 	// `foo c`; NRL-170 plan critique F1). Root frame only (`quoteCodeEndRoot`).
 	const quoteCodeStartsCode = leads.quoteCodeEndRoot.map((v, k) => v && quoteCodeEndSure[k]!);
+	qc.candidate = quoteCodeEndSure.some((v) => v);
+	qc.para = leads.para;
+	qc.quoteCodeEnd = leads.quoteCodeEnd;
+	qc.codeRun = new Array<boolean>(lines.length).fill(false);
+	// Whether the indented-code run the per-line loop is in was begun by a
+	// quote-code start rather than after a blank line (`qc.codeRun`).
+	let quoteCodeRun = false;
 	const term2StopOrCode = term2Stop.map((s, k) => s || htmlLeadCode[k]! || quoteCodeEndSure[k]!);
 	const htmlCloserAheadCode = closerAheadOf(term2StopOrCode);
 	// Both of fix round 1's term-2 changes (the code-line stop here and the body
@@ -7436,6 +7562,7 @@ export function extractChunks(
 			if (inIndentedCode) {
 				if (blank) continue;
 				if (INDENTED_CODE.test(raw)) {
+					if (quoteCodeRun) qc.codeRun[lineNo] = true;
 					if (!opts.skipCodeBlocks) appendToParagraph(verbatimLine(raw, lineStart), lineStart);
 					continue;
 				}
@@ -7444,6 +7571,8 @@ export function extractChunks(
 			} else if (!blank && !inList && (wasBlank || quoteCodeStartsCode[lineNo]!) && INDENTED_CODE.test(raw)) {
 				flushParagraph();
 				inIndentedCode = true;
+				quoteCodeRun = !wasBlank;
+				if (quoteCodeRun) qc.codeRun[lineNo] = true;
 				if (!opts.skipCodeBlocks) appendToParagraph(verbatimLine(raw, lineStart), lineStart);
 				continue;
 			}
