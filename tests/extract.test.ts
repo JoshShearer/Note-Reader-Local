@@ -3329,7 +3329,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// is what makes a measured result unattributable, and `LINK_REF_DEF`'s lead
 		// needs ADR 0018's own battery re-run. WHEN IT CLOSES, the first expectation
 		// must change on purpose; the control's must not move at all.
-		["pin-nrl113-space-tab-link-ref-def-leaks-destination", " \t[a]: zdestz.png \"t\"\n\nZPROSEZ [a].", "a : zdestz.png \"t\" ZPROSEZ a ."],
+		// CLOSED BY NRL-194: LINK_REF_DEF takes the renderer's block-start lead rule, so the
+		// definition is dropped and only the displayed prose is spoken. The control
+		// below is unchanged on purpose.
+		["guard-nrl194-space-tab-link-ref-def-dropped", " \t[a]: zdestz.png \"t\"\n\nZPROSEZ [a].", "ZPROSEZ a ."],
 		["guard-nrl113-link-ref-def-fallthrough-control-no-lead", "> [a]: zdestz.png \"t\"\n> [b]: zdestz.png \"u\"\n\nZPROSEZ.", "b : zdestz.png \"u\" ZPROSEZ."],
 		// NRL-113, SHIP REVIEW. The ticket's own corpus had a CONSTRUCT axis three
 		// wide - `<!--`, `%%`, and the image/link label - and the branch this change
@@ -8242,6 +8245,69 @@ console.log("NRL-128: an inline container spanning a mid-paragraph <!-- makes th
 	{
 		const src = "a ==x\rProse <!--\nQHAQ\ny== b\n--> QVAQ.";
 		check("NRL-128 a lone CR in the window is refused (unchanged reading)", !spoken(src, ALL).includes("<!--"), spoken(src, ALL));
+	}
+}
+
+console.log("NRL-194 link reference definition with a tab-bearing lead (R-M08)");
+{
+	/*
+	 * The renderer takes a definition at block start after any run of spaces and
+	 * tabs that is not indented code, so ` \t[ZQSX]: https://example.com` is
+	 * hidden. LINK_REF_DEF used to demand `^ {0,3}`, which refused the tab and
+	 * spoke the definition (118 cells in the NRL-153 spike grid). Measured on
+	 * Obsidian 1.13.7 and 1.14.4 through the parser harness.
+	 */
+	const ON = { ...OPTS, skipHeadings: true };
+	const OFF = { ...OPTS, skipCodeBlocks: false, skipTables: false, skipHeadings: false };
+	const say = (src: string, o: typeof OPTS): string => extractChunks(src, o).map((c) => c.text).join(" ");
+	const leads: Array<[string, string]> = [["space+tab", " \t"], ["two spaces+tab", "  \t"], ["three spaces", "   "], ["one space", " "]];
+	const shells: Array<[string, string]> = [
+		["top level", ""],
+		["quote '> '", "> "],
+		["quote '>'", ">"],
+		["nested quote", "> > "],
+		["tab item", "-\t"],
+		["item holding a quote", "- > "],
+	];
+	for (const [lname, lead] of leads) {
+		for (const [sname, open] of shells) {
+			// `> \t[` is container indented code (NRL-179: the tab reaches column 4
+			// after the marker's own space is absorbed), so it is not this ticket's
+			// shape. The `>`-then-two-spaces-and-tab form below is.
+			if (open === ">" && lead === " \t") continue;
+			// The definition opens the container, after a plain paragraph, with a
+			// following paragraph (ZAFTX) that must stay spoken.
+			const src = ["Para.", "", open + lead + "[ZQSX]: https://example.com", "", "ZAFTX", ""].join("\n");
+			for (const [pname, o] of [["skips on", ON], ["skips off", OFF]] as const) {
+				const out = say(src, o);
+				check(
+					`NRL-194 ${lname} lead in ${sname} (${pname}): definition not spoken, next paragraph is`,
+					!out.includes("ZQSX") && out.includes("ZAFTX") && out.includes("Para."),
+					out,
+				);
+			}
+		}
+	}
+	for (const [pname, o] of [["skips on", ON], ["skips off", OFF]] as const) {
+		const out = say("Para.\n\n>  \t[ZQSX]: https://example.com\n\nZAFTX\n", o);
+		check(`NRL-194 '>' then two spaces and a tab (${pname}): definition not spoken`, !out.includes("ZQSX") && out.includes("ZAFTX"), out);
+	}
+	// Guards. A four-space or tab-only lead is indented code: the base reading
+	// (the text is code, so it is spoken only with skipCodeBlocks off) is kept.
+	for (const lead of ["    ", "\t"]) {
+		const src = ["Para.", "", lead + "[ZQSX]: https://example.com", "", "ZAFTX", ""].join("\n");
+		check(`NRL-194 guard: ${JSON.stringify(lead)} lead is indented code, skipped with code skipped`, !say(src, ON).includes("ZQSX"), say(src, ON));
+		check(`NRL-194 guard: ${JSON.stringify(lead)} lead is indented code, spoken with code kept`, say(src, OFF).includes("ZQSX"), say(src, OFF));
+	}
+	// A definition-shaped line inside a paragraph cannot interrupt it.
+	{
+		const src = "Para line\n \t[ZQSX]: https://example.com\n\nZAFTX\n";
+		check("NRL-194 guard: a definition-shaped line inside a paragraph stays text", say(src, ON).includes("ZQSX"), say(src, ON));
+	}
+	// A footnote definition keeps its body.
+	{
+		const src = "Para.[^1]\n\n \t[^1]: ZQSX footnote body\n\nZAFTX\n";
+		check("NRL-194 guard: a tab-led footnote definition is not dropped as a link definition", say(src, OFF).includes("ZAFTX"), say(src, OFF));
 	}
 }
 

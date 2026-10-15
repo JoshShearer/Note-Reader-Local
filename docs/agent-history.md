@@ -442,6 +442,32 @@ another quote-peel copy, `LIST_BULLET`, `TABLE_ROW`, `LINK_REF_DEF`, `FENCE` / `
 - Reading view only. `sourceIndex` lockstep and Live Preview were not measured. NOT VERIFIED
   IN OBSIDIAN.
 
+### LINK_REF_DEF takes the renderer's block-start lead (NRL-194, 2026-10-15)
+
+`LINK_REF_DEF` was `^ {0,3}\[`, so ` \t[a]: https://example.com` at block start was
+spoken (`a : ...`) while the renderer hides the definition (Obsidian 1.13.7 and 1.14.4 via the
+parser harnesses; NRL-153 spike: 118 disclosure cells in its extra grid). It is now
+`^(?! {4}|\t)[ \t]*\[` (the spike's mutant M5): any space/tab run unless the line starts like
+indented code. LINK_REF_DEF has one use, the drop in extractChunks; nothing else in extract.ts
+resolves a `[x]` against a definition (`bracketClosesLater`/`labelClose` only ask whether a `](`
+or `][` tail follows), so no second regex needed to move with it.
+
+One carve-out the spike grids did not see. Its grids put the definition on a container's first
+line; a SECOND block in a list item (`- a`, blank, `  \t[r0]: u`) is where the renderer's list indent
+arithmetic makes `  \t[` indented code but `   \t[` a definition (a tab-stop rule this scanner does not
+model, the NRL-179 family). Ungated M5 dropped those code lines: measured 22 cells (ul 15, ol 7) newly
+lost at skipCodeBlocks off, and 0 on the spike grids. The drop therefore keeps the old spaces-only test on
+a bare continuation line while `inList` holds (`listContinuation` in extractChunks). Residual: tab-led
+definitions in that position (ul 7, ol 8 hidden cells, per profile) still speak, as on base.
+
+Measured (extra grid, harness 1.13.7): 118 disclosure -> ok, 0 newly lost, 0 newly disclosing; main and
+hazard grids 0 moved; the four `POS=` grids (atx, hr, fence, setext) 22 each, all fixed; fm.cjs output
+identical to base. Own generator (3000 reference-link notes, spaces/tabs/mixed leads, quotes, lists, CRLF,
+footnotes, 54,302 sentinel cells, same totals on 1.13.7 and 1.14.4): 652 cells moved, all toward the renderer
+(444 destination/title spoken -> not spoken, 208 disclosure -> ok), 0 newly lost, 0 newly disclosing.
+sourceIndex lockstep (NRL-128's checker, 252 notes x 3 masks): clean 0 on both arms, four mutators nonzero
+on both arms. Scripts: `.claude/runs/NRL-194/spike/`. Not observed in a live Obsidian.
+
 ### A container spanning a mid-paragraph `<!--` makes it text (NRL-128, 2026-10-15)
 
 `a ==x` / `Prose <!--` / `HIDDENQ` / `y== b` / `--> VISIBLEQ.` spoke `a ==x Prose VISIBLEQ.`
@@ -3885,7 +3911,7 @@ rediscover them:
   new member of ADR 0018's decision-Q8 fall-through class and **not a new class**: the same shape
   already leaks 256 of each row's 512 cells on base at `skipCodeBlocks: false`, and a lead-free
   two-definition control leaks **512 of 512 on both arms**. Pinned as a tripwire
-  (`pin-nrl113-space-tab-link-ref-def-leaks-destination` plus its control), not fixed, because
+  (a tripwire plus its control; the tripwire was closed by NRL-194 and is now `guard-nrl194-space-tab-link-ref-def-dropped`), not fixed, because
   widening a second predicate in the same diff is what makes a measured result unattributable.
 
   **SHIP REVIEW FOUND THAT THE CONSTRUCT AXIS WAS THE CORPUS'S REAL BLIND SPOT, and three more

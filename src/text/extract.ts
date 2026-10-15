@@ -3325,7 +3325,11 @@ const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
  * Every half is there to stop a false positive, because a miss here swallows a
  * sentence and ADR 0007 clause 6 prefers leaked markup to a lost word:
  *
- * - `^ {0,3}` - four spaces is indented code, which never reaches this point.
+ * - `^(?! {4}|\t)[ \t]*` - the renderer's block-start rule: any run of spaces and
+ *   tabs, so ` \t[a]: x` is a definition, unless the line is indented code (it
+ *   starts with four spaces or a tab). The old `^ {0,3}` refused the tab
+ *   leads and spoke a definition the renderer hides (NRL-194, NRL-153 spike
+ *   mutant M5). Block start only: the caller's paragraph guards are unchanged.
  * - `(?!\^)` - `[^1]:` is a footnote definition, whose body IS displayed, so
  *   it keeps cleanLine's own branch that drops only the marker.
  * - `(?:[^\[\]\\]|\\.)+` - a non-empty label with no unescaped bracket in it,
@@ -3341,7 +3345,7 @@ const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
  * whole soft-wrap family needs.
  */
 const LINK_REF_DEF =
-	/^ {0,3}\[(?!\^)(?:[^[\]\\]|\\.)+\]:[ \t]*(?:<(?:[^<>\\\n]|\\.)*>|[^\s<][^\s]*)(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
+	/^(?! {4}|\t)[ \t]*\[(?!\^)(?:[^[\]\\]|\\.)+\]:[ \t]*(?:<(?:[^<>\\\n]|\\.)*>|[^\s<][^\s]*)(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
 
 /**
  * Does this line leave a comment open, so that the lines after it are hidden?
@@ -7861,7 +7865,25 @@ export function extractChunks(
 		// provably be a no-op. And when `carriedCode` is live the previous line
 		// was a buffered paragraph line, so `paraText !== ""` and this branch
 		// cannot fire - a soft-wrapped code span can never be cut short here.
-		if (blockType !== "heading" && paraText === "" && !wasPara && !wasContainer && LINK_REF_DEF.test(body)) {
+		//
+		// NRL-194: a tab-bearing lead is accepted (LINK_REF_DEF), except on a
+		// bare continuation line while `inList` holds. There the renderer's list
+		// indent arithmetic decides between "hidden definition" and "indented
+		// code shown as text" by a tab-stop rule this scanner does not model (the
+		// NRL-179 family: `  \t[a]: x` under `- ` is code, `   \t[a]: x` a
+		// definition), and dropping a line the renderer displays as code would
+		// lose a reading with skipCodeBlocks off. Measured: 22 cells (ul 15, ol 7)
+		// of that shape lose a displayed line without this carve-out. Those lines
+		// keep the pre-NRL-194 spaces-only test.
+		const listContinuation = inList && blockType === "paragraph";
+		if (
+			blockType !== "heading" &&
+			paraText === "" &&
+			!wasPara &&
+			!wasContainer &&
+			LINK_REF_DEF.test(body) &&
+			(!listContinuation || /^ {0,3}\[/.test(body))
+		) {
 			continue;
 		}
 		// Output exclusions do not exclude parsing: an HTML or Obsidian comment
