@@ -8391,6 +8391,62 @@ console.log("NRL-194 link reference definition with a tab-bearing lead (R-M08)")
 		const out = say(src, OFF);
 		check(`NRL-194 r1 carve-out: ${sname} continuation is code, spoken with code kept`, out.includes("ZQSX") && out.includes("ZAFTX"), out);
 	}
+	// Fix round 2 (round 1 critics' F1). Only a type 6 HTML block the browser
+	// displays refuses the drop. A fence, math, `%%`, comment or front matter
+	// holding an HTML opener opens no block, types 1-5 hide their text or show it
+	// as code, and a hiding opener or nested tag is not trusted. Every one of
+	// these renders the definition hidden on 1.13.7 and 1.14.4 (the last two by
+	// HTML semantics: parse5 calls `hidden` and `<details>` text visible).
+	for (const [src, profiles] of [
+		["```php\n<?php\necho 1;\n```\n\nSome prose.\n\n[ZQSX]: https://zdst.example\n\nZAFTX\n", [ON, OFF]],
+		["```\n<div>\n```\n[ZQSX]: ZDST\n\nZAFTX\n", [ON, OFF]],
+		["%%\n<div>\n%%\n[ZQSX]: ZDST\n\nZAFTX\n", [ON, OFF]],
+		["<!--\n<div>\n-->\n[ZQSX]: ZDST\n\nZAFTX\n", [ON, OFF]],
+		["$$\n<div>\n$$\n[ZQSX]: ZDST\n\nZAFTX\n", [ON, OFF]],
+		["---\nk: v\n<div>\n---\n[ZQSX]: ZDST\n\nZAFTX\n", [ON, OFF]],
+		["```html\n<script>\nlet x;\n```\n\n# Heading\n\n[ZQSX]: ZDST\n\nZAFTX\n", [ON, OFF]],
+		["<style>\n.a{}\n\n[ZQSX]:hover{x}\n</style>\n\nZAFTX\n", [ON, OFF]],
+		["<textarea>\n\n[ZQSX]: ZDST\n\nZAFTX\n", [ON, OFF]],
+		["<pre>\n\n[ZQSX]: ZDST\n</pre>\n\nZAFTX\n", [ON]],
+		["<span></span>\n<!-- c -->\n[ZQSX]: ZDST\n\nZAFTX\n", [ON, OFF]],
+		["<div hidden>\n[ZQSX]: ZDST\n\nZAFTX\n", [ON, OFF]],
+		["<div>\n<details>\n[ZQSX]: ZDST\n\nZAFTX\n", [ON, OFF]],
+		["| a | b |\n|---|---|\n| c | d |\n \t[ZQSX]: ZDST\n\nZAFTX\n", [ON]],
+	] as const) {
+		for (const o of profiles) {
+			const out = say(src, o);
+			check(`NRL-194 r2 guard ${JSON.stringify(src)} (${o === ON ? "skips on" : "skips off"}): definition hidden`, !out.includes("ZQSX") && out.includes("ZAFTX"), out);
+		}
+	}
+	// Displayed lines round 2 keeps (critic 2 F2, critic 1 F2): a lone
+	// table-shaped line silenced by skipTables holds the paragraph open like any
+	// silent line, a `---` under a list item's quote is that quote's heading,
+	// and a lazy `-` is a list item, not an underline.
+	for (const [src, o] of [
+		["| a |\n \t[ZQSX]: ZDST\n\nZAFTX\n", ON],
+		["|a|b|\n \t[ZQSX]: ZDST\n\nZAFTX\n", ON],
+		["- >   \t[ZQSX]: ZDST\n  > ---\n\nZAFTX\n", OFF],
+		[">  \t[ZQSX]: <>\n-\n\nZAFTX\n", ON],
+		["#tag\n[ZQSX]: <zdst.md>\n\nZAFTX\n", ON],
+	] as const) {
+		const out = say(src, o);
+		check(`NRL-194 r2 ${JSON.stringify(src)}: displayed, spoken`, out.includes("ZQSX") && out.includes("ZAFTX"), out);
+	}
+	// A `<>` line over `-` or `---` at a list item's content column is the
+	// item's heading (critic 2 F3, critic 1 F3): skipped with headings skipped,
+	// spoken with them kept.
+	for (const src of ["- [ZQSX]: <> \"ZTTL\"\n  -\n\nZAFTX\n", "1. [ZQSX]: <>\n  ---\n\nZAFTX\n", "* %%c%%\n\n  [ZQSX]: <>\n  -\n\nZAFTX\n"]) {
+		check(`NRL-194 r2 ${JSON.stringify(src)}: heading skipped with headings skipped`, !say(src, ON).includes("ZQSX") && say(src, ON).includes("ZAFTX"), say(src, ON));
+		check(`NRL-194 r2 ${JSON.stringify(src)}: heading spoken with headings kept`, say(src, OFF).includes("ZQSX"), say(src, OFF));
+	}
+	// Base's answer, kept on purpose: a tag-shaped destination after a silent
+	// line is displayed as an inline element the browser hides, and speaking the
+	// line would speak that tag too (stripTags does not model it), so the line
+	// stays dropped. Pinned so a change here is a decision, not a drift.
+	{
+		const out = say("#tag\n[ZQSX]: <zdst>\n\nZAFTX\n", ON);
+		check("NRL-194 r2 tag-shaped destination after a silent line keeps base's drop", !out.includes("ZQSX") && !out.includes("zdst") && out.includes("ZAFTX"), out);
+	}
 }
 
 console.log("");

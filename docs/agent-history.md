@@ -494,6 +494,68 @@ only keeps base's reading there (no newly lost or disclosing cells, 96 disclosur
 note, not a measured defect. The carve-out is pinned by two code-shaped rows (`- a` / blank /
 `  \t[x]: y` and `1. a` / blank / `  \t\t[x]: y`), both red when the carve-out is removed.
 
+**Correction (fix round 2).** Round 1's "0 newly lost, 0 newly disclosing" held only on its own g3 grid.
+The round-1 critics measured against base 028ef10, identical on 1.13.7 and 1.14.4:
+- Critic 1's `defgen` (60,000 notes per run). Run A, tag-shaped `<QD..Q>` destinations: 1,686 cells
+  newly disclosing and 11 newly lost. Run B, non-tag destinations: 735 newly disclosing and 4 newly lost.
+  Run C: 376 newly disclosing and 9 newly lost.
+- Critic 2's `g1` and `g2`. `g1`: 432 cells newly disclosing and 48 newly lost. `g2`: 21 newly disclosing.
+- The causes. `!inRawHtml` read a pre-pass that has no fence, math, `%%`, comment or front-matter state,
+  so a fenced `<?php` spoke every later definition. It also treated types 1-5 (`<style>`, `<textarea>`,
+  `<pre>` under skipCodeBlocks) as displayed. A lone `| a |` silenced by skipTables never set
+  `wasSilentPara`. A `<>` line over `  -` at a list item's content column was missed. A tab-led
+  definition under a list item's quote was dropped although `---` made it a heading. A lazy `-` was
+  read as an underline. Most of run A was the separate stripTags gap for tag-shaped destinations (F4).
+
+The PR's "752bea0 fails 104 of the new checks" was wrong. Rerun, round 1's suite on 752bea0 source
+fails 103 checks.
+
+Round 2's rule: where the scanner cannot tell what the renderer does with a definition-shaped line,
+it gives base's answer (`LEGACY_LINK_REF_DEF`, `legacyDrop`), and it does not guess. Changes:
+- Only `htmlShownAt` refuses the drop. It is a new `containerViews` output that knows fences, math,
+  `%%`, comments, front matter and indented code. It is true inside a type 6 block opened by one bare
+  tag (`SHOWN_BLOCK_OPENER`) that is not a hiding opener (`HIDING_BLOCK_OPENER`: `details`, `dialog`,
+  `iframe`, `noframes`, `title`, `head`, `frameset`, `frame`, or a `hidden`/`style`/`class` attribute),
+  and only until another tag opens inside the block. This rests on HTML semantics and is not
+  measured: parse5 calls that text visible, so the classifier cannot grade it.
+- Any other HTML-block line, by either parse (`inRawHtml` or `htmlLineAt`), gives base's answer.
+- A lone table-shaped line with no delimiter-like row in its run sets the silent-paragraph flag.
+- A line in a container gives base's answer when the line under it may be an underline
+  (`uncertainUnderline`) without `setextLike` and the same quote vouching for it. One exception:
+  with headings kept, a `<>` line there is spoken, because it is displayed either way.
+- A line with a tag-shaped destination (`<x>`, `<x y>`) that base dropped stays dropped.
+  `prevKeptDef` and `prevDroppedDef` carry base's paragraph state through lines this ticket keeps or
+  drops differently from base.
+
+Measured with the final arm against base 028ef10. Both harnesses gave the same results.
+- NRL-153 grids (1.13.7): main and hazard grids 0 moved. Extra grid: 118 cells fixed. Each `POS=`
+  grid: 22 fixed. Nothing else moved, and `fm.cjs` output is identical.
+- `gen.cjs`: 652 cells fixed. `cont.cjs`: 140 fixed.
+- `g3` (20,000 notes, 183,320 cells, seed 4242): 4,231 fixed. Seed 777 (183,354 cells): 4,245 fixed.
+- Critic 2's `g1` (56,056 cells): 2,196 fixed. `g2` (64,640 cells): 3,096 fixed.
+- New `genblk.cjs` (71,136 notes, 548,496 cells): 13,458 fixed. It puts fences, `~~~`, `$$`, `%%`,
+  `<!--`, front matter and indented code holding 13 HTML openers before a definition. Against round
+  1 on this corpus, base's disclosure count was 100,764, round 1's 110,574 and round 2's 96,732.
+- Every corpus above: 0 newly lost and 0 newly disclosing.
+- Critic 1's `defgen` (30,000 notes per seed, about 403,000 cells). Seed 4243 (non-tag destinations):
+  9,852 fixed, 0 newly lost, 0 newly disclosing. Seed 777 (tag-shaped destinations): 9,295 fixed,
+  0 newly lost, and 2 cells newly disclosing, one each at skips on and speakImageAlt on.
+- The disclosing family: `%%c%%` / `   [a]: x "t"` / `   [b]: <x y> "t` (unclosed title) / `-`. Line 2
+  is kept, which is correct: it is displayed, and base lost it. Line 3 then joins that paragraph
+  instead of reading as hidden heading content, so stripTags speaks its `<x y>`. This is the F4 gap,
+  filed separately.
+- Lockstep: `lock194r1.cjs` and NRL-128's `lock128.cjs` are CLEAN 0/0/0/0 on both arms, with every
+  mutator nonzero. No `sourceIndex`/text length mismatch on any corpus.
+- Scripts are in `.claude/runs/NRL-194/spike-r2/`, and the critics' generators are in
+  `.claude/runs/NRL-194/critic-r1/`.
+
+Given up for base's answer, all measured as base-equal:
+- definitions inside type 7 blocks (`<span>` / `[a]: x` is displayed, and base drops it);
+- container setext shapes the scanner cannot vouch for;
+- tag-shaped destinations on displayed lines.
+
+None of this was observed in a live Obsidian.
+
 ### A container spanning a mid-paragraph `<!--` makes it text (NRL-128, 2026-10-15)
 
 `a ==x` / `Prose <!--` / `HIDDENQ` / `y== b` / `--> VISIBLEQ.` spoke `a ==x Prose VISIBLEQ.`

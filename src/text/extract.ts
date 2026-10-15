@@ -3313,6 +3313,13 @@ const TERM2_SETEXT_DASH = /^--+\r?$/;
 const INDENTED_CODE = /^(?: {4}|\t)/;
 const TABLE_ROW = /^\s*\|/;
 /**
+ * Anything that might be a GFM delimiter row among `TABLE_ROW` lines: pipes,
+ * colons, dashes and whitespace only, with a pipe and a dash. Deliberately
+ * wide; it only stops a run of table-shaped lines being read as a plain
+ * paragraph (NRL-194 fix round 2), and a real table there keeps base's answer.
+ */
+const TABLE_DELIMITER_LIKE = /^(?=[^-]*-)[ \t]*\|[ \t|:-]*\r?$/;
+/**
  * Thematic break: three or more of the same marker, optionally spaced. Checked
  * before LIST_BULLET because "- - -" would otherwise read as a bullet whose
  * body is "- -", and the dashes would be spoken.
@@ -3349,6 +3356,16 @@ const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
  */
 const LINK_REF_DEF =
 	/^(?! {4}|\t)[ \t]*\[(?!\^)(?:[^[\]\\]|\\.)+\]:[ \t]*(?:<(?:[^<>\\\n]|\\.)+>|[^\s<][^\s]*)(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
+
+/**
+ * `LINK_REF_DEF` as it was before NRL-194: a lead of at most three spaces and
+ * `<>` accepted. extractChunks falls back to it, and to nothing else of
+ * NRL-194's, wherever it cannot tell what the renderer does with a
+ * definition-shaped line (see `legacyDrop`), so those shapes keep their old
+ * answer instead of moving in an unmeasured direction (NRL-194 fix round 2).
+ */
+const LEGACY_LINK_REF_DEF =
+	/^ {0,3}\[(?!\^)(?:[^[\]\\]|\\.)+\]:[ \t]*(?:<(?:[^<>\\\n]|\\.)*>|[^\s<][^\s]*)(?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?[ \t]*$/;
 
 /**
  * `LINK_REF_DEF`'s shape with the empty destination `<>`, which the renderer
@@ -3796,6 +3813,24 @@ const HTML_BLOCK_TAGS = new Set(
 	).split(" "),
 );
 /**
+ * A type 6 opener line whose following lines the browser DISPLAYS (NRL-194 fix
+ * round 2, `shownLines` in `containerViews`): one bare tag, optionally with its
+ * own closing tag, and nothing else on the line, so no second element can open
+ * around the text below it. Anything else is left to the caller's older answer,
+ * which is the fail-toward-base direction: the only reader asks whether a
+ * definition-shaped line is displayed, and a wrong yes speaks hidden text.
+ */
+const SHOWN_BLOCK_OPENER = /^<\/?([A-Za-z][A-Za-z0-9]*)(?:[ \t][^<>]*)?\/?>(?:<\/\1>)?[ \t]*\r?$/;
+/**
+ * Type 6 openers whose content the browser does NOT display: a closed
+ * `<details>` or `<dialog>`, the raw-text `<iframe>` / `<noframes>`, a `<title>`,
+ * the ignored `<head>` / `<frameset>` / `<frame>`, and any opener carrying an
+ * attribute that can hide (`hidden`, `style`, `class`). Read off HTML
+ * semantics, not measured: parse5 reports such text as visible, so the
+ * NRL-151 classifier cannot grade it, and the safe answer is "not shown".
+ */
+const HIDING_BLOCK_OPENER = /^<(?:details|dialog|iframe|noframes|title|head|frameset|frame)\b|\b(?:hidden|style|class)\b/i;
+/**
  * If `view`, already stripped of its lead, opens a NON-comment raw HTML block,
  * the condition that ends it (NRL-136): types 1, 3, 4 and 5 by their closing
  * pattern, type 6 at a blank line. Narrow where `rawHtmlBlockEnd` is wide, for
@@ -4192,6 +4227,7 @@ function containerViews(
 	literal: Array<LiteralKind | undefined>,
 	fences: Array<"open" | "close" | undefined>,
 	htmlLines: boolean[],
+	shownLines: boolean[],
 	depth = 0,
 ): void {
 	let n = 0;
@@ -4211,6 +4247,9 @@ function containerViews(
 	// nothing. Measured: `   <!-- Z3Q` / `  $$` / `  \t<!----> <!-- Z5Q` is one raw
 	// block, not a math block.
 	let rawUntil: RegExp | "blank" | undefined;
+	// Whether that HTML block is a type 6 one whose text the browser displays
+	// (`shownLines`, NRL-194 fix round 2).
+	let rawShown = false;
 	while (n < views.length) {
 		const t = views[n]!.text;
 		const shallow = indentStops(t).indent < 4;
@@ -4220,7 +4259,15 @@ function containerViews(
 			const k = views[n]!.k;
 			if (rawUntil === "blank") {
 				if (t.trim() === "") rawUntil = undefined;
-				else htmlLines[k] = true;
+				else {
+					htmlLines[k] = true;
+					if (rawShown) shownLines[k] = true;
+					// A further tag inside the block may itself hide what follows it
+					// (`<details>`, `<span hidden>`, an unclosed `<!--`), so the
+					// lines after one are no longer claimed as displayed. A closing
+					// tag leaves the text after it in the parent, still shown.
+					if (/<[A-Za-z!?]/.test(t)) rawShown = false;
+				}
 			} else {
 				// A `%%` block is removed by the parser rather than passed raw.
 				if (rawUntil.source !== "%%") htmlLines[k] = true;
@@ -4299,7 +4346,7 @@ function containerViews(
 				out[r.k] = r.off;
 				homes[r.k] = quoteHome;
 			}
-			if (depth < RL_MAX_DEPTH) containerViews(run, out, homes, quoteHome, ids, literal, fences, htmlLines, depth + 1);
+			if (depth < RL_MAX_DEPTH) containerViews(run, out, homes, quoteHome, ids, literal, fences, htmlLines, shownLines, depth + 1);
 			n = m;
 			continue;
 		}
@@ -4331,6 +4378,8 @@ function containerViews(
 			const end = rawBlockOpener(body);
 			if (end !== undefined) {
 				htmlLines[views[n]!.k] = true;
+				rawShown = end === "blank" && SHOWN_BLOCK_OPENER.test(body) && !HIDING_BLOCK_OPENER.test(body);
+				if (rawShown) shownLines[views[n]!.k] = true;
 				if (end === "blank" || !end.test(body.slice(1))) rawUntil = end;
 				n += 1;
 				continue;
@@ -4412,7 +4461,7 @@ function containerViews(
 				out[c.k] = c.off;
 				homes[c.k] = itemHome;
 			}
-			if (depth < RL_MAX_DEPTH) containerViews(content, out, homes, itemHome, ids, literal, fences, htmlLines, depth + 1);
+			if (depth < RL_MAX_DEPTH) containerViews(content, out, homes, itemHome, ids, literal, fences, htmlLines, shownLines, depth + 1);
 		}
 		n = k;
 	}
@@ -6533,6 +6582,9 @@ export function extractChunks(
 	// `htmlLineAt[k]`: line k is a line of a markdown HTML block (any type,
 	// comments included) by the same parse, so it is raw HTML for the renderer.
 	const htmlLineAt: boolean[] = new Array<boolean>(lines.length).fill(false);
+	// `htmlShownAt[k]`: line k is inside a type 6 HTML block whose text the
+	// browser displays (`SHOWN_BLOCK_OPENER`), by the same parse (NRL-194).
+	const htmlShownAt: boolean[] = new Array<boolean>(lines.length).fill(false);
 	{
 		const viewStart: number[] = new Array<number>(lines.length).fill(0);
 		// Obsidian's frontmatter is a `---` on line 0 and the next `---`: its lines
@@ -6555,6 +6607,7 @@ export function extractChunks(
 			literalAt,
 			fenceAt,
 			htmlLineAt,
+			htmlShownAt,
 		);
 		for (let k = 0; k < lines.length; k++) {
 			const raw = lines[k]!;
@@ -6748,6 +6801,12 @@ export function extractChunks(
 	let prevContainer = false;
 	// The previous line was a paragraph line that spoke nothing (NRL-194).
 	let prevSilentPara = false;
+	// The previous line was a definition-shaped line NRL-194 keeps where base
+	// dropped it, and the open paragraph holds only such lines (fix round 2).
+	let prevKeptDef = false;
+	// The previous line was one NRL-194 drops where base kept it, so base had a
+	// paragraph open after it (fix round 2).
+	let prevDroppedDef = false;
 	const frontmatter = detectFrontmatter(lines);
 	// A line's WINDOW for fix round 1's refinements (fix round 2 scopes to it
 	// what round 1 gated note-wide): the line itself, every earlier line back to
@@ -7477,6 +7536,8 @@ export function extractChunks(
 		const wasPara = prevPara;
 		const wasContainer = prevContainer;
 		const wasSilentPara = prevSilentPara;
+		const wasKeptDef = prevKeptDef;
+		const wasDroppedDef = prevDroppedDef;
 		// NRL-158: read before computing `blank`, which needs to know whether
 		// a paragraph is open to tell a tab-bearing lazy continuation from
 		// the blank line that would end it (blankEndsParagraph).
@@ -7488,6 +7549,8 @@ export function extractChunks(
 		prevPara = false;
 		prevContainer = false;
 		prevSilentPara = false;
+		prevKeptDef = false;
+		prevDroppedDef = false;
 
 		if (!inFence) {
 			// A list ends at an unindented line that is not an item, when a blank
@@ -7936,24 +7999,97 @@ export function extractChunks(
 			sameQuote &&
 			next !== undefined &&
 			SETEXT_UNDERLINE_EXACT.test(next.replace(BLOCKQUOTE, "").slice(listStrip[lineNo + 1]));
-		if (
+		//
+		// NRL-194 fix round 2: where this scanner cannot tell what the renderer
+		// does with the line, it gives base's (pre-NRL-194) answer, `legacyDrop`,
+		// rather than a guess in either direction, so no shape below is newly
+		// lost or newly spoken against base:
+		// - Inside an HTML block by either parse (`inRawHtml`, the wide pre-pass
+		//   that also counts type 7, or `htmlLineAt`), unless `htmlShownAt` says
+		//   it is a type 6 block the browser displays. Types 1-5 are hidden or
+		//   code (`<style>`, `<?php`, `<pre>` under skipCodeBlocks), and the
+		//   pre-pass knows no fence, math, `%%`, comment or front matter, so it
+		//   also fires after a fenced `<?php` (round 1's refusal read it as
+		//   "displayed" and spoke hidden definitions there).
+		// - A line with a tag-shaped destination (`<x>`, `<my file.md>`) that
+		//   base dropped is dropped, whatever shows it (shown HTML, an open silent
+		//   paragraph, a setext heading): the renderer passes the destination as
+		//   an inline element the browser hides, and speaking the line would
+		//   speak the tag too, which stripTags does not model (a separate,
+		//   pre-existing gap). `<x.md>` is no tag and is displayed escaped. Base's
+		//   paragraph state is read through any line kept above it that base
+		//   dropped (`[a]: <>`, a definition after a silent line) and any line
+		//   dropped above it that base kept (a tab-led definition, which left
+		//   base's paragraph open): `legacyLike`, `wasKeptDef`, `wasDroppedDef`.
+		//   Only ever a drop; a tag-shaped line base KEPT follows the rules here
+		//   like any other.
+		// - Inside a container over a line that MAY be a setext underline (any
+		//   `=` or `-` run after the quote peel) without `setextLike` and the
+		//   same quote vouching for it: a lazy `-` is a list item, a `-` under a
+		//   list line may be the next item, and `  -` at the content column is
+		//   an underline `listStrip` does not see.
+		// One uncertain shape needs no guess: with headings kept, a `<>` line is
+		// displayed whether the line under it is an underline (heading text) or
+		// not (paragraph text, since the renderer takes no definition with an
+		// empty destination), so it is spoken, as round 1 measured, rather than
+		// handed back to base's drop. Not on the list carve-out's code-shaped
+		// lead, which skipCodeBlocks may hide.
+		const legacyDrop = blockType !== "heading" && paraText === "" && !wasPara && !wasContainer && LEGACY_LINK_REF_DEF.test(body);
+		const legacyLike =
 			blockType !== "heading" &&
-			paraText === "" &&
-			!wasPara &&
+			(paraText === "" || wasKeptDef) &&
+			(!wasPara || wasKeptDef) &&
+			!wasDroppedDef &&
 			!wasContainer &&
-			!(wasSilentPara && paraBefore[lineNo]!) &&
-			!inRawHtml[lineNo]! &&
-			!topLevelSetext &&
-			(containerSetext
-				? opts.skipHeadings && (LINK_REF_DEF.test(body) || EMPTY_DESTINATION_DEF.test(body))
-				: LINK_REF_DEF.test(body) || (maybeHiddenHeading && EMPTY_DESTINATION_DEF.test(body))) &&
-			(!listContinuation || /^ {0,3}\[/.test(body))
-		) {
+			LEGACY_LINK_REF_DEF.test(body);
+		const inHtml = inRawHtml[lineNo]! || htmlLineAt[lineNo]!;
+		const silentParaOpen = wasSilentPara && paraBefore[lineNo]!;
+		const angleDestination = /\]:[ \t]*<[A-Za-z][A-Za-z0-9-]*[\s/>]/.test(body);
+		const uncertainUnderline =
+			(prefixChars > 0 || inList) &&
+			next !== undefined &&
+			/^[ \t]*(?:=+|-+)[ \t]*\r?$/.test(next.replace(BLOCKQUOTE, "")) &&
+			!(setextLike[lineNo]! && nextQuotes === prefix.quotes);
+		const emptyDestinationShown =
+			uncertainUnderline &&
+			!inHtml &&
+			!opts.skipHeadings &&
+			EMPTY_DESTINATION_DEF.test(body) &&
+			(!listContinuation || /^ {0,3}\[/.test(body));
+		let drop: boolean;
+		if (emptyDestinationShown) drop = false;
+		else if ((inHtml && !htmlShownAt[lineNo]!) || uncertainUnderline) drop = legacyDrop;
+		else {
+			drop =
+				blockType !== "heading" &&
+				paraText === "" &&
+				!wasPara &&
+				!wasContainer &&
+				!silentParaOpen &&
+				!htmlShownAt[lineNo]! &&
+				!topLevelSetext &&
+				(containerSetext
+					? opts.skipHeadings && (LINK_REF_DEF.test(body) || EMPTY_DESTINATION_DEF.test(body))
+					: LINK_REF_DEF.test(body) || (maybeHiddenHeading && EMPTY_DESTINATION_DEF.test(body))) &&
+				(!listContinuation || /^ {0,3}\[/.test(body));
+		}
+		if (drop || (angleDestination && legacyLike)) {
+			if (!legacyLike) prevDroppedDef = true;
 			continue;
 		}
+		if (legacyLike) prevKeptDef = true;
 		// Output exclusions do not exclude parsing: an HTML or Obsidian comment
 		// opened in a skipped heading/table must still hide its following lines.
 		if ((opts.skipTables && TABLE_ROW.test(raw)) || (opts.skipHeadings && blockType === "heading")) {
+			// A table-shaped line with no delimiter row in its run is a plain
+			// paragraph line for the renderer, silenced here only by skipTables:
+			// `| a |` / ` \t[a]: x` is one `<p>` showing the definition, so it
+			// holds the paragraph open like any silent line (NRL-194 fix round 2).
+			if (blockType === "paragraph" && inComment === undefined && TABLE_ROW.test(raw)) {
+				let k = lineNo;
+				while (k >= 0 && TABLE_ROW.test(lines[k]!) && !TABLE_DELIMITER_LIKE.test(lines[k]!)) k--;
+				if (k < 0 || !TABLE_ROW.test(lines[k]!)) prevSilentPara = true;
+			}
 			flushParagraph();
 			continue;
 		}
