@@ -2403,7 +2403,8 @@ failures**.
   `<!-- ZAZ` and `ZBZ -->` are both displayed. NRL-156's capped `FENCE` reads the
   line as lazy prose, and the term-2 bound then pairs across it. The class moved at
   `8d2b3f2` (#214), the fix's output on it is byte-identical to `e2afbfe`'s, and it
-  has no peel-equalising control. It is fail-closed (prose loss).
+  has no peel-equalising control. It is fail-closed (prose loss). **Closed by
+  NRL-170** (its section below): the quote-ending code line is now a term-2 stop.
 - F2: 63 shape-mask groups moved. 41 have a control under the criterion above:
   24 peel-equalising, 11 by an inserted blank line, 5 by a renderer-equivalent
   defusal and 1 by the unquoted twin. That search (`ctrl4.cjs`) rejects a defusal
@@ -3408,6 +3409,84 @@ newly lost); its fuzz, seed 4242 x 30,000 and 99 x 60,000 attempts: 0 / 0, 7,066
 14,244 closed. Lockstep failures 0 and 1.14.4 verdict differences 0 on every corpus.
 Wrong arm on the census and fuzz: unchanged from above (62,540 / 18,400; 7,399 / 83;
 7,252 / 87). Twelve new pins were RED on d0442e5 and the four new guards passed there.
+
+### NRL-170 (2026-10-14): a quote ended by lazy indented code is a term-2 stop, and the line is code
+
+Class (e) of the NRL-166 section, closed. Reproduced on ee80121 (bare Node, the real
+`src/text/extract.ts` bundled with esbuild, parser harness 1.13.7 with 1.14.4 agreeing):
+`> Plain QPQ` / `> \t<!-- QAQ` / `` \t``` `` / `> QBQ -->` / `TAIL QDQ` renders
+`<blockquote><p>Plain QPQ<br>&lt;!-- QAQ</p></blockquote><pre><code>```</code></pre><blockquote><p>QBQ --><br>TAIL QDQ</p></blockquote>`,
+and ee80121 spoke `Plain QPQ | TAIL QDQ` under DEF and ALL. Bisected to `8d2b3f2` (#214).
+
+**Mechanism.** A lazy line that is module-134 indented code in the frame holding the
+quote ends the quote, because `indentedCode` is in module 6234's `interruptBlockquote`
+(it is not in `interruptParagraph`). The term-2 forward pass reads that unquoted line in
+its depth-0 branch, where the stop is `term2Stop[k] = endsTerm2Scan(line, paraLinesAbove)`
+(`endsTerm2Block || TERM2_DASH_RUN`); the fence term inside it, `fenceOpensAt(lead, true)`,
+never stops at a tab or four-space lead, so `closerAheadOf` carried the `-->` back over
+the line. Before #214 `FENCE`'s `^\s*` stopped there by accident. `endsTerm2Block` itself
+only drives `paraLinesAbove`.
+
+**Change.** walkLeadFrame's RL_QUOTE branch records the line that ended the quote when the
+refined walk holds and the line is non-blank and `startsIndentedCode` on the frame's own,
+dedented view (`RendererLeads.quoteCodeEnd`; `quoteCodeEndRoot` when the frame is the
+root). `pick` carries both through `refineWindowClean`. In extractChunks:
+
+- `quoteCodeEndSure` = `quoteCodeEnd` and not `unsureFresh`, not `crAbove`, not
+  `tabFenceAhead`, and the line holds no `<!--` and no `%%`. It joins
+  `term2StopOrCode`, so it reaches only `paraSure` openers, through `htmlCloserAheadCode`
+  and `commentBodyOkAheadOf`. `term2Stop`, `term2StopRaw`, `endsTerm2Block`,
+  `fenceOpensAt`, `FENCE` and `interruptsParagraph*` are unchanged, so every carry and
+  every other opener keeps ee80121's answer.
+- `quoteCodeStartsCode` = `quoteCodeEndRoot` and `quoteCodeEndSure`: the per-line loop
+  starts indented code there as it does after a blank line, so skipCodeBlocks skips it.
+
+Not a widening of `interruptsParagraph`: ADR 0019's F5 records an invariant test in
+place of a speculative code change there, and ADR 0023 warns against widening it; the
+question here is `interruptBlockquote`'s, not `interruptParagraph`'s.
+
+**Departures from the reviewed plan (plan critique v1).** F1: the prototype newly spoke
+the code line under skipCodeBlocks (`> P QaQ <!-- QbQ` / `\tfoo QcQ` / `> QdQ -->`
+spoke `foo QcQ`), and the plan's grader excused every DEF sentinel shown only inside
+`<pre>`/`<code>`/`<table>`, so it could not see it. The grader now grades such a
+sentinel as EXCLUDED content (DEF: code and tables; CODE: tables; ALL: none), and
+speaking it counts like disclosing (`newExcl`). Under it the prototype reads 2,476
+newly-speaking-excluded census cells, and the root-frame code start closes them. Two
+gates were then each found as newly-speaking-excluded cells and added: a line holding a
+comment opener (the fuzz's `>> ---QbQ<!--` / `      --><!--QcQ` spoke `--><!--QcQ`), and
+a quoted tab-led fence opener ahead in the same non-blank run (this build's generator:
+`> P <!-- a` / `      y` / `>   \t```` / `> b -->` spoke the fenced `b -->`, which the
+per-line loop misreads on base too). The root-frame restriction came from the fuzz
+(`1.  \tQaQ...` / `> > # -` / `>> \t\tQbQ` / `\t\t=== -` / `    # QcQ` lost the item
+heading QcQ to a raw code run). F2: `\t~~~` speaks `~~~` only with code on; DEF skips it.
+
+**Evidence** (`.claude/runs/NRL-170/build/`, graded against 1.13.7 `browserVisible`,
+1.14.4 cross-checked; arms ee80121, the plan prototype, this fix, wrong arms m3 and m4).
+Every corpus: 0 renderer crashes, 0 1.13.7/1.14.4 differences, 0 lockstep failures.
+
+| corpus | cells | fix new disc / lost / excl | fix closed lost / excl | prototype new excl | m3 new disc | m4 new disc |
+|---|---|---|---|---|---|---|
+| plan census, 175,680 notes x {DEF, ALL} | 1,446,936 | **0 / 0 / 0** | 16,852 / 5,704 | 2,476 | 15,820 | 640 |
+| plan fuzz, 20 seeds x 3,000 | 231,800 | **0 / 0 / 0** | 6 / 676 | 3 | 6 | 2 |
+| build generator, 20 seeds x 6,000 (structured, 15% CRLF) | 1,371,402 | **0 / 0 / 0** | 14,459 / 6,828 | 2,196 | 14,338 | 1,348 |
+| tab attack, {space,tab}^1..6 x 5 markers x 6 outers x 2 bodies | 68,040 | **0 / 0 / 0** | 3,150 / 0 | 350 | 1,044 | 1,044 |
+| NRL-178 census replay, 114,400 x {DEF, CODE, ALL} | 1,900,080 | **0 / 0 / 0** | 0 / 0 | - | - | - |
+
+The plan critic's own generators (`gen.cjs`, `tabs.cjs`, `body.cjs`) were not left on
+disk; the build generator and tab attack stand in for them and are not the same
+corpora. Single timing runs (noisy): 5,000 `> p <!-- x` / `` \t``` `` pairs 225-328 ms
+base vs 283-299 ms fix; 20,000 `>\tlazy` 362-434 vs 360-446 ms; 10,000 `> p` / `\tfoo`
+374-411 vs 330-409 ms. The fix adds three O(L) arrays and no scan.
+
+**Residuals**, all pre-existing on ee80121: (i) the fresh-fence lead ` \t```` after a quote
+stays `unknown` (`mayInterruptQuote` over-approximates); (ii) a quote in a list item
+ended by a dedented fence, heading or list line; (iii) `%%` openers, and a code line that
+itself holds `<!--`; (iv) the NRL-166 F2 list-item fence class; (v) lazy indented code
+after a quote in a NESTED frame (`> > P` / `> \tfoo`) is still spoken under
+skipCodeBlocks; the fix leaves 59,003 excluded census cells spoken (ee80121 64,707);
+(vi) a quoted fence opener with a tab in its lead is misread by the per-line loop
+(`P` / blank / `>   \t```` / `> b` / `> ```` speaks the fenced b). The census still loses
+24,714 cells (ee80121 41,566). NOT VERIFIED IN OBSIDIAN.
 
 ### CLOSED by NRL-119: a list marker alone on its line ends the paragraph
 

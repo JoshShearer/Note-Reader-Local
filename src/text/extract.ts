@@ -3183,6 +3183,9 @@ const TERM2_SETEXT_DASH = /^--+\r?$/;
  * item.
  */
 const INDENTED_CODE = /^(?: {4}|\t)/;
+// A quoted fence-shaped line with a tab somewhere in its lead after the last
+// marker (NRL-170's `tabFenceAhead`): `>   \t````, `> > \t~~~`.
+const QUOTED_TAB_FENCE = /^(?:[ \t]*>)+[ \t]*\t[ \t]*(?:`{3,}|~{3,})/;
 const TABLE_ROW = /^\s*\|/;
 /**
  * Thematic break: three or more of the same marker, optionally spaced. Checked
@@ -4935,6 +4938,24 @@ interface RendererLeads {
 	 */
 	unsureFresh: boolean[];
 	/**
+	 * A line that ENDED a blockquote by starting indented code in the frame the
+	 * quote lives in (NRL-170). `indentedCode` is in module 6234's
+	 * `interruptBlockquote` (not in `interruptParagraph`), and `startsIndentedCode`
+	 * is module 134's literal test on that same, dedented view, so the quote and
+	 * its paragraph certainly end here and the line is code. Refined walk only.
+	 */
+	quoteCodeEnd: boolean[];
+	/**
+	 * The subset of `quoteCodeEnd` found in the ROOT frame (depth 0), whose view
+	 * is the raw line itself. Only there does the per-line loop's raw
+	 * `INDENTED_CODE` test read the same block the renderer opens, including the
+	 * run of indented lines that continues it; inside a list item the item's
+	 * content column decides, which the per-line loop does not track
+	 * (`1.  \tx` / `> > # -` / `>> \t\tb` / `\t\t===` / `    # c` is a heading
+	 * in the item after one code line, and a raw run swallowed `c`).
+	 */
+	quoteCodeEndRoot: boolean[];
+	/**
 	 * A line the walker put in a PARAGRAPH whose first line it trusts (NRL-166
 	 * fix round 1): that first line or one of its continuations. Its content
 	 * never starts a block, so a `<!--` on it is inline for the renderer, which
@@ -5231,6 +5252,10 @@ function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: Rend
 			// literal test on the same view `mayInterruptQuote` read. The other
 			// interrupters stay `unknown`, since that test over-approximates them.
 			state = i < frame.length && (frame[i]!.view.trim() === "" || (out.refine && startsIndentedCode(frame[i]!.view))) ? "fresh" : "unknown";
+			if (out.refine && i < frame.length && frame[i]!.view.trim() !== "" && startsIndentedCode(frame[i]!.view)) {
+				out.quoteCodeEnd[frame[i]!.id] = true;
+				if (depth === 0) out.quoteCodeEndRoot[frame[i]!.id] = true;
+			}
 			continue;
 		}
 		if (RL_HEADING.test(view) || RL_HR.test(view)) {
@@ -5492,6 +5517,8 @@ function rendererLeads(lines: readonly string[], from: number, refine: boolean):
 		nested: new Array<boolean>(lines.length).fill(false),
 		closerInPara: new Array<boolean>(lines.length).fill(false),
 		unsureFresh: new Array<boolean>(lines.length).fill(false),
+		quoteCodeEnd: new Array<boolean>(lines.length).fill(false),
+		quoteCodeEndRoot: new Array<boolean>(lines.length).fill(false),
 		para: new Array<boolean>(lines.length).fill(false),
 		refine,
 		pending: [],
@@ -6682,6 +6709,8 @@ export function extractChunks(
 		nested: pick(leadsPlain.nested, leadsRefined.nested),
 		closerInPara: pick(leadsPlain.closerInPara, leadsRefined.closerInPara),
 		unsureFresh: pick(leadsPlain.unsureFresh, leadsRefined.unsureFresh),
+		quoteCodeEnd: pick(leadsPlain.quoteCodeEnd, leadsRefined.quoteCodeEnd),
+		quoteCodeEndRoot: pick(leadsPlain.quoteCodeEndRoot, leadsRefined.quoteCodeEndRoot),
 		para: pick(leadsPlain.para, leadsRefined.para),
 		refine: true,
 		pending: [],
@@ -6764,7 +6793,54 @@ export function extractChunks(
 	// through the rendered document and does not stop at a code block
 	// (`1. ><!-- y --> QAQ <!--` / `>>> \t| a |` / `>> QCQ` hides QCQ), and an
 	// arm without this condition spoke it in the 4,000-note fuzz.
-	const term2StopOrCode = term2Stop.map((s, k) => s || htmlLeadCode[k]!);
+	//
+	// A line that ended a quote by starting indented code (`quoteCodeEnd`) is the
+	// same kind of stop (NRL-170, ADR 0025). The lazy line after a quote is read
+	// in the term-2 scan's depth-0 branch, where `term2Stop[k]` is
+	// `endsTerm2Scan(line, paraLinesAbove)` and the fence test inside it,
+	// `fenceOpensAt(lead, true)`, never stops at a tab or four-space lead, so
+	// `> P <!-- a` / `\t```` / `> b -->` paired across the code block and hid
+	// `<!-- a` and `b -->`, which the renderer displays (#214 regression). The
+	// walker already knew the quote ended there; this hands that to the stop.
+	// Gated like `htmlLeadCode`, and it reaches only `paraSure` openers below, so
+	// every carry and every other opener keeps base's answer: adding a stop is
+	// the disclosing direction, and a raw-line stop (no item dedent) newly spoke
+	// 640 census cells, `- > P` / `  > Q <!-- R` / `    S -->` / `  > T -->`.
+	// Never on a line that itself holds a comment opener: how that line is read
+	// decides comment state for every later line, and the per-line loop would
+	// read it as prose, so its own `<!--` would open where the renderer shows
+	// code (`>> P <!--` / `      --><!--c` / ... spoke `--><!--c` in the fuzz).
+	// There the base reading stands whole (residual iii).
+	//
+	// Nor ahead of a quoted fence opener whose lead holds a tab, in the same run
+	// of non-blank lines (`tabFenceAhead`). The per-line loop misreads that
+	// opener (`P` / blank / `>   \t```` / `> b` / `> ```` speaks the fenced b on
+	// base already), so the pairing this stop ends was all that kept such a
+	// block silent: `> P <!-- a` / `      y` / `>   \t```` / `> b -->` newly spoke
+	// the fenced `b -->` under skipCodeBlocks in this ticket's generator. Base's
+	// answer stands there (residual vi).
+	const tabFenceAhead: boolean[] = new Array<boolean>(lines.length).fill(false);
+	for (let k = lines.length - 2, seen = false; k >= 0; k--) {
+		const next = lines[k + 1]!;
+		if (next.trim() === "") seen = false;
+		else if (QUOTED_TAB_FENCE.test(next)) seen = true;
+		tabFenceAhead[k] = seen;
+	}
+	const quoteCodeEndSure = leads.quoteCodeEnd.map(
+		(v, k) =>
+			v &&
+			!leads.unsureFresh[k]! &&
+			!crAbove[k]! &&
+			!tabFenceAhead[k]! &&
+			!lines[k]!.includes("<!--") &&
+			!lines[k]!.includes("%%"),
+	);
+	// The same line is CODE for the per-line loop below, so skipCodeBlocks skips
+	// it. Without this, ending the false pairing turned a silenced code line into
+	// prose under skipCodeBlocks (`> P <!-- a` / `\tfoo c` / `> d -->` spoke
+	// `foo c`; NRL-170 plan critique F1). Root frame only (`quoteCodeEndRoot`).
+	const quoteCodeStartsCode = leads.quoteCodeEndRoot.map((v, k) => v && quoteCodeEndSure[k]!);
+	const term2StopOrCode = term2Stop.map((s, k) => s || htmlLeadCode[k]! || quoteCodeEndSure[k]!);
 	const htmlCloserAheadCode = closerAheadOf(term2StopOrCode);
 	// Both of fix round 1's term-2 changes (the code-line stop here and the body
 	// rule below) apply only on a line the walker is sure is paragraph text and
@@ -7365,7 +7441,7 @@ export function extractChunks(
 				}
 				inIndentedCode = false;
 				flushParagraph();
-			} else if (!blank && !inList && wasBlank && INDENTED_CODE.test(raw)) {
+			} else if (!blank && !inList && (wasBlank || quoteCodeStartsCode[lineNo]!) && INDENTED_CODE.test(raw)) {
 				flushParagraph();
 				inIndentedCode = true;
 				if (!opts.skipCodeBlocks) appendToParagraph(verbatimLine(raw, lineStart), lineStart);

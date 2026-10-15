@@ -3679,7 +3679,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl118-v1-bullet-two-spaces-tab", "- > %%\n  \tSECRET", "SECRET"],
 		["pin-nrl118-v5-underscore-break-ends-item", "-   %% x\n\n   ___\nSECRET", "SECRET"],
 		["pin-nrl118-v6-four-space-heading-is-in-quote", "> - \n  \t- %%\n    # SECRET", "# SECRET"],
-		["pin-nrl118-v7-dash-break-is-no-list", "-    - - -\n>> %% x\n    SECRET", "SECRET"],
+		// The renderer shows SECRET as indented CODE (`<pre><code>SECRET`), since
+		// a four-space lazy line ends the quote (module 6234's
+		// `interruptBlockquote`). This pin asks whether the `%%` hides it, so it
+		// reads with code spoken; under the default skipCodeBlocks NRL-170 skips
+		// the code line, as the next row pins (ee80121 spoke it as prose).
+		["pin-nrl118-v7-dash-break-is-no-list", "-    - - -\n>> %% x\n    SECRET", "SECRET", { skipCodeBlocks: false }],
+		["pin-nrl170-nrl118-v7-code-line-skipped-by-default", "-    - - -\n>> %% x\n    SECRET", ""],
 		// A TRIPWIRE and not evidence: the one shape behind the only newly-lost cells
 		// in the fix pass's 600,000-note fuzz that subset control did not attribute
 		// (3 cells). `-    %%` opens a comment that the renderer ends with the item, so
@@ -8125,6 +8131,84 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 			}
 		}
 		check("NRL-172 memoised closer scans answer exactly as the plain scans, from every start", asked > 50000 && differing === 0, `${asked} asked, ${differing} differing ${example}`);
+	}
+}
+
+console.log("NRL-170: a quote ended by lazy indented code does not pair a comment across it");
+{
+	// Every row's expected speech was checked against the executed renderer's
+	// visible text (parser harness 1.13.7, 1.14.4 agreeing). Pins are RED on
+	// ee80121, guards GREEN there. Masks: DEF is the default settings (OPTS),
+	// ALL turns every content key on, so code is spoken.
+	//
+	// The renderer ends the quote at the unquoted indented-code line, because
+	// `indentedCode` is in module 6234's `interruptBlockquote`, and displays both
+	// `<!-- QAQ` and `QBQ -->`. ee80121 paired them across the code block and
+	// spoke only `Plain QPQ | TAIL QDQ` (a #214 regression, ADR 0025 class (e)).
+	// Under DEF the code line is skipped: speaking it would be code content the
+	// user asked us to skip (NRL-170 plan critique F1).
+	const ALL = {
+		...OPTS,
+		stripTags: false,
+		speakUrls: true,
+		skipCodeBlocks: false,
+		skipInlineCode: false,
+		skipTables: false,
+		skipFrontmatter: false,
+		speakEmbeds: true,
+	};
+	const said = (src: string, o: typeof OPTS): string =>
+		extractChunks(src, o)
+			.map((c) => c.text)
+			.join(" | ");
+	const rows: Array<[string, string, string, string]> = [
+		// [id, note, DEF speech, ALL speech]
+		["pin-nrl170-ticket-tab-backticks", "> Plain QPQ\n> \t<!-- QAQ\n\t```\n> QBQ -->\nTAIL QDQ", "Plain QPQ | <!-- QAQ | QBQ --> | TAIL QDQ", "Plain QPQ | <!-- QAQ | ``` | QBQ --> | TAIL QDQ"],
+		["pin-nrl170-four-space-backticks", "> Plain QPQ\n> \t<!-- QAQ\n    ```\n> QBQ -->\nTAIL QDQ", "Plain QPQ | <!-- QAQ | QBQ --> | TAIL QDQ", "Plain QPQ | <!-- QAQ | ``` | QBQ --> | TAIL QDQ"],
+		// The plan's residual (v): the prototype spoke `~~~` under DEF too. The
+		// line is indented code for the renderer, so DEF now skips it.
+		["pin-nrl170-tab-tildes", "> Plain QPQ\n> \t<!-- QAQ\n\t~~~\n> QBQ -->\nTAIL QDQ", "Plain QPQ | <!-- QAQ | QBQ --> | TAIL QDQ", "Plain QPQ | <!-- QAQ | ~~~ | QBQ --> | TAIL QDQ"],
+		["pin-nrl170-tab-code-text", "> Plain QPQ\n> \t<!-- QAQ\n\tfoo QCQ\n> QBQ -->\nTAIL QDQ", "Plain QPQ | <!-- QAQ | QBQ --> | TAIL QDQ", "Plain QPQ | <!-- QAQ | foo QCQ | QBQ --> | TAIL QDQ"],
+		["pin-nrl170-callout", "> [!note] T\n> Plain QPQ\n> \t<!-- QAQ\n\t```\n> QBQ -->\nTAIL QDQ", "T | Plain QPQ | <!-- QAQ | QBQ --> | TAIL QDQ", "T | Plain QPQ | <!-- QAQ | ``` | QBQ --> | TAIL QDQ"],
+		["pin-nrl170-tight-nested-quote", ">>Plain QPQ\n>>\t<!-- QAQ\n\t```\n>>QBQ -->\nTAIL QDQ", "Plain QPQ | <!-- QAQ | QBQ --> | TAIL QDQ", "Plain QPQ | <!-- QAQ | ``` | QBQ --> | TAIL QDQ"],
+		["pin-nrl170-mid-line-opener", "> P QPQ <!-- QAQ\n\tfoo QCQ\n> QBQ -->\nTAIL QDQ", "P QPQ <!-- QAQ | QBQ --> | TAIL QDQ", "P QPQ <!-- QAQ | foo QCQ | QBQ --> | TAIL QDQ"],
+		["pin-nrl170-crlf", "> Plain QPQ\r\n> \t<!-- QAQ\r\n\t```\r\n> QBQ -->\r\nTAIL QDQ", "Plain QPQ | <!-- QAQ | QBQ --> | TAIL QDQ", "Plain QPQ | <!-- QAQ | ``` | QBQ --> | TAIL QDQ"],
+		// The comment-free twin: ee80121 spoke the code line `foo QCQ` under DEF
+		// as a lazy continuation. It is `<pre><code>` for the renderer.
+		["pin-nrl170-twin-code-skipped", "> P QPQ\n\tfoo QCQ\n> QBQ\nTAIL QDQ", "P QPQ | QBQ | TAIL QDQ", "P QPQ | foo QCQ | QBQ | TAIL QDQ"],
+		// Guards: each keeps ee80121's answer.
+		// A QUOTED tab line is a lazy continuation inside the quote: still hidden.
+		["guard-nrl170-quoted-tab-line-hidden", "> Plain QPQ\n> \t<!-- QAQ\n> \t```\n> QBQ -->\nTAIL QDQ", "Plain QPQ | TAIL QDQ", "Plain QPQ | TAIL QDQ"],
+		// A raw-line stop (the rejected arm m4) newly spoke QdQ and QeQ here: the
+		// four-space line is lazy item content after the item's dedent.
+		["guard-nrl170-list-quote-dedent-hidden", "- > Plain QbQ\n  > QcQ <!-- QdQ\n    QeQ -->\n  > QfQ -->", "Plain QbQ | QcQ | QfQ -->", "Plain QbQ | QcQ | QfQ -->"],
+		["guard-nrl170-list-quote-tab-hidden", "- > Plain QPQ\n  > \t<!-- QAQ\n\tfoo\n  > QBQ -->\nTAIL QDQ", "Plain QPQ | TAIL QDQ", "Plain QPQ | TAIL QDQ"],
+		// A space-led `<!--` opens an HTML block the browser hides through `-->`.
+		["guard-nrl170-space-lead-block-hidden", "> Plain QPQ\n> <!-- QAQ\n\t```\n> QBQ -->\nTAIL QDQ", "Plain QPQ | TAIL QDQ", "Plain QPQ | TAIL QDQ"],
+		["guard-nrl170-top-level-block-hidden", "Plain QPQ\n<!-- QAQ\n\t```\nQBQ -->\nTAIL QDQ", "Plain QPQ TAIL QDQ", "Plain QPQ TAIL QDQ"],
+		// A lone CR above and a table-shaped line above: the walker is unsure, so
+		// base's answer (prose loss, fail-closed) stands.
+		["guard-nrl170-lone-cr-above-keeps-base", "> Pl\rain QPQ\n> \t<!-- QAQ\n\t```\n> QBQ -->\nTAIL QDQ", "Pl ain QPQ | TAIL QDQ", "Pl ain QPQ | TAIL QDQ"],
+		["guard-nrl170-table-shaped-above-keeps-base", "> | a |\n> \t<!-- QAQ\n\t```\n> QBQ -->\nTAIL QDQ", "| a | | TAIL QDQ", "| a | | TAIL QDQ"],
+		// Residual (iii): the code line holds a comment opener itself.
+		["guard-nrl170-opener-on-code-line-keeps-base", "> P QPQ <!-- QAQ\n      --><!--QCQ\n> QBQ -->\nTAIL QDQ", "P QPQ | TAIL QDQ", "P QPQ | TAIL QDQ"],
+		// Residual (vi): a quoted tab-led fence opener ahead, which the per-line
+		// loop misreads; un-pairing newly spoke its fenced text under DEF.
+		["guard-nrl170-quoted-tab-fence-ahead-keeps-base", "> P QPQ <!-- QAQ\n      y QCQ\n>   \t```\n> QBQ -->\nTAIL QDQ", "P QPQ | TAIL QDQ", "P QPQ | TAIL QDQ"],
+		// A quote inside a list item: the item's content column decides where
+		// the code run ends, so the per-line loop does not start code there
+		// (`    # QcQ` is a heading in the item; a raw code run swallowed it).
+		["guard-nrl170-code-in-list-item-keeps-base", "1.  \tQaQ- ===```\n> > # - \n>> \t\tQbQ\n\t\t=== - \n    # QcQ| a |===", "QaQ- === | # - | QbQ | === - # QcQ| a |===", "QaQ- === | # - | QbQ | === - # QcQ| a |==="],
+	];
+	for (const [id, src, def, all] of rows) {
+		const gotDef = said(src, OPTS);
+		const gotAll = said(src, ALL);
+		check(`NRL-170 ${id} (DEF)`, gotDef === def, JSON.stringify(gotDef));
+		check(`NRL-170 ${id} (ALL)`, gotAll === all, JSON.stringify(gotAll));
+		for (const o of [OPTS, ALL]) {
+			const lockstep = extractChunks(src, o).every((c) => unitsMatch(c.text, c.sourceIndex, src));
+			check(`NRL-170 ${id} sourceIndex lockstep (${o === OPTS ? "DEF" : "ALL"})`, lockstep);
+		}
 	}
 }
 

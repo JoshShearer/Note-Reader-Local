@@ -396,6 +396,42 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A quote ended by lazy indented code stops the term-2 pairing (NRL-170, 2026-10-14)
+
+ADR 0025 class (e), a #214 regression: `> Plain QPQ` / `> \t<!-- QAQ` / `` \t``` `` /
+`> QBQ -->` / `TAIL QDQ` spoke `Plain QPQ | TAIL QDQ` on ee80121 (DEF and ALL); the
+renderer ends the quote at the unquoted tab line (`indentedCode` is in module 6234's
+`interruptBlockquote`) and shows `<!-- QAQ` and `QBQ -->`. The lazy line is read in the
+term-2 scan's depth-0 branch, where `term2Stop[k] = endsTerm2Scan(line, paraLinesAbove)`
+and its `fenceOpensAt(lead, true)` never stops at a tab or four-space lead. The walker's
+RL_QUOTE branch now records such a line (`quoteCodeEnd`, refined walk, frame view), and
+it joins `term2StopOrCode` for `paraSure` openers only. ADR 0025's NRL-170 section has
+the figures: census 1,446,936 cells, fuzz 231,800, a build-phase generator 1,371,402 and
+a tab attack 68,040, all 0 newly disclosing, 0 newly lost, 0 newly speaking excluded
+content against ee80121; NRL-178's census replay is identical to base.
+
+- **Trap: un-pairing exposes code as prose (plan critique F1).** The plan's prototype
+  newly spoke the code line (`foo QcQ`) under skipCodeBlocks, because its grader EXCUSED
+  every DEF sentinel shown only inside `<pre>`/`<code>`. Grade such sentinels as
+  excluded content (speaking them is a failure), never excuse them. The prototype reads
+  2,476 newly-speaking-excluded census cells under the corrected grader; the fix 0.
+- **Trap: the per-line loop's raw code test.** The same line now starts indented code
+  in the per-line loop (`quoteCodeStartsCode`), but only from the ROOT frame
+  (`quoteCodeEndRoot`): inside a list item the item's content column ends the run,
+  and a raw run swallowed a heading (`1.  \tx` / ... / `    # c`).
+- **Gates that keep base's answer:** a line holding `<!--` or `%%` (its own reading
+  decides comment state for every later line), and a quoted tab-led fence opener ahead
+  in the same non-blank run (`tabFenceAhead`; the per-line loop misreads it, and
+  un-pairing spoke its fenced text). Each was found as newly-speaking-excluded cells.
+- **Pin moved:** `pin-nrl118-v7-dash-break-is-no-list` now reads with code spoken; the
+  renderer shows its SECRET as indented code, which DEF now skips (new row beside it).
+- **Residuals (pre-existing, prose loss or code spoken):** (i) fresh-fence leads
+  ` \t```` after a quote stay `unknown`; (ii) a quote in a list item ended by a dedented
+  line; (iii) `%%` openers, and a code line holding `<!--`; (iv) the NRL-166 F2
+  list-item fence class; (v) lazy indented code after a quote in a NESTED frame is still
+  spoken under skipCodeBlocks (`> > P` / `> \tfoo`); (vi) a quoted fence opener with a
+  tab in its lead is misread by the per-line loop.
+
 ### Fence heads holding `-->` hidden where nothing is open (NRL-178, 2026-10-14)
 
 NRL-166 round 3's `if (/--!?>/.test(head)) return;` in `hideFenceLines` left every such
