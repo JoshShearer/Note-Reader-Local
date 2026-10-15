@@ -7979,6 +7979,13 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 		["many-backtick-lines", (n) => "P <!-- `\n".repeat(n) + "` -->"],
 		["many-pct-lines-in-a-chain", (n) => "> P\n> [!note] %% a\n".repeat(n) + "<div>"],
 		["many-blocks-in-an-open-browser-comment", (n) => "<!-- a\n\n" + "<div title=\"x\n\n".repeat(n)],
+		// NRL-128: containerScopedOpeners examines each paragraph once (its first
+		// `<!--`), with one backward pass for the next `-->` and next break. The
+		// plan's first prototype re-walked the paragraph for every `<!--` line and
+		// failed many-literal-opener-lines (300 ms -> 4,009 ms).
+		["many-scoped-paragraphs", (n) => "a ==x\nProse <!--\nH\ny== b\n--> V.\n\n".repeat(n)],
+		["one-scoped-window-of-many-lines", (n) => "a ==x Prose <!--\n" + "word word\n".repeat(n) + "y== b\n--> V."],
+		["many-opener-lines-under-one-container", (n) => "a ==x P <!--\n".repeat(n) + "y== b\n--> V."],
 	];
 	const timeOf = (src: string): number => {
 		const t0 = performance.now();
@@ -8125,6 +8132,116 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 			}
 		}
 		check("NRL-172 memoised closer scans answer exactly as the plain scans, from every start", asked > 50000 && differing === 0, `${asked} asked, ${differing} differing ${example}`);
+	}
+}
+
+console.log("NRL-128: an inline container spanning a mid-paragraph <!-- makes the <!-- text");
+{
+	// Every expectation below was measured with the Obsidian parser harness
+	// (1.13.7, cross-checked on 1.14.4) through cls8's displayed-text classifier:
+	// `shown` is the sentinel set the reading view displays. The mark, strong,
+	// emphasis and delete tokenizers scan raw characters to their closer and skip
+	// no comment, so a container opened before a `<!--` that closes before the
+	// `-->` leaves the `<!--` as text (see containerScopedOpeners).
+	const ALL = { ...OPTS, stripTags: false, speakUrls: true, skipCodeBlocks: false, skipInlineCode: false, skipTables: false, skipFrontmatter: false, speakEmbeds: true };
+	const SENT = /Q[A-Z]{2,4}Q/g;
+	const sentinels = (src: string): string[] => [...new Set(src.match(SENT) ?? [])];
+	const T: Record<string, (o: string) => string> = {
+		ticket: (d) => `a ${d}QXAQ\nProse <!--\nQHAQ\nQYAQ${d} b\n--> QVAQ.`,
+		sameLine: (d) => `a ${d}QXAQ <!-- QHAQ QYAQ${d} b --> QVAQ.`,
+		openSame: (d) => `a ${d}QXAQ <!--\nQHAQ${d} b\n--> QVAQ.`,
+		closeBefore: (d) => `a ${d}QXAQ\nQYAQ${d} <!--\nQHAQ\n--> QVAQ.`,
+		inside: (d) => `a <!-- ${d}QHAQ\nQHBQ${d}\n--> QVAQ.`,
+		unmatched: (d) => `a ${d}QXAQ\nProse <!--\nQHAQ\n--> QVAQ.`,
+		closesInside: (d) => `a ${d}QXAQ <!--\nQHAQ --> QYAQ${d} QVAQ.`,
+		twoPara: (d) => `a ${d}QXAQ\n\nProse <!--\nQHAQ\nQYAQ${d} b\n--> QVAQ.`,
+		pct: (d) => `a ${d}QXAQ\nProse %%\nQHAQ\nQYAQ${d} b\n%% QVAQ.`,
+		closerInComment: (d) => `a ${d}QXAQ <!-- QHAQ${d} QHBQ\n--> QVAQ${d}.`,
+		nestedEq: (d) => `${d}a ==QXAQ\nProse <!--\nQHAQ\nQYAQ== b${d}\n--> QVAQ.`,
+		outerNested: (d) => `==a ${d}QXAQ\nProse <!--\nQHAQ\nQYAQ${d} b==\n--> QVAQ.`,
+		codeBefore: (d) => "a `" + d + "` QXAQ\nProse <!--\nQHAQ\nQYAQ" + d + " b\n--> QVAQ.",
+	};
+	const spoken = (src: string, o: typeof OPTS): string => extractChunks(src, o).map((c) => c.text).join(" ");
+	const inLockstep = (src: string, o: typeof OPTS): boolean => extractChunks(src, o).every((c) => unitsMatch(c.text, c.sourceIndex, src));
+	const CONTAINERS = ["==", "**", "*", "_", "__", "~~"];
+
+	// Fixed: the renderer displays every sentinel, and so do we now. On ee80121
+	// ticket and sameLine lost QHAQ and QYAQ, openSame QHAQ, for all six.
+	for (const d of CONTAINERS) for (const t of ["ticket", "sameLine", "openSame"]) {
+		const src = T[t]!(d);
+		for (const [mask, o] of [["DEF", OPTS], ["ALL", ALL]] as const) {
+			const say = spoken(src, o);
+			const missing = sentinels(src).filter((x) => !say.includes(x));
+			check(`NRL-128 ${d} ${t} (${mask}): every displayed sentinel is spoken`, missing.length === 0, `missing ${missing.join(",")}: ${say}`);
+			check(`NRL-128 ${d} ${t} (${mask}): the literal <!-- and --> are spoken, as displayed`, say.includes("<!--") && say.includes("-->"), say);
+			check(`NRL-128 ${d} ${t} (${mask}): sourceIndex in lockstep`, inLockstep(src, o));
+		}
+	}
+
+	// Class A: the comment genuinely hides something (`hidden` is the measured
+	// complement of the displayed set). None of it may be spoken, and what is
+	// displayed still is.
+	const classA: Array<[string, string, string[]]> = [];
+	for (const d of CONTAINERS) {
+		classA.push([d, "closeBefore", ["QHAQ"]], [d, "inside", ["QHAQ", "QHBQ"]], [d, "unmatched", ["QHAQ"]], [d, "closesInside", ["QHAQ"]]);
+		classA.push([d, "twoPara", ["QHAQ", "QYAQ"]], [d, "pct", ["QVAQ"]], [d, "codeBefore", ["QHAQ", "QYAQ"]]);
+	}
+	classA.push(["`", "closeBefore", ["QHAQ"]], ["`", "inside", ["QHAQ", "QHBQ"]], ["`", "unmatched", ["QHAQ"]], ["`", "twoPara", ["QHAQ", "QYAQ"]], ["`", "pct", ["QVAQ"]]);
+	for (const [d, t, hidden] of classA) {
+		const src = T[t]!(d);
+		const shown = sentinels(src).filter((x) => !hidden.includes(x));
+		const say = spoken(src, ALL);
+		const disclosed = hidden.filter((x) => say.includes(x));
+		const lost = shown.filter((x) => !say.includes(x));
+		check(`NRL-128 class A ${d} ${t}: the hidden sentinels stay unspoken`, disclosed.length === 0, `disclosed ${disclosed.join(",")}: ${say}`);
+		check(`NRL-128 class A ${d} ${t}: the displayed sentinels are spoken`, lost.length === 0, `lost ${lost.join(",")}: ${say}`);
+	}
+
+	// Measured residual losses, pinned so a change to them is seen: the renderer
+	// displays these sentinels and we still drop them. Outside this fix's gate
+	// (a third delimiter run, a nested container, or a code span, whose
+	// cross-line pairing against the comment is codeSpanClosesLater's
+	// mechanism). Follow-up ticket filed from the NRL-128 build; when it fixes
+	// one, move the row to the fixed set above.
+	const residual: Array<[string, string, string[]]> = [];
+	for (const d of CONTAINERS) {
+		residual.push([d, "closerInComment", d === "==" ? ["QHAQ"] : ["QHAQ", "QHBQ"]], [d, "nestedEq", ["QHAQ", "QYAQ"]], [d, "outerNested", ["QHAQ", "QYAQ"]]);
+	}
+	residual.push(["`", "ticket", ["QHAQ", "QYAQ"]], ["`", "openSame", ["QHAQ"]], ["`", "closesInside", ["QHAQ"]]);
+	residual.push(["`", "nestedEq", ["QHAQ", "QYAQ"]], ["`", "outerNested", ["QHAQ", "QYAQ"]], ["`", "codeBefore", ["QHAQ", "QYAQ"]]);
+	const pinned: Array<[string, string, string[]]> = residual.map(([d, t, lost]) => [`${d} ${t}`, T[t]!(d), lost]);
+	// The existing same-line highlight pairing skips a complete comment, which
+	// the mark tokenizer does not: displayed `a x <!-- QHAQ y QHBQ --> QVAQ z== b`.
+	pinned.push(["== three runs across one comment", "a ==x <!-- QHAQ y== QHBQ --> QVAQ z== b", ["QHAQ", "QHBQ"]]);
+	for (const [name, src, lost] of pinned) {
+		const say = spoken(src, ALL);
+		const nowSpoken = lost.filter((x) => say.includes(x));
+		check(`NRL-128 measured residual loss ${name}: still lost (follow-up)`, nowSpoken.length === 0, `now spoken ${nowSpoken.join(",")}: ${say}`);
+	}
+
+	// Realistic prose (plan critique F2): the window's rest may hold letters and
+	// digits of any script, typographic quotes, colons, `!`, word hyphens and
+	// CRLF line ends. Each displays QHAQ in the renderer; ee80121 dropped it.
+	const realistic: Array<[string, string]> = [
+		["curly apostrophe", "It’s prose ==x\nIt’s prose <!--\nQHAQ\ny== b\n--> QVAQ."],
+		["colon", "a ==x\nNote: prose <!--\nQHAQ\ny== b\n--> QVAQ."],
+		["non-ASCII letters", "a ==Café\nCafé prose <!--\nQHAQ\ny== b\n--> QVAQ."],
+		["word hyphen and bang", "a ==x\nWell-known <!--\nQHAQ\ny== b\n--> QVAQ!"],
+		["curly double quotes", "a **x\n“Quoted” prose <!--\nQHAQ\ny** b\n--> QVAQ."],
+		["CRLF note", "a ==x\r\nProse <!--\r\nQHAQ\r\ny== b\r\n--> QVAQ.\r\n"],
+	];
+	for (const [name, src] of realistic) {
+		for (const [mask, o] of [["DEF", OPTS], ["ALL", ALL]] as const) {
+			const say = spoken(src, o);
+			check(`NRL-128 realistic prose, ${name} (${mask}): the displayed QHAQ and QVAQ are spoken`, say.includes("QHAQ") && say.includes("QVAQ"), say);
+			check(`NRL-128 realistic prose, ${name} (${mask}): sourceIndex in lockstep`, inLockstep(src, o));
+		}
+	}
+	// A lone CR is a line end to the renderer but not to our line split, so
+	// the gate refuses it and the note keeps its pre-NRL-128 reading.
+	{
+		const src = "a ==x\rProse <!--\nQHAQ\ny== b\n--> QVAQ.";
+		check("NRL-128 a lone CR in the window is refused (unchanged reading)", !spoken(src, ALL).includes("<!--"), spoken(src, ALL));
 	}
 }
 
