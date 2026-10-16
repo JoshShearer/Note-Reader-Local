@@ -4306,6 +4306,8 @@ function endsTerm2Scan(line: string, paraLinesAbove: number): boolean {
 const TERM2_QUOTE_LEVEL = /^ {0,3}> ?/;
 /** A callout title's marker as module 6234 matches it (see `walkLeadQuote`). */
 const TERM2_CALLOUT_TITLE = /^\[![^\]]+\][+-]?(?:\s|$)/;
+/** A list marker with a one-to-four-space gap straight before a `>` (NRL-187). */
+const TERM2_ITEM_QUOTE = /^ {0,3}(?:[-*+]|\d{1,9}[.)]) {1,4}(?=>)/;
 
 /**
  * The quote depth module 6234 would strip from `line` and the body it leaves.
@@ -7168,6 +7170,8 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		let paraLinesAbove = 0;
 		let rawLinesAbove = 0;
 		let prevDepth = 0;
+		// The content-line count a `- > x` marker line hands a QUOTED next line (NRL-187).
+		let itemQuoteNext: number | undefined;
 		for (let k = 0; k < lines.length; k++) {
 			const line = lines[k]!;
 			// Both predicates are asked with the SAME count, before it is updated.
@@ -7187,11 +7191,36 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			// which withholds a stop, the fail-closed direction.
 			const quoteStart = depth > prevDepth && (k === 0 || term2Stop[k - 1]!);
 			prevDepth = Math.max(depth, containerPrefix(line).quotes);
+			const fromItemQuote = itemQuoteNext;
+			itemQuoteNext = undefined;
 			if (depth === 0) {
 				term2Stop[k] = endsTerm2Scan(line, paraLinesAbove);
 				paraLinesAbove = endsTerm2Block(line, paraLinesAbove) ? 0 : paraLinesAbove + 1;
+				// NRL-187: a list marker line whose content opens a quote (`- > x`,
+				// `1. > x`, `- > > x`) ends a block for the item, but its quoted body is
+				// that quote's FIRST content line, so a quoted line under it is the
+				// second. Counting zero there read `- > Title <!--` / `  > ===` as
+				// paragraph text (the comment hid the heading's tail: prose loss) and
+				// `- > Para.` / `  > Title <!--` / `  > ===` as an underline (the
+				// comment was spoken: disclosure). Held for the next line and used only
+				// if that line is itself quoted: a lazy line there is where the
+				// renderer ends the quote (`- > P` / `  T <!--` / `===` renders an
+				// `<h1>` outside it), so it keeps the old count. Spaces-only marker gap.
+				const itemQuote = TERM2_ITEM_QUOTE.exec(line);
+				if (itemQuote) {
+					const inner = term2QuoteView(line.slice(itemQuote[0].length));
+					// Only when the next line, and the one after it unless blank, sit at
+					// the same quote depth (plan review I1/I2): a deeper or shallower
+					// line there starts or ends a quote the count does not describe,
+					// and handing it over newly hid shown prose (4,104 cells).
+					const same = (j: number): boolean => j >= lines.length || lines[j]!.trim() === "" || term2QuoteView(lines[j]!).depth === inner.depth;
+					if (inner.depth > 0 && k + 1 < lines.length && term2QuoteView(lines[k + 1]!).depth === inner.depth && same(k + 2)) {
+						itemQuoteNext = term2QuotedStop(inner.body, true, 0).next;
+					}
+				}
 				continue;
 			}
+			if (fromItemQuote !== undefined) paraLinesAbove = fromItemQuote;
 			calloutTitleAt[k] = quoteStart && TERM2_CALLOUT_TITLE.test(body);
 			const r = term2QuotedStop(body, quoteStart, paraLinesAbove);
 			term2Stop[k] = r.stop;
