@@ -5094,6 +5094,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["residual-nrl212-markup-in-footnote", "a %% ^[**QxQ**] %% b", "a b"],
 		["residual-nrl212-footnote-on-opener-line", "%% ^[QxQ]\n%%", ""],
 		["residual-nrl212-quoted-block-body", "> %%\n> ^[QxQ]\n> %%", ""],
+		["guard-nrl212-c1f1-backtick-fence-in-block", "%%\n```\n^[QxQ]\n```\n%%\nd", "d"],
+		["guard-nrl212-c1f1-math-in-block", "%%\n$$\n^[QxQ]\n$$\n%%\nd", "d"],
+		["guard-nrl212-c1f1-html-comment-in-block", "%%\n<!--\n^[QxQ]\n-->\n%%\nd", "d"],
+		["guard-nrl212-c1f1-html-comment-on-opener", "%% <!--\n^[QxQ]\n--> %%\nd", "d"],
+		["guard-nrl212-c2f2-pair-inside-multi-line-footnote", "a ^[b\n%% ^[QxQ] %%\nc] d", "a ^[b c] d"],
+		["residual-nrl212-tilde-fence-in-block", "%%\n~~~\n^[QxQ]\n~~~\n%%\nd", "d"],
 		// NRL-213 fix round 1 (critic 1 F1): an ordered item numbered other than 1 cannot
 		// interrupt a paragraph, so `  2. QbQ` after `- QaQ` (or after a top-level text line)
 		// is the paragraph's lazy text and the six-space fence under it is text too: 1.13.7

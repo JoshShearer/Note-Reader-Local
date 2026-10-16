@@ -1429,26 +1429,26 @@ function opensObsidianBlock(view: string, at: number, dedentedByList: boolean): 
  * brackets, a `%%` inside the footnote, an escaped `\^[` and a multi-line
  * footnote (each line is judged alone) silent. One linear pass.
  *
- * Returns [from, to) of each footnote's `^[` .. `]` in `body`, in order, or an
- * empty list.
+ * Returns [from, to) of each footnote's `^[` .. `]` in `body`, in order, or
+ * null when the body is refused.
  */
 const COMMENT_FOOTNOTE_PLAIN = /^[\p{L}\p{N} .,;:?!'"]$/u;
-function commentFootnoteSpans(body: string): Array<[number, number]> {
+function commentFootnoteSpans(body: string): Array<[number, number]> | null {
 	const spans: Array<[number, number]> = [];
 	let k = 0;
 	while (k < body.length) {
 		const c = body[k]!;
 		if (c === "^") {
-			if (body[k + 1] !== "[") return [];
+			if (body[k + 1] !== "[") return null;
 			const end = body.indexOf("]", k + 2);
-			if (end === -1) return [];
+			if (end === -1) return null;
 			const inner = body.slice(k + 2, end);
-			if (!/^[\p{L}\p{N}](?:[\p{L}\p{N} .,;:?!'"]*[\p{L}\p{N}.,;:?!'"])?$/u.test(inner)) return [];
+			if (!/^[\p{L}\p{N}](?:[\p{L}\p{N} .,;:?!'"]*[\p{L}\p{N}.,;:?!'"])?$/u.test(inner)) return null;
 			spans.push([k, end + 1]);
 			k = end + 1;
 			continue;
 		}
-		if (!COMMENT_FOOTNOTE_PLAIN.test(c)) return [];
+		if (!COMMENT_FOOTNOTE_PLAIN.test(c)) return null;
 		k += 1;
 	}
 	return spans;
@@ -1463,7 +1463,7 @@ function commentFootnoteSpans(body: string): Array<[number, number]> {
 function commentFootnoteText(body: string, base: number): { text: string; index: number[] } {
 	const chars: string[] = [];
 	const index: number[] = [];
-	for (const [from, to] of commentFootnoteSpans(body)) {
+	for (const [from, to] of commentFootnoteSpans(body) ?? []) {
 		if (chars.length > 0 && chars[chars.length - 1] !== " ") {
 			chars.push(" ");
 			index.push(base + from);
@@ -2164,7 +2164,7 @@ function cleanLine(
 					raw.indexOf("-->", i + 2) === -1;
 				openCommentBrowser = htmlComment && blockComments && htmlRawLine && !openCommentBlock;
 				// A `%%` block's own line may carry a footnote after the opener (NRL-212).
-				if (obsidianComment && blockComments && !htmlRawLine && !containerCodeLine && !carrying) {
+				if (obsidianComment && blockComments && !htmlRawLine && !containerCodeLine && !carrying && opts.commentFootnoteAt?.(rawStart) !== false) {
 					const fn = commentFootnoteText(raw.slice(i + 2), rawStart + i + 2);
 					if (fn.text !== "") {
 						pushSpace(rawStart + i);
@@ -2179,7 +2179,7 @@ function cleanLine(
 				break;
 			}
 			pushSpace(rawStart + i);
-			if (obsidianComment && blockComments && !htmlRawLine && !containerCodeLine && !carrying) {
+			if (obsidianComment && blockComments && !htmlRawLine && !containerCodeLine && !carrying && opts.commentFootnoteAt?.(rawStart) !== false) {
 				const fn = commentFootnoteText(raw.slice(i + 2, close), rawStart + i + 2);
 				for (let k = 0; k < fn.text.length; k++) emit(fn.text[k]!, fn.index[k]!);
 				if (fn.text !== "") pushSpace(rawStart + close);
@@ -2533,6 +2533,13 @@ interface StripOptions {
 	 * means unknown, and then every `[ref]` tail is consumed as before.
 	 */
 	refLabels?: ReadonlySet<string>;
+	/**
+	 * NRL-212 fix round 1 (critic 2 F2): false for a raw offset whose line
+	 * follows an earlier line of its paragraph that left a `[` open. A `%%` pair
+	 * there can sit inside a multi-line `^[...]`, where the renderer hides it, so
+	 * no footnote is read out of it. Undefined means allowed.
+	 */
+	commentFootnoteAt?: (rawOffset: number) => boolean;
 }
 
 /**
@@ -7892,6 +7899,38 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		lineStarts.push(offset);
 		offset += line.length + 1;
 	}
+	// NRL-212 fix round 1: whether an earlier line of the paragraph left a `[`
+	// open (fail-closed: it stays set to the paragraph's end), one forward pass.
+	const bracketOpenAbove: boolean[] = [];
+	{
+		let open = false;
+		for (const line of lines) {
+			bracketOpenAbove.push(open);
+			open = /^[\s>]*$/.test(line) ? false : open || line.lastIndexOf("[") > line.lastIndexOf("]");
+		}
+	}
+	// NRL-212 fix round 1 (critics 1 and 2, F1): one verdict per `%%` block, so a
+	// footnote inside a fence, `$$` or `<!--` the comment holds stays silent. A
+	// block is read only when its opener line's rest and every line to its
+	// closer pass commentFootnoteSpans; filled from the block's first body line
+	// for all its lines, so the walk is linear.
+	const pctBlockPlain = new Map<number, boolean>();
+	const pctBlockReadable = (lineNo: number): boolean => {
+		const known = pctBlockPlain.get(lineNo);
+		if (known !== undefined) return known;
+		const prev = lineNo > 0 ? lines[lineNo - 1]! : "";
+		const at = prev.lastIndexOf("%%");
+		let ok = at !== -1 && commentFootnoteSpans(prev.slice(at + 2)) !== null;
+		let end = lineNo;
+		for (; end < lines.length; end++) {
+			const l = lines[end]!;
+			const c = l.indexOf("%%");
+			if (ok && commentFootnoteSpans(c === -1 ? l : l.slice(0, c)) === null) ok = false;
+			if (c !== -1) break;
+		}
+		for (let k = lineNo; k <= end && k < lines.length; k++) pctBlockPlain.set(k, ok);
+		return ok;
+	};
 
 	let inFence = false;
 	// The line of a quoted setext heading's underline, once its content line was
@@ -8379,6 +8418,16 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		speakImageAlt: opts.speakImageAlt,
 		speakEmbeds: opts.speakEmbeds,
 		refLabels: collectRefLabels(source),
+		commentFootnoteAt: (o) => {
+			let lo = 0;
+			let hi = lineStarts.length;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				if (lineStarts[mid]! <= o) lo = mid + 1;
+				else hi = mid;
+			}
+			return !bracketOpenAbove[lo - 1];
+		},
 	};
 	/*
 	 * Frontmatter is metadata, not markdown prose, so a spoken line is cleaned
@@ -8935,7 +8984,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 				const { close, raw: closeRaw } = inComment === "-->" ? fenceHeadClose(raw, lineNo, raw.indexOf(inComment)) : { close: raw.indexOf(inComment), raw };
 				// NRL-212: a plain inline footnote in a hidden `%%` block line is still
 				// collected by the renderer. Not under a browser comment (resumeBrowser).
-								if (inComment === "%%" && !resumeBrowser) {
+				if (inComment === "%%" && !resumeBrowser && !bracketOpenAbove[lineNo] && pctBlockReadable(lineNo)) {
 					const fn = commentFootnoteText(close === -1 ? raw : raw.slice(0, close), lineStart);
 					if (fn.text !== "") {
 						for (const at of fn.index) keptFootnote.add(at);
