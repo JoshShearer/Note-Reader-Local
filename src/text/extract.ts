@@ -1810,6 +1810,10 @@ function cleanLine(
 	 * real `](dest)` falls out as prose - the destination still leaked and the
 	 * alt text was silenced on top of it. One question, one helper, one answer.
 	 */
+	// The `[` that starts an undefined reference tail this line declined
+	// (NRL-208): the renderer reads that pair as text or an inline link, never
+	// as the next pair's reference tail, so it consumes no `[ref]` after it.
+	let declinedTail = -1;
 	if (incomingBracket !== undefined) {
 		const found = labelClose(raw, 0, incomingBracketDepth);
 		const close = found.close;
@@ -1835,14 +1839,16 @@ function cleanLine(
 					after = paren === -1 ? after + 1 : paren + 1;
 				}
 			} else if (raw[after] === "[") {
-				const lit = refTailLiteral(raw, after, opts);
+				const refClose = new CloserScan(raw).close(after + 1, "]", false);
+				const lit = refTailLiteral(raw, after, refClose, opts);
 				if (lit !== -1) {
 					pushSpace(rawStart + after);
 					const inner = cleanLine(raw.slice(after + 1, lit), rawStart + after + 1, opts);
 					for (let k = 0; k < inner.text.length; k++) emit(inner.text[k]!, inner.index[k] ?? rawStart + after + 1);
 					after = lit + 1;
 				} else {
-					after = refTailEnd(raw, after, opts);
+					after = refTailEnd(after, refClose, raw, opts);
+					if (after === close + 1) declinedTail = after;
 				}
 			}
 			i = after;
@@ -2244,9 +2250,11 @@ function cleanLine(
 				// Reference form. The tail names a link reference, not prose, and
 				// consuming it here is what stops `![alt][ref]` reaching the link
 				// branch below and speaking "ref".
-				refLit = refTailLiteral(raw, after, opts, raw[i - 1] === "]");
+				const refClose = (closers ??= new CloserScan(raw)).close(after + 1, "]", false);
+				refLit = refTailLiteral(raw, after, refClose, opts, i === declinedTail);
 				refAt = after;
-				after = refLit !== -1 ? refLit + 1 : refTailEnd(raw, after, opts);
+				after = refLit !== -1 ? refLit + 1 : i === declinedTail ? after : refTailEnd(after, refClose, raw, opts);
+				if (after === refAt) declinedTail = refAt;
 			}
 			if (opts.speakImageAlt) {
 				pushSpace(rawStart + i);
@@ -2295,9 +2303,11 @@ function cleanLine(
 					after = paren === -1 ? after + 1 : paren + 1;
 				}
 			} else if (raw[after] === "[") {
-				refLit = refTailLiteral(raw, after, opts, raw[i - 1] === "]");
+				const refClose = (closers ??= new CloserScan(raw)).close(after + 1, "]", false);
+				refLit = refTailLiteral(raw, after, refClose, opts, i === declinedTail);
 				refAt = after;
-				after = refLit !== -1 ? refLit + 1 : refTailEnd(raw, after, opts);
+				after = refLit !== -1 ? refLit + 1 : i === declinedTail ? after : refTailEnd(after, refClose, raw, opts);
+				if (after === refAt) declinedTail = refAt;
 			}
 			// Re-clean the label so nested markup inside link text is handled too.
 			const inner = cleanLine(label, rawStart + i + 1, opts);
@@ -2434,24 +2444,26 @@ interface StripOptions {
  * a full Unicode case fold) with internal whitespace collapsed.
  */
 function normaliseRefLabel(label: string): string {
-	return label.trim().replace(/\s+/g, " ").toLowerCase();
+	// Upper then lower folds `ß` and `ẞ` to `ss`, as the renderer matches them
+	// (NRL-208 critic 1 F2); toLowerCase alone does not.
+	return label.trim().replace(/\s+/g, " ").toLowerCase().toUpperCase().toLowerCase();
 }
 
 /**
- * A line that starts a link reference definition, for the whole note, with the
- * container prefixes (`>` and list markers) tolerated. Deliberately lenient: a
- * destination on the next line is a valid definition, and a false positive only
- * keeps the pre-NRL-208 consumption of the tail, which is the old behaviour.
+ * Every `[label]:` anywhere in the note, a label allowed to span lines (their
+ * `>` and indentation dropped), ignoring footnotes. Deliberately an
+ * over-approximation of the renderer's definitions (NRL-208 critic 1 F2: a
+ * line-start scan missed `- [ ] [a]:`, `- > [a]:`, multi-line labels and lone
+ * CR line ends, and a missed definition spoke a hidden label). A false positive
+ * consumes the tail, which is the pre-NRL-208 reading.
  */
-const REF_DEF_START = /^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*\[(?!\^)((?:[^[\]\\]|\\.)+)\]:/;
+const REF_DEF_ANYWHERE = /\[(?!\^)((?:[^[\]\\]|\\.)+)\]:/g;
 
 function collectRefLabels(source: string): Set<string> {
 	const out = new Set<string>();
 	if (source.indexOf("]:") === -1) return out;
-	for (const line of source.split("\n")) {
-		if (line.indexOf("]:") === -1) continue;
-		const m = REF_DEF_START.exec(line);
-		if (m) out.add(normaliseRefLabel(m[1]!));
+	for (const m of source.matchAll(REF_DEF_ANYWHERE)) {
+		out.add(normaliseRefLabel(m[1]!.replace(/(?:\r\n?|\n)[ \t>]*/g, " ")));
 	}
 	return out;
 }
@@ -2463,8 +2475,7 @@ function collectRefLabels(source: string): Set<string> {
  * tail (`[x][]`) names the label itself and carries no speakable text, so it is
  * always consumed.
  */
-function refTailEnd(raw: string, after: number, opts: StripOptions): number {
-	const refClose = raw.indexOf("]", after);
+function refTailEnd(after: number, refClose: number, raw: string, opts: StripOptions): number {
 	if (refClose === -1) return after;
 	const ref = raw.slice(after + 1, refClose);
 	if (opts.refLabels === undefined || ref.trim() === "" || opts.refLabels.has(normaliseRefLabel(ref))) return refClose + 1;
@@ -2477,11 +2488,10 @@ function refTailEnd(raw: string, after: number, opts: StripOptions): number {
  * as a link. Returns the index of the `]` closing `[ref]` when that is the
  * shape, else -1. The caller speaks `ref` and leaves `(dest)` to the loop.
  */
-function refTailLiteral(raw: string, after: number, opts: StripOptions, afterFailedTail = false): number {
+function refTailLiteral(raw: string, after: number, refClose: number, opts: StripOptions, afterFailedTail = false): number {
 	// Measured on the 1.13.7 and 1.14.4 parsers: `[x][a][b](u)` shows `[b](u)` as a
 	// link, so a bracket pair that directly follows another one's `]` is not the case.
 	if (afterFailedTail) return -1;
-	const refClose = raw.indexOf("]", after);
 	if (refClose === -1 || raw[refClose + 1] !== "(") return -1;
 	const ref = raw.slice(after + 1, refClose);
 	if (opts.refLabels === undefined || ref.trim() === "" || opts.refLabels.has(normaliseRefLabel(ref))) return -1;
