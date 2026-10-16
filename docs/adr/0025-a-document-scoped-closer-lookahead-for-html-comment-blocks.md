@@ -2403,7 +2403,8 @@ failures**.
   `<!-- ZAZ` and `ZBZ -->` are both displayed. NRL-156's capped `FENCE` reads the
   line as lazy prose, and the term-2 bound then pairs across it. The class moved at
   `8d2b3f2` (#214), the fix's output on it is byte-identical to `e2afbfe`'s, and it
-  has no peel-equalising control. It is fail-closed (prose loss).
+  has no peel-equalising control. It is fail-closed (prose loss). **Closed by
+  NRL-170** (its section below): the quote-ending code line is now a term-2 stop.
 - F2: 63 shape-mask groups moved. 41 have a control under the criterion above:
   24 peel-equalising, 11 by an inserted blank line, 5 by a renderer-equivalent
   defusal and 1 by the unquoted twin. That search (`ctrl4.cjs`) rejects a defusal
@@ -3408,6 +3409,304 @@ newly lost); its fuzz, seed 4242 x 30,000 and 99 x 60,000 attempts: 0 / 0, 7,066
 14,244 closed. Lockstep failures 0 and 1.14.4 verdict differences 0 on every corpus.
 Wrong arm on the census and fuzz: unchanged from above (62,540 / 18,400; 7,399 / 83;
 7,252 / 87). Twelve new pins were RED on d0442e5 and the four new guards passed there.
+
+### NRL-170 (2026-10-14): a quote ended by lazy indented code is a term-2 stop, and the line is code
+
+Class (e) of the NRL-166 section, closed. Reproduced on ee80121 (bare Node, the real
+`src/text/extract.ts` bundled with esbuild, parser harness 1.13.7 with 1.14.4 agreeing):
+`> Plain QPQ` / `> \t<!-- QAQ` / `` \t``` `` / `> QBQ -->` / `TAIL QDQ` renders
+`<blockquote><p>Plain QPQ<br>&lt;!-- QAQ</p></blockquote><pre><code>```</code></pre><blockquote><p>QBQ --><br>TAIL QDQ</p></blockquote>`,
+and ee80121 spoke `Plain QPQ | TAIL QDQ` under DEF and ALL. Bisected to `8d2b3f2` (#214).
+
+**Mechanism.** A lazy line that is module-134 indented code in the frame holding the
+quote ends the quote, because `indentedCode` is in module 6234's `interruptBlockquote`
+(it is not in `interruptParagraph`). The term-2 forward pass reads that unquoted line in
+its depth-0 branch, where the stop is `term2Stop[k] = endsTerm2Scan(line, paraLinesAbove)`
+(`endsTerm2Block || TERM2_DASH_RUN`); the fence term inside it, `fenceOpensAt(lead, true)`,
+never stops at a tab or four-space lead, so `closerAheadOf` carried the `-->` back over
+the line. Before #214 `FENCE`'s `^\s*` stopped there by accident. `endsTerm2Block` itself
+only drives `paraLinesAbove`.
+
+**Change.** walkLeadFrame's RL_QUOTE branch records the line that ended the quote when the
+refined walk holds and the line is non-blank and `startsIndentedCode` on the frame's own,
+dedented view (`RendererLeads.quoteCodeEnd`; `quoteCodeEndRoot` when the frame is the
+root). `pick` carries both through `refineWindowClean`. In extractChunks:
+
+- `quoteCodeEndSure` = `quoteCodeEnd` and not `unsureFresh`, not `crAbove`, not
+  `tabFenceAhead`, and the line holds no `<!--` and no `%%`. It joins
+  `term2StopOrCode`, so it reaches only `paraSure` openers, through `htmlCloserAheadCode`
+  and `commentBodyOkAheadOf`. `term2Stop`, `term2StopRaw`, `endsTerm2Block`,
+  `fenceOpensAt`, `FENCE` and `interruptsParagraph*` are unchanged, so every carry and
+  every other opener keeps ee80121's answer.
+- `quoteCodeStartsCode` = `quoteCodeEndRoot` and `quoteCodeEndSure`: the per-line loop
+  starts indented code there as it does after a blank line, so skipCodeBlocks skips it.
+
+Not a widening of `interruptsParagraph`: ADR 0019's F5 records an invariant test in
+place of a speculative code change there, and ADR 0023 warns against widening it; the
+question here is `interruptBlockquote`'s, not `interruptParagraph`'s.
+
+**Departures from the reviewed plan (plan critique v1).** F1: the prototype newly spoke
+the code line under skipCodeBlocks (`> P QaQ <!-- QbQ` / `\tfoo QcQ` / `> QdQ -->`
+spoke `foo QcQ`), and the plan's grader excused every DEF sentinel shown only inside
+`<pre>`/`<code>`/`<table>`, so it could not see it. The grader now grades such a
+sentinel as EXCLUDED content (DEF: code and tables; CODE: tables; ALL: none), and
+speaking it counts like disclosing (`newExcl`). Under it the prototype reads 2,476
+newly-speaking-excluded census cells, and the root-frame code start closes them. Two
+gates were then each found as newly-speaking-excluded cells and added: a line holding a
+comment opener (the fuzz's `>> ---QbQ<!--` / `      --><!--QcQ` spoke `--><!--QcQ`), and
+a quoted tab-led fence opener ahead in the same non-blank run (this build's generator:
+`> P <!-- a` / `      y` / `>   \t```` / `> b -->` spoke the fenced `b -->`, which the
+per-line loop misreads on base too). The root-frame restriction came from the fuzz
+(`1.  \tQaQ...` / `> > # -` / `>> \t\tQbQ` / `\t\t=== -` / `    # QcQ` lost the item
+heading QcQ to a raw code run). F2: `\t~~~` speaks `~~~` only with code on; DEF skips it.
+
+**Evidence** (`.claude/runs/NRL-170/build/`, graded against 1.13.7 `browserVisible`,
+1.14.4 cross-checked; arms ee80121, the plan prototype, this fix, wrong arms m3 and m4).
+Every corpus: 0 renderer crashes, 0 1.13.7/1.14.4 differences, 0 lockstep failures.
+
+| corpus | cells | fix new disc / lost / excl | fix closed lost / excl | prototype new excl | m3 new disc | m4 new disc |
+|---|---|---|---|---|---|---|
+| plan census, 175,680 notes x {DEF, ALL} | 1,446,936 | **0 / 0 / 0** | 16,852 / 5,704 | 2,476 | 15,820 | 640 |
+| plan fuzz, 20 seeds x 3,000 | 231,800 | **0 / 0 / 0** | 6 / 676 | 3 | 6 | 2 |
+| build generator, 20 seeds x 6,000 (structured, 15% CRLF) | 1,371,402 | **0 / 0 / 0** | 14,459 / 6,828 | 2,196 | 14,338 | 1,348 |
+| tab attack, {space,tab}^1..6 x 5 markers x 6 outers x 2 bodies | 68,040 | **0 / 0 / 0** | 3,150 / 0 | 350 | 1,044 | 1,044 |
+| NRL-178 census replay, 114,400 x {DEF, CODE, ALL} | 1,900,080 | **0 / 0 / 0** | 0 / 0 | - | - | - |
+
+These figures hold only for the corpora and the two masks (DEF, ALL) in the table; fix
+round 1 below shows that two independent generators found cells this table missed. The
+build phase reported the plan critic's generators (`gen.cjs`, `tabs.cjs`, `body.cjs`) as
+not left on disk; they were in the session scratchpad (`crit170/`), and fix round 1 grades
+them. Single timing runs (noisy): 5,000 `> p <!-- x` / `` \t``` `` pairs 225-328 ms
+base vs 283-299 ms fix; 20,000 `>\tlazy` 362-434 vs 360-446 ms; 10,000 `> p` / `\tfoo`
+374-411 vs 330-409 ms. The fix adds three O(L) arrays and no scan.
+
+**Residuals**, all pre-existing on ee80121: (i) the fresh-fence lead ` \t```` after a quote
+stays `unknown` (`mayInterruptQuote` over-approximates); (ii) a quote in a list item
+ended by a dedented fence, heading or list line; (iii) `%%` openers, and a code line that
+itself holds `<!--`; (iv) the NRL-166 F2 list-item fence class; (v) lazy indented code
+after a quote in a NESTED frame (`> > P` / `> \tfoo`) is still spoken under
+skipCodeBlocks; the fix leaves 59,003 excluded census cells spoken (ee80121 64,707);
+(vi) a quoted fence opener with a tab in its lead is misread by the per-line loop
+(`P` / blank / `>   \t```` / `> b` / `> ```` speaks the fenced b). The census still loses
+24,714 cells (ee80121 41,566). NOT VERIFIED IN OBSIDIAN.
+
+#### NRL-170 fix round 1: a whole-note differential instead of per-shape gates
+
+Both code critics (BLOCK 40 and 42) found, with their own generators, cells the table
+above did not: displayed prose newly lost and code or a heading newly spoken under a
+mask that skips it. Every counterexample reproduced on 4ae003f against 1.13.7 (1.14.4
+identical). Each is one mechanism (code critic 2's F3): ending a false pairing displays
+everything it hid, and the per-line loop then reads that span with its pre-existing
+misreadings, which the pairing had been masking; or a code start changes per-line state
+(`inList`) for lines far below it.
+
+- `> P ZAZ <!-- ZBZ` / `\tc ZFZ` / `> Q ZEZ` / `\t%% ZDZ` / `T -->`: the ungated code
+  line ended the pairing, so the gated `\t%% ZDZ` was read as prose and its code spoken
+  under DEF.
+- `> P ZAZ` / `\t- li ZCZ` / table / `\td ZEZ` / `===` / `Tail ZGZ`: reading `\t- li` as
+  code (right) dropped `inList`, and `\td` / `===` then read as a setext heading, losing
+  `===` (DEF) and the displayed code `d ZEZ` (code on, skipHeadings).
+- `> P ZAZ <!-- ZBZ` / `    c ZCZ` / `> Q ZDZ -->` / `===`: the renderer's h1 `Q ZDZ -->`
+  was spoken under skipHeadings.
+- `> P` / `> [!note] <!---> QC` / `\tfoo QF` / `> y -->` (and `<!-->`): base spoke the
+  misread `[!note]` line only through the false pairing; 4ae003f lost QC and `y -->`.
+- `> P` / `\tfoo` / `\t<!-- x` / `>>\tQJ`: the code run's continuation line no longer
+  opened a comment, exposing quoted indented code read as prose (QJ spoken under DEF).
+
+**Change.** `extractChunks` runs the pass with NRL-170's stop and code start
+(`QuoteCodePass.enabled`). If no line is a candidate (`quoteCodeEndSure`), that pass is
+ee80121's reading and is returned. Otherwise it also runs ee80121's pass and keeps the
+NRL-170 one only if `quoteCodeChangeContained` holds: every line whose spoken characters
+(source offset and block type) differ must be a line of a code run the change started,
+or a line where the change only ADDS non-heading speech, on a line the walker trusts as
+paragraph (`RendererLeads.para`), that is no quote-ending code line, gated or not, and
+has no underline-shaped line in its run below. Any other difference keeps ee80121's
+answer for the whole note. That is fail-closed: the note reads exactly as on ee80121,
+whose prose loss stays, and nothing new is lost or spoken, on LF and CRLF notes (a lone
+CR broke it; see fix round 2). The per-line gates
+(`<!--`/`%%` on the line, `tabFenceAhead`, the root frame) are kept as they were.
+
+**Cost.** A note with a candidate is extracted twice. Medians of 5 runs on this machine,
+DEF: 2,000 `> P <!-- a` / `\tfoo` / `> b -->` blocks (68,000 chars) 211 and 213 ms on
+ee80121, 398 and 370 ms here; a 16,024-char note with one such block 32-33 ms vs
+62-64 ms; a 70,000-char note with no candidate 150-156 ms vs 144-167 ms (noise).
+
+**Guards (code critic 2 F4).** `guard-nrl170-lone-cr-above-keeps-base` and
+`guard-nrl170-table-shaped-above-keeps-base` are held by `paraSure`, not by
+`quoteCodeEndSure`'s own terms. The new `guard-nrl170-lone-cr-on-code-line-keeps-base`
+(`> P QPQ` / `\tfoo` CR `bar QBQ` / `TAIL QDQ`) fails with `!crAbove[k]` removed, under
+DEF and ALL (mutation run): the renderer breaks the line at the CR and shows `bar QBQ` as
+a paragraph, which a code start would skip. No row can test `!leads.unsureFresh[k]`:
+`walkLeadFrame` marks a code line unsure only when the line above it in the same frame
+was the ambiguous one, and the line above a quote-ending line is the quote's last line,
+which the RL_QUOTE branch consumed. Removing the term changed no output on any of 7
+masks over 175,130 notes (census shards 0 and 7, c1 seeds 1-2, casc seeds 1-2, gen seed
+0, pgen seed 1, c2 seed 11, ptabs shard 0, fuzz seed 1). The term is kept, documented as
+unreachable today. Removing the `crAbove` term changed 36 of 5,997 gen-seed-0 notes.
+Replacing the containment check with `return fixed` fails all 13 new counterexample rows.
+
+**Evidence** (`.claude/runs/NRL-170/fix1/`, `g2.cjs`). Each cell is a sentinel x one of 7
+masks (DEF, CODE, ALL, DEF+skipHeadings, CODE+skipHeadings, ALL+skipCodeBlocks,
+ALL+skipTables), graded against 1.13.7 with a tag-context tracker: a sentinel displayed
+only in `<pre>`, inline `<code>`, a table or a heading is EXCLUDED content under a mask
+that skips that context, and speaking it is `newExcl`. Counts are against ee80121.
+Every corpus: 0 renderer crashes and 0 lockstep failures (chunk `sourceIndex` length and
+every spoken sentinel mapped to its source).
+
+| corpus | notes | cells | 4ae003f new disc / lost / excl | round 1 new disc / lost / excl | round 1 closed lost / excl |
+|---|---|---|---|---|---|
+| author census | 175,680 | 5,064,276 | 0 / 0 / 0 | **0 / 0 / 0** | 61,038 / 16,294 |
+| author fuzz, 20 seeds x 3,000 | 59,986 | 811,300 | 0 / 0 / 0 | **0 / 0 / 0** | 100 / 2,049 |
+| author gen170, 20 x 6,000 | 119,942 | 4,797,737 | 0 / 0 / 5 | **0 / 0 / 0** | 51,537 / 19,054 |
+| author tab attack | 7,560 | 238,140 | 0 / 0 / 0 | **0 / 0 / 0** | 11,200 / 0 |
+| plan critic gen.cjs, seeds 1-20 x 3,000 | 60,000 | 3,218,845 | 0 / 0 / 14 | **0 / 0 / 0** | 20,498 / 4,600 |
+| plan critic tabs.cjs | 144,500 | 5,563,250 | 0 / 0 / 0 | **0 / 0 / 0** | 133,560 / 7,560 |
+| plan critic body.cjs | 15,000 | 950,250 | 0 / 0 / 0 | **0 / 0 / 0** | 8,712 / 20,736 |
+| code critic 1 gen.cjs, seeds 1-8 x 25,000 | 193,899 | 6,621,594 | 0 / 3 / 64 | **0 / 0 / 0** | 106,481 / 258,062 |
+| code critic 2, reconstructed, seeds 11/22/33/44 x 40,000 | 159,690 | 5,916,631 | 0 / 1,244 / 98 | **0 / 0 / 0** | 5,281 / 48,923 |
+| cascade generator (round 1), seeds 1-16 x 25,000 | 399,998 | 21,324,625 | 0 / 15 / 5,064 | **0 / 0 / 0** | 209,135 / 438,777 |
+
+Code critic 2's script was not left on disk; `c2` in `corp.cjs` is rebuilt from its
+verdict's description (xorshift, 2-8 lines of quote, callout, lazy-tab, fence,
+`<!--`/`<!-->`/`<!--->`/`%%`/code-span lines, 5% CRLF) and is not the same corpus. On it
+1.13.7 and 1.14.4 disagree on 6 sentinel cells (every other corpus: 0); grading uses
+1.13.7. The cascade generator puts a quote (plain, nested, tight, callout, in a list)
+with a `<!--`/`%%` opener over 1-2 quote-ending code lines of 15 bodies, then 1-6 of 34
+follow-ons: lists, tables, setext underlines bare and quoted, headings, callouts, nested
+quotes, quoted code, `<!--`/`%%`/`-->` lines, fences, definitions; 10% CRLF. Round 1
+closes fewer cells than 4ae003f on several corpora: those are notes where 4ae003f's
+change was right on some lines and wrong on others, and round 1 keeps ee80121 for the
+whole note. These are generator corpora, not every note; NOT VERIFIED IN OBSIDIAN.
+
+#### NRL-170 fix round 2: a lone CR falls back, the check is linear, its terms are pinned
+
+Code critics on 2127af9: BLOCK 40 (critic 1) and BLOCK 45 (critic 2). Round 2 is the last
+allowed round.
+
+**Lone CR (critic 1 F1-F3).** All three need a CR not followed by `\n`. The per-line loop
+and `quoteCodeChangeContained` split on `\n` only, so a code-run line holding a lone CR
+was accepted whole: F1 spoke the hidden `QFQ -->` (DEF) and `<!-- QEQ` (ALL), F2 lost the
+shown `QEQ shown` (DEF), F3 spoke the `<h2>` `QDQ --> QEQ` under skipHeadings.
+`docs/agent-history.md` records from a CDP check that a lone CR cannot reach
+`extractChunks` in the product (Verify 3), and NRL-164 was closed as unreachable on the
+same grounds, so the shapes are not modelled. Run decision: since one `/\r(?!\n)/` test
+costs nothing and keeps fail-closed, `extractChunks` now returns ee80121's reading in a
+single pass (`QuoteCodePass.enabled` false) for any note holding a lone CR. That makes
+F1-F3 moot. The four inputs (F3 in both of its forms) are rows pinned to ee80121's
+speech under DEF, ALL, DEF+skipHeadings and ALL+skipCodeBlocks; each is red without the
+fallback (mutant M10) and green with it. `crAbove` in `quoteCodeEndSure` is now
+unreachable and is kept as defence in depth. Every 0 / 0 / 0 claim in this ADR for
+NRL-170 rounds 0 and 1 holds for LF and CRLF notes only; from round 2 a lone-CR note is
+byte-identical to ee80121 (checked per corpus below: `loneCRdiff` 0).
+
+**Linear check (critic 2 F1).** The underline lookahead walked to the end of the
+blank-free run once per line that gained speech: one candidate above a long run was
+quadratic. It is now one backward pass (`underlineBelow`), and the per-line comparison
+reads two per-offset block-type masks (`Uint8Array`, one bit per `BlockType`) instead of
+building string sets and binary-searching each offset's line. The verdict is unchanged
+by construction (a set of `offset:blockType` keys per line is the same information as a
+mask per offset), and r2's chunks equal 2127af9's on every shape timed below. Two
+scaling rows in `tests/extract.test.ts` ("NRL-170 fix round 2: the containment check
+is linear", the NRL-166/172 house rule: warm-up, medians of 3, four times the input
+under ten times the time or under 50 ms, any call over a second fails fast) were red on
+2127af9 (`100 ms -> over 1000 ms` and `167 ms -> over 1000 ms`) and are green here.
+
+**Shared work (critic 2 F2).** `rendererHiddenText`, its merged ranges and the two walker
+runs (`rendererLeads`, plain and refined) do not depend on `QuoteCodePass.enabled`; the
+first pass computes them into `PassShared` and the second reuses them. A CPU profile of
+2127af9 on the 200 KB note below (8 runs) put the containment check at 23% of
+`extractChunks` and those four calls at about 10%.
+
+**Cost, measured** (`.claude/runs/NRL-170/fix2/perf.cjs`, critic 2's shapes plus one,
+DEF, medians of 5 on this machine, idle):
+
+| note | chars | ee80121 | 2127af9 | round 2 | round 2 / ee80121 |
+|---|---|---|---|---|---|
+| vault-style, no candidate | 200,129 | 170 ms | 159 ms | 165 ms | 0.97 |
+| vault-style, a candidate every 10 sections | 200,423 | 134 ms | 362 ms | 246 ms | 1.83 |
+| vault-style, a candidate every section | 200,699 | 124 ms | 331 ms | 231 ms | 1.87 |
+| 6,000 candidate blocks, blank-separated | 236,668 | 375 ms | 918 ms | 740 ms | 1.97 |
+| 6,000 candidate blocks, no blank lines | 230,669 | 304 ms | 13,472 ms | 592 ms | 1.95 |
+| 3,000 candidates then 3,000 quote lines, no blanks | 148,559 | 199 ms | 5,597 ms | 373 ms | 1.87 |
+| one candidate above 4,000 plain lines, no blanks | 82,921 | 32 ms | 922 ms | 93 ms | 2.88 |
+
+The vault-style note (critic 2's generator: headings, paragraphs, lists, quotes,
+callouts, fences, comments, tables) is the realistic figure: a 200 KB note with a
+candidate is read in about 1.8-1.9x ee80121's time. The last row is a small note whose
+second pass dominates. A note with no candidate costs what it did.
+
+**Predicate terms (critic 1 F4).** Rows "NRL-170 fix round 2: every term of the
+containment check decides a row" call `quoteCodeChangeContained` (now exported) with
+hand-built passes, so each term alone decides its row. On critic 1's seed 3, M1, M3
+and M5 changed no output and M7 only closed more cells, so these rows, not corpus
+notes, are what make the terms load-bearing. Mutation run
+(`.claude/runs/NRL-170/fix2/mutants.py`, `mutants.out`), each through the whole extract
+suite:
+
+| mutant | rows that fail |
+|---|---|
+| M1 key on the spoken character, not its offset | `same-text-shifted-offset-rejects` |
+| M2 drop the block type | `same-offsets-another-block-type-rejects`, `new-heading-speech-rejects` |
+| M3 drop the new-heading check | `new-heading-speech-rejects` |
+| M4 drop `para` | `new-speech-on-an-untrusted-line-rejects`, both `c2f2` rows |
+| M5 drop `quoteCodeEnd` | `new-speech-on-a-quote-code-end-line-rejects` |
+| M6 drop the underline lookahead | both underline rows, `c1f3` rows |
+| M6b lookahead of one line only | `underline-further-down-the-run-rejects` |
+| M6c lookahead crosses a blank line | `underline-past-a-blank-line-accepts` |
+| M7 drop the loss check | `a-line-that-loses-speech-rejects` (and M2's, M1's rows) |
+| M8 drop the code-run skip | both code-run rows, every `pin-nrl170-*` row |
+| M9 `return fixed` | all 13 round-1 rows |
+| M10 no lone-CR fallback | all 4 lone-CR rows |
+
+The table is from an idle run, where each mutant failed only the rows listed. A first
+run that shared the CPU with the corpus grading also tripped timing rows (NRL-166 rows
+under M6b, M7 and M8, and this round's many-blocks row under M6c, whose lookahead stays
+linear); those were load, not kills, and the idle rerun shows none.
+
+**Whole-note fallback (critic 2 F4).** The fallback is per note, so the reading of a
+line is no longer a function of its neighbourhood alone: an edit anywhere in a note,
+such as an underline added far below, can switch an earlier comment's reading from
+NRL-170's back to ee80121's. That is fail-closed: the switch goes to ee80121's answer,
+never to a new loss or disclosure.
+
+**Known residuals (critic 2 F3).** The 13 rows of "NRL-170 fix round 1" pin ee80121's
+speech, which is wrong against the renderer. NRL-185 owns the per-line loop's
+misreadings that the false pairing masks: a `%%` code line read as prose (c1f1, both
+rows, loses `Q ZEZ`, `T -->`), a quoted setext h1 under skipHeadings (c1f3, speaks the
+`===` and loses `<!-- ZBZ`), a mid-quote `[!note] <!--->` / `<!-->` line read as a
+callout (c2f1, speaks the code `foo QF` / `-->QF` under DEF), and quoted indented code
+read as prose (c2f2, speaks the code `foo`, `P`, `QD` under DEF). NRL-170 owns c1f2
+`code-start-drops-list-state`: its own code start drops `inList`, so the note keeps
+ee80121's reading, which speaks the code `li ZCZ` and `d ZEZ` under DEF. c1f2
+`code-then-rule` (CODEH) matches the renderer. NRL-185 is not in this run's pipeline
+state, so its scope is taken from the orchestrator's brief, not read from the tracker.
+
+**Evidence** (`.claude/runs/NRL-170/fix2/`, `g2.cjs`, `corp2.cjs`, `runall.sh`, `sum.out`).
+Round 1's grader and 7 masks, round 2 vs ee80121. `cr1` and `cr2` are both round-1 code
+critics' own generators (`critic-r1-1/gen.cjs`, `critic-r1-2/gen.cjs`), cut out of their
+scripts unchanged; they label with upper-case `Q..Q` sentinels.
+
+| corpus | notes | lone-CR / CRLF notes | cells | round 2 new disc / lost / excl | round 2 closed lost / excl |
+|---|---|---|---|---|---|
+| author census | 175,680 | 0 / 0 | 5,064,276 | **0 / 0 / 0** | 61,038 / 16,294 |
+| author fuzz, 20 seeds x 3,000 | 59,986 | 0 / 0 | 811,300 | **0 / 0 / 0** | 100 / 2,049 |
+| author gen170, 20 x 6,000 | 119,942 | 13,266 / 15,940 | 4,797,737 | **0 / 0 / 0** | 51,537 / 19,054 |
+| author tab attack | 7,560 | 0 / 0 | 238,140 | **0 / 0 / 0** | 11,200 / 0 |
+| plan critic gen.cjs, seeds 1-20 x 3,000 | 60,000 | 6,504 / 8,112 | 3,218,845 | **0 / 0 / 0** | 20,498 / 4,600 |
+| plan critic tabs.cjs | 144,500 | 0 / 0 | 5,563,250 | **0 / 0 / 0** | 133,560 / 7,560 |
+| plan critic body.cjs | 15,000 | 0 / 0 | 950,250 | **0 / 0 / 0** | 8,712 / 20,736 |
+| code critic 1 (4ae003f) gen.cjs, seeds 1-8 x 25,000 | 193,899 | 0 / 29,732 | 6,621,594 | **0 / 0 / 0** | 106,481 / 258,062 |
+| code critic 2 (4ae003f), reconstructed, seeds 11/22/33/44 x 40,000 | 159,690 | 0 / 7,962 | 5,916,631 | **0 / 0 / 0** | 5,281 / 48,923 |
+| cascade generator (round 1), seeds 1-16 x 25,000 | 399,998 | 0 / 40,220 | 21,324,625 | **0 / 0 / 0** | 209,135 / 438,777 |
+| code critic 1 (2127af9) `critic-r1-1/gen.cjs`, seeds 1-16 x 25,000 | 400,000 | 23,804 / 40,315 | 15,667,155 | **0 / 0 / 0** | 228,016 / 252,045 |
+| code critic 2 (2127af9) `critic-r1-2/gen.cjs`, seeds 11/22/33/44 x 20,000 | 79,894 | 0 / 7,936 | 3,283,560 | **0 / 0 / 0** | 95,591 / 83,386 |
+
+Every corpus: 0 renderer crashes, 0 lockstep failures, and every lone-CR note's chunks
+(text, offsets, block types) equal ee80121's under all 7 masks (43,574 notes). On the ten
+round-1 corpora the closed counts equal round 1's exactly, as the unchanged verdict
+predicts. 1.13.7 and 1.14.4 disagree on 6 cells of `c2` and 2 of `cr2`; grading uses
+1.13.7. These are generator corpora, not every note. NOT VERIFIED IN OBSIDIAN: lanes do
+not deploy.
 
 ### CLOSED by NRL-119: a list marker alone on its line ends the paragraph
 

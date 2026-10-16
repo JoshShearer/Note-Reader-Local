@@ -3311,6 +3311,9 @@ const TERM2_SETEXT_DASH = /^--+\r?$/;
  * item.
  */
 const INDENTED_CODE = /^(?: {4}|\t)/;
+// A quoted fence-shaped line with a tab somewhere in its lead after the last
+// marker (NRL-170's `tabFenceAhead`): `>   \t````, `> > \t~~~`.
+const QUOTED_TAB_FENCE = /^(?:[ \t]*>)+[ \t]*\t[ \t]*(?:`{3,}|~{3,})/;
 const TABLE_ROW = /^\s*\|/;
 /**
  * Thematic break: three or more of the same marker, optionally spaced. Checked
@@ -5240,6 +5243,24 @@ interface RendererLeads {
 	 */
 	unsureFresh: boolean[];
 	/**
+	 * A line that ENDED a blockquote by starting indented code in the frame the
+	 * quote lives in (NRL-170). `indentedCode` is in module 6234's
+	 * `interruptBlockquote` (not in `interruptParagraph`), and `startsIndentedCode`
+	 * is module 134's literal test on that same, dedented view, so the quote and
+	 * its paragraph certainly end here and the line is code. Refined walk only.
+	 */
+	quoteCodeEnd: boolean[];
+	/**
+	 * The subset of `quoteCodeEnd` found in the ROOT frame (depth 0), whose view
+	 * is the raw line itself. Only there does the per-line loop's raw
+	 * `INDENTED_CODE` test read the same block the renderer opens, including the
+	 * run of indented lines that continues it; inside a list item the item's
+	 * content column decides, which the per-line loop does not track
+	 * (`1.  \tx` / `> > # -` / `>> \t\tb` / `\t\t===` / `    # c` is a heading
+	 * in the item after one code line, and a raw run swallowed `c`).
+	 */
+	quoteCodeEndRoot: boolean[];
+	/**
 	 * A line the walker put in a PARAGRAPH whose first line it trusts (NRL-166
 	 * fix round 1): that first line or one of its continuations. Its content
 	 * never starts a block, so a `<!--` on it is inline for the renderer, which
@@ -5536,6 +5557,10 @@ function walkLeadFrame(frame: readonly LeadFrameLine[], depth: number, out: Rend
 			// literal test on the same view `mayInterruptQuote` read. The other
 			// interrupters stay `unknown`, since that test over-approximates them.
 			state = i < frame.length && (frame[i]!.view.trim() === "" || (out.refine && startsIndentedCode(frame[i]!.view))) ? "fresh" : "unknown";
+			if (out.refine && i < frame.length && frame[i]!.view.trim() !== "" && startsIndentedCode(frame[i]!.view)) {
+				out.quoteCodeEnd[frame[i]!.id] = true;
+				if (depth === 0) out.quoteCodeEndRoot[frame[i]!.id] = true;
+			}
 			continue;
 		}
 		if (RL_HEADING.test(view) || RL_HR.test(view)) {
@@ -5797,6 +5822,8 @@ function rendererLeads(lines: readonly string[], from: number, refine: boolean):
 		nested: new Array<boolean>(lines.length).fill(false),
 		closerInPara: new Array<boolean>(lines.length).fill(false),
 		unsureFresh: new Array<boolean>(lines.length).fill(false),
+		quoteCodeEnd: new Array<boolean>(lines.length).fill(false),
+		quoteCodeEndRoot: new Array<boolean>(lines.length).fill(false),
 		para: new Array<boolean>(lines.length).fill(false),
 		refine,
 		pending: [],
@@ -6000,6 +6027,163 @@ export function extractChunks(
 	src: SegmenterSource = platformSegmenters,
 	filePath: string = "",
 ): SpeechChunk[] {
+	const shared: PassShared = {};
+	// A lone CR is a line break for the renderer but not for the per-line loop,
+	// which splits on `\n` only, so NRL-170's code start and `quoteCodeChangeContained`
+	// would read a different line structure from the one displayed (NRL-170 code
+	// critic 1, round 1: F1-F3 spoke hidden and heading text and lost shown text
+	// on such notes). The note gets ee80121's reading, in one pass. That is the
+	// fail-closed direction, and costs nothing: `docs/agent-history.md` records
+	// from a CDP check that a lone CR cannot reach `extractChunks` in the product.
+	if (NOTE_LONE_CR.test(source)) return extractChunksPass(source, opts, src, filePath, quoteCodePass(false, shared));
+	const qc = quoteCodePass(true, shared);
+	const fixed = extractChunksPass(source, opts, src, filePath, qc);
+	if (!qc.candidate) return fixed;
+	const base = extractChunksPass(source, opts, src, filePath, quoteCodePass(false, shared));
+	return quoteCodeChangeContained(source, base, fixed, qc) ? fixed : base;
+}
+
+// A CR anywhere in the note that is not half of a CRLF.
+const NOTE_LONE_CR = /\r(?!\n)/;
+
+/**
+ * Work a pass does that does not depend on `QuoteCodePass.enabled`, computed by
+ * whichever pass runs first and reused by the second (NRL-170 fix round 2,
+ * code critic 2 F2). Every field is read-only once set.
+ */
+interface PassShared {
+	/** `rendererHiddenText(source)`, null where the transcription has no answer. */
+	rendererHidden?: ReturnType<typeof rendererHiddenText>;
+	/** The merged ranges every spoken character is checked against. */
+	hiddenSpans?: Array<[number, number]>;
+	/** The two walker runs, without and with NRL-166 fix round 1's refinements. */
+	leadsPlain?: RendererLeads;
+	leadsRefined?: RendererLeads;
+}
+
+/**
+ * NRL-170's two changes (a quote-ending indented-code line stops the term-2
+ * pairing, and the per-line loop starts code there) applied or withheld for a
+ * whole pass, and what that pass learned for `quoteCodeChangeContained`.
+ */
+interface QuoteCodePass {
+	/** False: the pass is ee80121's reading exactly (no stop, no code start). */
+	enabled: boolean;
+	/** Out: some line was a quote-ending code line the changes would act on. */
+	candidate: boolean;
+	/** Out: lines inside an indented-code run that a quote-code start began. */
+	codeRun: boolean[];
+	/** Out: the walker's trusted-paragraph lines (`RendererLeads.para`). */
+	para: boolean[];
+	/** Out: every quote-ending code line the walker saw, gated or not. */
+	quoteCodeEnd: boolean[];
+	/** In/out: flag-independent work shared between the two passes. */
+	shared: PassShared;
+}
+
+function quoteCodePass(enabled: boolean, shared: PassShared): QuoteCodePass {
+	return { enabled, candidate: false, codeRun: [], para: [], quoteCodeEnd: [], shared };
+}
+
+// A setext-underline-shaped line once quote markers are stripped. The renderer
+// may make the paragraph above it a heading (`> Q` / `===` is an h1 inside the
+// quote), which the per-line loop does not always read.
+const QC_UNDERLINE = /^[ \t>]*(?:=+|-+)[ \t]*\r?$/;
+
+// One bit per block type, so a source offset's spoken block types are a mask.
+const QC_BLOCK_BIT: Record<BlockType, number> = { heading: 1, paragraph: 2, list: 4, quote: 8, other: 16 };
+
+/**
+ * Whether NRL-170's pass may stand in for base's (fix round 1, ADR 0025).
+ *
+ * Ending a false comment pairing displays everything it hid, and every line
+ * of that span is then read by the per-line loop, whose pre-existing
+ * misreadings the pairing had been masking: a quoted setext heading spoken
+ * under skipHeadings, quoted indented code spoken as prose, a later `<!--`
+ * read as an opener where the renderer shows code. Starting code at a line
+ * also changes per-line state (`inList`, the paragraph above a setext
+ * underline) for everything after it. Each of those was found by a generator
+ * as a cascade far from the line the change targets, so the check here is a
+ * differential over the whole note rather than another per-shape gate.
+ *
+ * Every line whose spoken characters (source offset and block type) differ
+ * between the two passes must be one of:
+ * - a line of an indented-code run the change started (its intended effect:
+ *   skipped under skipCodeBlocks, spoken verbatim otherwise), or
+ * - a line where the change only ADDS speech, as paragraph text, on a line the
+ *   walker trusts as paragraph (`para`), that is no quote-ending code line
+ *   (gated or not), with no underline-shaped line in its run below.
+ * Anything else (a line that lost speech, a new heading, new speech on a line
+ * the walker does not trust as paragraph) returns false, and the caller keeps
+ * base's answer for the whole note: the fail-closed direction, prose loss
+ * already present on ee80121, never new.
+ *
+ * Characters are compared by source offset, never by text: the same words
+ * spoken from another place on the line are a different reading. How often an
+ * offset is spoken is not compared, only which block types speak it.
+ *
+ * Linear in the note and the spoken text (fix round 2: the underline lookahead
+ * was a scan to the end of the run per line, quadratic on a long blank-free
+ * run, code critic 2 F1). Exported for its term-by-term rows in the tests.
+ */
+export function quoteCodeChangeContained(
+	source: string,
+	base: readonly SpeechChunk[],
+	fixed: readonly SpeechChunk[],
+	qc: Pick<QuoteCodePass, "codeRun" | "para" | "quoteCodeEnd">,
+): boolean {
+	const n = source.length;
+	// Per source offset, the mask of block types that speak a non-space character
+	// from it. Joining spaces are left out: where they map is not content.
+	const spokenAt = (chunks: readonly SpeechChunk[]): Uint8Array => {
+		const out = new Uint8Array(n + 1);
+		for (const c of chunks) {
+			const bit = QC_BLOCK_BIT[c.blockType];
+			for (let i = 0; i < c.text.length; i++) {
+				const code = c.text.charCodeAt(i);
+				if (code === 32 || (code >= 9 && code <= 13) || (code > 127 && /\s/.test(c.text[i]!))) continue;
+				const off = c.sourceIndex[i]!;
+				const at = off < 0 ? 0 : off > n ? n : off;
+				out[at] = out[at]! | bit;
+			}
+		}
+		return out;
+	};
+	const b = spokenAt(base);
+	const f = spokenAt(fixed);
+	const lines = source.split("\n");
+	// Whether a line below k, in k's run of non-blank lines, is underline-shaped:
+	// one backward pass.
+	const underlineBelow = new Array<boolean>(lines.length).fill(false);
+	for (let k = lines.length - 2; k >= 0; k--) {
+		const next = lines[k + 1]!;
+		if (next.replace(/^[ \t>]*/, "").trim() === "") continue;
+		underlineBelow[k] = QC_UNDERLINE.test(next) || underlineBelow[k + 1]!;
+	}
+	// Line k owns offsets [at, at + length] (its `\n` included); the last line
+	// also owns `n`, where an offset past the end is clamped.
+	for (let k = 0, at = 0; k < lines.length; at += lines[k]!.length + 1, k++) {
+		const end = Math.min(at + lines[k]!.length + 1, n + 1);
+		let differs = false;
+		let lost = false;
+		let newHeading = false;
+		for (let o = at; o < end; o++) {
+			const x = b[o]!;
+			const y = f[o]!;
+			if (x === y) continue;
+			differs = true;
+			if (x & ~y) lost = true;
+			if (y & ~x & QC_BLOCK_BIT.heading) newHeading = true;
+		}
+		if (!differs || qc.codeRun[k]) continue;
+		if (lost || newHeading) return false;
+		if (!qc.para[k] || qc.quoteCodeEnd[k]) return false;
+		if (underlineBelow[k]) return false;
+	}
+	return true;
+}
+
+function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterSource, filePath: string, qc: QuoteCodePass): SpeechChunk[] {
 	const chunks: SpeechChunk[] = [];
 	const lines = source.split("\n");
 	// Whether line k may hold an inline construct that hides text, a code span
@@ -6013,8 +6197,13 @@ export function extractChunks(
 	// offset falls in one of its ranges is dropped before segmentation (`speak`), and
 	// its `%%` block starts withhold our own block opener where the renderer has
 	// none (`percentOpensAt`).
-	const rendererHidden = rendererHiddenText(source, lines.length);
-	const hiddenSpans = mergeRanges(rendererHidden?.ranges ?? fallbackHtmlHidden(source));
+	const shared = qc.shared;
+	if (shared.hiddenSpans === undefined) {
+		shared.rendererHidden = rendererHiddenText(source, lines.length);
+		shared.hiddenSpans = mergeRanges(shared.rendererHidden?.ranges ?? fallbackHtmlHidden(source));
+	}
+	const rendererHidden = shared.rendererHidden ?? null;
+	const hiddenSpans = shared.hiddenSpans;
 	const speak = (text: string, index: number[], start: number, blockType: BlockType): SpeechChunk[] => {
 		const kept = hiddenSpans.length === 0 ? { text, index } : dropHiddenText(text, index, hiddenSpans);
 		return splitSentences(kept.text, kept.index, start, segmentCtx, blockType);
@@ -6978,8 +7167,8 @@ export function extractChunks(
 	// is sound; what the gate guards is the text a refined answer stops hiding,
 	// which lies in that line's own window.
 	const walkFrom = frontmatter ? frontmatter.endLine + 1 : 0;
-	const leadsPlain = rendererLeads(lines, walkFrom, false);
-	const leadsRefined = rendererLeads(lines, walkFrom, true);
+	const leadsPlain = (shared.leadsPlain ??= rendererLeads(lines, walkFrom, false));
+	const leadsRefined = (shared.leadsRefined ??= rendererLeads(lines, walkFrom, true));
 	const pick = <T>(a: T[], b: T[]): T[] => a.map((v, k) => (refineWindowClean[k]! ? b[k]! : v));
 	const leads: RendererLeads = {
 		lead: pick(leadsPlain.lead, leadsRefined.lead),
@@ -6987,6 +7176,8 @@ export function extractChunks(
 		nested: pick(leadsPlain.nested, leadsRefined.nested),
 		closerInPara: pick(leadsPlain.closerInPara, leadsRefined.closerInPara),
 		unsureFresh: pick(leadsPlain.unsureFresh, leadsRefined.unsureFresh),
+		quoteCodeEnd: pick(leadsPlain.quoteCodeEnd, leadsRefined.quoteCodeEnd),
+		quoteCodeEndRoot: pick(leadsPlain.quoteCodeEndRoot, leadsRefined.quoteCodeEndRoot),
 		para: pick(leadsPlain.para, leadsRefined.para),
 		refine: true,
 		pending: [],
@@ -7069,7 +7260,72 @@ export function extractChunks(
 	// through the rendered document and does not stop at a code block
 	// (`1. ><!-- y --> QAQ <!--` / `>>> \t| a |` / `>> QCQ` hides QCQ), and an
 	// arm without this condition spoke it in the 4,000-note fuzz.
-	const term2StopOrCode = term2Stop.map((s, k) => s || htmlLeadCode[k]!);
+	//
+	// A line that ended a quote by starting indented code (`quoteCodeEnd`) is the
+	// same kind of stop (NRL-170, ADR 0025). The lazy line after a quote is read
+	// in the term-2 scan's depth-0 branch, where `term2Stop[k]` is
+	// `endsTerm2Scan(line, paraLinesAbove)` and the fence test inside it,
+	// `fenceOpensAt(lead, true)`, never stops at a tab or four-space lead, so
+	// `> P <!-- a` / `\t```` / `> b -->` paired across the code block and hid
+	// `<!-- a` and `b -->`, which the renderer displays (#214 regression). The
+	// walker already knew the quote ended there; this hands that to the stop.
+	// Gated like `htmlLeadCode`, and it reaches only `paraSure` openers below, so
+	// every carry and every other opener keeps base's answer: adding a stop is
+	// the disclosing direction, and a raw-line stop (no item dedent) newly spoke
+	// 640 census cells, `- > P` / `  > Q <!-- R` / `    S -->` / `  > T -->`.
+	// Never on a line that itself holds a comment opener: how that line is read
+	// decides comment state for every later line, and the per-line loop would
+	// read it as prose, so its own `<!--` would open where the renderer shows
+	// code (`>> P <!--` / `      --><!--c` / ... spoke `--><!--c` in the fuzz).
+	// Base's answer stands for that line (residual iii). These per-line gates do
+	// not make the change safe for the rest of the note on their own: another,
+	// ungated line in the same window can still end the pairing (code critic 1
+	// F1). `quoteCodeChangeContained` is what keeps base's answer then.
+	//
+	// `!leads.unsureFresh[k]` cannot hold on a quote-ending line today: the walker
+	// marks a code line unsure only when the line above it in its frame was the
+	// ambiguous one, and above a quote-ending line is the quote's own last line.
+	// Kept so a walker change cannot silently reach it; no test row can.
+	//
+	// Nor ahead of a quoted fence opener whose lead holds a tab, in the same run
+	// of non-blank lines (`tabFenceAhead`). The per-line loop misreads that
+	// opener (`P` / blank / `>   \t```` / `> b` / `> ```` speaks the fenced b on
+	// base already), so the pairing this stop ends was all that kept such a
+	// block silent: `> P <!-- a` / `      y` / `>   \t```` / `> b -->` newly spoke
+	// the fenced `b -->` under skipCodeBlocks in this ticket's generator. Base's
+	// answer stands there (residual vi).
+	const tabFenceAhead: boolean[] = new Array<boolean>(lines.length).fill(false);
+	for (let k = lines.length - 2, seen = false; k >= 0; k--) {
+		const next = lines[k + 1]!;
+		if (next.trim() === "") seen = false;
+		else if (QUOTED_TAB_FENCE.test(next)) seen = true;
+		tabFenceAhead[k] = seen;
+	}
+	const quoteCodeEndSure = leads.quoteCodeEnd.map(
+		(v, k) =>
+			qc.enabled &&
+			v &&
+			!leads.unsureFresh[k]! &&
+			// Unreachable since fix round 2 (a note with a lone CR never runs an
+			// enabled pass, see `extractChunks`); kept as defence in depth.
+			!crAbove[k]! &&
+			!tabFenceAhead[k]! &&
+			!lines[k]!.includes("<!--") &&
+			!lines[k]!.includes("%%"),
+	);
+	// The same line is CODE for the per-line loop below, so skipCodeBlocks skips
+	// it. Without this, ending the false pairing turned a silenced code line into
+	// prose under skipCodeBlocks (`> P <!-- a` / `\tfoo c` / `> d -->` spoke
+	// `foo c`; NRL-170 plan critique F1). Root frame only (`quoteCodeEndRoot`).
+	const quoteCodeStartsCode = leads.quoteCodeEndRoot.map((v, k) => v && quoteCodeEndSure[k]!);
+	qc.candidate = quoteCodeEndSure.some((v) => v);
+	qc.para = leads.para;
+	qc.quoteCodeEnd = leads.quoteCodeEnd;
+	qc.codeRun = new Array<boolean>(lines.length).fill(false);
+	// Whether the indented-code run the per-line loop is in was begun by a
+	// quote-code start rather than after a blank line (`qc.codeRun`).
+	let quoteCodeRun = false;
+	const term2StopOrCode = term2Stop.map((s, k) => s || htmlLeadCode[k]! || quoteCodeEndSure[k]!);
 	const htmlCloserAheadCode = closerAheadOf(term2StopOrCode);
 	// Both of fix round 1's term-2 changes (the code-line stop here and the body
 	// rule below) apply only on a line the walker is sure is paragraph text and
@@ -7668,14 +7924,17 @@ export function extractChunks(
 			if (inIndentedCode) {
 				if (blank) continue;
 				if (INDENTED_CODE.test(raw)) {
+					if (quoteCodeRun) qc.codeRun[lineNo] = true;
 					if (!opts.skipCodeBlocks) appendToParagraph(verbatimLine(raw, lineStart), lineStart);
 					continue;
 				}
 				inIndentedCode = false;
 				flushParagraph();
-			} else if (!blank && !inList && wasBlank && INDENTED_CODE.test(raw)) {
+			} else if (!blank && !inList && (wasBlank || quoteCodeStartsCode[lineNo]!) && INDENTED_CODE.test(raw)) {
 				flushParagraph();
 				inIndentedCode = true;
+				quoteCodeRun = !wasBlank;
+				if (quoteCodeRun) qc.codeRun[lineNo] = true;
 				if (!opts.skipCodeBlocks) appendToParagraph(verbatimLine(raw, lineStart), lineStart);
 				continue;
 			}
