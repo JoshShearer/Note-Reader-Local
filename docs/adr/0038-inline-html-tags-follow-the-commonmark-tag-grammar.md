@@ -31,9 +31,11 @@ which R-M08 forbids. NRL-194's critic measured 1,103 such cells.
 - Such a tag separates the words either side, unless its name is a known formatting element
   the whitelist refused only for an attribute shape (`un<b class>bold</b>ed` stays one word,
   as the page shows it): a merged word is worse to hear than a space.
-- Not in an alias or a frontmatter value: Obsidian shows a tag-shaped `<x>` literally in a
-  wikilink or embed alias and in frontmatter, so only the whitelist applies there
-  (`StripOptions.literalTags`, fix round 1).
+- Not in an alias, a frontmatter value or an image's alt: Obsidian shows a tag-shaped `<x>`
+  literally in a wikilink or embed alias, in frontmatter, and in an alt attribute, so only the
+  whitelist applies there (`StripOptions.literalTags`, fix rounds 1 and 2). A link label that
+  holds `[[` is treated the same way, because the label ends at its first `]` and the
+  wikilink inside never reaches the alias path (fail-closed).
 - Text that cannot be a tag stays text: `a < b`, `<3`, `<->`, `< x>`, `<1a>`.
 
 ## Consequences

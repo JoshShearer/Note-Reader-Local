@@ -2375,7 +2375,9 @@ function cleanLine(
 			}
 			if (opts.speakImageAlt) {
 				pushSpace(rawStart + i);
-				const inner = cleanLine(raw.slice(i + 2, close), rawStart + i + 2, opts);
+				// An image's alt is an attribute, so a tag-shaped `<x>` in it is shown
+				// literally (NRL-202 round 1 critic F2): only the old whitelist applies.
+				const inner = cleanLine(raw.slice(i + 2, close), rawStart + i + 2, { ...opts, literalTags: true });
 				for (let k = 0; k < inner.text.length; k++) {
 					emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 2);
 				}
@@ -2433,7 +2435,10 @@ function cleanLine(
 				}
 			}
 			// Re-clean the label so nested markup inside link text is handled too.
-			const inner = cleanLine(label, rawStart + i + 1, opts);
+			// A wikilink inside the label keeps its alias literal (NRL-202 round 1
+			// critic F1): the label stops at its first `]`, so the `[[` never reaches
+			// emitWikiLabel; fail-closed, the whole label is literal then.
+			const inner = cleanLine(label, rawStart + i + 1, label.includes("[[") ? { ...opts, literalTags: true } : opts);
 			for (let k = 0; k < inner.text.length; k++) {
 				emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 1);
 			}

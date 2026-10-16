@@ -654,6 +654,7 @@ console.log("inline markup (NRL-9)");
 	eq("nrl202 space after < stays text", "a < x> b", "a < x> b");
 	eq("nrl202 r1 tag-shaped alias is shown literally", "a [[note|<x>]] b", "a <x> b");
 	eq("nrl202 r1 formatting name with a bare attribute joins the word", "un<b class>bold</b>ed", "unbolded");
+	eq("nrl202 r2 tag-shaped alias of a wikilink inside a link label is literal", "a [b [[c|d <x>]]](u) e", "a b c|d <x> ]](u) e");
 	eq("closing tag", "a </b> b", "a b");
 	eq("<br/> is a tag", "one<br/>two", "one two");
 	eq("<br /> is a tag", "one<br />two", "one two");
