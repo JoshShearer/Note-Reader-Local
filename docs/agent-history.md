@@ -396,6 +396,21 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### An undefined full reference `[x][ref]` keeps `[ref]` (NRL-208, 2026-10-16)
+
+`cleanLine`'s link, image and carried-label sites consumed a `[ref]` tail unconditionally, so
+`[x][QAAQ] tail` spoke `x tail` while the page (1.13.7 and 1.14.4) shows `[x][QAAQ] tail`. A
+full reference is a link only when the note defines it: `collectRefLabels` reads definition
+starts (lenient, container prefixes tolerated, so a false positive keeps the old consumption)
+into `StripOptions.refLabels`, matched by `normaliseRefLabel` (toLowerCase plus whitespace
+collapse, an approximation of the Unicode case fold). `[x][]` is always consumed, it has no
+text. Quirk measured on both parsers: `[x][ref](u)` with `ref` undefined shows `[ref](u)`
+literally, `(u)` included, but `[x][a][b](u)` shows `[b](u)` as a link, hence `refTailLiteral`
+and its `afterFailedTail` exemption. Generator, 8112 cells (3 option sets): 0 newly
+disclosed, 0 newly lost against main 5d41664, 2349 cells improved; lockstep clean. Old rows
+that used an undefined ref as if defined now define it; `wikilink-tail` and the NRL-182
+`full-reference-base-parity` row changed because the page shows the text. Bare-Node only.
+
 ### A late quote line keeps its `[!note]` marker as text (NRL-209, 2026-10-16)
 
 On a line that continues its quote, `[!note]` is shown text (`> P` / `> [!note] QAQ` renders

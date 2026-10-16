@@ -2340,8 +2340,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl98-link-in-quote", "> A [lab\n> words](zdestz.png) B", "A lab words B"],
 		["pin-nrl98-link-in-quote-urls-on", "> A [lab\n> words](zdestz.png) B", "A lab words B", { speakUrls: true }],
 		// And the reference form's `[ref]` tail, exactly as on one line.
-		["pin-nrl98-reference-form-in-quote", "> A ![alt\n> words][zrefz] B", "A B", { speakImageAlt: false }],
-		["pin-nrl98-reference-form-in-quote-alt", "> A ![alt\n> words][zrefz] B", "A alt words B", { speakImageAlt: true }],
+		["pin-nrl98-reference-form-in-quote", "> A ![alt\n> words][zrefz] B\n\n[zrefz]: d.png", "A B", { speakImageAlt: false }],
+		["pin-nrl98-reference-form-in-quote-alt", "> A ![alt\n> words][zrefz] B\n\n[zrefz]: d.png", "A alt words B", { speakImageAlt: true }],
 		// GUARDS from here down. Green on BOTH sides of the fix, so none is
 		// evidence of anything; they exist so the peel budget cannot be
 		// half-adopted into a blind peel, which is what the measured blind-peel
@@ -5031,6 +5031,21 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl209-late-marker-after-open-tag-attribute", "> QpQ <b title=\"QqQ\n> [!QtQ] QaQ\n> QbQ\">\n> QcQ", "QpQ <b title=\"QqQ QaQ QbQ\"> QcQ"],
 		["residual-nrl209-late-marker-after-open-code-span-base-parity", "> QpQ `QqQ\n> [!QtQ] QaQ\n> `\n> QbQ", "QpQ QqQ QaQ QbQ"],
 		["residual-nrl209-late-marker-glued-link-base-parity", "> QpQ %% QqQ\n> [!note][[QaQ]]\nQbQ", "QpQ %% QqQ QaQ QbQ"],
+		// NRL-208. Expectations are the page text read off the 1.13.7 renderer
+		// harness (1.14.4 agrees on every row): an undefined full reference is
+		// literal text, so `[ref]` is shown and `(u)` after it is shown too.
+		["pin-nrl208-undefined-full-ref", "[x][QAAQ] tail QZQ", "x QAAQ tail QZQ"],
+		["pin-nrl208-undefined-full-ref-paren", "[x][QAAQ](u) QZQ", "x QAAQ (u) QZQ"],
+		["pin-nrl208-undefined-full-ref-quote", "> [x][QAAQ](u) QZQ", "x QAAQ (u) QZQ"],
+		["pin-nrl208-undefined-two-refs", "[x][QAAQ](u) and [y][QBBQ] QZQ", "x QAAQ (u) and y QBBQ QZQ"],
+		["pin-nrl208-undefined-image-ref", "![x][QAAQ] tail QZQ", "x QAAQ tail QZQ"],
+		["pin-nrl208-undefined-chain-link", "[x][QAAQ][QBBQ](u) QZQ", "x QAAQ QBBQ QZQ"],
+		["guard-nrl208-defined-ref", "[x][QAAQ] tail\n\n[QAAQ]: http://a", "x tail"],
+		["guard-nrl208-defined-ref-case-space", "[x][Qa  b] tail\n\n[qA B]: http://a", "x tail"],
+		["guard-nrl208-defined-ref-in-quote", "[x][QAAQ] tail\n\n> [QAAQ]: http://a", "x tail"],
+		["guard-nrl208-defined-ref-before", "[QAAQ]: http://a\n\n[x][QAAQ] tail", "x tail"],
+		["guard-nrl208-collapsed", "[x][] tail QZQ", "x tail QZQ"],
+		["guard-nrl208-defined-image-ref", "![x][QAAQ] tail\n\n[QAAQ]: http://a", "x tail"],
 		["guard-nrl209-first-line-callout-unchanged", "> [!note] QAQ\n> QBQ", "QAQ QBQ"],
 		["guard-nrl209-new-item-callout-unchanged", "> P\n- > [!note] QAQ", "P QAQ"],
 		["guard-nrl209-c1f1-bare-item-then-nested-callout", "> > Earlier aside\n> -\n> > [!warning] Careful\n> > Body text", "Earlier aside Careful Body text"],
@@ -5658,7 +5673,7 @@ console.log("soft-wrapped code spans and the paragraph join space (NRL-42)");
 		["control-nrl63-single-line-link", "A [lab words](zdestz.png) B", "A lab words B"],
 		// The `[ref]` tail of the reference form goes too, exactly as it does on
 		// one line (srs.md R-M09).
-		["nrl63-reference-form", "A ![alt\nwords][zrefz] B", "A B", { speakImageAlt: false }],
+		["nrl63-reference-form", "A ![alt\nwords][zrefz] B\n\n[zrefz]: d.png", "A B", { speakImageAlt: false }],
 		// A label may cross several breaks; the carry holds until the `]`.
 		["nrl63-three-lines-silenced", "A ![alt\nmid\nwords](zdestz.png) B", "A B", { speakImageAlt: false }],
 		["nrl63-three-lines-spoken", "A ![alt\nmid\nwords](zdestz.png) B", "A alt mid words B", { speakImageAlt: true }],
@@ -5965,7 +5980,7 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		// id, source, spoken when dropped, spoken when alt is read
 		["inline", "Before ![alt words](img.png) after.", "Before after.", "Before alt words after."],
 		["titled", 'Before ![alt words](img.png "The Title") after.', "Before after.", "Before alt words after."],
-		["reference", "Before ![alt words][the-ref] after.", "Before after.", "Before alt words after."],
+		["reference", "Before ![alt words][the-ref] after.\n\n[the-ref]: img.png", "Before after.", "Before alt words after."],
 		["shortcut", "Before ![alt words] after.", "Before after.", "Before alt words after."],
 		["empty-alt", "Before ![](img.png) after.", "Before after.", "Before after."],
 		["nested-markup", "Before ![**bold** alt](img.png) after.", "Before after.", "Before bold alt after."],
@@ -5989,7 +6004,7 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 	}
 	// The reference-form leak this ticket found by running the old module: the
 	// `[ref]` tail was not consumed, so the link branch spoke the reference id.
-	check("NRL-21 reference-form tail no longer leaks the reference id", !say("Before ![alt][ref] after.", { speakImageAlt: false }).includes("ref"), say("Before ![alt][ref] after.", { speakImageAlt: false }));
+	check("NRL-21 reference-form tail no longer leaks the reference id", !say("Before ![alt][ref] after.\n\n[ref]: d.png", { speakImageAlt: false }).includes("ref"), say("Before ![alt][ref] after.\n\n[ref]: d.png", { speakImageAlt: false }));
 
 	/*
 	 * Pinned, not fixed: a label containing another bracket construct.
@@ -6018,7 +6033,7 @@ console.log("configurable content exclusions (NRL-21, R-M09/R-M13)");
 		// consumed as one, exactly as the link branch consumes it. The merge
 		// base spoke `N` here; neither output is meaningful and diverging from
 		// the link branch for this shape would be worse than matching it.
-		["wikilink-tail", "Before ![alt][[N]] after.", "Before ] after.", "Before alt ] after."],
+		["wikilink-tail", "Before ![alt][[N]] after.", "Before N after.", "Before alt N after."],
 	];
 	for (const [id, src, dropped, read] of nestedLabel) {
 		check(`NRL-21 pin nested-label ${id} dropped`, say(src, { speakImageAlt: false }) === dropped, `got: ${JSON.stringify(say(src, { speakImageAlt: false }))}`);
@@ -8882,11 +8897,12 @@ console.log("NRL-181: bracketClosesLater stays linear across a paragraph's lines
 		// `[!e][QAAQ] QBBQ`, `[!e][QAAQ][QBBQ]`), so the marker, the url and QBBQ in the
 		// last row are shown and not spoken, exactly as on 071a37e. Left in the line,
 		// `[!e][QAAQ]` read as a full reference link and lost QAAQ too (151 cells), the
-		// undefined-reference hole its plain twin `>[x][QAAQ](u)` has on every revision.
+		// undefined-reference hole its plain twin `>[x][QAAQ](u)` had on every revision.
+		// NRL-208 closed that hole, so the last row now speaks QBBQ, which the page shows.
 		["residual-nrl182-r1-glued-wikilink-base-parity", "> [!note][[QAAQ]]", "QAAQ"],
 		["residual-nrl182-r1-glued-link-base-parity", ">[!tip][QAAQ](https://x.io)", "QAAQ"],
 		["residual-nrl182-r1-glued-shortcut-then-text-base-parity", "> [!e][QAAQ] QBBQ", "QAAQ QBBQ"],
-		["residual-nrl182-r1-glued-full-reference-base-parity", "> [!e][QAAQ][QBBQ]", "QAAQ"],
+		["residual-nrl182-r1-glued-full-reference-base-parity", "> [!e][QAAQ][QBBQ]", "QAAQ QBBQ"],
 		// critic 1 F5: `[!x|y]` is a callout of type x (base spoke `!x|y QAAQ`), and
 		// `[!e](QAAQ)` is a link the renderer shows as `!e` (base spoke the href).
 		["pin-nrl182-r1-metadata-type-is-a-callout", "> [!x|y] QAAQ", "QAAQ"],
