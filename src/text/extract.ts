@@ -2253,8 +2253,14 @@ function cleanLine(
 				const refClose = (closers ??= new CloserScan(raw)).close(after + 1, "]", false);
 				refLit = refTailLiteral(raw, after, refClose, opts, i === declinedTail);
 				refAt = after;
-				after = refLit !== -1 ? refLit + 1 : i === declinedTail ? after : refTailEnd(after, refClose, raw, opts);
-				if (after === refAt) declinedTail = refAt;
+				if (refLit !== -1) after = refLit + 1;
+				// A pair that is itself a declined tail takes no tail, and does not
+				// re-arm the next pair: the renderer evaluates that one normally
+				// (round 1 critic 1 F2, `[x][y][z][a](u)`).
+				else if (i !== declinedTail) {
+					after = refTailEnd(after, refClose, raw, opts);
+					if (after === refAt) declinedTail = refAt;
+				}
 			}
 			if (opts.speakImageAlt) {
 				pushSpace(rawStart + i);
@@ -2306,8 +2312,14 @@ function cleanLine(
 				const refClose = (closers ??= new CloserScan(raw)).close(after + 1, "]", false);
 				refLit = refTailLiteral(raw, after, refClose, opts, i === declinedTail);
 				refAt = after;
-				after = refLit !== -1 ? refLit + 1 : i === declinedTail ? after : refTailEnd(after, refClose, raw, opts);
-				if (after === refAt) declinedTail = refAt;
+				if (refLit !== -1) after = refLit + 1;
+				// A pair that is itself a declined tail takes no tail, and does not
+				// re-arm the next pair: the renderer evaluates that one normally
+				// (round 1 critic 1 F2, `[x][y][z][a](u)`).
+				else if (i !== declinedTail) {
+					after = refTailEnd(after, refClose, raw, opts);
+					if (after === refAt) declinedTail = refAt;
+				}
 			}
 			// Re-clean the label so nested markup inside link text is handled too.
 			const inner = cleanLine(label, rawStart + i + 1, opts);
@@ -2456,14 +2468,28 @@ function normaliseRefLabel(label: string): string {
  * line-start scan missed `- [ ] [a]:`, `- > [a]:`, multi-line labels and lone
  * CR line ends, and a missed definition spoke a hidden label). A false positive
  * consumes the tail, which is the pre-NRL-208 reading.
+ *
+ * One pass, not a global regex: a regex retried at every escaped `[` of a
+ * `\[a\[a...` line walked to the line's end from each, quadratic (security
+ * review of round 1, measured 1.7 s at 20,000 repeats against 28 ms on base).
+ * An escaped `[` never starts a label here, and an unescaped one restarts it.
  */
-const REF_DEF_ANYWHERE = /\[(?!\^)((?:[^[\]\\]|\\.)+)\]:/g;
-
 function collectRefLabels(source: string): Set<string> {
 	const out = new Set<string>();
 	if (source.indexOf("]:") === -1) return out;
-	for (const m of source.matchAll(REF_DEF_ANYWHERE)) {
-		out.add(normaliseRefLabel(m[1]!.replace(/(?:\r\n?|\n)[ \t>]*/g, " ")));
+	let start = -1;
+	for (let i = 0; i < source.length; i++) {
+		const c = source[i];
+		if (c === "\\") {
+			i += 1;
+		} else if (c === "[") {
+			start = source[i + 1] === "^" ? -1 : i + 1;
+		} else if (c === "]") {
+			if (start !== -1 && i > start && source[i + 1] === ":") {
+				out.add(normaliseRefLabel(source.slice(start, i).replace(/(?:\r\n?|\n)[ \t>]*/g, " ")));
+			}
+			start = -1;
+		}
 	}
 	return out;
 }
