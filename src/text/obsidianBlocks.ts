@@ -435,6 +435,71 @@ interface FootnoteDef {
 	lastLine: number;
 }
 
+/**
+ * Where a fence's info string puts `-->` or `--!>` into the `class` the
+ * renderer writes, as the end of the closer and of the word in the info
+ * string's raw text, or null (NRL-183). The class is `language-` plus the info string's
+ * first word, after the tokenizer has removed backslash escapes and then decoded
+ * character references (measured on 1.13.7 and 1.14.4: `Q--\&gt;Q` and
+ * `Q--&#62;Q` both write `Q-->Q`; `Q&#32;--&gt;S` writes `Q`, the decoded space
+ * ending the word; `&#32;Q-->` writes no class at all; a later word never
+ * reaches the page). The word is the run of non-space, non-tab characters the
+ * renderer's own `/^[^ \t]+(?=[ \t]|$)/` takes, from an info string whose own leading
+ * blanks the fence tokenizer has dropped.
+ *
+ * Decoded here: numeric references (with or without `;`) and the named ones
+ * that can yield `>`, `!`, space or tab. Read off the renderer's table of 2,125
+ * entities, only `gt`, `GT`, `nvgt`, `excl` and `Tab` do; `gt` and `GT` also
+ * without `;`, unless a longer known name with `;` wins (`&gtrdot;` is a
+ * different character; `&gtx;` is `>x;`). Any other reference leaves no byte
+ * this test reads. `-` comes from `&#45;` only.
+ */
+const FENCE_REFERENCE =
+	/&(?:#[xX]([0-9a-fA-F]+);?|#([0-9]+);?|(?:gtcc|gtcir|gtdot|gtlPar|gtquest|gtrapprox|gtrarr|gtrdot|gtreqless|gtreqqless|gtrless|gtrsim);|(nvgt|excl|Tab|gt|GT);|(gt|GT))/g;
+export function fenceClassCloser(info: string): { end: number; bang: boolean; wordEnd: number } | null {
+	const lead = /^[ \t]*/.exec(info)![0].length;
+	// Stage 1, the backslash escapes: each result character keeps the end of the
+	// raw text it came from, so the closer can be placed in the raw line.
+	let s1 = "";
+	const end1: number[] = [];
+	for (let i = lead; i < info.length; i++) {
+		const esc = info[i] === "\\" && i + 1 < info.length && /[!-/:-@[-`{-~]/.test(info[i + 1]!);
+		s1 += esc ? info[i + 1]! : info[i]!;
+		if (esc) i++;
+		end1.push(i + 1);
+	}
+	// Stage 2, the character references, over stage 1's text.
+	let decoded = "";
+	const end2: number[] = [];
+	let at = 0;
+	for (const m of s1.matchAll(FENCE_REFERENCE)) {
+		for (; at < m.index; at++) {
+			decoded += s1[at]!;
+			end2.push(end1[at]!);
+		}
+		const [text, hex, dec, named, legacy] = m;
+		let ch: string;
+		if (hex !== undefined || dec !== undefined) {
+			const cp = hex !== undefined ? parseInt(hex, 16) : parseInt(dec!, 10);
+			ch = cp === 9 || cp === 32 || cp === 33 || cp === 45 || cp === 62 ? String.fromCharCode(cp) : "�";
+		} else {
+			const name = named ?? legacy;
+			ch = name === undefined ? "�" : name === "excl" ? "!" : name === "Tab" ? "\t" : ">";
+		}
+		decoded += ch;
+		end2.push(end1[m.index + text.length - 1]!);
+		at = m.index + text.length;
+	}
+	for (; at < s1.length; at++) {
+		decoded += s1[at]!;
+		end2.push(end1[at]!);
+	}
+	const word = /^[^ \t]+(?=[ \t]|$)/.exec(decoded);
+	if (word === null) return null;
+	const close = /--!?>/.exec(word[0]);
+	return close === null ? null : { end: end2[close.index + close[0].length - 1]!, bang: close[0] === "--!>", wordEnd: end2[word[0].length - 1]! };
+}
+
 class BlockScanner {
 	readonly found: RendererPercentBlock[] = [];
 	// Spans the reading view hides by construction (NRL-166 fix round 2): every
@@ -674,8 +739,9 @@ class BlockScanner {
 		// whole note is scanned (a footnote's fence renders after every block),
 		// so such a fence is deferred, not left to the old answer outright: that
 		// spoke the hidden info string wherever nothing was open (NRL-178,
-		// `- Q<!--` / `    ```QKZQ--->`).
-		if (/--!?>/.test(head)) {
+		// `- Q<!--` / `    ```QKZQ--->`). Only the class's own word counts, as
+		// the page has it: `fenceClassCloser` (NRL-183).
+		if (fenceClassCloser(head.slice(lead + fence[0].length)) !== null) {
 			this.commentFences.push({ parts, line, footnote: this.inFootnote > 0 });
 			return;
 		}
