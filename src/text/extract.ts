@@ -7811,6 +7811,11 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			if (!/^[ \t>]*$/.test(lines[k + 1]!.slice(0, viewStart[k + 1]))) continue;
 			if (!PLAIN_SETEXT_HTML_OPENER.test(t) || MODULE134_INDENTED_CODE.test(t)) continue;
 			if (!/^(?:=+|-{2,})\r?$/.test(u)) continue;
+			// A rule- or underline-shaped line right after the underline (`- Para.`
+			// / `  <!--` / `  ---` / ` ---`) leaves the comment open for the renderer
+			// in shapes not modelled here (round 0 critic 2 F1), so keep the old
+			// answer there.
+			if (k + 2 < lines.length && /^[ \t>]*(?:=+|-{2,}|(?:[-*_][ \t]*){3,})[ \t]*\r?$/.test(lines[k + 2]!)) continue;
 			const inner = home[home.length - 1]!;
 			const firstOfQuote = quoteIds.has(inner) && (k === 0 || !containerHome[k - 1]!.includes(inner));
 			if (TAB_BEARING_LEAD.test(t) && !/(?:[-*+]|\d{1,9}[.)])[ \t]*$/.test(lines[k]!.slice(0, viewStart[k])) && !firstOfQuote) continue;
