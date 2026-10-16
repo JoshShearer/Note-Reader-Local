@@ -5094,6 +5094,17 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["residual-nrl212-markup-in-footnote", "a %% ^[**QxQ**] %% b", "a b"],
 		["residual-nrl212-footnote-on-opener-line", "%% ^[QxQ]\n%%", ""],
 		["residual-nrl212-quoted-block-body", "> %%\n> ^[QxQ]\n> %%", ""],
+		// NRL-207: a callout title that starts with four spaces or a tab after the
+		// marker's one whitespace character renders as indented code; skipCodeBlocks
+		// (the table's default) drops it, and with it off it is read as before.
+		["pin-nrl207-code-title-four-spaces-skipped", "> [!note]     QtQ code\n> body QbQ", "body QbQ"],
+		["pin-nrl207-code-title-tab-skipped", "> [!note] \tQtQ\n> b QbQ", "b QbQ"],
+		["pin-nrl207-code-title-comment-opener-skipped", "> [!note]     a <!-- QtQ\n> body QbQ -->", "body QbQ -->"],
+		["guard-nrl207-code-title-read-when-not-skipping", "> [!note]     QtQ code\n> body QbQ", "QtQ code body QbQ", {skipCodeBlocks: false}],
+		["guard-nrl207-tab-as-the-one-space-is-no-code", "> [!note]\tQtQ code\n> body QbQ", "QtQ code body QbQ"],
+		["guard-nrl207-spaces-then-tab-is-no-code", "> [!note]    \tQtQ\n> b", "QtQ b"],
+		["guard-nrl207-three-spaces-is-no-code", "> [!note]    QtQ\n> b", "QtQ b"],
+		["guard-nrl207-late-line-marker-is-text", "> P\n> [!note]     QtQ", "P !note QtQ"],
 		["guard-nrl212-c1f1-backtick-fence-in-block", "%%\n```\n^[QxQ]\n```\n%%\nd", "d"],
 		["guard-nrl212-c1f1-math-in-block", "%%\n$$\n^[QxQ]\n$$\n%%\nd", "d"],
 		["guard-nrl212-c1f1-html-comment-in-block", "%%\n<!--\n^[QxQ]\n-->\n%%\nd", "d"],
