@@ -1,6 +1,6 @@
-import { parseWav } from "../../audio/wav";
 import {
 	EngineUnavailableError,
+	type SpeechChunk,
 	type EngineAvailability,
 	type EngineCapabilities,
 	type SpeechEngine,
@@ -58,6 +58,29 @@ export const HEALTH_TIMEOUT_MS = 1500;
  */
 export const SYNTH_TIMEOUT_MS = 30_000;
 
+/**
+ * How often a read in progress asks Read Me where it is.
+ *
+ * The answer moves the highlight, so this is how far the highlight can lag
+ * a sentence change. A loopback GET; while Obsidian is in the background its
+ * timers are throttled and the reading does not depend on them.
+ */
+export const STATUS_POLL_MS = 250;
+
+/** A single control or status call: loopback, so anything slower is a dead bridge. */
+export const CONTROL_TIMEOUT_MS = 3000;
+
+/**
+ * What one `/play` may carry (Read Me's contract: 1 MiB, 10,000 chunks). A
+ * longer note is sent in parts: when the reading reaches the end of a part,
+ * the next `synthesize` starts the next one.
+ */
+export const PLAY_MAX_BYTES = 1024 * 1024;
+export const PLAY_MAX_CHUNKS = 10_000;
+
+/** U+001E, record separator: Read Me splits the `/play` body on it. */
+const SEPARATOR = "\u001e";
+
 /** Where to send someone who does not have the companion app. Text only; never fetched. */
 export const READ_ME_URL = "https://github.com/JoshShearer/Read-Me";
 
@@ -99,6 +122,8 @@ export interface BridgeHealth {
 	voice: string;
 	busy: boolean;
 	maxChars: number | null;
+	/** Read Me reads the chunks itself (`/play`, its ADR 0014). Required since Read Me 1.1.0. */
+	play: boolean;
 }
 
 /**
@@ -169,6 +194,7 @@ export function parseHealth(body: ArrayBuffer): BridgeHealth | null {
 		voice: typeof r.voice === "string" ? r.voice : "",
 		busy: r.busy === true,
 		maxChars: typeof r.maxChars === "number" && r.maxChars > 0 ? r.maxChars : null,
+		play: r.play === true,
 	};
 }
 
@@ -190,6 +216,41 @@ const NOT_RUNNING =
 	`Read Me Offline's Obsidian bridge is not running. Install Read Me Offline (${READ_ME_URL}) ` +
 	"and turn on its Obsidian bridge in its Settings.";
 
+/** Read Me's `/status`: which session, in what state, at which of its chunks. */
+interface PlayStatus {
+	session: number;
+	state: "none" | "starting" | "playing" | "paused" | "ended" | "stopped";
+	index: number;
+}
+
+function parseStatus(body: ArrayBuffer): PlayStatus | null {
+	const raw = decodeJson(body);
+	if (typeof raw !== "object" || raw === null) return null;
+	const r = raw as Record<string, unknown>;
+	if (typeof r.session !== "number" || typeof r.state !== "string" || typeof r.index !== "number") return null;
+	return { session: r.session, state: r.state as PlayStatus["state"], index: r.index };
+}
+
+/**
+ * Read Me stopped reading the note on its own side: the user stopped it from
+ * the lock screen or the notification, or started reading an article in Read
+ * Me. Ends the read without falling back to another engine.
+ */
+export class BridgeStoppedError extends EngineUnavailableError {
+	readonly noFallback = true;
+	constructor() {
+		super("readme", "Read Me Offline stopped reading this note.");
+		this.name = "BridgeStoppedError";
+	}
+}
+
+/** The chunks one `/play` sent, by chunk id, and the rate it was read at. */
+interface Session {
+	id: number;
+	chunkIds: string[];
+	rate: number;
+}
+
 export class ReadMeBridgeEngine implements SpeechEngine {
 	readonly id = "readme" as const;
 	readonly label = "Read Me Offline (Android voices)";
@@ -199,38 +260,33 @@ export class ReadMeBridgeEngine implements SpeechEngine {
 		// The bridge promises no word timings; the sentence layer and the
 		// NRL-72 scroll still work (highlight.ts disables the word row only).
 		timing: "none",
-		// Honoured by the PLAYER, not the bridge: this is a buffer engine, so
-		// it renders at 1.0 and the player applies the speed (non-negotiable 9).
+		// Read Me applies it, once, at synthesis: this engine owns playback, so
+		// the player passes the user's rate and never touches an element
+		// (non-negotiable 9).
 		rate: true,
 		pitch: false,
 		desktopOnly: false,
-		// Buffer engine: pause and resume are the player's audio element.
+		// A pair, on Read Me's own session (`/control`).
 		pause: true,
 		resume: true,
 		sentenceBoundary: false,
 		offlineStatus: false,
-		// Returns a WAV. `ownsPlayback: true` with a buffer is the combination
-		// that shipped 2.25x once.
-		ownsPlayback: false,
+		// Read Me reads the note in its own foreground service (its ADR 0014).
+		// Obsidian playing the audio itself was muted by Android about 5 s after
+		// Obsidian left the screen (Read Me REA-39, measured 2026-10-08).
+		ownsPlayback: true,
 	};
 
 	private health: BridgeHealth | null = null;
-
-	/**
-	 * Settles when the previous request to /synthesize has settled.
-	 *
-	 * The bridge synthesizes one request at a time and admits only a short
-	 * queue behind it, answering the rest `503 {"error":"busy","reason":"queue"}`.
-	 * The player prefetches `bufferAhead` chunks in parallel, so without this a
-	 * read on the MatePad sent 8 requests at once and 5 were refused (measured
-	 * 2026-10-03 in Read Me's own request log). Serializing here costs nothing,
-	 * since the bridge would serialize them anyway.
-	 */
-	private queue: Promise<void> = Promise.resolve();
+	private session: Session | null = null;
+	/** The session position that continues it: the one after the last chunk finished. */
+	private next = 0;
 
 	constructor(
 		private readonly config: () => BridgeConfig,
 		private readonly transport: BridgeTransport = fetchTransport,
+		private readonly sleep: (ms: number) => Promise<void> = (ms) =>
+			new Promise((resolve) => window.setTimeout(resolve, ms)),
 	) {}
 
 	private baseUrl(): string | null {
@@ -279,6 +335,12 @@ export class ReadMeBridgeEngine implements SpeechEngine {
 				reason: `Read Me Offline speaks bridge version ${health.version}; this plugin needs version ${BRIDGE_CONTRACT_VERSION}. Update whichever is older.`,
 			};
 		}
+		if (!health.play) {
+			return {
+				available: false,
+				reason: "This Read Me Offline is too old for this plugin: update it to 1.1.0 or later, which reads notes itself.",
+			};
+		}
 		if (!health.ok || !health.ttsReady) {
 			return { available: false, reason: "Read Me Offline is running, but its speech engine is not ready yet." };
 		}
@@ -315,20 +377,52 @@ export class ReadMeBridgeEngine implements SpeechEngine {
 	/** The voice is Read Me's setting; there is nothing to select from here. */
 	async selectVoice(): Promise<void> {}
 
+	/**
+	 * Speak `req.chunk`: resolves once Read Me has read past it.
+	 *
+	 * The first call of a read sends the chunk and everything after it in one
+	 * `/play`, and Read Me reads them all in its own service, whatever Obsidian
+	 * does meanwhile. Each later call finds its chunk in that session and only
+	 * waits for Read Me's `/status` to move past it, which is what moves the
+	 * player's highlight. A chunk outside the session, a new rate, or a
+	 * session Read Me no longer has, starts a new one from this chunk.
+	 */
 	async synthesize(req: SynthRequest, signal: AbortSignal): Promise<SynthResult> {
-		const previous = this.queue;
-		let release!: () => void;
-		this.queue = new Promise<void>((resolve) => (release = resolve));
-		try {
-			await previous;
-			if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-			return await this.synthesizeOne(req, signal);
-		} finally {
-			release();
+		// A chunk with nothing to say: Read Me refuses blank chunks, and the
+		// session stopped short of this one (see `buildPlay`).
+		if (req.chunk.text.trim() === "") return { kind: "streamed", estimatedMs: 0, words: null };
+		const { base, auth } = this.target();
+		let position = this.positionInSession(req);
+		// Only the chunk after the one last finished continues the session.
+		// Anything else is the player jumping (a replay, Previous, Next), and
+		// Read Me must jump with it. The next chunk in order may already be
+		// read: Read Me went on while Obsidian was in the background, and the
+		// player catches up one resolved chunk at a time.
+		if (position >= 0 && position !== this.next) position = -1;
+		if (position >= 0) {
+			const status = await this.status(base, auth, signal);
+			const live = status.session === this.session!.id && status.state !== "stopped" && status.state !== "none";
+			if (!live) position = -1;
 		}
+		if (position < 0) {
+			await this.play(base, auth, req, signal);
+			position = 0;
+		}
+		await this.waitPast(base, auth, position, signal);
+		this.next = position + 1;
+		return { kind: "streamed", estimatedMs: 0, words: null };
 	}
 
-	private async synthesizeOne(req: SynthRequest, signal: AbortSignal): Promise<SynthResult> {
+	pause(): void {
+		this.control("pause");
+	}
+
+	resume(): void {
+		this.control("resume");
+	}
+
+	/** Base URL and Authorization header, or the error a user can act on. */
+	private target(): { base: string; auth: string } {
 		const base = this.baseUrl();
 		if (!base) throw new EngineUnavailableError("readme", "The Read Me bridge port is not a valid port number.");
 		const { token } = this.config();
@@ -338,41 +432,133 @@ export class ReadMeBridgeEngine implements SpeechEngine {
 				"Paste the pairing token from Read Me Offline's Settings into this plugin's settings.",
 			);
 		}
+		return { base, auth: `Bearer ${token.trim()}` };
+	}
 
-		// `rate=1.0` always, whatever `req.rate` says: the player applies the
-		// user's speed to the returned buffer, and asking the bridge for it too
-		// would multiply the two (Read Me's bridge contract; non-negotiable 9).
-		// The text goes in the body and never the URL, where it would land in
-		// logs the way argv lands in `ps` (non-negotiable 2's reasoning).
-		let res: BridgeResponse;
-		try {
-			res = await this.transport({
+	/** Where `req.chunk` sits in the current session at its rate, or -1. */
+	private positionInSession(req: SynthRequest): number {
+		const s = this.session;
+		if (!s || s.rate !== req.rate) return -1;
+		return s.chunkIds.indexOf(req.chunk.id);
+	}
+
+	/**
+	 * `req.chunk` and what follows it, up to Read Me's limits and the first
+	 * blank chunk (Read Me refuses blank ones; that chunk is skipped here and
+	 * the next one starts a new session).
+	 */
+	private buildPlay(req: SynthRequest): { chunks: SpeechChunk[]; body: string } {
+		const chunks: SpeechChunk[] = [];
+		const parts: string[] = [];
+		let bytes = 0;
+		const encoder = new TextEncoder();
+		for (const c of [req.chunk, ...(req.following?.() ?? [])]) {
+			if (c.text.trim() === "" || chunks.length >= PLAY_MAX_CHUNKS) break;
+			// The separator cannot be part of a chunk: it would split it in two
+			// and every index after it would be off by one.
+			const text = c.text.split(SEPARATOR).join(" ");
+			const size = encoder.encode(text).length + (parts.length > 0 ? 1 : 0);
+			if (chunks.length > 0 && bytes + size > PLAY_MAX_BYTES) break;
+			bytes += size;
+			chunks.push(c);
+			parts.push(text);
+		}
+		return { chunks, body: parts.join(SEPARATOR) };
+	}
+
+	private async play(base: string, auth: string, req: SynthRequest, signal: AbortSignal): Promise<void> {
+		const { chunks, body } = this.buildPlay(req);
+		// The rate goes to Read Me, which applies it once at synthesis; the
+		// player applies none to an engine that owns playback (non-negotiable
+		// 9). The text goes in the body and never the URL.
+		const res = await this.call(
+			{
 				method: "POST",
-				url: `${base}/synthesize?rate=1.0`,
-				headers: {
-					Authorization: `Bearer ${token.trim()}`,
-					"Content-Type": "text/plain; charset=utf-8",
-				},
-				body: req.chunk.text,
+				url: `${base}/play?rate=${req.rate.toFixed(2)}`,
+				headers: { Authorization: auth, "Content-Type": "text/plain; charset=utf-8" },
+				body,
 				timeoutMs: SYNTH_TIMEOUT_MS,
 				signal,
-			});
+			},
+			signal,
+		);
+		if (res.status !== 200) throw this.failure(res);
+		const parsed = decodeJson(res.body) as { session?: unknown } | null;
+		if (typeof parsed?.session !== "number") throw new Error("Read Me Offline's bridge answered /play without a session.");
+		this.session = { id: parsed.session, chunkIds: chunks.map((c) => c.id), rate: req.rate };
+		this.next = 0;
+	}
+
+	/** Polls `/status` until Read Me is past `position`, has ended, or stopped. */
+	private async waitPast(base: string, auth: string, position: number, signal: AbortSignal): Promise<void> {
+		const id = this.session!.id;
+		const onAbort = (): void => {
+			// The player stopped, or moved to another chunk (which will start a
+			// new session): either way Read Me must stop reading this one.
+			if (this.session?.id === id) {
+				this.control("stop");
+				this.session = null;
+			}
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		try {
+			for (;;) {
+				if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+				const status = await this.status(base, auth, signal);
+				if (status.session !== id || status.state === "stopped" || status.state === "none") {
+					if (this.session?.id === id) this.session = null;
+					throw new BridgeStoppedError();
+				}
+				if (status.state === "ended" || status.index > position) return;
+				await this.sleep(STATUS_POLL_MS);
+			}
+		} finally {
+			signal.removeEventListener("abort", onAbort);
+		}
+	}
+
+	private async status(base: string, auth: string, signal: AbortSignal): Promise<PlayStatus> {
+		const res = await this.call(
+			{ method: "GET", url: `${base}/status`, headers: { Authorization: auth }, timeoutMs: CONTROL_TIMEOUT_MS, signal },
+			signal,
+		);
+		if (res.status !== 200) throw this.failure(res);
+		const status = parseStatus(res.body);
+		if (!status) throw new Error("Read Me Offline's bridge answered /status with something else.");
+		return status;
+	}
+
+	/** One request; a transport failure is "the bridge is not running", an abort stays an abort. */
+	private async call(req: BridgeRequest, signal: AbortSignal): Promise<BridgeResponse> {
+		try {
+			return await this.transport(req);
 		} catch {
 			if (signal.aborted) throw new DOMException("Aborted", "AbortError");
 			throw new EngineUnavailableError("readme", NOT_RUNNING);
 		}
+	}
 
-		if (res.status === 200) {
-			const info = parseWav(res.body);
-			return {
-				kind: "buffer",
-				audio: res.body,
-				sampleRate: info.sampleRate,
-				durationMs: info.durationMs,
-				words: [],
-			};
+	/**
+	 * Pause, resume or stop the current session, fire and forget: the player
+	 * calls these synchronously and they must not throw. A stale session is
+	 * Read Me's to refuse (409), which changes nothing.
+	 */
+	private control(action: "pause" | "resume" | "stop"): void {
+		const s = this.session;
+		if (!s) return;
+		let target: { base: string; auth: string };
+		try {
+			target = this.target();
+		} catch {
+			return;
 		}
-		throw this.failure(res);
+		void this.transport({
+			method: "POST",
+			url: `${target.base}/control?action=${action}&session=${s.id}`,
+			headers: { Authorization: target.auth },
+			body: "",
+			timeoutMs: CONTROL_TIMEOUT_MS,
+		}).catch(() => undefined);
 	}
 
 	/**
@@ -407,6 +593,8 @@ export class ReadMeBridgeEngine implements SpeechEngine {
 	}
 
 	async dispose(): Promise<void> {
+		this.control("stop");
+		this.session = null;
 		this.health = null;
 	}
 }

@@ -204,6 +204,14 @@ export interface SynthRequest {
 	onWord?: (timing: WordTiming) => void;
 	/** Called once the utterance is fully finished. */
 	onEnd?: () => void;
+	/**
+	 * The chunks after `chunk`, in reading order. Given only to engines that
+	 * own playback. The Read Me bridge engine sends them to Read Me Offline in
+	 * one request, so the reading goes on while Obsidian's JavaScript is
+	 * throttled in the background (Read Me's ADR 0014). A function, so engines
+	 * that speak one chunk at a time never pay for the slice.
+	 */
+	following?: () => readonly SpeechChunk[];
 }
 
 export type SynthResult =
