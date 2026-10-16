@@ -8503,11 +8503,18 @@ console.log("NRL-181: bracketClosesLater stays linear across a paragraph's lines
 	// HTML, list markers, indented code) fall between them. On the plan's
 	// mutants this generator catches all six (see the history entry).
 	{
-		const set = ["- [a", "[b", "<div>](d) z", "> [c", ">> [c", "x", "](d)", "] y](d)", "    ](d)", "\t[a", "> ](d)", "> <div>](d)", "- x", "> - [e", "  [f", "[g [h] [i", "1. [j", "> > ](d)", "$$", "`k", "]`](d)", "[d [e] [f", "] g [h", ""];
+		// NRL-204: one line per stop kind in BracketCarryMemo.facts. They are
+		// kept apart because the draw alone reaches a given stop right after an
+		// opener and before a closer too rarely to pin each arm (the fence and
+		// setext single-arm mutants survived 11000 draws), so the same lines are
+		// also walked exhaustively below.
+		const stops = ["", "<!--", "-->", "%%", "```", "~~~", "# h", "===", "---", "***", "| a | b |", "|---|---|", "a\rb", "-", "1.", "* x", "<div>", "    code", "    <div>", ">\t<div>](d)", "> $$ x", "$$", "$$ x $$", "> [!note]", "> - ](d)", "> > ](d)"];
+		const set = ["- [a", "[b", "<div>](d) z", "> [c", ">> [c", "x", "](d)", "] y](d)", "    ](d)", "\t[a", "> ](d)", "> <div>](d)", "- x", "> - [e", "  [f", "[g [h] [i", "1. [j", "$$", "`k", "]`](d)", "[d [e] [f", "] g [h", ...stops];
 		let openers = 0;
 		let differing = 0;
 		let example = "";
 		let current = "";
+		const RANDOM_DRAWS = 9500;
 		auditBracketCarry((from, memo, fresh) => {
 			openers += 1;
 			if (memo !== fresh) {
@@ -8516,7 +8523,16 @@ console.log("NRL-181: bracketClosesLater stays linear across a paragraph's lines
 			}
 		});
 		try {
-			for (let k = 0; k < 6000; k++) {
+			// Every opener class, then one stop (optionally behind a filler line), then a
+			// closer: the shortest note on which a missing stop arm changes the answer.
+			for (const o of ["[b", "- [a", "> [c", "1. [j", "> - [e", "\t[a"])
+				for (const stop of stops)
+					for (const fill of [[], ["x"]])
+						for (const closer of ["](d)", "> ](d)", "    ](d)", "<div>](d) z", "] y](d)"]) {
+							current = [o, ...fill, stop, closer].join("\n");
+							extractChunks(current, OPTS);
+						}
+			for (let k = 0; k < RANDOM_DRAWS; k++) {
 				const count = 2 + Math.floor(rnd() * 10);
 				const lines: string[] = [];
 				for (let l = 0; l < count; l++) lines.push(pick(set));
@@ -8526,7 +8542,7 @@ console.log("NRL-181: bracketClosesLater stays linear across a paragraph's lines
 		} finally {
 			auditBracketCarry(undefined);
 		}
-		check(`NRL-181 the memo answers as the fresh walk for every armed opener (${openers} openers)`, differing === 0 && openers > 15000, `${differing} differing, first ${example}`);
+		check(`NRL-181 the memo answers as the fresh walk for every armed opener (${openers} openers)`, differing === 0 && openers > 10000, `${differing} differing, first ${example}`);
 	}
 }
 
