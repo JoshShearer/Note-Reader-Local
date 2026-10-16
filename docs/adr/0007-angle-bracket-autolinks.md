@@ -75,7 +75,9 @@ everything it consumes is text that stops being spoken.
    `x<y://z>w` would be consumed here while Obsidian renders it literally,
    deleting visible text and joining `x` to `w`. This is the trade the HTML
    element whitelist already makes: a false positive eats a sentence, a false
-   negative reads a bracket.
+   negative reads a bracket. (ADR 0038 later found that the whitelist's
+   false negatives were tags the page hides, and replaced it with CommonMark's
+   tag grammar; the autolink trade here stands on its own measurement.)
 
 7. **A glued sentence period is spoken, unlike the bare-URL form.** Consumption
    stops exactly at the closing `>`, so `See <https://x.com>.` keeps its full

@@ -639,13 +639,19 @@ console.log("inline markup (NRL-9)");
 	eq("inline tag inside a word keeps the word", "un<b>bold</b>ed", "unbolded");
 	eq("tag with attributes", 'A <span class="x">red</span> word.', "A red word.");
 	eq("comparison with spaces is not a tag", "a < b and c > d", "a < b and c > d");
-	eq("comparison without spaces is not a tag", "x<y and z>w", "x<y and z>w");
-	// Prose between angle brackets that happens to start with a known element
-	// name must not be eaten as a tag with bare attributes. Leaked markup is a
-	// smaller cost than a lost sentence.
-	eq("known element name with prose after is not a tag", "a <b and c> d", "a <b and c> d");
-	eq("<i am here> is not a tag", "x <i am here> y", "x <i am here> y");
-	eq("unknown bare attribute is not a tag", "a <span foo> b", "a <span foo> b");
+	// NRL-202 (ADR 0038): these ARE tags by CommonMark's raw-HTML grammar, and
+	// the renderer hides them (1.13.7 and 1.14.4 show `xw`, `a  d`, `x  y`,
+	// `a  b`), so the old "leaked markup costs less than a lost sentence" trade
+	// spoke hidden text. A tag outside the formatting whitelist separates words.
+	eq("comparison without spaces is a tag the page hides", "x<y and z>w", "x w");
+	eq("known element name with bare attributes is a hidden tag", "a <b and c> d", "a d");
+	eq("<i am here> is a hidden tag", "x <i am here> y", "x y");
+	eq("unknown bare attribute is a hidden tag", "a <span foo> b", "a b");
+	eq("nrl202 tag-shaped file name is hidden", "see <my file.md> now", "see now");
+	eq("nrl202 less-than with a space stays text", "a < b", "a < b");
+	eq("nrl202 heart stays text", "i <3 you", "i <3 you");
+	eq("nrl202 arrow stays text", "a <-> b", "a <-> b");
+	eq("nrl202 space after < stays text", "a < x> b", "a < x> b");
 	eq("closing tag", "a </b> b", "a b");
 	eq("<br/> is a tag", "one<br/>two", "one two");
 	eq("<br /> is a tag", "one<br />two", "one two");
@@ -1298,10 +1304,8 @@ console.log("angle-bracket autolinks (NRL-39)");
 	// before and after the fix; they pin what must not regress.
 	const unchanged: Array<[string, string]> = [
 		["a < b and c > d", "a < b and c > d"],
-		["x<y and z>w", "x<y and z>w"],
-		["a <b and c> d", "a <b and c> d"],
-		["x <i am here> y", "x <i am here> y"],
-		["a <span foo> b", "a <span foo> b"],
+		// `x<y and z>w`, `a <b and c> d`, `x <i am here> y` and `a <span foo> b`
+		// left this list with NRL-202: they are tags the renderer hides.
 		// A dotless domain is not positive evidence of an address, so it stays
 		// text rather than risk swallowing a word (docs/adr/0007).
 		["Ping <a@b> soon.", "Ping <a@b> soon."],
@@ -4607,13 +4611,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// quotes there as text), and it keeps the old answers to the note's end
 		// (an unclosed `<script>` swallows the page: QAMQ, QANQ, QAOQ). F3: a quote
 		// opens an attribute value only right after `=`.
-		["pin-nrl166-r3-f1-textarea-content-not-read-as-markup", "P\n\n<textarea>\n<? QBQ\n", "P <textarea> <? QBQ", { stripTags: false }],
-		["pin-nrl166-r3-f1-script-block-keeps-old-answers-after-it", ">\t]] <!-- QAAQ QABQQACQ\r\n>\tQADQ QAEQ \r\n    QAFQ== QAGQ </b>QAHQ\r\n1. > <? QAIQ\r\n- <script> QAJQ QAKQ QALQ\r\n\r\n>\t<!--> *QAMQ QANQ\r\n> > QAOQ ", "]] <!-- QAAQ QABQQACQ QADQ QAEQ QAFQ== QAGQ QAHQ <script> QAJQ QAKQ QALQ", { skipCodeBlocks: false, stripTags: false }],
+		["pin-nrl166-r3-f1-textarea-content-not-read-as-markup", "P\n\n<textarea>\n<? QBQ\n", "P <? QBQ", { stripTags: false }],
+		["pin-nrl166-r3-f1-script-block-keeps-old-answers-after-it", ">\t]] <!-- QAAQ QABQQACQ\r\n>\tQADQ QAEQ \r\n    QAFQ== QAGQ </b>QAHQ\r\n1. > <? QAIQ\r\n- <script> QAJQ QAKQ QALQ\r\n\r\n>\t<!--> *QAMQ QANQ\r\n> > QAOQ ", "]] <!-- QAAQ QABQQACQ QADQ QAEQ QAFQ== QAGQ QAHQ QAJQ QAKQ QALQ", { skipCodeBlocks: false, stripTags: false }],
 		// The same for a raw-text tag earlier in the note, inline included: the
 		// browser may be inside the `<textarea>`, which displays the `<?` block.
-		["pin-nrl166-r3-f1-inline-textarea-before-block", ">\" QAAQ<textarea> QABQ\n1. <? QACQ QADQ", "\" QAAQ<textarea> QABQ <? QACQ QADQ", { stripTags: false }],
+		["pin-nrl166-r3-f1-inline-textarea-before-block", ">\" QAAQ<textarea> QABQ\n1. <? QACQ QADQ", "\" QAAQ QABQ <? QACQ QADQ", { stripTags: false }],
 		["pin-nrl166-r3-f5-fence-info-closer-not-hidden", "\tQAAQ QABQ QACQ\n- %% QADQ\n> %% <!-- QAEQ\n\n    > [^1]:  <b> QAFQ\n```<!--->[[aQAGQ\n", "QAAQ QABQ QACQ aQAGQ", { skipCodeBlocks: false }],
-		["pin-nrl166-r3-label-defined-twice-lazily-is-not-judged", "[^1]: <!--QAAQ`` QABQ\n> - QACQ QADQ \n[^1]:  <textarea>QAEQ QAFQ QAGQQAHQ", "<!--QAAQ QABQ QACQ QADQ <textarea>QAEQ QAFQ QAGQQAHQ", { stripTags: false }],
+		["pin-nrl166-r3-label-defined-twice-lazily-is-not-judged", "[^1]: <!--QAAQ`` QABQ\n> - QACQ QADQ \n[^1]:  <textarea>QAEQ QAFQ QAGQQAHQ", "<!--QAAQ QABQ QACQ QADQ QAEQ QAFQ QAGQQAHQ", { stripTags: false }],
 		["pin-nrl166-r3-f3-quote-in-attribute-name-opens-no-value", "<div \">QAGQ", "QAGQ"],
 		["pin-nrl166-r3-f3-quote-in-unquoted-value-opens-no-value", "<div e=='>QAGQ", "QAGQ"],
 		["guard-nrl166-r3-f3-quote-after-equals-still-opens", "<div title=\"x\" b='QAQ", ""],
@@ -4634,7 +4638,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// /critique on 2acd366: an end tag's name, CDATA inside SVG, and a bogus
 		// comment left open at a block's end.
 		["pin-nrl166-r3-g6-end-tag-name-after-slash", "</div =\">QAQ", "QAQ"],
-		["pin-nrl166-r3-g6-svg-cdata-not-read", "<div>\n<svg><text><![CDATA[QCQ]]></text></svg>", "<svg><text>< CDATA[QCQ ]></text></svg>", { stripTags: false }],
+		["pin-nrl166-r3-g6-svg-cdata-not-read", "<div>\n<svg><text><![CDATA[QCQ]]></text></svg>", "< CDATA[QCQ ]>", { stripTags: false }],
 		["pin-nrl166-r3-g6-open-bogus-fails-closed", "<p><?\n\n<div e='>QCQ", "<div e='>QCQ", { stripTags: false }],
 		// NRL-166 fix round 4 (/critique on ef84044). F1: a `%%` line inside the
 		// renderer's frontmatter block, which `detectFrontmatter` rejects (no key, a
@@ -4668,9 +4672,9 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// real CDATA section whose text displays; the block was read as a bogus
 		// comment and hidden. A foreign-content tag anywhere now leaves every later
 		// block unread (`UNREAD_TAG`), 44a037a's answer. RED on ef84044.
-		["pin-nrl166-r4-f3-inline-svg-cdata-displays", "- P <svg><text>\n  <![CDATA[ QAQ ]]>", "P <svg><text> < CDATA[ QAQ ]>"],
-		["pin-nrl166-r4-f3-inline-svg-lazy-cdata-displays", "- P <svg><text>\n<![CDATA[ QAQ ]]>", "P <svg><text> < CDATA[ QAQ ]>"],
-		["pin-nrl166-r4-f3-inline-math-cdata-displays", "- P <math><mtext>\n  <![CDATA[ QAQ ]]>", "P <math><mtext> < CDATA[ QAQ ]>"],
+		["pin-nrl166-r4-f3-inline-svg-cdata-displays", "- P <svg><text>\n  <![CDATA[ QAQ ]]>", "P < CDATA[ QAQ ]>"],
+		["pin-nrl166-r4-f3-inline-svg-lazy-cdata-displays", "- P <svg><text>\n<![CDATA[ QAQ ]]>", "P < CDATA[ QAQ ]>"],
+		["pin-nrl166-r4-f3-inline-math-cdata-displays", "- P <math><mtext>\n  <![CDATA[ QAQ ]]>", "P < CDATA[ QAQ ]>"],
 		["pin-nrl166-r3-g4-bang-bogus-comment", "<div>\n<! <b title=\"x>QKQ", "QKQ"],
 		["pin-nrl166-r3-g4-slash-bogus-comment", "<div>\n</ <b title=\"x> QAQ", "QAQ"],
 		["pin-nrl166-r3-g4-bang-dash-bogus-comment", "<div>\n<!- <!-- -> QAQ", "QAQ"],

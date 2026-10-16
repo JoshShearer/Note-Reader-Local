@@ -296,6 +296,17 @@ const INLINE_ELEMENTS = new Set([
 	"b", "i", "u", "s", "em", "strong", "mark", "sub", "sup", "small", "big", "span", "font",
 	"a", "abbr", "kbd", "del", "ins", "q", "cite", "code",
 ]);
+/**
+ * CommonMark's raw-HTML open and closing tags (spec 6.6), on one line: a tag
+ * name of ASCII letters, digits and `-`, attributes `name` or `name=value`
+ * (unquoted, single or double quoted). Obsidian passes such a tag through as
+ * an element and the browser hides it (NRL-202, measured on 1.13.7 and 1.14.4:
+ * `see <my file.md> now` shows `see  now`, `<x y>` and `<QtQ>` likewise), so
+ * it is markup, whatever its name. Text that cannot be a tag (`a < b`, `<3`,
+ * `<->`, `< x>`) does not match and stays text.
+ */
+const CM_TAG =
+	/^(?:<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^\s"'=<>`]+|'[^'\n]*'|"[^"\n]*"))?)*[ \t]*\/?>|<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>)/;
 /** Elements that break the flow of text, so they separate the words either side. */
 const BREAKING_ELEMENTS = new Set(["br", "hr", "p", "div", "img", "center", "details", "summary"]);
 
@@ -2226,6 +2237,16 @@ function cleanLine(
 			if (m && name !== undefined && (INLINE_ELEMENTS.has(name) || BREAKING_ELEMENTS.has(name))) {
 				if (BREAKING_ELEMENTS.has(name)) pushSpace(rawStart + i);
 				i += m[0].length;
+				continue;
+			}
+			// NRL-202: any other tag the renderer parses as an element. Not a known
+			// formatting element, so it separates the words either side rather
+			// than gluing them.
+			const cm = CM_TAG.exec(raw.slice(i));
+			if (cm) {
+				pushSpace(rawStart + i);
+				i += cm[0].length;
+				pushSpace(rawStart + i);
 				continue;
 			}
 		}
