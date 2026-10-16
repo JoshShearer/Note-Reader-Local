@@ -9254,6 +9254,7 @@ console.log("NRL-205: a link or image whose (dest \"title\") spans lines of one 
 		["guard-nrl205-unclosed-math-line-inside", "[a](u \"QEQ\n$$\nQGQ\") after", "a u \"QEQ $$ QGQ\") after"],
 		["guard-nrl205-html-block-line-inside", "P [a](u \"t QAQ\n<div>QBQ</div>\nmore QDQ\") QCQ", "P a u \"t QAQ QBQ more QDQ\") QCQ"],
 		["guard-nrl205-backslash-on-opener-line", "[Q](u\\ 'QEQ\nQFQ') z", "Q u 'QEQ QFQ') z"],
+		["guard-nrl205-indented-html-line-in-list-item", "- [QAQ](u \"QEQ\n    <!-- c -->\n  QGQ\") zQZQ", "QAQ u \"QEQ | QGQ\") zQZQ"],
 		["guard-nrl205-blank-line-inside", "[a](u \"t QAQ\n\nmore QBQ\") after QCQ", "a u \"t QAQ | more QBQ\") after QCQ"],
 		["guard-nrl205-title-never-closed", "[a](u \"t QAQ\nmore QBQ ) after QCQ", "a u \"t QAQ more QBQ ) after QCQ"],
 		["guard-nrl205-junk-after-title", "[a](u \"t QAQ\nmore QBQ\" x) after QCQ", "a u \"t QAQ more QBQ\" x) after QCQ"],

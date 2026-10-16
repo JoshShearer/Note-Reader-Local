@@ -5163,7 +5163,10 @@ function destClosesLater(at: CarryLines, from: number, state: DestState): boolea
 		// (an unclosed `$$` too, which opensMathBlock does not count), and the
 		// escapes above may be misread: stop there, at top level as well as in a
 		// container (both critics on 6966bff, F1/F2/F3).
-		if (HTML_BLOCK_OPEN.test(line) || line.includes("$$") || /\\(?:>|\s|$)/.test(line)) return false;
+		// The HTML test ignores indentation on purpose: in a list item the renderer
+		// counts it from the item's content column, which `line` still includes
+		// (`- [a](u "x` / `    <!-- c -->`; NRL-205 fix round 2, critic 1 F1).
+		if (/^\s*<(?:[!?/]|[A-Za-z])/.test(line) || line.includes("$$") || /\\(?:>|\s|$)/.test(line)) return false;
 		if (
 			interruptsParagraphExceptBareMarker(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!, listStrip[n]!) ||
 			BARE_LIST_MARKER.test(quoteContent(lines[n]!, quotes)) ||
