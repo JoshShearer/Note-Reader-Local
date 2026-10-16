@@ -2949,10 +2949,26 @@ const LATE_CALLOUT_PEEL = /^\[![A-Za-z][\w-]*\][+-]?\s*/;
  * type is stripped exactly as before.
  */
 const CALLOUT_CODE_TITLE_NEW_TYPE = /^\[!(?![A-Za-z][\w-]*\])[^\]]+\][+-]?\s(?: {4}|\t)/;
-/** An earlier line that could have opened an inline construct still open on a late marker line. */
-const LATE_OPEN_CHARS = /[`<"'($]/;
-/** A line that is only container markers and whitespace: it ends the paragraph. */
+/**
+ * An earlier line that could have opened an inline construct still open on a
+ * late marker line. `[^` is a footnote definition the page hides; left whole,
+ * the marker's type was spoken inside it (NRL-209 critic F2).
+ */
+const LATE_OPEN_CHARS = /[`<"'($]|\[\^/;
+/**
+ * A line that is only container markers and whitespace. It resets the open
+ * check below; it does not always end the paragraph (`> 2.` continues one,
+ * NRL-209 critic F3), which only matters through the reset.
+ */
 const LATE_BLANK = /^(?:[ \t]*(?:>|[-*+]|\d{1,9}[.)]))*[ \t\r]*$/;
+/**
+ * A `LATE_BLANK` line holding a list marker (`> -`, `> 1.`). The renderer can
+ * read the next quote line as a new nested quote under that empty item, so its
+ * `[!type]` is a real callout with the type hidden, though the container stacks
+ * call the line late (NRL-209 critic F1, measured newly speaking `!warning`).
+ * Fail-closed: the next line keeps the pre-NRL-209 peel.
+ */
+const LATE_BARE_ITEM = /[-*+.)]/;
 /**
  * The marker a LATE quote line gives up (NRL-209). `[!note]` on a line that
  * continues its quote is paragraph text the renderer shows, so it stays in the
@@ -6501,7 +6517,7 @@ function markerRules(
 	let open = false;
 	for (const l of lines) {
 		openAbove.push(open);
-		open = LATE_BLANK.test(l) ? false : open || LATE_OPEN_CHARS.test(l);
+		open = LATE_BLANK.test(l) ? LATE_BARE_ITEM.test(l) : open || LATE_OPEN_CHARS.test(l);
 	}
 	const rule = (h: readonly number[][], q: ReadonlySet<number>, lit: ReadonlyArray<LiteralKind | undefined>) =>
 		lines.map((_, k): MarkerRule =>
