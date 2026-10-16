@@ -7246,6 +7246,87 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			paraLinesAbove = r.next;
 		}
 	}
+	// NRL-197: two paragraph interrupts the pass above omits, added as term-2
+	// stops only (never removed), so a stop can only make an inline `<!--` the
+	// text it is for the renderer. The risk is disclosure, so each stop is gated
+	// to positions where the line surely starts a new block:
+	// - Q0: a quote starting (spaces-only 0-3 lead, `TERM2_QUOTE_LEVEL`) under a
+	//   paragraph whose lines are all depth 0, no container quote. Blockquote is
+	//   in the renderer's `interruptParagraph` list; a continuation line of the
+	//   SAME quote is not this case and stays as ADR 0025 decided.
+	// - H6: an HTML block start condition 6 line (`rawBlockOpener` "blank"),
+	//   0-3 spaces, no tab, which can interrupt a paragraph. Types 1 and 3-5 are
+	//   left out: type 1 measured 243 disclosures (a script body spoken).
+	// Guards, each added after a measured disclosure, fall back to base: a run
+	// that has had an HTML-led line (`htmlish`); a multi-line raw block or line-
+	// start comment still open (`pendingEnd`, cleared only by a top-level closer
+	// line, so a quoted multi-line comment withholds later stops: fail-closed,
+	// costs fixes only); a fence, `$$` or `%%` still open (`pendingLit`).
+	{
+		let pendingEnd: RegExp | undefined;
+		let pendingLit: string | undefined;
+		// Whether the open raw block or fence started at top level, the only
+		// case whose closer may restart a run (one flag for both pending states).
+		let pendingTop = false;
+		let inRun = false;
+		let htmlish = false;
+		let allZero = true;
+		for (let k = 0; k < lines.length; k++) {
+			const line = lines[k]!;
+			const { depth, body } = term2QuoteView(line);
+			if (pendingEnd !== undefined) {
+				const htmlClosed = pendingEnd.test(line) && pendingTop && depth === 0 && containerPrefix(line).quotes === 0;
+				if (htmlClosed) pendingEnd = undefined;
+				inRun = line.trim() !== "" && !htmlClosed;
+				htmlish = true;
+				continue;
+			}
+			const lit = line.replace(/^(?:\s*(?:>|[-*+](?=\s)|\d{1,9}[.)](?=\s)))*\s*/, "");
+			if (pendingLit !== undefined) {
+				const fenceClosed =
+					pendingTop && (pendingLit === "```" || pendingLit === "~~~") && /^ {0,3}(?:```+|~~~+)[ \t]*\r?$/.test(line) && line.trimStart().startsWith(pendingLit);
+				if (lit.startsWith(pendingLit)) pendingLit = undefined;
+				inRun = line.trim() !== "" && !fenceClosed;
+				htmlish = true;
+				continue;
+			}
+			for (const m of ["```", "~~~", "$$", "%%"]) {
+				if (lit.startsWith(m) && (m.charAt(0) === "`" || m.charAt(0) === "~" || !lit.slice(2).includes(m))) pendingLit = m;
+			}
+			if (pendingLit !== undefined) {
+				pendingTop = /^ {0,3}(?:```|~~~)/.test(line);
+				inRun = true;
+				htmlish = true;
+				continue;
+			}
+			{
+				const v = body.replace(/^\s*/, "");
+				const e = v.startsWith("<!--") ? /-->/ : rawBlockOpener(v);
+				if (e !== undefined && e !== "blank" && !e.test(v.slice(2))) {
+					pendingEnd = e;
+					pendingTop = /^ {0,3}</.test(line);
+				}
+			}
+			if (line.trim() === "") {
+				inRun = false;
+				continue;
+			}
+			if (inRun && !htmlish) {
+				if (depth > 0 && allZero) term2Stop[k] = true;
+				else {
+					const lead = /^ */.exec(body)![0].length;
+					if (lead <= 3 && !/\s/.test(body.charAt(lead)) && rawBlockOpener(body.slice(lead)) === "blank") term2Stop[k] = true;
+				}
+			}
+			if (!inRun) {
+				inRun = true;
+				htmlish = false;
+				allZero = true;
+			}
+			if (/^ {0,3}</.test(body) || /^\s*</.test(line)) htmlish = true;
+			if (depth !== 0 || containerPrefix(line).quotes !== 0) allZero = false;
+		}
+	}
 	const closerAheadOf = (stops: readonly boolean[]): boolean[] => {
 		const out: boolean[] = new Array<boolean>(lines.length).fill(false);
 		let ahead = false;

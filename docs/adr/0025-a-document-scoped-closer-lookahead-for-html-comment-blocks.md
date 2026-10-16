@@ -4784,3 +4784,12 @@ its comment opener pairs as before). The NRL-184 rows that rely on that refusal 
 discriminate (36 of 38). Quoted ATX and setext headings are taken from `containerViews` marks and
 refused under any comment opener or closer since the last blank line. Evidence and the full gate
 list: `docs/agent-history.md`, NRL-206.
+
+## AMENDED by NRL-197 (2026-10-16): a type-6 HTML line or a starting quote ends the paragraph
+
+An inline `<!--` in a top-level paragraph is text when a later line ends that paragraph by
+starting a quote (0-3 spaces, every earlier line of the run at depth 0) or an HTML block of
+start condition 6 (0-3 spaces, no tab). The renderer lists both in `interruptParagraph`. These
+are term-2 stops only, so they can only make an inline `<!--` text. Runs with an HTML-led line,
+an open multi-line raw block or comment, or an open fence, `$$` or `%%` keep this ADR's pairing
+(fail-closed). Evidence: `docs/agent-history.md`, NRL-197.

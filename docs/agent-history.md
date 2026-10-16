@@ -396,6 +396,25 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A `<div>` line or a starting quote ends an inline-comment paragraph (NRL-197, 2026-10-16)
+
+`Title <!--` / `<div>` / `ZQSX` / `-->` hid `ZQSX`, but the renderer ends the paragraph at the
+`<div>` line (HTML block type 6 and blockquote are both in its `interruptParagraph` list), so
+`<!--` is text and `ZQSX` is shown, on 1.13.7 and 1.14.4. A post-pass before `closerAheadOf`
+adds term-2 stops only: Q0, a quote starting (0-3 spaces) under a paragraph whose lines are all
+depth 0; H6, a `rawBlockOpener(...) === "blank"` line with 0-3 spaces and no tab. Types 1 and
+3-5 are left out (type 1 measured 243 disclosures, a script body spoken). Guards, each from a
+measured disclosure, fall back to base: a run that had an HTML-led line, a multi-line raw block
+or line-start comment still open (`pendingEnd`), a fence, `$$` or `%%` still open
+(`pendingLit`). Plan reviewed (v1 CONCERNS 88). The plan critic's generator on o14 shards: 35,176
+cells fixed, 0 newly disclosed, 0 newly lost. Four rows were re-pinned to the page on both
+oracles; `guard-nrl166-r1-image-label-before-code-stop` now speaks `!x QCAQ`, which is image alt
+text (`alt="!x <!-- QBAQ\nQCAQ"`) and spoken only with `speakImageAlt`. Adversarial timing on
+four shapes at 2k/8k scales linearly, like base. lock128 CLEAN. Residual, fail-closed:
+`pendingEnd` is cleared only by a top-level closer line, so a quoted multi-line comment
+withholds later stops (costs fixes, never discloses). NRL-200 (`%%` inside a type-6 block) is a
+separate change. Not run in Obsidian.
+
 ### A defined reference label spanning lines is hidden (NRL-218, 2026-10-16)
 
 `[l][r` / `s] T.` with `[r s]: u` defined is a full reference link for the renderer and its
