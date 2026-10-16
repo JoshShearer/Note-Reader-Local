@@ -9305,7 +9305,10 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		if (
 			opts.skipCodeBlocks &&
 			prefix.callout &&
-			calloutTitleAt[lineNo]! &&
+			// NRL-217: `calloutTitleAt` cannot see a quote behind a list marker
+			// (`- > [!note]     X`); markerRule "first" is the renderer's rule for a
+			// line that starts its quote, which covers those.
+			(calloutTitleAt[lineNo]! || markerRule[lineNo] === "first") &&
 			body.trim() !== "" &&
 			/^(?: {4}|\t)/.test(/\s*$/.exec(raw.slice(0, prefixChars))![0].slice(1))
 		) {

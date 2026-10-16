@@ -669,6 +669,10 @@ skipCodeBlocks; with it off the title is read as before. Generator over 20,400 c
 lost 0 outside a `<pre>`, 1,350 code tokens newly skipped; lock128 CLEAN. A late-line
 marker is text (NRL-209) and is unaffected. Non-letter types (`[!1]`) keep base's reading
 (`CALLOUT_CODE_TITLE_NEW_TYPE`). Not run in Obsidian.
+NRL-217 extends the skip to a callout whose quote starts inside a list item (`- > [!note]
+    X`, `1. >`, `> - >`): `calloutTitleAt` cannot see a `>` behind a list marker, so the
+branch also takes markerRule "first". 14,742 list-nested cells x 3 option sets: 0 newly
+disclosed, 0 newly lost, every `<pre>` title now skipped.
 
 ### A plain `^[footnote]` inside a `%%` comment is spoken (NRL-212, 2026-10-16)
 
