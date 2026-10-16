@@ -4485,7 +4485,14 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// definition is in its reach; F3/F4 a reference inside an HTML comment or a
 		// definition no longer counts; F8 an
 		// attribute a kept footnote leaves open swallows only the footnotes section.
-		["pin-nrl166-r2c-f1-link-title-over-lazy-pct", ">[](u \"\n>[!e]%%QBQ\")", "u \""],
+		// NRL-182 fix round 1: neither line-2 `[!e]` is a callout (it is a LATE quote line),
+		// so both rows hold ONLY through the pre-NRL-182 late-marker peel
+		// (`LATE_CALLOUT_PEEL`), which puts `%%` at line start. They go red the day the
+		// late-marker class is fixed; the twin `>[](u "` / `>[x] %%QBQ")` speaks QBQ on
+		// every revision, the link-title-spanning-lines class (to be filed, NRL-182 fix
+		// round 1), so that fix needs the link-title class first.
+		["pin-nrl166-r2c-f1-link-title-over-lazy-pct", ">[](u \"\n>[!e] %%QBQ\")", "u \""],
+		["pin-nrl166-r2c-f1-link-title-over-lazy-pct-no-space", ">[](u \"\n>[!e]%%QBQ\")", "u \""],
 		["pin-nrl166-r2c-f1-tag-attribute-over-lazy-pct", "> P <b title=\"QAQ\n> [!note] %% QBQ\n> QCQ\">QDQ</b>", "P <b title=\"QAQ"],
 		// Fix round 3: a reference in a code span MAY count, so the definition is
 		// kept as on 44a037a and our opener keeps its answer beside it: `a` is
@@ -4673,12 +4680,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// head holding `-->` or `--!>` spoken, even where no browser comment can be
 		// open for the class to close. Its two rows, each the 1.13.7 renderer's
 		// visible text and RED on 6f4afc2 (which speaks `QKZQ--->` and
-		// `~~~-->QIQ`). Row B's `[!e]` is shown by the renderer and lost on every
-		// revision since 44a037a: the callout-marker mechanism, NRL-182, not this.
+		// `~~~-->QIQ`). Row B's `[!e]` is shown by the renderer and was lost on every
+		// revision from 44a037a to NRL-182, which now speaks it as `!e`.
 		["pin-nrl178-row-a-list-inline-comment-fence-info-hidden", "- Q<!--\n    ```QKZQ--->", "Q<!--"],
 		["pin-nrl178-row-a-list-inline-comment-fence-info-hidden-code", "- Q<!--\n    ```QKZQ--->", "Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl178-row-b-callout-pct-fence-info-hidden", ">[!e]%%\n>~~~-->QIQ", "%%"],
-		["pin-nrl178-row-b-callout-pct-fence-info-hidden-code", ">[!e]%%\n>~~~-->QIQ", "%%", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl178-row-b-callout-pct-fence-info-hidden", ">[!e]%%\n>~~~-->QIQ", "!e %%"],
+		["pin-nrl178-row-b-callout-pct-fence-info-hidden-code", ">[!e]%%\n>~~~-->QIQ", "!e %%", { skipCodeBlocks: false, skipInlineCode: false }],
 		// `--!>` also ends a comment, and both fence kinds and lengths take the
 		// same path. RED on 6f4afc2.
 		["pin-nrl178-bang-closer-fence-info-hidden", "- Q<!--\n    ```QKZQ--!>QLQ", "Q<!--", { skipCodeBlocks: false }],
@@ -8419,6 +8426,110 @@ console.log("NRL-181: bracketClosesLater stays linear across a paragraph's lines
 			auditBracketCarry(undefined);
 		}
 		check(`NRL-181 the memo answers as the fresh walk for every armed opener (${openers} openers)`, differing === 0 && openers > 15000, `${differing} differing, first ${example}`);
+	}
+}
+
+// NRL-182: a callout marker is a callout only when the renderer reads it as one.
+// Measured on Obsidian 1.13.7 and 1.14.4 (identical on 2295 marker forms): `[!`,
+// one or more non-`]` characters, `]`, an optional `+`/`-`, then whitespace or the
+// end of the line. `>[!e]QaQ` is an ordinary quote paragraph that DISPLAYS
+// `[!e]QaQ`, so the marker must not be stripped; `> [!1] QaQ` and `> [!e f] QaQ`
+// ARE callouts (no `[!1]` shown), though the old letter-led type test missed them.
+{
+	const say182 = (src: string, extra: Partial<typeof OPTS> = {}): string =>
+		extractChunks(src, { ...OPTS, ...extra })
+			.map((c) => c.text)
+			.join(" | ");
+	const CODE182 = { skipCodeBlocks: false, skipInlineCode: false };
+	const rows182: Array<[string, string, string, Partial<typeof OPTS>?]> = [
+		// Not callouts: the marker is shown text, so what follows it is not "the title".
+		["pin-nrl182-no-space-after-bracket", ">[!e]QaQ", "!e QaQ"],
+		["pin-nrl182-no-space-lazy-second-line", "> [!e]QaQ\n> QbQ", "!e QaQ | QbQ"],
+		["pin-nrl182-fold-plus-no-space", ">[!e]+QaQ", "!e +QaQ"],
+		["pin-nrl182-fold-minus-no-space", "> [!e]-QaQ", "!e -QaQ"],
+		["pin-nrl182-ticket-pct-row", ">[!e]%%\n>~~~-->QIQ", "!e %%"],
+		["pin-nrl182-nested-quote-no-space", "> > [!e]QaQ", "!e QaQ"],
+		["pin-nrl182-list-quote-no-space", "- > [!e]QaQ", "!e QaQ"],
+		// Callouts the old `[A-Za-z][\w-]*` type test did not recognise.
+		["pin-nrl182-digit-type-is-a-callout", "> [!1] QaQ", "QaQ"],
+		["pin-nrl182-hyphen-type-is-a-callout", "> [!-] QaQ", "QaQ"],
+		["pin-nrl182-spaced-type-is-a-callout", "> [!e f] QaQ", "QaQ"],
+		["pin-nrl182-unicode-type-is-a-callout", "> [!\u65e5\u672c]\tQaQ", "QaQ"],
+		// Guards: real callouts keep their title behaviour; the empty type is still no callout.
+		["guard-nrl182-space-title", ">[!e] QaQ", "QaQ"],
+		["guard-nrl182-tab-title", "> [!note]\tQaQ", "QaQ"],
+		["guard-nrl182-fold-minus-title", "> [!note]- QaQ", "QaQ"],
+		["guard-nrl182-fold-plus-title", "> [!note]+\tQaQ", "QaQ"],
+		["guard-nrl182-bare-marker", "> [!note]\n> QbQ", "QbQ"],
+		["guard-nrl182-bare-marker-fold", ">[!e]-\n>QbQ", "QbQ"],
+		["guard-nrl182-nested-callout", "> > [!tip] QaQ", "QaQ"],
+		["guard-nrl182-list-quote-callout", "- > [!note] QaQ", "QaQ"],
+		["guard-nrl182-empty-type-no-callout", "> [!] QaQ", "! QaQ"],
+		["guard-nrl182-double-bracket-no-callout", "> [!e]] QaQ", "!e ] QaQ"],
+		// Fix round 1, critic 1 F1: a marker GLUED to `[` keeps base's strip. These rows
+		// are RESIDUAL LOSSES pinned at base parity, not the renderer's text: 1.13.7 and
+		// 1.14.4 show each line literally (`[!note][QAAQ]]`, `[!tip][QAAQ](https://x.io)`,
+		// `[!e][QAAQ] QBBQ`, `[!e][QAAQ][QBBQ]`), so the marker, the url and QBBQ in the
+		// last row are shown and not spoken, exactly as on 071a37e. Left in the line,
+		// `[!e][QAAQ]` read as a full reference link and lost QAAQ too (151 cells), the
+		// undefined-reference hole its plain twin `>[x][QAAQ](u)` has on every revision.
+		["residual-nrl182-r1-glued-wikilink-base-parity", "> [!note][[QAAQ]]", "QAAQ"],
+		["residual-nrl182-r1-glued-link-base-parity", ">[!tip][QAAQ](https://x.io)", "QAAQ"],
+		["residual-nrl182-r1-glued-shortcut-then-text-base-parity", "> [!e][QAAQ] QBBQ", "QAAQ QBBQ"],
+		["residual-nrl182-r1-glued-full-reference-base-parity", "> [!e][QAAQ][QBBQ]", "QAAQ"],
+		// critic 1 F5: `[!x|y]` is a callout of type x (base spoke `!x|y QAAQ`), and
+		// `[!e](QAAQ)` is a link the renderer shows as `!e` (base spoke the href).
+		["pin-nrl182-r1-metadata-type-is-a-callout", "> [!x|y] QAAQ", "QAAQ"],
+		["pin-nrl182-r1-marker-then-paren-is-a-link", "> [!e](QAAQ)", "!e"],
+		// critic 2 F1: on a LATE quote line the marker is shown text; it keeps the
+		// pre-NRL-182 peel, so a type that test never took is spoken as base spoke it.
+		["pin-nrl182-r1-late-digit-type-is-text", "> P\n> [!1] QaQ", "P | !1 QaQ"],
+		["pin-nrl182-r1-late-after-empty-quote-line", ">\n> [!e f] QaQ", "!e f QaQ"],
+		["pin-nrl182-r1-late-in-list-quote", "- > P\n  > [!1] QaQ", "P | !1 QaQ"],
+		["pin-nrl182-r1-late-comment-stays-mid-line", ">QPQ\n>[!9QTQ] <!-- QaQ\n>---", "QPQ | !9QTQ <!-- QaQ"],
+		// ...but a quote that STARTS on the line is a callout: a deeper quote, or a
+		// list marker on the line opening a new item.
+		["guard-nrl182-r1-nested-quote-starts", "> P\n> > [!1] QaQ", "P | QaQ"],
+		["guard-nrl182-r1-new-list-item-quote-starts", "- > P\n- > [!1] QaQ", "P | QaQ"],
+		["guard-nrl182-r1-new-item-callout-title-comment", ">   > P\n> - > [!note] <!-- QAAQ\n>   > QCCQ", "P"],
+		// critic 1 F3 residual: a title led by 4 spaces or a tab after the marker's one
+		// whitespace is an indented code block for the renderer, unmodelled here on
+		// every revision; a type base never took keeps base's reading there.
+		["residual-nrl182-r1-code-title-new-type", "> > [!%%]     %% QAAQ %%", "[! QAAQ %%"],
+		// Fix round 2, both critics' F1: the late test reads the note as LF. On CRLF,
+		// `containerViews` gives a list item's lines no container, so a late line in a
+		// list item's quote read as a first line and lost the shown `[!1]` (and, past a
+		// moved `<!--`, the prose). Each row is the renderer's text bar the marker's `[]`.
+		["pin-nrl182-r2-crlf-late-in-list-quote", "- > P\r\n  > [!1] QaQ", "P | !1 QaQ"],
+		["pin-nrl182-r2-crlf-late-comment-in-nested-list-quote", "> - > QpQ\r\n>   > [!1] <!-- QaQ\r\n>   > QbQ", "QpQ | !1 <!-- QaQ | QbQ"],
+		["pin-nrl182-r2-crlf-late-comment-in-list-quote", "- > P\r\n  > [!1] <!--QcQ", "P | !1 <!--QcQ"],
+		["pin-nrl182-r2-crlf-late-under-ordered-item", "1. > P\r\n> [!1] QaQ", "P | !1 QaQ"],
+		["pin-nrl182-r2-crlf-late-digit-type-is-text", "> P\r\n> [!1] QaQ", "P | !1 QaQ"],
+		["guard-nrl182-r2-crlf-new-list-item-quote-starts", "- > P\r\n- > [!1] QaQ", "P | QaQ"],
+		["guard-nrl182-r2-crlf-nested-quote-starts", "> P\r\n> > [!1] QaQ", "P | QaQ"],
+		// Fix round 2, critic 1 F2: a new type's title led by a whitespace run and opened
+		// by `%%` or `<!--`. The renderer takes one whitespace character as the marker's
+		// and shows the opener when the rest of the run reaches it in a way the comment
+		// tokenizer does not take (tab columns, NBSP); with three spaces or fewer it hides.
+		["pin-nrl182-r2-led-tab-opener-shown", "> [!1]-   \t%%QaQ\n> QbQ", "%%QaQ | QbQ"],
+		["pin-nrl182-r2-led-tab-opener-shown-task-list-quote", "- [ ] > [!1]-   \t%%QaQ", "%%QaQ"],
+		["guard-nrl182-r2-led-spaces-opener-hidden", "> [!1]   %%QaQ\n> QbQ", "QbQ"],
+		["guard-nrl182-r2-nbsp-then-spaces-opener-hidden", "> [!1]\u00a0   <!--QaQ", ""],
+		// An NBSP after the marker's own whitespace: shown by the renderer, but the
+		// body's lead tests read it as space, so the marker stays as base left it
+		// (`!1` is spoken where the renderer hides it, as on 071a37e).
+		["residual-nrl182-r2-nbsp-led-opener-base-parity", "> [!1] \u00a0%%QaQ\n> QbQ", "!1 %%QaQ | QbQ"],
+		["residual-nrl182-r2-nbsp-space-led-comment-base-parity", "> [!1] \u00a0 <!--QaQ", "!1 <!--QaQ"],
+		// Fix round 2, critic 2 F2: a list-marker line inside a fence is code, so it keeps
+		// base's peel and its `%%` hides nothing (the renderer shows `- > [!1] %%QbQ` and
+		// QxQ in the <pre>; dropping `- >` and `[]` is base parity).
+		["pin-nrl182-r2-fence-in-quote-list-marker-line", "> ```\n> - > [!1] %%QbQ\n> QxQ\n> ```", "!1 %%QbQ | QxQ", CODE182],
+		["pin-nrl182-r2-fence-in-list-item-list-marker-line", "- ```\n  - > [!1] %%QbQ\n  QxQ\n  ```", "!1 %%QbQ | QxQ", CODE182],
+		["pin-nrl182-r2-crlf-fence-in-quote-list-marker-line", "> ```\r\n> - > [!1] %%QbQ\r\n> QxQ\r\n> ```", "!1 %%QbQ | QxQ", CODE182],
+	];
+	for (const [name, src, want, extra] of rows182) {
+		const got = say182(src, extra);
+		check(`${name} ${JSON.stringify(src)}`, got === want, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
 	}
 }
 

@@ -908,6 +908,13 @@ const INLINE_CONSTRUCT_MAY_HOLD = /<|\[/;
  * `[!x]` there is no label, so it is taken out before the test above. Not when a
  * `(`, `[` or `:` follows it, which would make it a link or a definition.
  *
+ * Deliberately NOT narrowed to `CALLOUT`'s rule (NRL-182): this only decides
+ * whether a `[` could pair with something, never what is shown. Measured with
+ * the marker rule narrowed, `>[!e]<!--Q1Q` / `><!-- Q2Q -->` newly lost Q1Q, the
+ * loss its plain twin `>[x]<!--Q1Q` / `><!-- Q2Q -->` already has on every
+ * revision (the live `[` withholds the comment refinement), so the looser
+ * strip stays and that twin class stays NRL-166's.
+ *
  * Each list-marker step is ONE space or tab and then `[ \t>]*`, never `[ \t]+`
  * then `[ \t>]*`: the two describe the same strings, but the second lets every
  * run of spaces split two ways, which is exponential on `-  -  -  ...` (measured
@@ -2707,12 +2714,102 @@ function rawOrMathBlockMayBeOpenTable(lines: readonly string[], withFences: bool
  * renders literally in Obsidian. Requiring `[!` keeps `> [link](x)` and
  * `> [text]` on the normal path.
  *
+ * The marker is exactly what the renderer's quote tokenizer matches (module 6234,
+ * measured on Obsidian 1.13.7 and 1.14.4, NRL-182): `[!`, ONE OR MORE characters
+ * other than `]` (digits, `-`, `_`, unicode, spaces and punctuation included,
+ * not just a letter-led word; `[!]` is no callout), `]`, an optional `+` or `-`,
+ * then whitespace or the end of the line. With no whitespace after it
+ * (`>[!e]Text`, `>[!e]+Text`) the line is an ordinary quote paragraph that
+ * DISPLAYS `[!e]`, so nothing may be stripped. This is the same test as
+ * `TERM2_CALLOUT_TITLE`, `walkLeadQuote`'s title test and `obsidianBlocks.ts`.
+ *
  * The type is dropped silently, not announced as "Note:". That was a
  * deliberate call (NRL-8 Decisions, 2026-09-28): prose flow matters more than
  * the callout kind when listening. If it proves wrong the fix is a setting,
  * not a hardcoded prefix.
  */
-const CALLOUT = /^\[![A-Za-z][\w-]*\][+-]?\s*/;
+const CALLOUT = /^\[![^\]]+\][+-]?(?:\s+|$)/;
+/**
+ * A marker GLUED to a `[` (`>[!tip][text](url)`, `> [!note][[Page]]`) is no
+ * callout either, and the renderer displays it, but it is still taken out, as
+ * every revision before NRL-182 did (NRL-182 fix round 1). Left in the line,
+ * `[!tip][text]` reads to `cleanLine` as a full reference link whose `[text]`
+ * label is dropped, so the displayed link or wikilink text was lost and a stray
+ * `]` or `(` spoken (critic 1 F1, 151 cells). That is the undefined-reference
+ * hole its plain twin `>[x][text](u)` has on every revision; until it is fixed
+ * for both, dropping the shown `[!tip]` keeps the link text. Only base's
+ * letter-led type, so a type base kept as text (`[!1][x]`) still reads as base
+ * read it.
+ */
+const CALLOUT_GLUED_LINK = /^\[![A-Za-z][\w-]*\][+-]?(?=\[)/;
+/**
+ * The pre-NRL-182 marker test, kept for a marker on a LATE quote line, where the
+ * renderer shows it as text whatever its shape. Stripping it there is the
+ * existing late-marker loss (`> P` / `> [!note] Q` drops the shown `[!note]`),
+ * left as it was on purpose: the widened `CALLOUT` there newly lost shown
+ * `[!1]`, `[!e f]` and the prose after a moved `<!--` (critic 2 F1, 31,104 cells
+ * a quarter), and NOT stripping there at all newly disclosed text that NRL-166's
+ * `%%` handling hides only because the strip puts `%%` at line start (a link
+ * title or tag attribute spanning lines, `pin-nrl166-r2c-f1-*`) and lost text it
+ * pairs. Both directions measured; fixing the late class is its own ticket.
+ * Also the peel on a line that is fenced code, display math or frontmatter for
+ * the renderer (NRL-182 fix round 2): nothing there is a marker, and the widened
+ * rule newly peeled `[!1] ` off `> - > [!1] %%QbQ` inside a fence, so its `%%`
+ * hid the rest of the shown code (critic 2 F2, 262 cells).
+ */
+const LATE_CALLOUT_PEEL = /^\[![A-Za-z][\w-]*\][+-]?\s*/;
+/**
+ * A callout whose TITLE is an indented code block: after the marker's one
+ * whitespace character the title starts with four spaces or a tab (measured,
+ * 1,680 of 1,680 callout lines on 1.13.7 and 1.14.4 agree). `> [!e]     %% Q %%`
+ * shows `%% Q %%` in a `<pre>`. The extractor does not model that title as code
+ * on any revision (critic 1 F3), so for a type base did not read as a callout
+ * (`[!%%]`, `[!1]`) the marker is left in the line as base left it: stripping it
+ * newly put a `%%` at the title's start and hid the code (67 cells). A letter-led
+ * type is stripped exactly as before.
+ */
+const CALLOUT_CODE_TITLE_NEW_TYPE = /^\[!(?![A-Za-z][\w-]*\])[^\]]+\][+-]?\s(?: {4}|\t)/;
+/**
+ * Which marker test `containerPrefix` applies on a line (NRL-182 fix rounds 1
+ * and 2): "first" is the renderer's rule (`CALLOUT`), for a line that can start
+ * a quote; "late" is base's peel on a line continuing its quote unless a list
+ * marker on the line opens a new item; "literal" is base's peel on a line the
+ * renderer reads as fenced code, display math or frontmatter.
+ */
+type MarkerRule = "first" | "late" | "literal";
+/**
+ * A title LED BY A WHITESPACE RUN and opened by `%%` or `<!--`, for a type base
+ * never took (NRL-182 fix round 2, critic 1 F2). `CALLOUT` consumes the whole
+ * run, so the opener landed at the body's start and hid a title the renderer
+ * shows (`[!1]-   \t%%Q` shows `%%Q`), and for `%%` the lines after it. The
+ * renderer takes ONE whitespace character as the marker's and keeps the rest in
+ * the title, so this peels only `[!1] ` and leaves the run for the body's own
+ * lead tests, which then read `  \t%%` as the renderer does. Up to three spaces
+ * and an opener (`[!1]  %%Q`) are left to `CALLOUT`: the renderer hides those.
+ * A letter-led type loses such a title on every revision and is not changed.
+ */
+const CALLOUT_LED_OPENER_NEW_TYPE = /^\[!(?![A-Za-z][\w-]*\])[^\]]+\][+-]?\s(?! {0,3}(?:%%|<!--))\s+(?:%%|<!--)/;
+/** The marker and its one whitespace character, for `CALLOUT_LED_OPENER_NEW_TYPE`. */
+const CALLOUT_ONE_SPACE = /^\[![^\]]+\][+-]?\s/;
+/**
+ * The same lead holding a non-ASCII whitespace character (NBSP, ideographic or
+ * em space) after the marker's own: the renderer keeps it in the title, so the
+ * opener after it is shown text, but the body's lead tests read it as space and
+ * hid the opener even with `CALLOUT_ONE_SPACE` (3,436 cells measured on critic
+ * 1's second generator). Such a marker is left in the line, as base left it.
+ */
+const CALLOUT_WIDE_SPACE_OPENER_NEW_TYPE = /^\[!(?![A-Za-z][\w-]*\])[^\]]+\][+-]?\s[ \t]*[^\S \t]\s*(?:%%|<!--)/;
+
+/**
+ * The marker a quote's FIRST line gives up (NRL-182): the renderer's rule,
+ * contained where a type base never took would newly hide shown text, and a
+ * letter-led type glued to a `[` peeled as base peeled it.
+ */
+function firstLineMarker(rest: string): RegExpMatchArray | null {
+	if (CALLOUT_CODE_TITLE_NEW_TYPE.test(rest) || CALLOUT_WIDE_SPACE_OPENER_NEW_TYPE.test(rest)) return rest.match(CALLOUT_GLUED_LINK);
+	if (CALLOUT_LED_OPENER_NEW_TYPE.test(rest)) return rest.match(CALLOUT_ONE_SPACE);
+	return rest.match(CALLOUT) ?? rest.match(CALLOUT_GLUED_LINK);
+}
 /**
  * NRL-116's PEEL-LOCAL list marker, lead and task checkbox. The first two exist
  * because `containerPrefix` has to ask a DIFFERENT question from the one
@@ -2865,7 +2962,10 @@ const QUOTE_PREFIX_PEEL = /^(?:\s{0,3}>[ \r]?)+/;
  * `interruptsParagraph`, aborting the carry and leaving the destination leak in
  * place. That would be half a fix.
  */
-function containerPrefix(line: string): {
+function containerPrefix(
+	line: string,
+	markerRule: MarkerRule = "first",
+): {
 	chars: number;
 	quotes: number;
 	blockType: BlockType;
@@ -2917,8 +3017,27 @@ function containerPrefix(line: string): {
 		// (`<div class="callout" data-callout="note">` with `[!note]` not
 		// shown). So the marker is a callout exactly when a quote was just
 		// peeled, at any depth rather than only on the first round.
-		if (levelsHere > 0 && CALLOUT.test(line.slice(chars))) {
-			chars += line.slice(chars).match(CALLOUT)![0].length;
+		// `markerRule` "late" (NRL-182 fix round 1): the caller knows this line does NOT
+		// start the marker's quote, so `[!note]` there is paragraph text the
+		// renderer shows, never a callout (module 6234 reads only a quote's first
+		// line). Such a line keeps the pre-NRL-182 peel EXACTLY (`LATE_CALLOUT_PEEL`)
+		// rather than the renderer's first-line rule. A list marker peeled on
+		// THIS line overrides it: the marker opens a new item, so the quote inside
+		// it starts here (`>   > P` / `> - > [!note] <!-- Q` is a callout whose
+		// title comment hides the next line, where `lateCallout`'s container ids
+		// call it late; measured as 392 newly disclosed cells without this).
+		// "literal" (fix round 2): the line is fenced code, display math or
+		// frontmatter, so no list marker on it opens anything and base's peel
+		// stands whatever was peeled.
+		const rest = levelsHere > 0 ? line.slice(chars) : "";
+		const marker =
+			levelsHere > 0
+				? markerRule === "literal" || (markerRule === "late" && !sawList)
+					? rest.match(LATE_CALLOUT_PEEL)
+					: firstLineMarker(rest)
+				: null;
+		if (marker) {
+			chars += marker[0].length;
 			return { chars, quotes, blockType, callout: true, outerList };
 		}
 		// A list item whose CONTENT INDENT reaches indented-code depth ENDS the
@@ -6029,6 +6148,55 @@ function leadReachesBlockStart(line: string): boolean {
  * table row still flushes the buffer: those keep their own pacing rather than
  * being folded into surrounding prose.
  */
+/** Does line k continue the innermost quote it is in, by these container stacks? */
+function quoteContinuesIn(homes: readonly number[][], quotes: ReadonlySet<number>, k: number): boolean {
+	if (k === 0) return false;
+	const own = homes[k]!.filter((id) => quotes.has(id));
+	const quote = own[own.length - 1];
+	return quote !== undefined && homes[k - 1]!.includes(quote);
+}
+
+/**
+ * Each line's `MarkerRule` (NRL-182 fix round 2), from the note as an LF note
+ * reads: the given parse when no line ends in `\r`, otherwise a second
+ * `containerViews` pass over the lines with that `\r` removed, frontmatter
+ * found the same way `extractChunks` finds it. Only this decision uses the
+ * second pass; see the call site.
+ */
+function markerRules(
+	lines: readonly string[],
+	homes: readonly number[][],
+	quotes: ReadonlySet<number>,
+	literal: ReadonlyArray<LiteralKind | undefined>,
+): MarkerRule[] {
+	const rule = (h: readonly number[][], q: ReadonlySet<number>, lit: ReadonlyArray<LiteralKind | undefined>) =>
+		lines.map((_, k): MarkerRule => (lit[k] !== undefined ? "literal" : quoteContinuesIn(h, q, k) ? "late" : "first"));
+	if (!lines.some((l) => l.endsWith("\r"))) return rule(homes, quotes, literal);
+	const lf = lines.map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
+	const lfHomes: number[][] = lf.map(() => []);
+	const lfQuotes = new Set<number>();
+	const lfLiteral: Array<LiteralKind | undefined> = new Array<LiteralKind | undefined>(lf.length).fill(undefined);
+	let first = 0;
+	if (lf[0] === "---") {
+		const end = lf.indexOf("---", 1);
+		if (end !== -1) {
+			for (let k = 0; k <= end; k++) lfLiteral[k] = "front";
+			first = end + 1;
+		}
+	}
+	containerViews(
+		lf.slice(first).map((text, i) => ({ k: i + first, text, off: 0 })),
+		new Array<number>(lf.length).fill(0),
+		lfHomes,
+		[],
+		{ next: 0, quotes: lfQuotes },
+		lfLiteral,
+		new Array<"open" | "close" | undefined>(lf.length).fill(undefined),
+		new Array<boolean>(lf.length).fill(false),
+	);
+	return rule(lfHomes, lfQuotes, lfLiteral);
+}
+
 export function extractChunks(
 	source: string,
 	opts: ExtractOptions,
@@ -6969,12 +7137,29 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// Measured: `> x` / `> [!note] <!-- y --> <!-- Z1Q` / `Z2Q` shows `[!note]`, the
 	// second `<!--` escaped, and Z2Q. containerPrefix peels it on every line, so
 	// NRL-136's block term asks this instead of trusting that peel.
-	const lateCallout = (k: number): boolean => {
-		if (k === 0 || !containerPrefix(lines[k]!).callout) return false;
-		const own = containerHome[k]!.filter((id) => quoteIds.has(id));
-		const quote = own[own.length - 1];
-		return quote !== undefined && containerHome[k - 1]!.includes(quote);
-	};
+	const quoteContinues = (k: number): boolean => quoteContinuesIn(containerHome, quoteIds, k);
+	const lateCallout = (k: number): boolean => k > 0 && containerPrefix(lines[k]!).callout && quoteContinues(k);
+	// The peel every later reader of a line's prefix asks (NRL-182 fix round 1):
+	// on a late marker line the marker is shown text, so it stays in the body.
+	// With the widened marker rule, stripping it there newly lost `[!1]` in
+	// `> P` / `> [!1] QaQ` and moved a following `<!--` to line start, hiding
+	// shown prose (critic 2 F1). Readers above this point keep the plain peel.
+	// Every line that continues its innermost quote, whatever its marker looks
+	// like, so a marker the old test took there (`>[](u "` / `>[!e]%%QBQ")`, no
+	// space) keeps base's reading rather than newly speaking a link title the
+	// renderer hides, and one it never took (`[!1]`) stays text.
+	//
+	// Fix round 2: the rule is read off the note with every line's trailing `\r`
+	// removed. `containerViews` registers no container for a CRLF list-item line
+	// (`- > P\r` / `  > [!1] Q` gives line 1 no quote line 0 shares), so on CRLF a
+	// late line in a list item's quote read as a first line and the widened
+	// marker newly lost the shown `[!1]` and, past a moved `<!--`, the prose
+	// (both critics' F1). That gap is older than NRL-182 and feeds more than the
+	// marker, so only this decision takes the LF reading; the rest keeps its own.
+	// A line that is literal (fenced code, display math, frontmatter) by that
+	// reading keeps base's peel outright (critic 2 F2).
+	const markerRule: MarkerRule[] = markerRules(lines, containerHome, quoteIds, literalAt);
+	const prefixAt = (raw: string, k: number): ReturnType<typeof containerPrefix> => containerPrefix(raw, markerRule[k]);
 	const leftAQuote = (k: number): boolean =>
 		containerHome[k - 1]!.some((id) => quoteIds.has(id) && !containerHome[k]!.includes(id));
 	const paraBefore: boolean[] = new Array<boolean>(lines.length).fill(false);
@@ -6991,7 +7176,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		let fenced = false;
 		for (let k = 0; k < lines.length; k++) {
 			paraBefore[k] = open;
-			const p = containerPrefix(lines[k]!);
+			const p = prefixAt(lines[k]!, k);
 			// A marker line's content starts a new block, the item; its own lead is
 			// containerLeadOk's question, and listStrip is zero there.
 			const view = lines[k]!.slice(p.chars).slice(listStrip[k]);
@@ -7447,7 +7632,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	 * once list-item content is stripped.
 	 */
 	const htmlBlockLineAt = (raw: string, lineNo: number): boolean => {
-		const p = containerPrefix(raw);
+		const p = prefixAt(raw, lineNo);
 		return (
 			p.blockType !== "heading" &&
 			!literalAt[lineNo]! &&
@@ -7472,7 +7657,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		htmlBlockLineAt(raw, lineNo) || (htmlLineAt[lineNo]! && !literalAt[lineNo]!) ? "raw" : "inline";
 
 	/** The line as its innermost container's block tokenizers see it (NRL-136). */
-	const blockView = (raw: string, lineNo: number): string => raw.slice(containerPrefix(raw).chars).slice(listStrip[lineNo]);
+	const blockView = (raw: string, lineNo: number): string => raw.slice(prefixAt(raw, lineNo).chars).slice(listStrip[lineNo]);
 
 	/**
 	 * The container stack a block opened on this line lives in, for a block
@@ -7510,7 +7695,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		if (!SETEXT_UNDERLINE_EXACT.test(nextView)) return false;
 		if (underlineLeftQuote(lineNo)) return false;
 		const raw = lines[lineNo]!;
-		const cur = containerPrefix(raw);
+		const cur = prefixAt(raw, lineNo);
 		if (cur.callout) return false;
 		// A `-` run under a container line is a rule (or, in a list, the next
 		// item), not an underline: measured, `- [ ] Z5Q --> Z6Q` / `---` and
@@ -7815,7 +8000,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 					if (spoken && rest.trim() !== "") appendToParagraph(verbatimLine(rest, lineStart + from), lineStart + from);
 					continue;
 				}
-				const prefix = containerPrefix(raw);
+				const prefix = prefixAt(raw, lineNo);
 				const peeled = raw.slice(prefix.chars);
 				const fenceLine = fenceAt[lineNo] !== undefined;
 				const blockLine = htmlBlockLineAt(raw, lineNo);
@@ -8050,7 +8235,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		// this consumption read one definition of where the prefix ends. Only the
 		// three SIDE EFFECTS stay here, because a lookahead must be able to ask
 		// the question about a line it is not consuming.
-		const prefix = containerPrefix(raw);
+		const prefix = prefixAt(raw, lineNo);
 		const prefixChars = prefix.chars;
 		const blockType: BlockType = prefix.blockType;
 		if (blockType === "quote" || blockType === "list") prevContainer = true;
