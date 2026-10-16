@@ -5724,10 +5724,13 @@ const FM_LIST_ITEM = /^\s*-(\s|$)/;
 const FM_CONTINUATION = /^\s+\S/;
 const FM_COMMENT = /^\s*#/;
 
-// trim, not trimEnd, and a leading BOM tolerated: the positional check this
-// replaced accepted both, and narrowing either would start reading
-// frontmatter aloud on notes that are silent about it today.
-const isFrontmatterFence = (line: string): boolean => line.replace(/^\uFEFF/, "").trim() === "---";
+// Exactly `---`, a leading BOM tolerated (NRL-198). Obsidian's own detector
+// (app.js `_T`, 1.13.7) opens on `/^---(\r?\n)/` at the very start of the text
+// and closes on a `---(\r?\n|$)` that starts a line, so a fence with a lead or
+// trailing whitespace is not frontmatter: the renderer shows it as a rule and
+// the lines after it as text (` ---` / `title: x` / `---` is an `<h2>`), which
+// the old `trim()` here hid.
+const isFrontmatterFence = (line: string): boolean => /^---\r?$/.test(line.replace(/^\uFEFF/, ""));
 
 /**
  * Net open `[` / `{` on a line, ignoring quoted strings. A flow collection
@@ -5757,6 +5760,8 @@ function flowDepthDelta(line: string): number {
  * not necessarily line 0.
  */
 function detectFrontmatter(lines: string[]): { startLine: number; endLine: number } | null {
+	// Leading blank lines stay tolerated: srs.md and ADR 0002 promise that, though
+	// Obsidian's `_T` needs the fence at the very start (a residual, NRL-198).
 	let open = 0;
 	while (open < lines.length && lines[open]!.replace(/^\uFEFF/, "").trim() === "") open += 1;
 	if (open >= lines.length || !isFrontmatterFence(lines[open]!)) return null;

@@ -396,6 +396,18 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### Frontmatter fences are an exact `---` (NRL-198, 2026-10-16)
+
+`isFrontmatterFence` used `trim() === "---"`, so ` ---` or `--- ` delimited frontmatter and
+the lines inside were skipped, though the renderer shows a rule and text (` ---` / `title: x`
+/ `---` is an `<h2>`). Obsidian's own detector (app.js `_T`: `/^---(\r?\n)/` at the start of
+the text, closer `---(\r?\n|$)` at a line start) and the editor (`"---" === lineAt(0).text`)
+both need an exact `---`. The fence test is now exact, BOM tolerated. Leading blank lines
+before the opener stay tolerated because srs.md and ADR 0002 promise it, though `_T` does not
+accept them: a recorded divergence. Census over 31,104 cells, with an oracle that hides
+`_T`-frontmatter under skipFrontmatter: 0 newly disclosed, 0 newly lost, 11,610 shown tokens
+recovered; lock128 CLEAN. Not run in Obsidian.
+
 ### Inline HTML tags follow the CommonMark tag grammar (NRL-202, 2026-10-16)
 
 The element whitelist spoke every tag outside it, though the renderer hides any CommonMark

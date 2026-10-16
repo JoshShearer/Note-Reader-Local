@@ -352,12 +352,23 @@ console.log("frontmatter detection (NRL-7)");
 		"key with parens": "---\ncreated (date): secret\n---\nProse.",
 		"wrapped flow list": "---\ntags: [a,\nsecret]\n---\nProse.",
 		"leading BOM": "\uFEFF---\ntitle: secret\n---\nProse.",
-		"indented fence": "  ---\ntitle: secret\n---\nProse.",
 		"CRLF after blank line": "\r\n---\r\ntitle: secret\r\n---\r\nProse.",
 	};
 	for (const [name, src] of Object.entries(shapes)) {
 		const got = texts(src);
 		check(`frontmatter with ${name} is skipped`, got.join(" ") === "Prose.", `got: ${JSON.stringify(got)}`);
+	}
+	// NRL-198: a fence with a lead or trailing whitespace is not frontmatter for
+	// Obsidian (its detector `_T` and the editor both need an exact `---`); the
+	// renderer shows a rule and the lines as text (` ---` / `title: x` / `---`
+	// is an `<h2>`), so they are read.
+	for (const [name, src, want] of [
+		["lead on the opener", "  ---\ntitle: secret\n---\nProse.", "title: secret Prose."],
+		["lead on the closer", "---\ntitle: secret\n ---\n\nProse.", "title: secret Prose."],
+		["trailing space on the opener", "--- \ntitle: secret\n---\nProse.", "title: secret Prose."],
+	] as const) {
+		const got = texts(src);
+		check(`nrl198 fence with ${name} is not frontmatter`, got.join(" ") === want, `got: ${JSON.stringify(got)}`);
 	}
 
 	// Offset invariant over every fixture in this section.
