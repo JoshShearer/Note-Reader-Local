@@ -7786,6 +7786,41 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			const strip = viewStart[k]! - peel;
 			listStrip[k] = !LIST_BULLET.test(body) && strip > 0 && /^[ \t]*$/.test(body.slice(0, strip)) ? strip : 0;
 		}
+		// NRL-188: a list item's content line over a setext underline in the same
+		// item is heading content for the renderer, which strips the item's indent
+		// (module 5540) and re-runs the block tokenizers on the content, where the
+		// plain setext rule applies. The list arm of `isSetextContentLine` only
+		// knows a one-space marker and a spaces-only indent, so `-  <!--` / `  ===`
+		// and the tab or quote-in-list forms opened a hidden HTML block to EOF.
+		// This reads the same NRL-155 predicates on `containerViews`' own content
+		// view. Only ever sets true, and fail-closed: lazy items, a different
+		// container stack below, a lone `-` underline (NRL-120: a new item), a tab
+		// lead off block position, raw HTML and literal lines keep the old answer.
+		// Readers of `setextContent`: `opensHtmlBlock` term 1, the main loop's
+		// paragraph flush and `setextLike`. CRLF lines get no list container from
+		// `containerViews`, so they keep the old answer (unreachable: NRL-203).
+		for (let k = 0; k + 1 < lines.length; k++) {
+			if (setextContent[k] || inRawHtml[k]! || literalAt[k] !== undefined) continue;
+			const home = containerHome[k]!;
+			if (home.length === 0 || (quoteIds.has(home[home.length - 1]!) && !home.some((id) => !quoteIds.has(id)))) continue;
+			const nh = containerHome[k + 1]!;
+			if (nh.length !== home.length || nh.some((id, i) => id !== home[i])) continue;
+			if (home.some((id) => lazyItems.has(id))) continue;
+			const t = lines[k]!.slice(viewStart[k]);
+			const u = lines[k + 1]!.slice(viewStart[k + 1]);
+			if (!/^[ \t>]*$/.test(lines[k + 1]!.slice(0, viewStart[k + 1]))) continue;
+			if (!PLAIN_SETEXT_HTML_OPENER.test(t) || MODULE134_INDENTED_CODE.test(t)) continue;
+			if (!/^(?:=+|-{2,})\r?$/.test(u)) continue;
+			// A rule- or underline-shaped line right after the underline (`- Para.`
+			// / `  <!--` / `  ---` / ` ---`) leaves the comment open for the renderer
+			// in shapes not modelled here (round 0 critic 2 F1), so keep the old
+			// answer there.
+			if (k + 2 < lines.length && /^[ \t>]*(?:=+|-{2,}|(?:[-*_][ \t]*){3,})[ \t]*\r?$/.test(lines[k + 2]!)) continue;
+			const inner = home[home.length - 1]!;
+			const firstOfQuote = quoteIds.has(inner) && (k === 0 || !containerHome[k - 1]!.includes(inner));
+			if (TAB_BEARING_LEAD.test(t) && !/(?:[-*+]|\d{1,9}[.)])[ \t]*$/.test(lines[k]!.slice(0, viewStart[k])) && !firstOfQuote) continue;
+			setextContent[k] = true;
+		}
 	}
 	// `paraBefore[k]` is "the lines above k leave a paragraph open that k would
 	// continue", read off the markdown alone and NOT off our comment state,

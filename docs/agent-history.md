@@ -396,6 +396,23 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A list item's `<!--` over a setext underline is heading text (NRL-188, 2026-10-16)
+
+Inside a list item, `-  <!--` / `  ===` (and the tab, continuation-line, ordered, wide-marker
+and quote-in-list forms) is an `<h1>` for the renderer, which strips the item's indent
+(module 5540) and re-runs its block tokenizers on the content. `isSetextContentLine`'s list arm
+knows only a one-space marker and a spaces-only indent, so these lines opened a hidden HTML
+block to EOF (672 spike cells of prose loss). A post-pass in the `containerViews` block now sets
+`setextContent` from NRL-155's plain-arm predicates read on `viewStart`'s content view, with an
+exact underline in the same container stack. Additive and fail-closed: lazy items, a lone `-`
+underline (NRL-120), tab leads off block position, raw HTML and literal lines keep the old
+answer. Plan reviewed (CONCERNS 80, no blocker). Census: the planner's generator gave 137,600
+cells per option set with 12,612 fixed and 0/0/0 (DEF/CODE/ALL, o13 and o14). The plan
+critic's generator gave 136,992 fixed and 0 newly disclosed or lost. Residuals: CRLF lines
+(no list container from `containerViews`, unreachable per NRL-203), `-  <!--` over a short
+`  ---` (a thematic break leaves the item), and `- Title <!--` / `===` with a later `-->`.
+Not run in Obsidian.
+
 ### Indented code opens right after a heading, a rule or a closed literal (NRL-157, 2026-10-16)
 
 Top-level indented code opened only after a blank line. Module 134 opens it at any block
