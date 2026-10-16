@@ -657,6 +657,19 @@ was prose (also a backtick in the title opened a code carry that silenced the re
   `## x ##` closing sequence; lazy `===` underline; callout-title heading; list-marker-line
   fences; a 4-5 column opener. NOT VERIFIED IN OBSIDIAN: reading-view harness evidence only.
 
+### A callout title that is indented code is skipped under skipCodeBlocks (NRL-207, 2026-10-16)
+
+On a line that starts its quote, a callout title that begins with four spaces or a tab
+after the marker's one whitespace character renders in a `<pre>`. Spaces then a tab
+(`[!note]   \tx`) is not code: 14 leads x 5 containers measured on 1.13.7 and 1.14.4, which
+agree. The comment openers in such a title were already read literally. The new branch
+beside the callout-title fence arm in `extractChunksPass` drops the line under
+skipCodeBlocks; with it off the title is read as before. Generator over 20,400 cells
+(8 containers x 17 leads x 10 titles x 5 bodies x DEF/CODE/ALL): newly disclosed 0, newly
+lost 0 outside a `<pre>`, 1,350 code tokens newly skipped; lock128 CLEAN. A late-line
+marker is text (NRL-209) and is unaffected. Non-letter types (`[!1]`) keep base's reading
+(`CALLOUT_CODE_TITLE_NEW_TYPE`). Not run in Obsidian.
+
 ### A plain `^[footnote]` inside a `%%` comment is spoken (NRL-212, 2026-10-16)
 
 The renderer hides a `%%` comment's own text but still collects an inline footnote
@@ -674,7 +687,12 @@ over DEF/CODE/ALL, `%%`/`<!--` x footnote bodies x containers): newly disclosed 
 newly lost 0, lockstep 0; 742 sentinels newly spoken (DEF). A mutant that also admits
 `<!--` pairs shows 21 disclosures, so the generator can see the failure class. Deliberate
 residuals: the footnote on a `%%` opener line (`%% ^[x]` / `%%`), a block whose body
-sits behind a `>` prefix, and everything the gate refuses. Not run in Obsidian.
+sits behind a `>` prefix, and everything the gate refuses. Not run in Obsidian. Fix round 1
+(both round-0 critics BLOCKed): block lines judged alone leaked a footnote inside a
+backtick fence, `$$` or `<!--` the comment held, and a `%%` pair inside a multi-line `^[`
+leaked. Now one verdict per `%%` block (`pctBlockReadable`) and no footnote after a `[`
+left open above in the paragraph (`bracketOpenAbove`); a `~~~` fence block and CRLF blocks
+stay silent (residuals). Round 1 critics PASS 88/88, 0/0 over 36,063 runs.
 
 ### Inline PI/CDATA counted only where the renderer emits it raw (NRL-184, 2026-10-16)
 

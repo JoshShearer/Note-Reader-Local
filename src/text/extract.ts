@@ -9295,6 +9295,23 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			flushParagraph();
 			continue;
 		}
+		// NRL-207: a callout whose TITLE is indented code (after the marker's one
+		// whitespace character, a title starting with four spaces or a tab; NOT
+		// spaces then a tab, `  \t` is no code, measured) renders the title in a
+		// `<pre>` (1,680 of 1,680 callout lines on 1.13.7 and 1.14.4, and the 14
+		// leads x 5 containers rerun for NRL-207). skipCodeBlocks drops it as any
+		// code block; off, the title is read as before. Only on a line that starts
+		// its quote (`calloutTitleAt`), as for the fence arm above.
+		if (
+			opts.skipCodeBlocks &&
+			prefix.callout &&
+			calloutTitleAt[lineNo]! &&
+			body.trim() !== "" &&
+			/^(?: {4}|\t)/.test(/\s*$/.exec(raw.slice(0, prefixChars))![0].slice(1))
+		) {
+			flushParagraph();
+			continue;
+		}
 
 		/*
 		 * Two passes, and the order is the whole of NRL-64.
