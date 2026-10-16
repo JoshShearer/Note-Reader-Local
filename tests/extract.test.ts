@@ -4981,6 +4981,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl206-nested-atx-crlf-defh", "> > # QHQ\r\n> > body", "body", {skipHeadings: true}],
 		["pin-nrl206-callout-setext-h2-defh", "> [!note] QTQ\n> QXQ\n> ---\nQZQ", "QTQ QZQ", {skipHeadings: true}],
 		["pin-nrl206-callout-setext-h2-crlf-defh", "> [!note] QTQ\r\n> QXQ\r\n> ---\r\nQZQ", "QTQ QZQ", {skipHeadings: true}],
+		// Fix round 1 (both critics on d218283): a backtick run whose rest holds a
+		// backtick is an inline code span, not a fence, and a lone-CR note is one
+		// split line; both keep 3cc2bea's reading (red on d218283).
+		["guard-nrl206-backtick-info-is-inline-code", "> [!note] T\n> ```js``` is inline QIQ\n> more\n\nQAQ", "T is inline QIQ more QAQ", {}],
+		["guard-nrl206-backtick-in-info-is-no-fence", "> ``` `x`\n> QBQ\n\nQAQ", "QBQ QAQ", {}],
+		["guard-nrl206-lone-cr-note-keeps-base", "> ```\r> QBQ\r> ```\rQAQ", "QAQ", {}],
 		["guard-nrl206-tab-atx-is-code-def", ">\t# QHQ\nQZQ", "# QHQ QZQ", {}],
 		["guard-nrl206-tab-atx-is-code-code", ">\t# QHQ\nQZQ", "# QHQ QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
 		["guard-nrl206-tab-atx-is-code-defh", ">\t# QHQ\nQZQ", "# QHQ QZQ", {skipHeadings: true}],

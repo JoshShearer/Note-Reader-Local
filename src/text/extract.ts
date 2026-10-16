@@ -7443,8 +7443,22 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// (NRL-114, NRL-182) keep the old reading. Nor inside an item containerViews
 	// names lazy (NRL-213 fix round 1): its fence line is the renderer's
 	// paragraph text, so a fence opened there would run to the end of the note.
+	// Nor (NRL-206 fix round 1, fail closed) on a backtick run whose rest holds a
+	// backtick: CommonMark reads that as an inline code span, not a fence, though
+	// containerViews marks it open (`> ```js``` is inline x` lost the rest of the
+	// callout); nor anywhere in a note with a lone CR, which `lines` does not split,
+	// so one "line" can hold a whole quoted fence and the text after it.
+	const loneCr = /\r(?!\n)/.test(source);
+	const backtickInfo = (line: string): boolean => {
+		const run = /`{3,}/.exec(line);
+		return run !== null && line.slice(run.index + run[0].length).includes("`");
+	};
 	const viewFenceOpens = (at: number): boolean =>
-		fenceMarks[at] === "open" && !LIST_BULLET.test(lines[at]!) && !fenceHomes[at]!.some((id) => fenceLazy.has(id));
+		!loneCr &&
+		fenceMarks[at] === "open" &&
+		!LIST_BULLET.test(lines[at]!) &&
+		!backtickInfo(lines[at]!) &&
+		!fenceHomes[at]!.some((id) => fenceLazy.has(id));
 	const fenceTrusted = (at: number, commentBefore: boolean): boolean => {
 		if (commentBefore || firstLazy <= at) return false;
 		const item = fenceHomes[at]![fenceHomes[at]!.length - 1];
