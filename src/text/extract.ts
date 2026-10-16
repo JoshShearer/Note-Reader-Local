@@ -8252,7 +8252,10 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// outside a closed literal keeps the blank-line rule.
 	const afterLeafEnd = (k: number): boolean => {
 		if (k === 0) return false;
-		if (literalAt[k - 1] !== undefined) return literalAt[k] === undefined;
+		// A literal's closing line counts only when it is a top-level delimiter: a
+		// fence or `$$` closed inside a quote or list item leaves the next line in
+		// that container (`> ```` / `\t> x` is quote text, round 0 critic 1 F1).
+		if (literalAt[k - 1] !== undefined) return literalAt[k] === undefined && /^ {0,3}(?:`{3,}|~{3,}|\${2,}|---)/.test(lines[k - 1]!);
 		const p = lines[k - 1]!;
 		if (htmlLineAt[k - 1]! || /[<%`]/.test(p)) return false;
 		return /^ {0,3}#{1,6}[ \t]/.test(p) || /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(p);

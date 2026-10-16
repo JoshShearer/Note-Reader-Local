@@ -5158,6 +5158,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl157-code-after-heading-is-skipped", "# H\n\tcode QaQ\nQbQ", "H QbQ"],
 		["pin-nrl157-comment-after-rule-is-code", "---\n\t<!-- QaQ\nQbQ", "QbQ"],
 		["guard-nrl157-equals-line-is-paragraph-text", "===\n\tQaQ", "=== QaQ"],
+		["guard-nrl157-r1-fence-closed-in-a-quote-keeps-quote-text", "> ```\n> Q1Q\n> ```\n\t> Q2Q\nQ3Q end", "Q1Q Q2Q Q3Q end"],
 		["guard-nrl157-comment-after-paragraph-is-lazy", "QpQ\n\t<!-- QaQ\nQbQ", "QpQ <!-- QaQ QbQ"],
 		["pin-nrl216-declined-tail-spanning-lines-keeps-dest", "A [QlQ][QrQ\n](QuQ) T.", "A QlQ [QrQ ](QuQ) T."],
 		["guard-nrl216-spaced-label-is-a-real-link", "A [QlQ] [QrQ\n](QuQ) T.", "A QlQ QrQ T."],
