@@ -405,8 +405,14 @@ The renderer turned out stricter than CommonMark's label matching, so each guard
 paragraph lines only (no ATX, table or fence line), no indented-code lead, same container
 stack on every line, no literal or HTML line, plain label text, label text right after the `[`
 and right before the `]`, not followed by `(`, `[` or `:`, and no setext underline or rule
-after. Census over 183,600 cells: 0 newly disclosed, 0 newly lost, about 10,900 hidden tokens
-no longer spoken. Not run in Obsidian.
+after. Fix round 1 (both critics BLOCKed): the lenient `refLabels` counted definitions the
+renderer does not take (in indented or fenced code, an HTML block, a paragraph continuation,
+a label with a trailing space), and anything before the tail on its line (an escape, a
+footnote, an earlier bracket pair, a callout, a URL, code, math, HTML, emphasis) changes what
+the brackets are. Now a strict definition set (column 0, block start, not literal or HTML,
+plain alphanumeric label) and only plain prose before a plain `[x][label`; the line regex is
+anchored, so linear. Both critics' generators and the census gave 0/0 afterwards, with about
+4,650 hidden tokens no longer spoken (fewer than round 0, by design). Not run in Obsidian.
 
 ### The term-2 bound counts a `- > x` line's quoted body (NRL-187, 2026-10-16)
 

@@ -8621,11 +8621,24 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// text (no brackets, backslash, backtick, `<` or `%`), at most four lines,
 	// no blank line, and not followed by `(` or `[` (an inline link or another
 	// pair reads otherwise).
-	if (refLabels.size > 0) {
+	// Round 1 (critic 1): a strict definition set, unlike `refLabels`' lenient one:
+	// a line that is exactly a link reference definition at top level, not in a
+	// literal or HTML block, at a block start (first line or after a blank).
+	const strictRefLabels = new Set<string>();
+	for (let k = 0; k < lines.length; k++) {
+		if (literalAt[k] !== undefined || htmlLineAt[k]! || (k > 0 && lines[k - 1]!.trim() !== "")) continue;
+		const d = /^\[([A-Za-z0-9](?:[A-Za-z0-9 ]*[A-Za-z0-9])?)\]:[ \t]+\S+[ \t]*$/.exec(lines[k]!);
+		if (d) strictRefLabels.add(normaliseRefLabel(d[1]!));
+	}
+	if (strictRefLabels.size > 0) {
 		const extra: Array<[number, number]> = [];
 		for (let k = 0; k + 1 < lines.length; k++) {
 			if (literalAt[k] !== undefined || htmlLineAt[k]!) continue;
-			const m = /\[(?:[^[\]\\`<%]|\\.)+\]\[([^[\]\\`<%]*)$/.exec(lines[k]!);
+			// Plain prose before the tail: only letters, digits, spaces and sentence
+			// punctuation from the line's content start to the `[x][` (round 1: an
+			// escape, footnote, earlier bracket pair, callout, URL, code span, math,
+			// HTML or emphasis there changes what the brackets are).
+			const m = /^([ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?)([\p{L}\p{N} ,.;?'"-]*)\[([\p{L}\p{N}][\p{L}\p{N} ]*)\]\[([\p{L}\p{N}][\p{L}\p{N} ]*)$/u.exec(lines[k]!);
 			if (!m) continue;
 			// Paragraph text only: an ATX heading, table row or fence line is one
 			// line and its label cannot span lines (measured).
@@ -8635,7 +8648,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			// four spaces in a row, on the tail's line or the closing line.
 			const codeLead = (l: string): boolean => /^[ >]*(?: {4}|\t)/.test(l) || /^[ \t>]*\t/.test(l);
 			if (codeLead(lines[k]!)) continue;
-			const parts = [m[1]!];
+			const parts = [m[4]!];
 			for (let j = k + 1; j < lines.length && j <= k + 4; j++) {
 				if (literalAt[j] !== undefined || htmlLineAt[j]!) break;
 				// Same container stack as the tail's line (a lazy line or a new
@@ -8658,8 +8671,8 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 				// heading the renderer splits differently (measured).
 				const after = lines[j + 1];
 				const underAfter = after !== undefined && /^[ \t>]*(?:=+|-+|(?:[-*_][ \t]*){3,})[ \t]*$/.test(after);
-				if (!underAfter && /^\S/.test(m[1]!) && /\S$/.test(seg) && nextCh !== "(" && nextCh !== "[" && nextCh !== ":" && refLabels.has(normaliseRefLabel(parts.join(" ")))) {
-					extra.push([lineStarts[k]! + m.index + m[0].length - m[1]!.length - 1, lineStarts[j]! + lead + close + 1]);
+				if (!underAfter && /^[\p{L}\p{N} ]+$/u.test(seg) && /\S$/.test(seg) && nextCh !== "(" && nextCh !== "[" && nextCh !== ":" && strictRefLabels.has(normaliseRefLabel(parts.join(" ")))) {
+					extra.push([lineStarts[k]! + m[0].length - m[4]!.length - 1, lineStarts[j]! + lead + close + 1]);
 				}
 				break;
 			}
