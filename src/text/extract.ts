@@ -79,6 +79,20 @@ interface Cleaned {
 	 */
 	openBracketDepth?: number;
 	/**
+	 * A CONFIRMED inline link tail `(dest "title")` left unfinished at the end of
+	 * this line, carried in or opened here, so the next line starts inside it
+	 * (NRL-205). Cleared like `openBracket`; the confirmation is made where the
+	 * tail opens.
+	 */
+	openDest?: DestState;
+	/**
+	 * The unconfirmed discovery pass 1 makes: a link or image on this line whose
+	 * tail runs past the line end in a valid state. extractChunks acts on it only
+	 * after `destClosesLater` finds the closing `)` on a later line of the same
+	 * paragraph; unconfirmed, the tail is read as prose as before.
+	 */
+	unclosedDest?: DestState;
+	/**
 	 * Set only beside an `openComment` of `-->`, and true when that comment was
 	 * opened as a document-level HTML BLOCK - the line was raw HTML for the
 	 * renderer - rather than by the paragraph-scoped term 2 (NRL-136). The line
@@ -130,6 +144,123 @@ type HtmlContext = "none" | "block" | "raw" | "inline";
  * spoken - and in nothing else, which is why one carry covers both (NRL-63).
  */
 type BracketKind = "image" | "link";
+
+/**
+ * Where an inline link's `(dest "title")` stands at a line break (NRL-205). The
+ * destination and title may span lines inside one paragraph, so a line can end
+ * with the tail unfinished: `pre` is before the destination, `ad` after it
+ * (whitespace seen), `at` after a title, and a quote character is inside a title
+ * opened by it (`(` for the parenthesised kind, closed by `)`).
+ */
+type DestState = "pre" | "ad" | "at" | '"' | "'" | "(";
+
+type DestScan = { kind: "closed"; end: number } | { kind: "more"; state: DestState } | { kind: "fail" };
+
+const DEST_ASCII_PUNCT = /[!-/:-@[-`{-~]/;
+
+/**
+ * Reads the tail of an inline link from `from` to the end of ONE line, in the
+ * state a previous line left, by CommonMark's grammar for `(dest "title")`:
+ * optional whitespace, a destination (`<...>` on one line, or non-space
+ * characters with balanced parentheses), optional whitespace and a quoted
+ * title, optional whitespace, `)`. A title may span lines; nothing else may.
+ *
+ * `closed` carries the index just past the closing `)`. `more` is a line that
+ * ends with the tail still valid and unfinished. `fail` is anything the grammar
+ * refuses, and also anything this reader is not sure of (an angle destination
+ * left open at a line end, a control character, parentheses more than three
+ * deep, a `(` title holding an unescaped `(`): a caller that gets `fail` keeps
+ * its reading of the text as prose, which discloses at worst and never silences.
+ */
+function destScan(line: string, from: number, state: DestState): DestScan {
+	let i = from;
+	const n = line.length;
+	let st: DestState = state;
+	// A destination must be followed by whitespace before a title. A continuation
+	// line starts after a line ending, which is that whitespace.
+	let ws = state === "ad";
+	for (;;) {
+		if (st === '"' || st === "'" || st === "(") {
+			const close = st === "(" ? ")" : st;
+			while (i < n) {
+				const c = line[i]!;
+				if (c === "\\" && i + 1 < n && DEST_ASCII_PUNCT.test(line[i + 1]!)) {
+					i += 2;
+					continue;
+				}
+				if (st === "(" && c === "(") return { kind: "fail" };
+				if (c === close) break;
+				i += 1;
+			}
+			if (i >= n) return { kind: "more", state: st };
+			i += 1;
+			st = "at";
+			continue;
+		}
+		// Whitespace between the parts. A line end here is a line ending, which
+		// the grammar allows once on each side of the destination.
+		const wsFrom = i;
+		while (i < n && (line[i] === " " || line[i] === "\t" || line[i] === "\r")) i += 1;
+		if (i > wsFrom) ws = true;
+		if (i >= n) return { kind: "more", state: st };
+		const c = line[i]!;
+		if (c === ")") return { kind: "closed", end: i + 1 };
+		if (st === "pre") {
+			if (c === "<") {
+				i += 1;
+				for (;;) {
+					if (i >= n) return { kind: "fail" };
+					const d = line[i]!;
+					if (d === "<") return { kind: "fail" };
+					if (d === "\\" && i + 1 < n && DEST_ASCII_PUNCT.test(line[i + 1]!)) {
+						i += 2;
+						continue;
+					}
+					if (d === ">") break;
+					i += 1;
+				}
+				i += 1;
+				// A title or `)` needs whitespace after the destination; the glue case
+				// (`<u>"t"`) is refused rather than guessed at.
+				if (i < n && line[i] !== " " && line[i] !== "\t" && line[i] !== ")") return { kind: "fail" };
+			} else {
+				let depth = 0;
+				let any = false;
+				while (i < n) {
+					const d = line[i]!;
+					if (d === " " || d === "\t" || d === "\r") break;
+					if (d < " " || d === "\x7f") return { kind: "fail" };
+					if (d === "\\" && i + 1 < n && DEST_ASCII_PUNCT.test(line[i + 1]!)) {
+						i += 2;
+						any = true;
+						continue;
+					}
+					if (d === "(") {
+						depth += 1;
+						if (depth > 3) return { kind: "fail" };
+					} else if (d === ")") {
+						if (depth === 0) break;
+						depth -= 1;
+					}
+					any = true;
+					i += 1;
+				}
+				if (!any || depth !== 0) return { kind: "fail" };
+			}
+			st = "ad";
+			ws = false;
+			continue;
+		}
+		// After the destination (`ad`) a title may open, but only after
+		// whitespace; `at` (after a title) takes `)` and nothing else.
+		if (st === "ad" && ws && (c === '"' || c === "'" || c === "(")) {
+			i += 1;
+			st = c;
+			continue;
+		}
+		return { kind: "fail" };
+	}
+}
 
 function isWordChar(ch: string): boolean {
 	return /[\p{L}\p{N}'’-]/u.test(ch);
@@ -1367,6 +1498,8 @@ function cleanLine(
 	htmlBodyOkLater: boolean | undefined = undefined,
 	percentOpens: boolean | undefined = undefined,
 	scopedOpeners: ReadonlySet<number> | undefined = undefined,
+	incomingDest: DestState | undefined = undefined,
+	outgoingDest = false,
 ): Cleaned {
 	const chars: string[] = [];
 	const index: number[] = [];
@@ -1603,6 +1736,26 @@ function cleanLine(
 	// opened inside the label straddles this line's end (NRL-88).
 	let openBracketDepth = 0;
 	let unclosedBracket: BracketKind | undefined;
+	// The link tail's two halves, on the same terms as the label's (NRL-205).
+	let openDest: DestState | undefined;
+	let unclosedDest: DestState | undefined;
+	/**
+	 * A link or image tail `(` at `from - 1` that this line leaves unfinished
+	 * (the title or destination goes on below). Confirmed by extractChunks, the
+	 * rest of the line is the tail and the carry goes out; otherwise it is only
+	 * noted, and the caller reads the tail as it always did.
+	 */
+	const carryDest = (from: number): boolean => {
+		if (unclosedDest !== undefined || openDest !== undefined) return false;
+		const r = destScan(raw, from, "pre");
+		if (r.kind !== "more") return false;
+		if (!outgoingDest) {
+			unclosedDest = r.state;
+			return false;
+		}
+		openDest = r.state;
+		return true;
+	};
 	let i = 0;
 
 	/*
@@ -1675,8 +1828,12 @@ function cleanLine(
 			emitLabelRegion(0, close, incomingBracket);
 			let after = close + 1;
 			if (raw[after] === "(") {
-				const paren = raw.indexOf(")", after);
-				after = paren === -1 ? after + 1 : paren + 1;
+				if (carryDest(after + 1)) {
+					after = raw.length;
+				} else {
+					const paren = raw.indexOf(")", after);
+					after = paren === -1 ? after + 1 : paren + 1;
+				}
 			} else if (raw[after] === "[") {
 				const refClose = raw.indexOf("]", after);
 				after = refClose === -1 ? after : refClose + 1;
@@ -1686,6 +1843,26 @@ function cleanLine(
 			// of the note and `rawStart + raw.length` is then one past the end of
 			// the source. Every sourceIndex entry must be a real offset in it.
 			pushSpace(rawStart + Math.min(i, raw.length - 1));
+		}
+	}
+
+	/*
+	 * A confirmed link tail carried in from an earlier line (NRL-205): this line
+	 * starts inside `(dest "title")`. The tail is read by the same grammar that
+	 * confirmed it, on THIS line's own text, and what the grammar refuses leaves
+	 * the line as prose and drops the carry, so a disagreement between the
+	 * confirming walk's peeled line and this body costs a disclosure, never
+	 * silenced prose. Never reached with a code or label carry live: extractChunks
+	 * arms one carry per line.
+	 */
+	if (incomingDest !== undefined && incomingBracket === undefined && !carrying) {
+		const r = destScan(raw, 0, incomingDest);
+		if (r.kind === "closed") {
+			i = r.end;
+			pushSpace(rawStart + Math.min(i, raw.length - 1));
+		} else if (r.kind === "more") {
+			openDest = r.state;
+			i = raw.length;
 		}
 	}
 
@@ -2048,8 +2225,12 @@ function cleanLine(
 			}
 			let after = close + 1;
 			if (raw[after] === "(") {
-				const paren = raw.indexOf(")", after);
-				after = paren === -1 ? after + 1 : paren + 1;
+				if (raw[i + 2] !== "^" && carryDest(after + 1)) {
+					after = raw.length;
+				} else {
+					const paren = raw.indexOf(")", after);
+					after = paren === -1 ? after + 1 : paren + 1;
+				}
 			} else if (raw[after] === "[") {
 				// Reference form. The tail names a link reference, not prose, and
 				// consuming it here is what stops `![alt][ref]` reaching the link
@@ -2090,8 +2271,12 @@ function cleanLine(
 			const label = raw.slice(i + 1, close);
 			let after = close + 1;
 			if (raw[after] === "(") {
-				const paren = raw.indexOf(")", after);
-				after = paren === -1 ? after + 1 : paren + 1;
+				if (label[0] !== "^" && carryDest(after + 1)) {
+					after = raw.length;
+				} else {
+					const paren = raw.indexOf(")", after);
+					after = paren === -1 ? after + 1 : paren + 1;
+				}
 			} else if (raw[after] === "[") {
 				const refClose = raw.indexOf("]", after);
 				after = refClose === -1 ? after : refClose + 1;
@@ -2205,7 +2390,7 @@ function cleanLine(
 		i += 1;
 	}
 
-	return { text: chars.join(""), index, openComment, openCode, openBracket, openBracketDepth, unclosedBracket, openCommentBlock, openCommentBrowser };
+	return { text: chars.join(""), index, openComment, openCode, openBracket, openBracketDepth, unclosedBracket, openDest, unclosedDest, openCommentBlock, openCommentBrowser };
 }
 
 interface StripOptions {
@@ -4935,6 +5120,69 @@ function bracketClosesLater(memo: BracketCarryMemo, from: number): boolean {
 }
 
 /**
+ * How many later lines a link tail is followed across (NRL-205). A tail longer
+ * than this is read as prose, as before: the walk is bounded per opener, so a
+ * note of many openers stays linear, and what it declines can only disclose.
+ */
+const DEST_CARRY_LINES = 32;
+
+/**
+ * Does a link or image tail left unfinished on line `from`, in `state`, close
+ * with its `)` on a later line of the same paragraph (NRL-205)?
+ *
+ * Fail-closed in every direction: any later line that is not a plain
+ * continuation of the opener's paragraph (a blank line, anything
+ * interruptsParagraph or containerCarryStops names, a quote depth change, an
+ * opening math block), or on which `destScan` refuses the tail, answers no, and
+ * the caller keeps its reading of the tail as prose. The stops are
+ * bracketClosesLater's and bracketWalkFresh's, copied rather than shared so
+ * their hashed bodies stay as they are, and read on the same peeled lines.
+ * Callout title lines and headings never open one, for bracketClosesLater's
+ * reasons.
+ */
+function destClosesLater(at: CarryLines, from: number, state: DestState): boolean {
+	const { lines, htmlCloserAhead, listDedented, htmlLeadIndented, htmlLeadLazy, htmlLeadCode, listStrip } = at;
+	const op = containerPrefix(lines[from]!);
+	if (op.callout) return false;
+	if (op.blockType === "heading") return false;
+	const containerInPlay = op.quotes > 0 || op.blockType === "list";
+	if (interruptsParagraph(lines[from]!.slice(op.chars), htmlCloserAhead[from]!, listDedented[from]!, htmlLeadIndented[from]!, listStrip[from]!) || opensMathBlock(lines, from, op.quotes)) return false;
+	if (containerInPlay && containerCarryStops(lines[from]!.slice(op.chars), false, htmlLeadLazy[from]!)) return false;
+	if (containerInPlay && htmlLeadCode[from]!) return false;
+	const quotes = op.quotes;
+	// Fail closed (NRL-205 fix round 1, both critics on 6966bff): an escaped `>`
+	// or a backslash before whitespace is read differently by the renderer than
+	// by destScan (`<u\>>`, `u\ 'x'`), so such a tail keeps the old reading. An
+	// escaped quote in a title (`\"`) is not one of them.
+	if (/\\(?:>|\s|$)/.test(lines[from]!)) return false;
+	let st = state;
+	const last = Math.min(lines.length - 1, from + DEST_CARRY_LINES);
+	for (let n = from + 1; n <= last; n++) {
+		const line = peelQuotes(lines[n]!, quotes);
+		// Any HTML-block start or `$$` line ends the paragraph for the renderer
+		// (an unclosed `$$` too, which opensMathBlock does not count), and the
+		// escapes above may be misread: stop there, at top level as well as in a
+		// container (both critics on 6966bff, F1/F2/F3).
+		// The HTML test ignores indentation on purpose: in a list item the renderer
+		// counts it from the item's content column, which `line` still includes
+		// (`- [a](u "x` / `    <!-- c -->`; NRL-205 fix round 2, critic 1 F1).
+		if (/^\s*<(?:[!?/]|[A-Za-z])/.test(line) || line.includes("$$") || /\\(?:>|\s|$)/.test(line)) return false;
+		if (
+			interruptsParagraphExceptBareMarker(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!, listStrip[n]!) ||
+			BARE_LIST_MARKER.test(quoteContent(lines[n]!, quotes)) ||
+			opensMathBlock(lines, n, quotes)
+		)
+			return false;
+		if (containerInPlay && containerCarryStops(line, quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!), htmlLeadLazy[n]!)) return false;
+		const r = destScan(line, 0, st);
+		if (r.kind === "closed") return true;
+		if (r.kind === "fail") return false;
+		st = r.state;
+	}
+	return false;
+}
+
+/**
  * The per-line facts bracketClosesLater reads, by RAW line number. All of them
  * are filled before extractChunks' main loop and nothing writes them after:
  * BracketCarryMemo caches answers derived from them, so an edit that writes one
@@ -7558,6 +7806,9 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// Travels with openBracket and is cleared by exactly the same paths, being
 	// part of the same carry rather than state of its own (NRL-88).
 	let openBracketDepth = 0;
+	// The link tail left unfinished by the previous line (NRL-205), cleared by the
+	// same paths as the label carry.
+	let openDest: DestState | undefined;
 	let inIndentedCode = false;
 	// Inside a list item, an indented line is item content or a nested item,
 	// never code. Kept across blank lines, since loose lists have them.
@@ -8157,6 +8408,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 
 	// One per call, built on the first armed `[` so a note with none pays nothing.
 	let bracketMemo: BracketCarryMemo | undefined;
+	let carryAt: CarryLines | undefined;
 	for (let lineNo = 0; lineNo < lines.length; lineNo++) {
 		const raw = lines[lineNo]!;
 		const lineStart = lineStarts[lineNo]!;
@@ -8173,6 +8425,8 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		openBracket = undefined;
 		const carriedBracketDepth = openBracketDepth;
 		openBracketDepth = 0;
+		const carriedDest = openDest;
+		openDest = undefined;
 
 		// This deliberately diverges from Obsidian, which only honours a `---`
 		// on line 1. A note that starts with blank lines and then a `key: value`
@@ -8763,7 +9017,20 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			htmlBlockLine(body, listStrip[lineNo]!, htmlParaOpen[lineNo]!)
 				? "block"
 				: "none";
-		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens, scopedOpeners);
+		let cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens, scopedOpeners, carriedDest);
+		// The link tail's confirmation pass (NRL-205), BEFORE the code carry is
+		// asked, because a tail that runs on swallows a backtick in its title and
+		// the code run is then not there to be confirmed. Once confirmed it stays
+		// confirmed through the passes below.
+		let confirmedDest = false;
+		if (
+			(blockType === "paragraph" || blockType === "quote" || blockType === "list") &&
+			cleaned.unclosedDest !== undefined &&
+			destClosesLater((carryAt ??= { lines, htmlCloserAhead: htmlClosesLaterAt, listDedented, htmlLeadIndented, htmlLeadLazy, htmlLeadCode, listStrip }), lineNo, cleaned.unclosedDest)
+		) {
+			confirmedDest = true;
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, undefined, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens, scopedOpeners, carriedDest, true);
+		}
 		let confirmed: number | undefined;
 		if (
 			blockType === "paragraph" &&
@@ -8771,7 +9038,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			codeSpanClosesLater(lines, lineNo, cleaned.openCode, htmlClosesLaterAt, listDedented, htmlLeadIndented, listStrip)
 		) {
 			confirmed = cleaned.openCode;
-			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens, scopedOpeners);
+			cleaned = cleanLine(body, lineStart + prefixChars, stripOpts, true, carriedCode, confirmed, carriedBracket, undefined, htmlClosesLater, carriedBracketDepth, dedentedByList, isSetextContent, leadIndented, codeLine, htmlContext, htmlBodyOkLater, percentOpens, scopedOpeners, carriedDest, confirmedDest);
 		}
 		/*
 		 * The second confirmed-carry kind, attached at the site NRL-64 built and
@@ -8834,6 +9101,9 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 				htmlContext,
 				htmlBodyOkLater,
 				percentOpens,
+				undefined,
+				carriedDest,
+				confirmedDest,
 			);
 		}
 		// Taken from the SECOND pass on purpose. A comment delimiter inside the
@@ -8896,6 +9166,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		// inside it is part of its content. Only one of the two is ever set.
 		openBracket = cleaned.openBracket;
 		openBracketDepth = cleaned.openBracketDepth ?? 0;
+		openDest = cleaned.openDest;
 		if (confirmed !== undefined && openBracket === undefined) openCode = confirmed;
 
 		if (cleaned.text.trim() === "") {

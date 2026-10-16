@@ -4494,11 +4494,11 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// NRL-182 fix round 1: neither line-2 `[!e]` is a callout (it is a LATE quote line),
 		// so both rows hold ONLY through the pre-NRL-182 late-marker peel
 		// (`LATE_CALLOUT_PEEL`), which puts `%%` at line start. They go red the day the
-		// late-marker class is fixed; the twin `>[](u "` / `>[x] %%QBQ")` speaks QBQ on
-		// every revision, the link-title-spanning-lines class (to be filed, NRL-182 fix
-		// round 1), so that fix needs the link-title class first.
-		["pin-nrl166-r2c-f1-link-title-over-lazy-pct", ">[](u \"\n>[!e] %%QBQ\")", "u \""],
-		["pin-nrl166-r2c-f1-link-title-over-lazy-pct-no-space", ">[](u \"\n>[!e]%%QBQ\")", "u \""],
+		// late-marker class is fixed. They spoke `u "` until NRL-205 (the link title
+		// spanning lines); the renderer shows nothing for either (1.13.7 and 1.14.4),
+		// so the expected speech is now empty and they no longer depend on the peel.
+		["pin-nrl166-r2c-f1-link-title-over-lazy-pct", ">[](u \"\n>[!e] %%QBQ\")", ""],
+		["pin-nrl166-r2c-f1-link-title-over-lazy-pct-no-space", ">[](u \"\n>[!e]%%QBQ\")", ""],
 		["pin-nrl166-r2c-f1-tag-attribute-over-lazy-pct", "> P <b title=\"QAQ\n> [!note] %% QBQ\n> QCQ\">QDQ</b>", "P <b title=\"QAQ"],
 		// Fix round 3: a reference in a code span MAY count, so the definition is
 		// kept as on 44a037a and our opener keeps its answer beside it: `a` is
@@ -9213,6 +9213,69 @@ console.log("NRL-170 fix round 2: the containment check is linear");
 		}
 		const shown = (ms: number | undefined) => (ms === undefined ? "over 1000 ms" : `${ms.toFixed(0)} ms`);
 		check(`NRL-170 ${id}: four times the input takes under ten times as long`, linear, `${shown(small)} -> ${shown(large)}`);
+	}
+}
+
+console.log("");
+console.log("NRL-205: a link or image whose (dest \"title\") spans lines of one paragraph drops its tail");
+{
+	// Every pin's expected speech was checked against the executed renderer's visible
+	// text (parser harness 1.13.7; 1.14.4 agreeing on every sentinel): the sentinels the
+	// page shows are spoken and those it hides are not. Pins are RED on 3e763e2. Guards
+	// and residuals are GREEN there: they hold the reading of a tail the grammar refuses
+	// or a paragraph that ends before the `)`, where the carry stays off (fail-closed).
+	// The residual- rows are base parity where this reader declines something the
+	// renderer reads differently, so they only disclose.
+	const rows205: Array<[string, string, string, Partial<typeof OPTS>?]> = [
+		["pin-nrl205-title-spans-lines", "[a](u \"t QAQ\nmore QBQ\") after QCQ", "a after QCQ"],
+		["pin-nrl205-title-spans-lines-in-quote", ">[a](u \"t QAQ\n> more QBQ\") after QCQ", "a | after QCQ"],
+		["pin-nrl205-title-spans-lines-in-quote-spaced", "> [a](u \"t QAQ\n> more QBQ\") after QCQ", "a | after QCQ"],
+		["pin-nrl205-title-spans-lines-lazy-quote", "> [a](u \"t QAQ\nmore QBQ\") after QCQ", "a | after QCQ"],
+		["pin-nrl205-empty-label-hidden-pct-in-title", ">[](u \"\n>[x] %%QBQ\")", ""],
+		["pin-nrl205-single-quote-title", "[a](u 't QAQ\nmore QBQ') after QCQ", "a after QCQ"],
+		["pin-nrl205-paren-title", "[a](u (t QAQ\nmore QBQ)) after QCQ", "a after QCQ"],
+		["pin-nrl205-title-three-lines", "[a](u \"t QAQ\nmid QDQ\nmore QBQ\")QCQ", "a QCQ"],
+		["pin-nrl205-angle-destination", "[a](<u v> \"t QAQ\nmore QBQ\") after QCQ", "a after QCQ"],
+		["pin-nrl205-balanced-paren-destination", "[a](u(x) \"t QAQ\nmore QBQ\") after QCQ", "a after QCQ"],
+		["pin-nrl205-destination-on-next-line", "[a](\nuQAQ) after QCQ", "a after QCQ"],
+		["pin-nrl205-title-on-next-line", "[a](uQAQ\n\"t QBQ\") after QCQ", "a after QCQ"],
+		["pin-nrl205-closing-paren-on-own-line", "[a](u \"t QAQ\"\n) after QCQ", "a after QCQ"],
+		["pin-nrl205-escaped-quote-in-title", "[a](u \"t \\\" QAQ\nmore QBQ\") after QCQ", "a after QCQ"],
+		["pin-nrl205-crlf", "[a](u \"t QAQ\r\nmore QBQ\") after QCQ", "a after QCQ"],
+		["pin-nrl205-list-item", "- [a](u \"t QAQ\n  more QBQ\") after QCQ", "a | after QCQ"],
+		["pin-nrl205-image-title-spans-lines", "![a](u \"t QAQ\nmore QBQ\") after QCQ", "a after QCQ"],
+		["pin-nrl205-label-and-title-both-span-lines", "[a QXQ\nb](u \"t QAQ\nmore QBQ\") after QCQ", "a QXQ b after QCQ"],
+		["pin-nrl205-code-span-opener-in-title", "[a](u \"t ` QAQ\nmore QBQ\") after QCQ`", "a after QCQ"],
+		["pin-nrl205-speak-urls-on", "[a](u \"t QAQ\nmore QBQ\") after QCQ", "a after QCQ", { speakUrls: true }],
+		// Fix round 1 (both critics on 6966bff): an HTML-block line or any `$$` line
+		// inside the tail ends the paragraph, and a backslash may be an escape destScan
+		// misreads; each keeps the old reading (red on 6966bff).
+		["guard-nrl205-html-comment-line-inside", "[Q](u 'QEQ\n<!-- c -->\nQGQ') z", "Q u 'QEQ QGQ') z"],
+		["guard-nrl205-unclosed-math-line-inside", "[a](u \"QEQ\n$$\nQGQ\") after", "a u \"QEQ $$ QGQ\") after"],
+		["guard-nrl205-html-block-line-inside", "P [a](u \"t QAQ\n<div>QBQ</div>\nmore QDQ\") QCQ", "P a u \"t QAQ QBQ more QDQ\") QCQ"],
+		["guard-nrl205-backslash-on-opener-line", "[Q](u\\ 'QEQ\nQFQ') z", "Q u 'QEQ QFQ') z"],
+		["guard-nrl205-indented-html-line-in-list-item", "- [QAQ](u \"QEQ\n    <!-- c -->\n  QGQ\") zQZQ", "QAQ u \"QEQ | QGQ\") zQZQ"],
+		["guard-nrl205-blank-line-inside", "[a](u \"t QAQ\n\nmore QBQ\") after QCQ", "a u \"t QAQ | more QBQ\") after QCQ"],
+		["guard-nrl205-title-never-closed", "[a](u \"t QAQ\nmore QBQ ) after QCQ", "a u \"t QAQ more QBQ ) after QCQ"],
+		["guard-nrl205-junk-after-title", "[a](u \"t QAQ\nmore QBQ\" x) after QCQ", "a u \"t QAQ more QBQ\" x) after QCQ"],
+		["guard-nrl205-heading-line-inside", "[a](u \"t QAQ\n# H QDQ\nmore QBQ\") after QCQ", "a u \"t QAQ | H QDQ | more QBQ\") after QCQ"],
+		["guard-nrl205-list-line-inside", "[a](u \"t QAQ\n- more QBQ\") after QCQ", "a u \"t QAQ | more QBQ\") after QCQ"],
+		["guard-nrl205-quote-depth-change", "[a](u \"t QAQ\n> more QBQ\") after QCQ", "a u \"t QAQ | more QBQ\") after QCQ"],
+		["guard-nrl205-quote-ends-before-close", "> [a](u \"t QAQ\n\nmore QBQ\") after QCQ", "a u \"t QAQ | more QBQ\") after QCQ"],
+		["residual-nrl205-angle-destination-spans-lines", "[a](<u QAQ\nv>) after QCQ", "a <u QAQ v>) after QCQ"],
+		["residual-nrl205-unbalanced-paren-destination", "[a](u(x \"t QAQ\nmore QBQ\") after QCQ", "a u(x \"t QAQ more QBQ\") after QCQ"],
+		["guard-nrl205-image-never-closed", "![a](u \"t QAQ\nmore QBQ ) after QCQ", "a u \"t QAQ more QBQ ) after QCQ"],
+		["guard-nrl205-image-blank-line-inside", "![a](u \"t QAQ\n\nmore QBQ\") after QCQ", "a u \"t QAQ | more QBQ\") after QCQ"],
+		["residual-nrl205-paren-title-inner-paren", "[a](u (t QAQ (x)\nmore QBQ)) after QCQ", "a more QBQ)) after QCQ"],
+		["guard-nrl205-comment-opener-on-opener-line", "P [a](u \"<!-- QAQ -- x\nQBQ -->\") QCQ", "P a u \" \") QCQ"],
+		["guard-nrl205-speak-urls-never-closed", "[a](u \"t QAQ\nmore QBQ ) after QCQ", "a u \"t QAQ more QBQ ) after QCQ", { speakUrls: true }],
+		["guard-nrl205-callout-title-line", "> [!e] [a](u \"t QAQ\n> more QBQ\") after QCQ", "a u \"t QAQ | more QBQ\") after QCQ"],
+	];
+	for (const [name, src, want, extra] of rows205) {
+		const got = extractChunks(src, { ...OPTS, ...extra })
+			.map((c) => c.text)
+			.join(" | ");
+		check(`${name} ${JSON.stringify(src)}`, got === want, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
 	}
 }
 

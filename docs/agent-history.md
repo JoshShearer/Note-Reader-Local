@@ -396,6 +396,60 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A link tail `(dest "title")` that spans lines is dropped whole (NRL-205, 2026-10-16)
+
+On 3e763e2 `[a](u "t QAQ` / `more QBQ") after QCQ` (top level, in a quote, lazy quote, list
+item) spoke `a u "t QAQ more QBQ") after QCQ` where both renderers (1.13.7 and 1.14.4) show
+`a after QCQ`; images the same. Cause: the link and image branches of `cleanLine` take the
+tail up to the first `)` ON THE LINE, and with none consume only the `(`, so everything after
+was prose (also a backtick in the title opened a code carry that silenced the rest).
+
+- **Mechanism.** `destScan` reads a tail by CommonMark's grammar on one line and returns
+  `closed`, `more` (ends valid and unfinished, in a state: `pre`, `ad`, `at`, or inside a `"`,
+  `'` or `(` title) or `fail`. A link or image whose tail is `more` is recorded as
+  `unclosedDest`; `destClosesLater` (copy of `bracketClosesLater`'s opener checks and
+  `bracketWalkFresh`'s per-line stops, on the same peeled lines, plus `destScan` per line,
+  at most `DEST_CARRY_LINES` = 32 lines) confirms it; a second `cleanLine` pass then drops the
+  rest of the line and hands `openDest` on, and each later line drops up to the `)`. The pass
+  runs before the code-carry confirmation. A tail that closes on its own line keeps the old
+  first-`)` reading (same-line titles holding a `)` are out of scope).
+- **Fail-closed, by design.** A blank line, any `interruptsParagraph` or `containerCarryStops`
+  line, a quote depth change, a callout title opener, a heading opener, `^` footnote labels,
+  an angle destination left open at a line end, a control character, parentheses deeper than 3,
+  an unescaped `(` in a `(` title, junk after the title, an unclosed title: all keep the old
+  reading (disclosure at worst, never silenced prose). The incoming line re-reads its own text
+  with the same grammar, so a peeled-versus-body disagreement costs a disclosure.
+- **Pins moved with evidence.** `pin-nrl166-r2c-f1-link-title-over-lazy-pct` and `-no-space`
+  expected `u "`; the renderer shows nothing (1.13.7 and 1.14.4), so they now expect empty and
+  no longer rest on the late-marker peel. The comment-opener-on-opener-line guards
+  (`guard-nrl166-r1-a-link-title-holds-opener`) are untouched: the opener check refuses first.
+- **Residuals pinned as `residual-nrl205-*`** (base parity, disclosing): an angle destination
+  spanning lines, an unbalanced paren destination, a `(` title with an inner `(...)`.
+- **Grade** (`g205.cjs`, generator of this change, seeded: 12 containers x link/image x 4
+  destination forms x title kind or none x 1-3 split points x 6 followers x 16 title-content
+  variants x interrupts (blank, heading, quote depth, bullet, fence) x CRLF, 3 option sets,
+  sentinel per part, renderer = 1.13.7 visible text, 1.14.4 agreeing on every sentinel).
+  Seeds 11 and 12 (40,000 notes, ~856,000 cells each, before the title-content variants):
+  newly disclosing 0, newly lost 0, newly speaking 0 (a shown sentinel base lost, newly
+  spoken), disclosures removed 132,396 and 131,946. Seed 21 with the variants (20,000 notes,
+  428,649 cells): 0 / 0 / 0 after one grader correction, disclosures 81,547 -> 22,023. Before
+  that correction 35 cells counted "newly lost": `` `QeQ` `` after a link whose title held a
+  backtick; base paired the title's backtick with the follower's and spoke QeQ by accident,
+  the branch reads the real code span, which DEF skips by design (CODE and ALL speak it).
+  Wrong arms fail in the same grader: dropping the per-line stops newly lost 8,630 cells
+  (6,000 notes), letting the grammar accept junk newly lost 327. The remaining disclosures in
+  the grade are fail-closed shapes, image alt under `speakImageAlt`, and the three residuals.
+- **Lockstep** (rule 8): NRL-128's `lock128.cjs` with the branch bundle, CLEAN row 0/0/0/0; a
+  full identity check (length, bounds, monotone, character equality except spaces) on 15,000
+  generated notes x DEF/ALL, 77,819 chunks, 0 violations.
+- **Timing** (median of 3, this machine): 20,000 lines of multi-line links base 481 ms,
+  branch 478 ms (separate paragraphs); one paragraph 358 / 359 ms; 40,000 unclosed
+  openers (`[a](u "t` each line) 744 / 787 ms; alternating `"`, `'`, `(` openers 707 / 795 ms.
+  Four sizes 5,000 to 40,000 scale linearly on every shape.
+- **Not established.** Nothing was run in Obsidian (NOT VERIFIED IN OBSIDIAN): all
+  behaviour is the Node parser harness. Reference-style links (`[a][r]`), wikilinks, and
+  titles holding a `)` on the same line are untouched. Live Preview is a separate renderer.
+
 ### A fence's closer is read in its container, not off the raw line (NRL-213, 2026-10-16)
 
 - **Bug (R-M08):** `1. QiQ` / six-space ```` ```js ```` / `   QmQ` / three-space ```` ``` ```` / blank /
