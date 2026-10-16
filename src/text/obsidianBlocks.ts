@@ -464,6 +464,9 @@ class BlockScanner {
 	// with the tokenizer's name, and of every paragraph.
 	readonly rawBlocks: Array<readonly [number, number, string]> = [];
 	readonly paragraphs: Array<readonly [number, number]> = [];
+	// Where each paragraph's text starts, past its containers' markers and a
+	// footnote's label, parallel to `paragraphs` (NRL-184).
+	readonly paragraphFrom: ScanPos[] = [];
 	private lastMethod = "";
 	// The note as scanned, and each of its lines' end offset, when the caller
 	// gives them (`setNote`): what the browser-comment carry reads between blocks.
@@ -616,8 +619,10 @@ class BlockScanner {
 			if (RAW_BLOCKS.has(this.lastMethod) || this.lastMethod === "paragraph") {
 				let last = line;
 				for (let k = pos; k < pos + eaten - 1; k++) if (value.charCodeAt(k) === 10) last++;
-				if (this.lastMethod === "paragraph") this.paragraphs.push([line, last]);
-				else this.rawBlocks.push([line, last, this.lastMethod]);
+				if (this.lastMethod === "paragraph") {
+					this.paragraphs.push([line, last]);
+					this.paragraphFrom.push(scanPos(rest, line, 0));
+				} else this.rawBlocks.push([line, last, this.lastMethod]);
 			}
 			// A fenced block's fence lines are never displayed: the opening one's
 			// info string becomes a `class` (measured: `> ~~~ QFQ` renders
@@ -1793,6 +1798,182 @@ export interface RendererHiddenText {
 	hiddenRawLines: boolean[];
 }
 
+/** Characters that open no inline construct: a backtick run after only these is the one the renderer pairs. */
+const SPAN_SAFE_CHAR = /^[\p{L}\p{N}\s.,;!?'"()+>-]$/u;
+
+/**
+ * NRL-184: which `<?` / `<![CDATA[` the deferred-fence gate counts. `bodyAt` is
+ * the first one the renderer may emit raw in the page body, or -1; `anyAt` also
+ * takes one inside a `%%` block comment, which the body drops but a `^[...]`
+ * written there still reaches the footnotes section raw (plan critique v1 F1),
+ * so only footnote fences read it. An opener is skipped only when the scan is
+ * sure the renderer escapes or drops it; anything unsure counts, which keeps the
+ * NRL-178 answer. Linear: each paragraph's code spans are paired once, closers
+ * are found with forward-only cursors, and `%%` ranges are binary searched
+ * (NRL-172/181 traps: "<?".repeat(n), long backtick paragraphs).
+ */
+function inlineBogusGate(
+	source: string,
+	scanner: BlockScanner,
+	lineStart: readonly number[],
+	lineEnd: readonly number[],
+	lineCount: number,
+	offset: (p: ScanPos) => number,
+	inPct: (o: number) => boolean,
+): { bodyAt: number; anyAt: number } {
+	const first = INLINE_BOGUS_OPENER.exec(source);
+	if (!first) return { bodyAt: -1, anyAt: -1 };
+	const lineOf = (o: number): number => {
+		let lo = 0;
+		let hi = lineCount - 1;
+		while (lo < hi) {
+			const mid = (lo + hi + 1) >> 1;
+			if (lineStart[mid]! <= o) lo = mid;
+			else hi = mid - 1;
+		}
+		return lo;
+	};
+	// Per line: the raw block over it and whether it is that block's first line,
+	// and the paragraph it belongs to.
+	const rawKind: Array<string | null> = new Array<string | null>(lineCount).fill(null);
+	const rawHead: boolean[] = new Array<boolean>(lineCount).fill(false);
+	for (const [a, b, kind] of scanner.rawBlocks) {
+		for (let l = a; l <= b && l < lineCount; l++) {
+			rawKind[l] = kind;
+			rawHead[l] = l === a;
+		}
+	}
+	const paraOf: number[] = new Array<number>(lineCount).fill(-1);
+	scanner.paragraphs.forEach(([a, b], id) => {
+		for (let l = a; l <= b && l < lineCount; l++) paraOf[l] = id;
+	});
+	// The first `%%` outside a block comment: an inline `%%` pair is removed
+	// before the inline parse and may cut a code span, so nothing past it is sure.
+	let loosePct = Infinity;
+	for (let at = source.indexOf("%%"); at !== -1; at = source.indexOf("%%", at + 2)) {
+		if (!inPct(at)) {
+			loosePct = at;
+			break;
+		}
+	}
+	// The renderer's inline HTML rule: a processing instruction closes with `?>`
+	// on its own line, a CDATA section (exact case) with any later `]]>`.
+	let piClose = -1;
+	const cdClose = source.lastIndexOf("]]>");
+	const paras = new Map<number, { spans: Array<readonly [number, number]>; until: number; from: number }>();
+	const paraSpans = (p: number): { spans: Array<readonly [number, number]>; until: number; from: number } => {
+		const known = paras.get(p);
+		if (known) return known;
+		const from = offset(scanner.paragraphFrom[p]!);
+		const end = lineEnd[scanner.paragraphs[p]![1]] ?? source.length;
+		const runAt: number[] = [];
+		const runLen: number[] = [];
+		for (let i = from; i < end; ) {
+			if (source.charCodeAt(i) !== 96) {
+				i++;
+				continue;
+			}
+			let j = i;
+			while (j < end && source.charCodeAt(j) === 96) j++;
+			runAt.push(i);
+			runLen.push(j - i);
+			i = j;
+		}
+		const nextSame = new Array<number>(runAt.length).fill(-1);
+		const lastOfLen = new Map<number, number>();
+		for (let i = runAt.length - 1; i >= 0; i--) {
+			nextSame[i] = lastOfLen.get(runLen[i]!) ?? -1;
+			lastOfLen.set(runLen[i]!, i);
+		}
+		// Forward-only cursors over the paragraph: every scan starts past the last.
+		let mark = from - 1;
+		const nextMark = (x: number): number => {
+			if (mark >= x) return mark;
+			let k = x;
+			while (k < end && !(source.charCodeAt(k) === 36 || (source.charCodeAt(k) === 91 && source.charCodeAt(k + 1) === 91))) k++;
+			return (mark = k);
+		};
+		const firstUnsafe = (a: number, b: number): number => {
+			for (let k = a; k < b; ) {
+				const cp = source.codePointAt(k)!;
+				const w = cp > 0xffff ? 2 : 1;
+				if (!SPAN_SAFE_CHAR.test(source.slice(k, k + w))) return k;
+				k += w;
+			}
+			return b;
+		};
+		const spans: Array<readonly [number, number]> = [];
+		let until = end;
+		for (let pos = from, i = 0; ; ) {
+			const k = i < runAt.length ? runAt[i]! : end;
+			const u = firstUnsafe(pos, k);
+			if (u < k || i >= runAt.length) {
+				until = u;
+				break;
+			}
+			const j = nextSame[i]!;
+			if (j === -1) {
+				until = k;
+				break;
+			}
+			const close = runAt[j]! + runLen[j]!;
+			if (nextMark(k) < close || loosePct < close) {
+				until = k;
+				break;
+			}
+			spans.push([k + runLen[i]!, runAt[j]!]);
+			pos = close;
+			i = j + 1;
+		}
+		const out = { spans, until, from };
+		paras.set(p, out);
+		return out;
+	};
+	let anyAt = -1;
+	const re = new RegExp(INLINE_BOGUS_OPENER.source, "gi");
+	for (let m = re.exec(source); m; m = re.exec(source)) {
+		const at = m.index;
+		const l = lineOf(at);
+		const kind = rawKind[l];
+		if (kind === "html") return { bodyAt: at, anyAt: anyAt === -1 ? at : anyAt };
+		if (kind !== null && kind !== undefined) {
+			// Code, math and frontmatter bodies are escaped or dropped; a fence's
+			// or `$$`'s own first line may hold an info string or text.
+			if (!((kind === "fencedCode" || kind === "math") && rawHead[l])) continue;
+			return { bodyAt: at, anyAt: anyAt === -1 ? at : anyAt };
+		}
+		if (inPct(at)) {
+			if (anyAt === -1) anyAt = at;
+			continue;
+		}
+		if (source.charCodeAt(at + 1) === 63) {
+			if (piClose < at + 2) {
+				const k = source.indexOf("?>", at + 2);
+				piClose = k === -1 ? Infinity : k;
+			}
+			if (piClose >= (lineEnd[l] ?? source.length)) continue;
+		} else if (!source.startsWith("<![CDATA[", at) || cdClose < at + 9) continue;
+		const p = paraOf[l]!;
+		if (p === -1) return { bodyAt: at, anyAt: anyAt === -1 ? at : anyAt };
+		const { spans, until, from } = paraSpans(p);
+		// Inside a span the walk reached: the renderer escapes it.
+		let lo = 0;
+		let hi = spans.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			if (spans[mid]![0] <= at) lo = mid + 1;
+			else hi = mid;
+		}
+		if (lo > 0 && at < spans[lo - 1]![1] && spans[lo - 1]![1] <= until) continue;
+		// In clean text after an odd backslash run: escaped.
+		let bs = 0;
+		while (at - bs - 1 >= from && source.charCodeAt(at - bs - 1) === 92) bs++;
+		if (bs % 2 === 1 && until >= at - bs && loosePct >= at) continue;
+		return { bodyAt: at, anyAt: anyAt === -1 ? at : anyAt };
+	}
+	return { bodyAt: -1, anyAt };
+}
+
 /**
  * Text the reading view displays NOTHING of, read off the same transcription
  * (NRL-166 fix round 2), or `null` exactly when `rendererPercentBlocks` is:
@@ -1807,9 +1988,10 @@ export interface RendererHiddenText {
  *   (`openRiskThrough` reports how far it may reach instead; fix round 3);
  * - the opening and closing lines of every fenced code block: the info string
  *   becomes a `class` and the closer is markup. A head holding `-->` or `--!>`,
- *   which may close a browser comment, only before the first line an HTML block
- *   or a raw-text or foreign tag may leave open, and in a footnote definition
- *   only when nothing in the note may (NRL-178);
+ *   which may close a browser comment, only before the first line an HTML block,
+ *   a raw-text or foreign tag, or a processing instruction or CDATA section the
+ *   renderer passes through raw may leave open, and in a footnote definition
+ *   only when nothing in the note may (NRL-178, NRL-184);
  * - every footnote definition the note never references, and every earlier
  *   definition of a label defined twice. The renderer lists only referenced
  *   definitions, and only the last of a label, which nothing else here models:
@@ -1830,6 +2012,7 @@ export interface RendererHiddenText {
  * falls inside one from the spoken text can never disclose, and it is how
  * `extractChunks` drops text its own model would otherwise read.
  */
+
 export function rendererHiddenText(source: string, lineCount: number): RendererHiddenText | null {
 	if (/\r(?!\n)/.test(source)) return null;
 	let value = source.replace(/\r\n/g, "\n");
@@ -1878,15 +2061,31 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	// comment, and a `<!--` after that `>` opens a comment (fix round 1,
 	// /critique on d0442e5, F1: `QpaQ <?x > <!-- QpbQ ?>` / blank /
 	// ```` > ```QhQ-->QiQ ```` displays `QiQ">`). Every other inline construct
-	// ends where the browser's does. Whether one is real markup, or what follows
-	// its `>`, is not modelled: any `<?` or `<![CDATA[` in the note counts from
-	// its line, which keeps the old answer there. Only the deferred fences read
-	// this; `openFrom` keeps its meaning for `browserRiskLines` below.
+	// ends where the browser's does. What follows its `>` is not modelled: an
+	// opener counts from its line unless `inlineBogusGate` is sure the renderer
+	// escapes or drops it (code, `$$`, frontmatter and `%%` bodies, a sure code
+	// span, a backslash escape, no closer; NRL-184). One in a `%%` block still
+	// counts for footnote fences: a `^[...]` written there reaches the footnotes
+	// section raw. Only the deferred fences read this; `openFrom` keeps its
+	// meaning for `browserRiskLines` below.
 	let fenceOpenFrom = openFrom;
 	let fenceAnyOpen = anyOpen;
-	const inlineBogusAt = INLINE_BOGUS_OPENER.exec(source)?.index ?? -1;
+	// The `%%` block comments, the rest of `hidden`, disjoint; read before the fence parts below join `hidden` as bogus.
+	const pctRanges = scanner.hidden.flatMap((h, k) => (scanner.bogus.has(k) ? [] : [[offset(h.start), offset(h.end)] as const])).sort((x, y) => x[0] - y[0]);
+	const inPct = (o: number): boolean => {
+		let lo = 0;
+		let hi = pctRanges.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			if (pctRanges[mid]![0] <= o) lo = mid + 1;
+			else hi = mid;
+		}
+		return lo > 0 && pctRanges[lo - 1]![1] > o;
+	};
+	const gate = inlineBogusGate(source, scanner, lineStart, lineEnd, lineCount, offset, inPct);
+	if (gate.anyAt !== -1) fenceAnyOpen = true;
+	const inlineBogusAt = gate.bodyAt;
 	if (inlineBogusAt !== -1) {
-		fenceAnyOpen = true;
 		let l = 0;
 		while (l + 1 < lineCount && lineStart[l + 1]! <= inlineBogusAt) l++;
 		fenceOpenFrom = Math.min(fenceOpenFrom, l);
@@ -1923,18 +2122,6 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 			else hi = mid;
 		}
 		return lo > 0 && bogusRanges[lo - 1]![1] > o;
-	};
-	// The `%%` block comments, the rest of `hidden`, likewise disjoint.
-	const pctRanges = scanner.hidden.flatMap((h, k) => (scanner.bogus.has(k) ? [] : [[offset(h.start), offset(h.end)] as const])).sort((x, y) => x[0] - y[0]);
-	const inPct = (o: number): boolean => {
-		let lo = 0;
-		let hi = pctRanges.length;
-		while (lo < hi) {
-			const mid = (lo + hi) >> 1;
-			if (pctRanges[mid]![0] <= o) lo = mid + 1;
-			else hi = mid;
-		}
-		return lo > 0 && pctRanges[lo - 1]![1] > o;
 	};
 	const footnoteLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	const browserRiskLines: boolean[] = new Array<boolean>(lineCount).fill(false);

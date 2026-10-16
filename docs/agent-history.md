@@ -396,6 +396,41 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### Inline PI/CDATA counted only where the renderer emits it raw (NRL-184, 2026-10-16)
+
+NRL-178 fix round 1's `INLINE_BOGUS_OPENER` exec counted any `<?` / `<![CDATA[` in the
+note, so an escaped or dropped one (code span, code / `$$` / `%%` / frontmatter body,
+`\<?`, no closer) still left `- Q<!--` / `    ```QKZQ--->` speaking `QKZQ--->`.
+`inlineBogusGate` in `obsidianBlocks.ts` now decides per opener. ADR 0025's NRL-184
+section has the rules and figures: on 7.07M LF census cells, 2.83M CRLF, six fuzz seeds,
+cross3, f1probe and the NRL-178 corpora, 0 newly disclosing, 0 newly lost and 0 newly
+speaking excluded text against 4e67084, lockstep clean, every timing row at or under
+4.6x for 4x input.
+
+- **Ticket correction: indentation.** The rows reproduce only with the fence inside the
+  list item (`    ````); unindented, every revision already hid the head.
+- **Trap: a whitelist, not a blacklist.** Every census round of the plan found another
+  construct that takes a backtick before the code span does (`[`, `$`, inline `%%`, tag
+  attributes, autolinks, `*`, `_`, `~~`, `==`, `^[`, `[[`, images, embeds). A span is
+  trusted only after `SPAN_SAFE_CHAR` text; the no-whitelist mutant loses 17,514 census
+  cells per atom.
+- **Trap: `%%` does not hide a `^[`** (plan critique v1 F1). A `^[...]` written inside a
+  `%%` block is still collected, and its content reaches the footnotes section raw, so a
+  `%%`-block opener still counts for footnote fences (`anyAt`). The v1 rule, skipping it
+  for both fence classes, loses 1,315 census cells per atom and 36 f1probe cells;
+  `guard-nrl184-pct-*` go RED on it.
+- **Trap: the per-opener walk is quadratic** (critique v1 F2): in-span CDATA x4,000 took
+  266,753 ms. Spans are paired once per paragraph with forward-only cursors; the
+  `NRL-184 ... four times the input` rows in `tests/extract.test.ts` guard it.
+- **Base moved under the plan.** NRL-170 and NRL-182 changed extract.ts after the plan
+  graded against 071a37e: `>[!e]%%` is now a plain quote, so the plan's Row B is no longer
+  a callout. Graded against 4e67084 with a real-callout Row B (`> [!e]` / `>~~~`) added;
+  the `>[!e]%%` head-speaking drift on main is NRL-211.
+- **Residual.** `%%` / `^[hello QxQ]` / `%%` displays `hello QxQ` in the footnotes and every
+  revision stays silent (lost text, pre-existing).
+
+NOT VERIFIED IN OBSIDIAN: lanes never deploy.
+
 ### A callout marker is what the renderer reads as one (NRL-182, 2026-10-15)
 
 `CALLOUT` (the container peel, which strips the marker) was `^\[![A-Za-z][\w-]*\][+-]?\s*`: it

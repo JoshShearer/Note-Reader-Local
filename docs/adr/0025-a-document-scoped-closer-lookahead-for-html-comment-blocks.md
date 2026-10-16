@@ -3410,6 +3410,80 @@ newly lost); its fuzz, seed 4242 x 30,000 and 99 x 60,000 attempts: 0 / 0, 7,066
 Wrong arm on the census and fuzz: unchanged from above (62,540 / 18,400; 7,399 / 83;
 7,252 / 87). Twelve new pins were RED on d0442e5 and the four new guards passed there.
 
+#### NRL-184 (2026-10-16): count only the inline openers the renderer emits raw
+
+Fix round 1 above counted every `<?` and `<![CDATA[` in the note (`INLINE_BOGUS_OPENER`
+over the raw source). An opener the renderer escapes or drops opens no browser comment,
+yet still left a later `-->` fence head spoken: `- Q<!--` / `    ```QKZQ--->` spoke
+`QKZQ--->` after ``Use `<?php` here.``, an indented `<?php`, a `$$`, `%%` or fenced body
+holding one, `a \<?x b` or `a <?x b`. Both renderers (1.13.7, 1.14.4) hide it. The
+ticket's rows reproduce only with the fence inside the item; unindented, every revision
+already hid it.
+
+**Change.** `inlineBogusGate` (next to `rendererHiddenText`) returns `bodyAt`, the first
+opener the renderer may emit raw in the page body, which lowers `fenceOpenFrom` as
+`inlineBogusAt` did, and `anyAt`, which also takes an opener inside a `%%` block and is
+the only thing that sets `fenceAnyOpen` from inline markup. Rules, in source order; an
+opener the scan is unsure of counts, which keeps the old answer:
+
+1. On a raw block's line (`scanner.rawBlocks`): an `html` block counts; an indented
+   code, frontmatter, fenced code or `$$` body line is skipped; a fence or `$$` head
+   line counts (its info string is an inert attribute, but no corpus proves every head
+   shape).
+2. Inside a `%%` block: skipped for body fences, recorded as `anyAt` for footnote
+   fences. A `^[...]` written inside a `%%` block is still collected and its content
+   reaches the footnotes section raw (plan critique v1 F1; `%%` / `^[<?x > <!-- QaQ ?>]`
+   / `%%` before `[^n]: Q<!--` / `    ```QhQ-->QiQ` displays `QiQ`).
+3. No closer the renderer's inline rule needs: a PI with no `?>` on its line, a CDATA
+   section not exactly `<![CDATA[` or with no later `]]>`. Skipped.
+4. In a paragraph (`BlockScanner.paragraphFrom` gives where its text starts): skipped
+   inside a code span the walk is sure of, or after an odd backslash run in clean text.
+   The walk pairs backtick runs of equal length and is sure only while the text before a
+   run is `SPAN_SAFE_CHAR` and the span holds no `$` or `[[` and no loose `%%` precedes
+   its closer: link text, `$`, inline `%%`, a tag attribute, an autolink, `*`, `_`,
+   `~~`, `==`, `^[`, images and embeds may each take a backtick first. A whitelist, not a
+   list of constructs. Not in a paragraph (heading, table row): counted.
+
+The `pctRanges` / `inPct` definition moved above the gate; before the `commentFences`
+loop `hidden` holds only `%%` and HTML-block bogus ranges, and the latter are excluded
+by `bogus`, so the list is the one the `noRef` scan reads later.
+
+**Linear.** A first prototype re-walked the paragraph per opener: in-span CDATA x1,000
+took 4,231 ms and x4,000 266,753 ms (plan critique v1 F2). The gate pairs each
+paragraph's spans once (cached), uses forward-only cursors for `?>`, `$`/`[[` and
+unsafe text, one `lastIndexOf("]]>")`, and binary search for lines and `%%` ranges.
+
+**Evidence** (`.claude/runs/NRL-184/plan`, `run-impl.sh`, outputs `b-*.out`). Arm `impl`
+is this tree bundled with esbuild; the base is 4e67084 (origin/main at build time, after
+NRL-170 and NRL-182 changed extract.ts; `obsidianBlocks.ts` is byte-identical to
+071a37e). 071a37e and ee80121 ran as historical arms and equal each other in every
+cell; against 4e67084 they differ only by that base drift (for example `>[!e]%%` is no
+longer a callout). Graded per sentinel x DEF/CODE/ALL with NRL-178's `browserVisible`
+over 1.13.7, 1.14.4 cross-checked; both harness selftests OK. Every corpus: renderer
+crashes 0, 1.13.7 vs 1.14.4 differing 0, lockstep failures 0, and `impl` newly
+disclosing 0, newly lost 0, newly speaking excluded text 0.
+
+| corpus | cells | impl fixed | wrong arms, newly lost |
+|---|---|---|---|
+| census184v3, 5 atoms x 81 wrappers x 6 containers x 6 fence contexts (real-callout Row B `> [!e]` / `>~~~` added), LF | 7,074,000 | pi 67,910, cd 68,774, piOpen 193,718, cdLower 212,655, piBare 68,774 | v1 rule 2: 1,315 + 1,315; no whitelist: 17,514 + 17,514; skip heads: 0 |
+| same, CRLF, pi and cd | 2,829,600 | 67,910, 68,774 | 1,315 + 1,315; 17,514 + 17,514 |
+| fuzz seeds 184, 9001, 77 x 30,000 | 1,116,609 | 18,754, 18,301, 17,569 | no whitelist: 3 (seed 9001) |
+| fuzz2 seeds 1841, 2026, 4242 x 30,000 | 1,045,296 | 5,604, 5,916, 5,613 | v1 rule 2: 6, 12, 9 |
+| cross3 span straddles, 4 fences | 2,419,200 | 183,978 | no whitelist: 756 |
+| f1probe (`%%` / `^[` shapes) | 756 | 36 (body fences) | v1 rule 2: 36 |
+| NRL-178 inline / census / fuzz 31337 | 1,920,816 / 1,900,080 / 105,102 | 27,774 / 0 / 0 | - |
+
+lock128 (NRL-128): CLEAN 0/0/0/0 and every mutator and exemption row red. Timing (CODE,
+best of 3, 15 rows at n=1,000 -> 4,000 and 4,000 -> 16,000): every `impl` ratio at or
+under 4.6x, base 4e67084 at or under 4.8x; in-span CDATA x4,000 46 ms (base 35 ms).
+
+**Residuals, left at the base answer.** Footnote fences after any opener in a `%%`
+block; inline comments; `$..$`, inline `%%`, links, highlights, heading, table and
+callout-title spans holding a closed PI; code-span pairs after an unclosed run; fence
+and `$$` head lines; and the pre-existing `%%` / `^[hello QxQ]` / `%%` loss (the
+renderer shows it in the footnotes, every revision stays silent). NOT VERIFIED IN
+OBSIDIAN: lanes never deploy.
+
 ### NRL-170 (2026-10-14): a quote ended by lazy indented code is a term-2 stop, and the line is code
 
 Class (e) of the NRL-166 section, closed. Reproduced on ee80121 (bare Node, the real
