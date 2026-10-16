@@ -5150,10 +5150,20 @@ function destClosesLater(at: CarryLines, from: number, state: DestState): boolea
 	if (containerInPlay && containerCarryStops(lines[from]!.slice(op.chars), false, htmlLeadLazy[from]!)) return false;
 	if (containerInPlay && htmlLeadCode[from]!) return false;
 	const quotes = op.quotes;
+	// Fail closed (NRL-205 fix round 1, both critics on 6966bff): an escaped `>`
+	// or a backslash before whitespace is read differently by the renderer than
+	// by destScan (`<u\>>`, `u\ 'x'`), so such a tail keeps the old reading. An
+	// escaped quote in a title (`\"`) is not one of them.
+	if (/\\(?:>|\s|$)/.test(lines[from]!)) return false;
 	let st = state;
 	const last = Math.min(lines.length - 1, from + DEST_CARRY_LINES);
 	for (let n = from + 1; n <= last; n++) {
 		const line = peelQuotes(lines[n]!, quotes);
+		// Any HTML-block start or `$$` line ends the paragraph for the renderer
+		// (an unclosed `$$` too, which opensMathBlock does not count), and the
+		// escapes above may be misread: stop there, at top level as well as in a
+		// container (both critics on 6966bff, F1/F2/F3).
+		if (HTML_BLOCK_OPEN.test(line) || line.includes("$$") || /\\(?:>|\s|$)/.test(line)) return false;
 		if (
 			interruptsParagraphExceptBareMarker(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!, listStrip[n]!) ||
 			BARE_LIST_MARKER.test(quoteContent(lines[n]!, quotes)) ||
