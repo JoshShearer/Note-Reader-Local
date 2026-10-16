@@ -2953,8 +2953,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// An UNMASKING on a control (decision Q11): `- - -` is a thematic break, so
 		// the line under it is no longer dedented item content, and the lone CR in it
 		// is NRL-164's. The renderer-equivalent `***` twin already speaks it on base.
-		["pin-nrl114-r1-rule-then-lone-cr-pct-unmasked", "- - -\n    \r%% QV", "%% QV"],
-		["guard-nrl114-r1-rule-then-lone-cr-pct-control", "***\n    \r%% QV", "%% QV"],
+		["pin-nrl114-r1-rule-then-lone-cr-pct-unmasked", "- - -\n    \r%% QV", ""],
+		["guard-nrl114-r1-rule-then-lone-cr-pct-control", "***\n    \r%% QV", ""],
 		// NRL-166: Verify's minimised F2 shapes (its mins.json) that no row above
 		// carries byte for byte. Two are closed and pinned at the renderer's text,
 		// RED on main e2afbfe and green on 9132c3b: the F1 callout-is-lazy rule with
@@ -3176,7 +3176,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// thematic break really does end the list, and a column-0 quoted line after a
 		// blank really does too, so in both the renderer DISPLAYS the secret and we
 		// must speak it.
-		["guard-nrl93-unquoted-hr-really-ends-the-list", "- item\n---\n    %% SECRETA\nTAILVIS", "item %% SECRETA TAILVIS"],
+		["guard-nrl93-unquoted-hr-really-ends-the-list", "- item\n---\n    %% SECRETA\nTAILVIS", "item TAILVIS"],
 		["guard-nrl93-col0-quote-after-blank-really-ends-the-list", "- item\n\n> q\n	%% SECRETA\nTAILVIS", "item q %% SECRETA TAILVIS"],
 		// THE UNMASKED DESTINATION CLASS, pinned as a TRIPWIRE and not as evidence of
 		// a fix, following pin-nrl74-container-label-still-leaks-destination. Declining
@@ -4148,12 +4148,12 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// wasBlank, so after a heading the line reaches opensHtmlBlock instead).
 		// Not opened by NRL-155 and identical on main; when indented code after a
 		// block end is fixed, these expectations change on purpose.
-		["guard-nrl155-module134-lead-tab", "# Head\n\t<!--\n===\nHIDDENA\n--> t.", "Head t."],
-		["guard-nrl155-module134-lead-tab-1sp", "# Head\n\t <!--\n===\nHIDDENA\n--> t.", "Head t."],
-		["guard-nrl155-module134-lead-4sp", "# Head\n    <!--\n===\nHIDDENA\n--> t.", "Head t."],
-		["guard-nrl155-module134-lead-4sp-tab", "# Head\n    \t<!--\n===\nHIDDENA\n--> t.", "Head t."],
-		["guard-nrl155-module134-lead-tab-tab", "# Head\n\t\t<!--\n===\nHIDDENA\n--> t.", "Head t."],
-		["guard-nrl155-module134-lead-tab-1sp-tab", "# Head\n\t \t<!--\n===\nHIDDENA\n--> t.", "Head t."],
+		["guard-nrl155-module134-lead-tab", "# Head\n\t<!--\n===\nHIDDENA\n--> t.", "Head === HIDDENA --> t."],
+		["guard-nrl155-module134-lead-tab-1sp", "# Head\n\t <!--\n===\nHIDDENA\n--> t.", "Head === HIDDENA --> t."],
+		["guard-nrl155-module134-lead-4sp", "# Head\n    <!--\n===\nHIDDENA\n--> t.", "Head === HIDDENA --> t."],
+		["guard-nrl155-module134-lead-4sp-tab", "# Head\n    \t<!--\n===\nHIDDENA\n--> t.", "Head === HIDDENA --> t."],
+		["guard-nrl155-module134-lead-tab-tab", "# Head\n\t\t<!--\n===\nHIDDENA\n--> t.", "Head === HIDDENA --> t."],
+		["guard-nrl155-module134-lead-tab-1sp-tab", "# Head\n\t \t<!--\n===\nHIDDENA\n--> t.", "Head === HIDDENA --> t."],
 		// The module-134 test is also what keeps a FOUR-SPACE lead from being
 		// refused as a paragraph continuation: that lead bears no tab, so the
 		// block-position gate does not see it. Red on the arm dropping the test.
@@ -4318,7 +4318,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl115-fresh-block-space-tab-is-nrl113", "Before x.\n\n \t<!--\nSECRET\nVISIBLE", "Before x."],
 		// Decision Q5: a top-level line after a heading is a fresh block, indented code
 		// for the renderer, and still silenced here - prose loss, recorded and left.
-		["guard-nrl115-after-heading-tab-left", "# Head\n\t<!--\nSECRET\nVISIBLE", "Head"],
+		["guard-nrl115-after-heading-tab-left", "# Head\n\t<!--\nSECRET\nVISIBLE", "Head SECRET VISIBLE"],
 		// An HTML block of kinds 6 and 7 ends only at a TRULY empty line, so a line
 		// holding a tab does not end it and the `<!--` below is raw HTML the browser
 		// treats as a comment. Resetting the model's `unknown` state on a
@@ -5151,6 +5151,15 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl201-c1c2-definition-is-setext-heading-text", "[^1]: QfQ\n[QdQ]: QuQ\n---", "QdQ : QuQ"],
 		["guard-nrl201-c1-footnote-line-in-an-html-block", "<div>\n[^1]: QfQ\n[QdQ]: QuQ", "QfQ QdQ : QuQ"],
 		["guard-nrl201-c1-definition-run-ending-in-setext", "[^1]: QfQ\n[QaQ]: u\n[QbQ]: v\n---", "QaQ : u QbQ : v"],
+		// NRL-157: right after an ATX heading, a rule or a closed literal, a tab or
+		// four-space line opens indented code (module 134 opens at any block start).
+		// The NRL-155/115/93/114 rows above were re-pinned to the page with it: the
+		// `<!--`/`%%` line is code in a `<pre>` (skipped here), the rest is shown.
+		["pin-nrl157-code-after-heading-is-skipped", "# H\n\tcode QaQ\nQbQ", "H QbQ"],
+		["pin-nrl157-comment-after-rule-is-code", "---\n\t<!-- QaQ\nQbQ", "QbQ"],
+		["guard-nrl157-equals-line-is-paragraph-text", "===\n\tQaQ", "=== QaQ"],
+		["guard-nrl157-r1-fence-closed-in-a-quote-keeps-quote-text", "> ```\n> Q1Q\n> ```\n\t> Q2Q\nQ3Q end", "Q1Q Q2Q Q3Q end"],
+		["guard-nrl157-comment-after-paragraph-is-lazy", "QpQ\n\t<!-- QaQ\nQbQ", "QpQ <!-- QaQ QbQ"],
 		["pin-nrl216-declined-tail-spanning-lines-keeps-dest", "A [QlQ][QrQ\n](QuQ) T.", "A QlQ [QrQ ](QuQ) T."],
 		["guard-nrl216-spaced-label-is-a-real-link", "A [QlQ] [QrQ\n](QuQ) T.", "A QlQ QrQ T."],
 		["guard-nrl216-later-bracket-may-carry", "A [QlQ][QrQ [QsQ\n](QuQ) T.", "A QlQ QrQ [QsQ T."],
