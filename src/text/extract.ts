@@ -7281,6 +7281,47 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	let inFence = false;
 	// Whether `inFence` was opened by containerViews' reading (NRL-213).
 	let fenceByView = false;
+	// The view-opened fence below is trusted only where the readings this loop
+	// builds around it cannot be disturbed by it (NRL-213 fix round 1, cont.).
+	// On the fix-round generator against f15bc99 (seeds 7, 11, 12), every newly
+	// disclosed or lost sentinel came from a note where the raw reading's
+	// runaway fence had hidden a different misreading by luck: a `<!--` or `%%`
+	// opened on an earlier line, an item containerViews names lazy at or before
+	// the fence (its inner fence state is not the renderer's), more of the same
+	// item after the fence ends, or indented code after it. Each refusal falls
+	// back to the raw reading, which is f15bc99's; refusing every view-opened
+	// fence measured identical to f15bc99 on seed 7. Fail-closed, not modelled:
+	// a refused note keeps the pre-NRL-213 runaway fence.
+	// The earliest comment-opener line and lazy-item line, and whether any line
+	// from k on has indented-code lead, computed once: a per-fence scan from
+	// the note's start is quadratic on a note of many fences (NRL-166's
+	// many-fences timing check measured it).
+	let firstComment = lines.length;
+	let firstLazy = lines.length;
+	for (let k = lines.length - 1; k >= 0; k--) {
+		if (/<!--|%%/.test(lines[k]!)) firstComment = k;
+		if (fenceHomes[k]!.some((id) => fenceLazy.has(id))) firstLazy = k;
+	}
+	const indentedFrom: boolean[] = new Array<boolean>(lines.length + 1).fill(false);
+	for (let k = lines.length - 1; k >= 0; k--) indentedFrom[k] = indentedFrom[k + 1]! || /^(?: {4}|\t| {0,3}\t)[ \t]*\S/.test(lines[k]!);
+	const viewFenceTrusted = (at: number): boolean => {
+		if (firstComment < at || firstLazy <= at) return false;
+		const item = fenceHomes[at]![fenceHomes[at]!.length - 1];
+		// Where the fence ends: its own closer, the first line its container no
+		// longer holds, or the end of the note.
+		let after = at + 1;
+		while (after < lines.length && fenceLiteral[after] === "code" && fenceMarks[after] !== "close") after++;
+		const closed = after < lines.length && fenceMarks[after] === "close" && fenceLiteral[after] === "code";
+		if (closed) after++;
+		let next = after;
+		while (next < lines.length && lines[next]!.trim() === "") next++;
+		// An item that ends with its fence still open, at another list's marker
+		// (`* QaQ` / `  ```x` / `- QbQ`), is where this loop's reading of the
+		// following list items is untested; refused.
+		if (!closed && next < lines.length && /^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/.test(lines[next]!)) return false;
+		if (next < lines.length && item !== undefined && fenceHomes[next]!.includes(item)) return false;
+		return !indentedFrom[after];
+	};
 	let inComment: CommentCloser | undefined;
 	// A `%%` block ends where Obsidian's own parser ends it (NRL-118, ADR 0006
 	// clause 5). The reading view tokenizes a blockquote, a list item or a
@@ -8283,7 +8324,8 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			if (
 				fenceMarks[lineNo] === "open" &&
 				!LIST_BULLET.test(raw) &&
-				!fenceHomes[lineNo]!.some((id) => fenceQuotes.has(id) || fenceLazy.has(id))
+				!fenceHomes[lineNo]!.some((id) => fenceQuotes.has(id) || fenceLazy.has(id)) &&
+				viewFenceTrusted(lineNo)
 			) {
 				flushParagraph();
 				inFence = true;

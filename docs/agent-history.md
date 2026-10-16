@@ -460,6 +460,26 @@ forbade.
   (`- QaQ` / `   ```` x` / `-  QpQ --> QoQ` / `\t1. <!-- QrQ` / ...), and a new list of another
   delimiter after an item's unclosed fence. Not root-caused. Lockstep CLEAN 0/0/0/0 on both arms.
   Not observed in a running Obsidian.
+- Fix round 1, cont.: the view-opened fence is narrowed FAIL-CLOSED (`viewFenceTrusted` in
+  `extractChunksPass`), not modelled. Refusing every view-opened fence measured identical to
+  f15bc99 on seed 7 (0 differing notes), so each refusal falls back to the pre-NRL-213 reading.
+  Refused: a `<!--` or `%%` on any earlier line (from the note's start; scoping it to the start of
+  the outermost list was measured and still regressed: 12/68, 35/116, 9/102 disclose/lost); an item
+  containerViews names lazy at or before the fence line; the fence's item going on after the fence
+  ends; an unclosed fence whose item ends at another list item's marker line; any later line with
+  indented-code lead. Kept trusted: a fence the item's end closes before a non-list line (the
+  `fence-ends-with-item-unclosed` and `closer-indented-4` pins) and one that runs to the end of
+  the note (refusing that cost about two thirds of the fixes and was not needed for 0/0). Same
+  generator, same seeds, f15bc99 -> this commit newly disclosing / lost / speaking excluded:
+  seed 7 0/0/0, seed 11 0/0/0, seed 12 0/0/0; fixed 8/285/276, 1/243/245, 7/261/263. Most of round
+  1's fixes are given back by the narrowing; the ticket repro stays fixed under DEF and CODE. The
+  residues behind each refusal (comment before, other list after an unclosed fence, next item
+  after an unclosed fence, item going on after the closer, indented code after the closer, lazy
+  item before) are `guard-nrl213-refused-*` rows pinned to f15bc99's reading, which is not always
+  the renderer's. The comment and lazy prefixes and the indented-code suffix are precomputed: a
+  per-fence scan failed NRL-166's many-fences timing check (360 ms -> 5126 ms). Lockstep CLEAN
+  0/0/0/0 on both arms. Not established: anything beyond this one generator's three seeds (other
+  generators, corpora), and behaviour in a running Obsidian.
 
 ### Inline PI/CDATA counted only where the renderer emits it raw (NRL-184, 2026-10-16)
 

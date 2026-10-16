@@ -4943,6 +4943,27 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl213-body-comment-code", "1. QiQ\n      ```\n   <!--\n   QmQ\n   ```\n\nQxQ %%QyQ%% QzQ", "QiQ <!-- QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
 		["pin-nrl213-body-div-def", "1. QiQ\n      ```\n   <div>\n   QmQ\n   ```\n\nQxQ %%QyQ%% QzQ", "QiQ QxQ QzQ", {}],
 		["pin-nrl213-body-div-code", "1. QiQ\n      ```\n   <div>\n   QmQ\n   ```\n\nQxQ %%QyQ%% QzQ", "QiQ <div> QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		// NRL-213 fix round 1, cont.: the view-opened fence is refused, falling back to
+		// f15bc99's raw reading, after a `<!--` or `%%` on an earlier line, at or after
+		// an item containerViews names lazy, when the fence's item goes on after the fence
+		// ends, when an unclosed fence's item ends at another list item, and when any later
+		// line has indented-code lead. Each shape is a reduced generator residue; 8 of the
+		// 12 rows are red on 594b650 (not red there: both item-goes-on-after-closer rows,
+		// indented-code-after-closer DEF, lazy-item-before CODE). The expected text is f15bc99's,
+		// which is not always the renderer's (`unclosed-then-other-list` loses QbQ under
+		// DEF on both). These pin the fail-closed fallback, not renderer parity.
+		["guard-nrl213-refused-comment-before-def", "- QaQ <!-- QbQ --> QcQ\n  ```\n2. QdQ\n\t3) <!-- QeQ", "QaQ QcQ", {}],
+		["guard-nrl213-refused-comment-before-code", "- QaQ <!-- QbQ --> QcQ\n  ```\n2. QdQ\n\t3) <!-- QeQ", "QaQ QcQ 2. QdQ 3) <!-- QeQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-refused-unclosed-then-other-list-def", "* QaQ\n  ```x\n- QbQ\n  10. <!-- QcQ", "QaQ", {}],
+		["guard-nrl213-refused-unclosed-then-other-list-code", "* QaQ\n  ```x\n- QbQ\n  10. <!-- QcQ", "QaQ - QbQ 10. <!-- QcQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-refused-unclosed-then-next-item-def", "1. QaQ\n   ```\n2. QbQ --> QcQ\n  ````\n   ~~~\nQdQ", "QaQ", {}],
+		["guard-nrl213-refused-unclosed-then-next-item-code", "1. QaQ\n   ```\n2. QbQ --> QcQ\n  ````\n   ~~~\nQdQ", "QaQ 2. QbQ --> QcQ QdQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-refused-item-goes-on-after-closer-def", "+ QaQ\n     ```js\n   ```\n   ~~~\n10.\tQbQ %%QcQ%% QdQ", "QaQ QbQ QdQ", {}],
+		["guard-nrl213-refused-item-goes-on-after-closer-code", "+ QaQ\n     ```js\n   ```\n   ~~~\n10.\tQbQ %%QcQ%% QdQ", "QaQ QbQ QdQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-refused-indented-code-after-closer-def", "* QaQ\n\t``` x\n  ```\n      %%QbQ%%", "QaQ", {}],
+		["guard-nrl213-refused-indented-code-after-closer-code", "* QaQ\n\t``` x\n  ```\n      %%QbQ%%", "QaQ %%QbQ%%", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-refused-lazy-item-before-def", "1) QaQ\n\t3) QbQ\n\t   ```js\n    ```\n    QcQ", "QaQ QbQ QcQ", {}],
+		["guard-nrl213-refused-lazy-item-before-code", "1) QaQ\n\t3) QbQ\n\t   ```js\n    ```\n    QcQ", "QaQ QbQ QcQ", { skipCodeBlocks: false, skipInlineCode: false }],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
