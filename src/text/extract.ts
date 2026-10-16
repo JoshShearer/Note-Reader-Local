@@ -5771,6 +5771,19 @@ function detectFrontmatter(lines: string[]): { startLine: number; endLine: numbe
 	for (let n = open + 1; n < lines.length; n++) {
 		const line = lines[n]!;
 		if (isFrontmatterFence(line)) return sawKey ? { startLine: open, endLine: n } : null;
+		// A near-miss fence (` ---`, `--- `) is not a closer for Obsidian's `_T`,
+		// which closes on the next EXACT `---` starting a line, so everything up
+		// to that is frontmatter. Before NRL-198 the near-miss closed here and the
+		// keys above stayed silent; giving up at it would speak them (round 0
+		// critic 1 F1). With no exact closer later there is no frontmatter.
+		if (line.replace(/^\uFEFF/, "").trim() === "---") {
+			if (!sawKey) return null;
+			// After leading blank lines (our tolerated divergence) `_T` sees no
+			// frontmatter at all, so base's early close stands there.
+			if (open !== 0) return { startLine: open, endLine: n };
+			for (let j = n + 1; j < lines.length; j++) if (isFrontmatterFence(lines[j]!)) return { startLine: open, endLine: j };
+			return null;
+		}
 		if (flowDepth > 0) {
 			flowDepth = Math.max(0, flowDepth + flowDepthDelta(line));
 			continue;

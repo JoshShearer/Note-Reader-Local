@@ -404,9 +404,15 @@ the lines inside were skipped, though the renderer shows a rule and text (` ---`
 the text, closer `---(\r?\n|$)` at a line start) and the editor (`"---" === lineAt(0).text`)
 both need an exact `---`. The fence test is now exact, BOM tolerated. Leading blank lines
 before the opener stay tolerated because srs.md and ADR 0002 promise it, though `_T` does not
-accept them: a recorded divergence. Census over 31,104 cells, with an oracle that hides
-`_T`-frontmatter under skipFrontmatter: 0 newly disclosed, 0 newly lost, 11,610 shown tokens
-recovered; lock128 CLEAN. Not run in Obsidian.
+accept them: a recorded divergence. Round 0's census (31,104 cells) had no near-miss closer
+followed by a later exact `---`, and both critics found the disclosure there: base closed at
+the near-miss and kept the keys silent, round 0 gave up and spoke them. Fix round 1 follows
+`_T`: after a near-miss closer, an opener on line 0 closes on the next exact `---` (none: no
+frontmatter); after leading blank lines base's early close stands. Critic 1's generator
+(31,360 notes, BOM openers excluded as `_T` never sees a BOM in editor text) and critic 2's
+probe (4,752 notes x 6 option sets): 0 newly disclosed. The 310 new losses under DEF with
+skipFrontmatter off are inline code in lines that are now body, skipped by skipInlineCode as
+designed (CODE: 0). lock128 CLEAN. Not run in Obsidian.
 
 ### Inline HTML tags follow the CommonMark tag grammar (NRL-202, 2026-10-16)
 

@@ -366,6 +366,11 @@ console.log("frontmatter detection (NRL-7)");
 		["lead on the opener", "  ---\ntitle: secret\n---\nProse.", "title: secret Prose."],
 		["lead on the closer", "---\ntitle: secret\n ---\n\nProse.", "title: secret Prose."],
 		["trailing space on the opener", "--- \ntitle: secret\n---\nProse.", "title: secret Prose."],
+		// Round 1 (both critics): a near-miss closer is not a closer for `_T`, which
+		// closes on the next exact `---`, so the keys above stay frontmatter.
+		["a near-miss closer before a later exact fence", "---\ntitle: secret\n--- \nmid\n---\nProse.", "Prose."],
+		["a near-miss closer with no exact fence after it", "---\ntitle: secret\n--- \nProse.", "title: secret Prose."],
+		["four dashes", "----\ntitle: secret\n----\nProse.", "title: secret Prose."],
 	] as const) {
 		const got = texts(src);
 		check(`nrl198 fence with ${name} is not frontmatter`, got.join(" ") === want, `got: ${JSON.stringify(got)}`);
