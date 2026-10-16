@@ -4758,6 +4758,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl183-second-word-closer-after-open-first", "- <!-- a\n\n```QdQ QeQ-->QfQ\n```", "", { skipCodeBlocks: false }],
 		["pin-nrl183-decoded-space-ends-word", "- <!-- a\n\n```QdQ&#32;--&gt;QeQ\n```", "", { skipCodeBlocks: false }],
 		["pin-nrl183-decoded-tab-ends-word", "- <!-- a\n\n```QdQ&Tab;--&gt;QeQ\n```", "", { skipCodeBlocks: false }],
+		// Fix round 1 (critic 1 on 252ca52): a decoded `<` after the closer opens a new
+		// comment on the page (only QeQ shows), and a backtick in a backtick fence's
+		// info makes the line a paragraph (nothing shows). Both keep base's answer,
+		// which loses QeQ in the first two: fail closed, not the renderer's truth.
+		["guard-nrl183-entity-lt-after-closer", "- <!-- a\n\n```QdQ--&gt;QeQ&lt;!--QfQ\nQcQ\n```", "", { skipCodeBlocks: false }],
+		["guard-nrl183-numeric-lt-after-closer", "- <!-- a\n\n```QdQ--&gt;QeQ&#60;!--QfQ\nQcQ\n```", "", { skipCodeBlocks: false }],
+		["guard-nrl183-backtick-in-info-is-no-fence", "- <!-- a\n\n```QdQ--&gt;QeQ`x\nQcQ\n```", "", { skipCodeBlocks: false }],
 		["guard-nrl183-plain-closer-first-word", "- <!-- a\n\n```QdQ-->QeQ\n```", "QeQ", { skipCodeBlocks: false }],
 		["guard-nrl183-bang-closer-first-word-residual", "- <!-- a\n\n```QdQ--!>QeQ\n```", "", { skipCodeBlocks: false }],
 		["guard-nrl183-tilde-plain-closer", "- <!-- a\n\n~~~QdQ-->QeQ\n~~~", "QeQ", { skipCodeBlocks: false }],

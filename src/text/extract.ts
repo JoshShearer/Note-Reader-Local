@@ -7750,6 +7750,11 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		const fence = /^[ \t]*(`{3,}|~{3,})/.exec(raw.slice(prefix));
 		if (fence === null) return same;
 		const base = prefix + fence[0].length;
+		// A backtick fence whose info string holds a backtick is no fence to the
+		// renderer but a paragraph with inline code, whatever `fenceAt` says: keep
+		// the old answer (critic 1 on 252ca52, F2: ```` ```QdQ--&gt;QeQ`x ```` under an
+		// open comment newly spoke QeQ).
+		if (fence[1]![0] === "`" && raw.slice(base).includes("`")) return same;
 		const closer = fenceClassCloser(raw.slice(base));
 		if (closer === null) return { close: -1, raw };
 		if (closer.bang) return same;
@@ -7758,9 +7763,11 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		// A `<` in the rest of the word may open a tag or a comment the page then
 		// leaves open, which the remainder's cleaning does not follow (measured:
 		// the plain `-->` twin already speaks the text such a comment hides), so
-		// that shape keeps the old answer.
+		// that shape keeps the old answer. The class is DECODED, so any reference
+		// counts as a possible `<` too (`&lt;`, `&LT`, `&#60;`, `&#x3C;`, `&nvlt;`;
+		// critic 1 on 252ca52, F1): fail closed on `&` rather than decode them all.
 		const tail = raw.slice(close + 3, base + closer.wordEnd);
-		return tail.includes("<") ? same : { close, raw: raw.slice(0, base + closer.wordEnd) };
+		return tail.includes("<") || tail.includes("&") ? same : { close, raw: raw.slice(0, base + closer.wordEnd) };
 	};
 
 	/**
