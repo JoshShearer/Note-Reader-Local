@@ -5160,6 +5160,19 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl157-equals-line-is-paragraph-text", "===\n\tQaQ", "=== QaQ"],
 		["guard-nrl157-r1-fence-closed-in-a-quote-keeps-quote-text", "> ```\n> Q1Q\n> ```\n\t> Q2Q\nQ3Q end", "Q1Q Q2Q Q3Q end"],
 		["guard-nrl157-comment-after-paragraph-is-lazy", "QpQ\n\t<!-- QaQ\nQbQ", "QpQ <!-- QaQ QbQ"],
+		// NRL-188: a list item's `<!--` line over a setext underline in the same
+		// item is heading text (module 5540 strip), not an HTML block to EOF. The
+		// spoken `===` is pre-existing excess speech (the one-space control has it).
+		["pin-nrl188-list-two-space-lead-eq", "Para.\n\n-  <!--\n  ===\n  ZQSX\n  more\n\nZAFTX", "Para. <!-- === ZQSX more ZAFTX"],
+		["pin-nrl188-list-continuation-eq", "- Para.\n  <!--\n  ===\n  ZQSX\n  more\n\nZAFTX", "Para. <!-- === ZQSX more ZAFTX"],
+		["pin-nrl188-list-tab-lead-eq", "Para.\n\n-\t<!--\n\t===\n\tZQSX\n\tmore\n\nZAFTX", "Para. <!-- === ZQSX more ZAFTX"],
+		["pin-nrl188-list-continuation-dash", "- Para.\n  <!--\n  ---\n  ZQSX\n  more\n\nZAFTX", "Para. <!-- ZQSX more ZAFTX"],
+		["pin-nrl188-quote-list-eq", "Para.\n\n> -  <!--\n>   ===\n>   ZQSX\n\nZAFTX", "Para. <!-- === ZQSX ZAFTX"],
+		["pin-nrl188-ordered-two-space-lead", "Para.\n\n1.  <!--\n    ===\n    ZQSX\n\nZAFTX", "Para. <!-- === ZQSX ZAFTX"],
+		["pin-nrl188-wide-ordered", "Para.\n\n10.  <!--\n     ===\n     ZQSX\n\nZAFTX", "Para. <!-- === ZQSX ZAFTX"],
+		["guard-nrl188-bare-dash-is-a-new-item", "Para.\n\n-  <!--\n  -\n  HIDQ\n\nZAFTX", "Para."],
+		["guard-nrl188-one-space-control", "Para.\n\n- <!--\n  ===\n  ZQSX\n\nZAFTX", "Para. <!-- === ZQSX ZAFTX"],
+		["residual-nrl188-crlf-list-setext-keeps-old-answer", "-  <!--\r\n   ===\r\n   QAQ\r\n\r\nQZQ", ""],
 		["pin-nrl216-declined-tail-spanning-lines-keeps-dest", "A [QlQ][QrQ\n](QuQ) T.", "A QlQ [QrQ ](QuQ) T."],
 		["guard-nrl216-spaced-label-is-a-real-link", "A [QlQ] [QrQ\n](QuQ) T.", "A QlQ QrQ T."],
 		["guard-nrl216-later-bracket-may-carry", "A [QlQ][QrQ [QsQ\n](QuQ) T.", "A QlQ QrQ [QsQ T."],
