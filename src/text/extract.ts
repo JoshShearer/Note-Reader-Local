@@ -4295,12 +4295,15 @@ function blankEndsParagraph(line: string, paragraphOpen: boolean): boolean {
  * which still starts with a container marker and so never reads as an HTML block
  * line: the pre-NRL-136 answer, fail-closed.
  */
+/** A quoted heading mark from `containerViews` (NRL-206). */
+type QuoteHead = "atx" | "setext" | "setextAfterTitle" | "under";
+
 function containerViews(
 	views: LineView[],
 	out: number[],
 	homes: number[][],
 	home: number[],
-	ids: { next: number; quotes: Set<number>; lazy?: Set<number> },
+	ids: { next: number; quotes: Set<number>; lazy?: Set<number>; heads?: Array<QuoteHead | undefined> },
 	literal: Array<LiteralKind | undefined>,
 	fences: Array<"open" | "close" | undefined>,
 	htmlLines: boolean[],
@@ -4459,6 +4462,24 @@ function containerViews(
 		// included, so `- - -` is a rule and never a list.
 		const open = HR.test(t) ? null : t.match(LIST_ITEM_OPEN);
 		if (!shallow || !open) {
+			// The heading marks the per-line loop reads for a line whose innermost
+			// container is a quote (NRL-206). Read here, where the quote's own
+			// paragraph state is known: an ATX heading is any such line; a setext
+			// heading is ONE content line that starts a paragraph (Obsidian's exact
+			// shape, NRL-120) over an exact `=` or `-` run in the same view. A
+			// lazy line kept in the quote counts, as the renderer counts it (`> > QXQ`
+			// / `> ===` is an h1). A callout's title line is not paragraph text, so
+			// the line after it may start one (`> [!note] T` / `> QXQ` / `> ---` is
+			// an h2); the loop checks that the line above really is a title.
+			const quoted = ids.heads !== undefined && home.length > 0 && ids.quotes.has(home[home.length - 1]!);
+			if (quoted && shallow && /^ {0,3}#{1,6}(?:[ \t]+|\r?$)/.test(t)) ids.heads![views[n]!.k] = "atx";
+			else if (quoted && shallow && t.trim() !== "" && !HR.test(t) && !/^[ \t]*</.test(t) && /^(?:=+|-+)\r?$/.test(views[n + 1]?.text ?? "")) {
+				const afterTitle = n === 1 && wasOpen && /^\[![^\]]*\]/.test(views[0]!.text);
+				if (!textBefore || afterTitle) {
+					ids.heads![views[n]!.k] = afterTitle ? "setextAfterTitle" : "setext";
+					ids.heads![views[n + 1]!.k] = "under";
+				}
+			}
 			paraOpen =
 				t.trim() !== "" &&
 				!(wasOpen ? false : /^(?: {4}|\t)/.test(t)) &&
@@ -7096,8 +7117,15 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// `lazyStart` there), which the view-opened fence below refuses to trust.
 	const lazyItems = new Set<number>();
 	let fenceLazy: ReadonlySet<number> = lazyItems;
+	// Line k's content column in its innermost container, by the same reading
+	// as the fence marks (the CRLF re-pass on a CRLF note): where a quoted
+	// fence's body line starts for the renderer, past its `>` (NRL-206).
+	let fenceCols: number[] = [];
+	// containerViews' quoted ATX and setext marks, by that same reading (NRL-206).
+	let quoteHeads: Array<QuoteHead | undefined> = new Array<QuoteHead | undefined>(lines.length).fill(undefined);
 	{
 		const viewStart: number[] = new Array<number>(lines.length).fill(0);
+		fenceCols = viewStart;
 		// Obsidian's frontmatter is a `---` on line 0 and the next `---`: its lines
 		// are literal YAML whatever they hold. Measured: `---` / `<!----> <!-- Z1Q`
 		// / ... / `---` renders the lines as `<pre class="frontmatter">`.
@@ -7114,7 +7142,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			viewStart,
 			containerHome,
 			[],
-			{ next: 0, quotes: quoteIds, lazy: lazyItems },
+			{ next: 0, quotes: quoteIds, lazy: lazyItems, heads: quoteHeads },
 			literalAt,
 			fenceAt,
 			htmlLineAt,
@@ -7129,12 +7157,14 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			const lfLazy = new Set<number>();
 			fenceQuotes = lfQuotes;
 			fenceLazy = lfLazy;
+			fenceCols = new Array<number>(lines.length).fill(0);
+			quoteHeads = new Array<QuoteHead | undefined>(lines.length).fill(undefined);
 			containerViews(
 				lf.slice(first).map((text, i) => ({ k: i + first, text, off: 0 })),
-				new Array<number>(lines.length).fill(0),
+				fenceCols,
 				fenceHomes,
 				[],
-				{ next: 0, quotes: lfQuotes, lazy: lfLazy },
+				{ next: 0, quotes: lfQuotes, lazy: lfLazy, heads: quoteHeads },
 				fenceLiteral,
 				fenceMarks,
 				new Array<boolean>(lines.length).fill(false),
@@ -7220,6 +7250,50 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// reading keeps base's peel outright (critic 2 F2).
 	const markerRule: MarkerRule[] = markerRules(lines, containerHome, quoteIds, literalAt);
 	const prefixAt = (raw: string, k: number): ReturnType<typeof containerPrefix> => containerPrefix(raw, markerRule[k]);
+	// Line k is a plain quote line for NRL-206's quoted headings: its prefix is
+	// quote markers only (no list peel, not a callout title or marker line), no
+	// tab within it or the four columns after it, and it is neither literal nor
+	// an HTML-block line by either containerViews reading.
+	// `mathOddBefore[k]`: an odd count of `$$` above line k. Obsidian's `$$`
+	// math spans lines inside a paragraph, quoted ones too, where containerViews
+	// opens no math block; a `# x` under such an opener is math text for the
+	// renderer (NRL-206, k170 seed 7). Quoted headings are refused there.
+	const mathOddBefore: boolean[] = new Array<boolean>(lines.length + 1).fill(false);
+	for (let k = 0; k < lines.length; k++) mathOddBefore[k + 1] = mathOddBefore[k]! !== ((lines[k]!.split("$$").length - 1) % 2 === 1);
+	// `riskyRun[k]`: since the last blank line, a line at or above k holds a
+	// construct whose extent this loop and containerViews do not always share
+	// with the renderer: a line starting (past spaces, tabs and `>`) with `<`, a
+	// fence run, `$$`, a comment opener or closer, or a whitespace line holding a
+	// tab (NRL-158). Each was a newly lost or newly spoken quoted heading on the
+	// k170 and NRL-206 wild generators (an HTML block run on from a list item, a
+	// heading line opening a comment, a lazy line after a quoted fence); quoted
+	// headings are refused under any such run. Fail-closed, not modelled.
+	const riskyRun: boolean[] = new Array<boolean>(lines.length).fill(false);
+	for (let k = 0; k < lines.length; k++) {
+		const r = lines[k]!;
+		const risky = /^[ \t>]*</.test(r) || /`{3,}|~{3,}|\$\$|<!--|%%|-->/.test(r) || (/^[ \t>]*\r?$/.test(r) && /\t/.test(r));
+		riskyRun[k] = r.trim() !== "" && (risky || (k > 0 && riskyRun[k - 1]!));
+	}
+	const plainQuoteLine = (k: number): boolean => {
+		const r = lines[k]!;
+		if (mathOddBefore[k] || riskyRun[k]) return false;
+		const peel = r.match(QUOTE_PREFIX_PEEL)?.[0].length ?? -1;
+		if (peel < 0 || /\t/.test(r.slice(0, peel + 4))) return false;
+		const p = prefixAt(r, k);
+		return p.blockType === "quote" && !p.callout && p.chars === peel && !literalAt[k] && !fenceLiteral[k] && !htmlLineAt[k];
+	};
+	// Line k is a quoted setext heading's content line: both it and its
+	// underline are plain quote lines, the underline no deeper than it, and the
+	// line above is not a whitespace line holding a tab (NRL-158: `> \t` is lazy
+	// continuation for the renderer, so k would not start a paragraph). After a
+	// callout's first line, that line must be a real title.
+	const quotedSetextAt = (k: number, qh: QuoteHead): boolean => {
+		if (k + 1 >= lines.length || quoteHeads[k + 1] !== "under" || !plainQuoteLine(k) || !plainQuoteLine(k + 1)) return false;
+		if (prefixAt(lines[k + 1]!, k + 1).quotes > prefixAt(lines[k]!, k).quotes) return false;
+		if (k > 0 && /^[ \t]*$/.test(lines[k - 1]!.replace(QUOTE_PREFIX_PEEL, "")) && /\t/.test(lines[k - 1]!)) return false;
+		if (qh === "setextAfterTitle") return k > 0 && prefixAt(lines[k - 1]!, k - 1).callout && markerRule[k - 1] !== "late";
+		return true;
+	};
 	const leftAQuote = (k: number): boolean =>
 		containerHome[k - 1]!.some((id) => quoteIds.has(id) && !containerHome[k]!.includes(id));
 	const paraBefore: boolean[] = new Array<boolean>(lines.length).fill(false);
@@ -7279,6 +7353,9 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	}
 
 	let inFence = false;
+	// The line of a quoted setext heading's underline, once its content line was
+	// read as the heading (NRL-206).
+	let quotedUnderline = -1;
 	// Whether `inFence` was opened by containerViews' reading (NRL-213).
 	let fenceByView = false;
 	// The view-opened fence below is trusted only where the readings this loop
@@ -7296,16 +7373,80 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// from k on has indented-code lead, computed once: a per-fence scan from
 	// the note's start is quadratic on a note of many fences (NRL-166's
 	// many-fences timing check measured it).
-	let firstComment = lines.length;
 	let firstLazy = lines.length;
 	for (let k = lines.length - 1; k >= 0; k--) {
-		if (/<!--|%%/.test(lines[k]!)) firstComment = k;
 		if (fenceHomes[k]!.some((id) => fenceLazy.has(id))) firstLazy = k;
 	}
 	const indentedFrom: boolean[] = new Array<boolean>(lines.length + 1).fill(false);
 	for (let k = lines.length - 1; k >= 0; k--) indentedFrom[k] = indentedFrom[k + 1]! || /^(?: {4}|\t| {0,3}\t)[ \t]*\S/.test(lines[k]!);
-	const viewFenceTrusted = (at: number): boolean => {
-		if (firstComment < at || firstLazy <= at) return false;
+	// The first line from k on whose text past its `>` markers has indented-code
+	// lead, and each quote's last line, so a quoted fence's check below is
+	// linear over the note.
+	const nextQuotedIndented: number[] = new Array<number>(lines.length + 1).fill(lines.length);
+	for (let k = lines.length - 1; k >= 0; k--) {
+		const peel = lines[k]!.match(QUOTE_PREFIX_PEEL)?.[0].length ?? 0;
+		nextQuotedIndented[k] = peel > 0 && /^(?: {4}|\t| {0,3}\t)[ \t]*\S/.test(lines[k]!.slice(peel)) ? k : nextQuotedIndented[k + 1]!;
+	}
+	const quoteLast = new Map<number, number>();
+	const quoteFirst = new Map<number, number>();
+	for (let k = 0; k < lines.length; k++)
+		for (const id of fenceHomes[k]!) {
+			if (!fenceQuotes.has(id)) continue;
+			quoteLast.set(id, k);
+			if (!quoteFirst.has(id)) quoteFirst.set(id, k);
+		}
+	// The quotes whose every line is plain enough for a quoted fence to be
+	// trusted in them (NRL-206): no tab in a line's first columns, one quote
+	// depth throughout, a list marker after the `>` on the quote's first line at
+	// most, and a lazy line only in an unnested, list-free quote (the
+	// acceptance's lazy body line). The wild generator found each of these
+	// shapes reading differently from the renderer, newly losing or speaking
+	// text; refused rather than modelled.
+	const plainQuoteBlock = new Set<number>();
+	{
+		const bad = new Set<number>();
+		const depth = new Map<number, number>();
+		for (let k = 0; k < lines.length; k++) {
+			const homes = fenceHomes[k]!;
+			const r = lines[k]!;
+			for (const id of homes) {
+				if (!fenceQuotes.has(id) || bad.has(id)) continue;
+				const outer = homes.find((h) => fenceQuotes.has(h)) === id;
+				if (!outer) continue;
+				const lead = r.match(/^(?:[ ]{0,3}(?:[-*+]|\d{1,9}[.)])[ ]+)?((?:[ ]{0,3}>[ ]?)+)/);
+				const lazy = lead === null;
+				const d = lazy ? 0 : (lead[1]!.match(/>/g) ?? []).length;
+				if (/\t/.test(r.slice(0, (lead?.[0].length ?? 0) + 5))) bad.add(id);
+				else if (lazy && (homes.length > 1 || homes.some((h) => !fenceQuotes.has(h)) || depth.get(id) !== 1)) bad.add(id);
+				else if (!lazy && depth.has(id) && depth.get(id) !== d) bad.add(id);
+				else if (!lazy && k !== quoteFirst.get(id) && LIST_BULLET.test(r.slice(lead[0].length)) ) bad.add(id);
+				else if (!lazy && !depth.has(id)) depth.set(id, d);
+			}
+		}
+		for (const id of quoteFirst.keys()) if (!bad.has(id)) plainQuoteBlock.add(id);
+	}
+	// Prefix counts of lines holding a fence run, and of lines holding comment,
+	// math, HTML-start or fence text, for the quoted fence checks below.
+	const fenceRunCount: number[] = new Array<number>(lines.length + 1).fill(0);
+	const commentCount: number[] = new Array<number>(lines.length + 1).fill(0);
+	const riskyCount: number[] = new Array<number>(lines.length + 1).fill(0);
+	for (let k = 0; k < lines.length; k++) {
+		const r = lines[k]!;
+		fenceRunCount[k + 1] = fenceRunCount[k]! + (/`{3,}|~{3,}/.test(r) ? 1 : 0);
+		commentCount[k + 1] = commentCount[k]! + (/<!--|%%/.test(r) ? 1 : 0);
+		riskyCount[k + 1] = riskyCount[k]! + (/^[ \t>]*</.test(r) || /`{3,}|~{3,}|\$\$|<!--|%%|-->/.test(r) ? 1 : 0);
+	}
+	const quotedFence = (at: number): boolean => fenceHomes[at]!.some((id) => fenceQuotes.has(id));
+	// The view path's opener test short of `viewFenceTrusted`. Not on a list
+	// marker line: containerViews does not model that an ordered marker other
+	// than 1 cannot interrupt a paragraph, and the pins on a marker line's fence
+	// (NRL-114, NRL-182) keep the old reading. Nor inside an item containerViews
+	// names lazy (NRL-213 fix round 1): its fence line is the renderer's
+	// paragraph text, so a fence opened there would run to the end of the note.
+	const viewFenceOpens = (at: number): boolean =>
+		fenceMarks[at] === "open" && !LIST_BULLET.test(lines[at]!) && !fenceHomes[at]!.some((id) => fenceLazy.has(id));
+	const fenceTrusted = (at: number, commentBefore: boolean): boolean => {
+		if (commentBefore || firstLazy <= at) return false;
 		const item = fenceHomes[at]![fenceHomes[at]!.length - 1];
 		// Where the fence ends: its own closer, the first line its container no
 		// longer holds, or the end of the note.
@@ -7319,9 +7460,37 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		// (`* QaQ` / `  ```x` / `- QbQ`), is where this loop's reading of the
 		// following list items is untested; refused.
 		if (!closed && next < lines.length && /^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/.test(lines[next]!)) return false;
-		if (next < lines.length && item !== undefined && fenceHomes[next]!.includes(item)) return false;
+		// More of the same quote after its fence is the callout and quote shape
+		// NRL-206 is for, and is read by the loop's own quote handling; more of
+		// the same list item is not (above).
+		if (next < lines.length && item !== undefined && !fenceQuotes.has(item) && fenceHomes[next]!.includes(item)) return false;
+		if (quotedFence(at)) {
+			// A quoted fence left open runs to its container's end, which this
+			// loop's quote reading does not always share: with a `<!--` or `%%`
+			// in that body, 3cc2bea's runaway comment had hidden what follows, and
+			// trusting the fence disclosed or spoke it (NRL-206, k170 seed 7).
+			// Refused, as is indented code in a quote after the fence, which the
+			// raw test below cannot see past the `>`. Fail-closed, not modelled.
+			if (commentCount[after]! - commentCount[at + 1]! > 0) return false;
+			const qid = fenceHomes[at]!.find((id) => fenceQuotes.has(id))!;
+			const last = quoteLast.get(qid) ?? -1;
+			if (nextQuotedIndented[after]! <= last) return false;
+			if (mathOddBefore[at] || !plainQuoteBlock.has(qid)) return false;
+			// Nothing fence-like earlier in the same quote, and no comment, math,
+			// HTML or fence text after this fence in it.
+			const first = quoteFirst.get(qid)!;
+			if (fenceRunCount[at]! - fenceRunCount[first]! > 0) return false;
+			// A quote entered straight after a text line, or a fence left open at
+			// its quote's end with a text line next, is where this parse's lazy
+			// reading (it ends a quote before a quoted underline-like line) and the
+			// renderer's (a quoted fence takes lazy lines as code) part.
+			if (first > 0 && lines[first - 1]!.trim() !== "") return false;
+			if (!closed && after < lines.length && lines[after]!.trim() !== "" && !/^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?>/.test(lines[after]!)) return false;
+			if (last >= after && riskyCount[last + 1]! - riskyCount[after]! > 0) return false;
+		}
 		return !indentedFrom[after];
 	};
+	const viewFenceTrusted = (at: number): boolean => fenceTrusted(at, commentCount[at]! > 0);
 	let inComment: CommentCloser | undefined;
 	// A `%%` block ends where Obsidian's own parser ends it (NRL-118, ADR 0006
 	// clause 5). The reading view tokenizes a blockquote, a list item or a
@@ -8311,22 +8480,10 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		}
 		if (!inFence) {
 			const fenceLead = raw.match(/^[ \t]*/)![0];
-			// Not inside a quote: the loop has never tracked a quoted fence (its
-			// raw lead test cannot see past the `>`), and pins from NRL-93, NRL-98,
-			// NRL-114, NRL-115 and NRL-166 record that reading as accepted. Nor on
-			// a list marker line: containerViews does not model that an ordered
-			// marker other than 1 cannot interrupt a paragraph, and the pins on a
-			// marker line's fence (NRL-114, NRL-182) keep the old reading. Moving
-			// either is a different ticket than a closer's lead in a list item.
-			// Nor inside an item containerViews names lazy (fix round 1): its fence
-			// line is the renderer's paragraph text, so a fence opened there would
-			// run to the end of the note under default options.
-			if (
-				fenceMarks[lineNo] === "open" &&
-				!LIST_BULLET.test(raw) &&
-				!fenceHomes[lineNo]!.some((id) => fenceQuotes.has(id) || fenceLazy.has(id)) &&
-				viewFenceTrusted(lineNo)
-			) {
+			// A quoted fence opens here too (NRL-206): the raw lead test below
+			// cannot see past the `>`, and before NRL-206 its body was read as quote
+			// prose and spoken under DEF.
+			if (viewFenceOpens(lineNo) && viewFenceTrusted(lineNo)) {
 				flushParagraph();
 				inFence = true;
 				fenceByView = true;
@@ -8343,8 +8500,11 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			continue;
 		}
 		if (inFence) {
-			if (opts.skipCodeBlocks || raw.trim() === "") continue;
-			appendToParagraph(verbatimLine(raw, lineStart), lineStart);
+			// A quoted fence's body is spoken from its container's content column,
+			// so its `>` markers are not read out; a lazy body line's column is 0.
+			const col = fenceByView && quotedFence(lineNo) ? fenceCols[lineNo]! : 0;
+			if (opts.skipCodeBlocks || raw.slice(col).trim() === "") continue;
+			appendToParagraph(verbatimLine(raw.slice(col), lineStart + col), lineStart);
 			continue;
 		}
 		// Setext heading: the whole buffered paragraph is the heading, as in
@@ -8420,8 +8580,27 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		// three SIDE EFFECTS stay here, because a lookahead must be able to ask
 		// the question about a line it is not consuming.
 		const prefix = prefixAt(raw, lineNo);
-		const prefixChars = prefix.chars;
-		const blockType: BlockType = prefix.blockType;
+		let prefixChars = prefix.chars;
+		let blockType: BlockType = prefix.blockType;
+		// A quoted heading (NRL-206), from containerViews' marks: `containerPrefix`
+		// tests HEADING only before it peels a `>`, and quote lines never set the
+		// paragraph state the setext branch below reads. Taken only on a plain,
+		// tab-free quote line (no list peel, not a callout line, not literal or
+		// HTML by either reading); measured, `>\t# x` is code and a heading or
+		// setext reading on a list-peeled or tab-bearing line lost text on a wild
+		// generator. A setext heading's underline is never spoken.
+		if (lineNo === quotedUnderline) continue;
+		const qh = quoteHeads[lineNo];
+		if (qh === "atx" && blockType === "quote" && plainQuoteLine(lineNo)) {
+			const h = raw.slice(prefixChars).match(/^ {0,3}#{1,6}(?:[ \t]+|\r?$)/);
+			if (h) {
+				prefixChars += h[0].length;
+				blockType = "heading";
+			}
+		} else if ((qh === "setext" || qh === "setextAfterTitle") && blockType === "quote" && quotedSetextAt(lineNo, qh)) {
+			blockType = "heading";
+			quotedUnderline = lineNo + 1;
+		}
 		if (blockType === "quote" || blockType === "list") prevContainer = true;
 		// Driven off `outerList` and NOT off `blockType === "list"` (NRL-131). A
 		// quoted list ends with its quote, so it does not hold the list state
