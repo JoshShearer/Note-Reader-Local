@@ -4306,6 +4306,8 @@ function endsTerm2Scan(line: string, paraLinesAbove: number): boolean {
 const TERM2_QUOTE_LEVEL = /^ {0,3}> ?/;
 /** A callout title's marker as module 6234 matches it (see `walkLeadQuote`). */
 const TERM2_CALLOUT_TITLE = /^\[![^\]]+\][+-]?(?:\s|$)/;
+/** A list marker with a one-to-four-space gap straight before a `>` (NRL-187). */
+const TERM2_ITEM_QUOTE = /^ {0,3}(?:[-*+]|\d{1,9}[.)]) {1,4}(?=>)/;
 
 /**
  * The quote depth module 6234 would strip from `line` and the body it leaves.
@@ -7168,6 +7170,8 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		let paraLinesAbove = 0;
 		let rawLinesAbove = 0;
 		let prevDepth = 0;
+		// The content-line count a `- > x` marker line hands a QUOTED next line (NRL-187).
+		let itemQuoteNext: number | undefined;
 		for (let k = 0; k < lines.length; k++) {
 			const line = lines[k]!;
 			// Both predicates are asked with the SAME count, before it is updated.
@@ -7187,11 +7191,54 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			// which withholds a stop, the fail-closed direction.
 			const quoteStart = depth > prevDepth && (k === 0 || term2Stop[k - 1]!);
 			prevDepth = Math.max(depth, containerPrefix(line).quotes);
+			const fromItemQuote = itemQuoteNext;
+			itemQuoteNext = undefined;
 			if (depth === 0) {
 				term2Stop[k] = endsTerm2Scan(line, paraLinesAbove);
 				paraLinesAbove = endsTerm2Block(line, paraLinesAbove) ? 0 : paraLinesAbove + 1;
+				// NRL-187: a list marker line whose content opens a quote (`- > x`,
+				// `1. > x`, `- > > x`) ends a block for the item, but its quoted body is
+				// that quote's FIRST content line, so a quoted line under it is the
+				// second. Counting zero there read `- > Title <!--` / `  > ===` as
+				// paragraph text (the comment hid the heading's tail: prose loss) and
+				// `- > Para.` / `  > Title <!--` / `  > ===` as an underline (the
+				// comment was spoken: disclosure). Held for the next line and used only
+				// if that line is itself quoted: a lazy line there is where the
+				// renderer ends the quote (`- > P` / `  T <!--` / `===` renders an
+				// `<h1>` outside it), so it keeps the old count. Spaces-only marker gap.
+				const itemQuote = TERM2_ITEM_QUOTE.exec(line);
+				if (itemQuote) {
+					const inner = term2QuoteView(line.slice(itemQuote[0].length));
+					// Only when the next line, and the one after it unless blank, sit at
+					// the same quote depth (plan review I1/I2): a deeper or shallower
+					// line there starts or ends a quote the count does not describe,
+					// and handing it over newly hid shown prose (4,104 cells).
+					// Round 1 (critic 1): the whole paragraph below, up to a blank line or
+					// the next list marker, must stay at that depth. A deeper `> >` line
+					// further down is a stop the plain-quote scan misses once the count
+					// reaches two (an older plain `>` gap), and the hand-off exposed it.
+					// And plain prose only: at most one `<!--` and no backtick, `[`, `%`,
+					// `$` or other `<` in it (round 1), since the plain-quote scan's
+					// construct handling has its own gaps the hand-off would expose.
+					let sameDepth = inner.depth > 0;
+					let text = line;
+					for (let j = k + 1; sameDepth && j < lines.length; j++) {
+						const lj = lines[j]!;
+						if (lj.trim() === "" || TERM2_LIST.test(lj)) break;
+						if (term2QuoteView(lj).depth !== inner.depth) sameDepth = false;
+						text += "\n" + lj;
+					}
+					if (sameDepth) {
+						const openers = text.split("<!--").length - 1;
+						if (openers > 1 || /[`[%$]|<(?!!--)/.test(text)) sameDepth = false;
+					}
+					if (sameDepth && k + 1 < lines.length && lines[k + 1]!.trim() !== "") {
+						itemQuoteNext = term2QuotedStop(inner.body, true, 0).next;
+					}
+				}
 				continue;
 			}
+			if (fromItemQuote !== undefined) paraLinesAbove = fromItemQuote;
 			calloutTitleAt[k] = quoteStart && TERM2_CALLOUT_TITLE.test(body);
 			const r = term2QuotedStop(body, quoteStart, paraLinesAbove);
 			term2Stop[k] = r.stop;

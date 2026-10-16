@@ -396,6 +396,28 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### The term-2 bound counts a `- > x` line's quoted body (NRL-187, 2026-10-16)
+
+In the `term2Stop` forward pass `term2QuoteView` cannot see a `>` behind a list marker, so
+`- > Para.` reset the paragraph count and the quoted line under it was counted as the first
+content line. The `paraLinesAbove === 1` setext gate then fired one line late:
+`- > Para.` / `  > Title <!--` / `  > ===` read `===` as an underline and spoke the comment
+body (disclosure, 66 spike cells), and `- > Title <!--` / `  > ===` read it as paragraph text
+and hid the heading's tail (loss). A `- > x` / `1. > x` / `- > > x` line (spaces-only marker
+gap, `TERM2_ITEM_QUOTE`) now hands its quoted body's count (`term2QuotedStop(..).next`) to the
+next line. Fail-closed: only when that line, and the one after it unless blank, sit at the
+same quote depth (the plan critic measured 4,104 newly lost cells without the depth gate);
+a lazy next line keeps the old count. Fix round 1 (critic 1): the hand-off made a `- > x`
+quote behave like a plain `> x` quote, which has its own gaps (a deeper `> >` line further
+down is not a stop once the count reaches two, and constructs in the body), so the hand-off
+now also needs the whole paragraph below, up to a blank line or a list marker, at one depth
+and plain prose (at most one `<!--`; no backtick, `[`, `%`, `$` or other `<`). After that,
+critic 1's generator (3 seeds x 20,000) gave 0/0, and both round-0 generators kept their
+fixes with 0/0. Plan v1 CONCERNS 68, addressed. Census: the plan
+critic's generator (4 shards x 98,784 cells) gave 3,096 fixed and 0/0. The planner's
+generator gave 1,728 fixed and 0/0. Spike hazard grid: 66 disclosure and 30 loss cells
+fixed. Not run in Obsidian.
+
 ### A list item's `<!--` over a setext underline is heading text (NRL-188, 2026-10-16)
 
 Inside a list item, `-  <!--` / `  ===` (and the tab, continuation-line, ordered, wide-marker
