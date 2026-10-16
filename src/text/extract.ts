@@ -9306,9 +9306,14 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			opts.skipCodeBlocks &&
 			prefix.callout &&
 			// NRL-217: `calloutTitleAt` cannot see a quote behind a list marker
-			// (`- > [!note]     X`); markerRule "first" is the renderer's rule for a
-			// line that starts its quote, which covers those.
-			(calloutTitleAt[lineNo]! || markerRule[lineNo] === "first") &&
+			// (`- > [!note]     X`). markerRule "first" covers those, but it also
+			// says "first" on an HTML block line (`<div>` / `> [!note]     X` is raw
+			// block text) and on a lazy paragraph line (`P` / `    - > [!note]
+			// X`), where the page shows the title (critic F1, 336 cells). So only
+			// on the note's first line or after a blank line, never an HTML line:
+			// fail-closed, the rest keeps base's reading.
+			(calloutTitleAt[lineNo]! ||
+				(markerRule[lineNo] === "first" && !htmlLineAt[lineNo] && (lineNo === 0 || /^[ \t>]*$/.test(lines[lineNo - 1]!)))) &&
 			body.trim() !== "" &&
 			/^(?: {4}|\t)/.test(/\s*$/.exec(raw.slice(0, prefixChars))![0].slice(1))
 		) {
