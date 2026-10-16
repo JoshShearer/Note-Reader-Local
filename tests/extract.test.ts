@@ -1,4 +1,4 @@
-import { CloserScan, extractChunks, footnoteRefEnd, inlineContainerClose, wikiTargetClose } from "../src/text/extract.ts";
+import { CloserScan, auditBracketCarry, extractChunks, footnoteRefEnd, inlineContainerClose, labelClose, labelProfile, wikiTargetClose } from "../src/text/extract.ts";
 import { rendererPercentBlocks } from "../src/text/obsidianBlocks.ts";
 import {
 	graphemeBoundaries,
@@ -7940,8 +7940,8 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 	// many definition lines is still quadratic, but across lines, not in the
 	// footnote branch: bracketClosesLater re-walks every later line of the
 	// paragraph for each line with an unmatched `[` (`[^1: x` x 4,000 lines took
-	// 2,855 ms on 499038d and 2,827 ms with the NRL-172 fix, medians of five). It
-	// is out of NRL-172's scope and is not checked here.
+	// 2,855 ms on 499038d and 2,827 ms with the NRL-172 fix, medians of five).
+	// NRL-181 fixed it; its rows are under NRL-181 below.
 	const scaled: Array<[string, (n: number) => string]> = [
 		["many-footnote-references", (n) => "a [^1] ".repeat(n) + "\n\n[^1]: x"],
 		["many-open-attribute-blocks", (n) => "<div title='a\n\nb\n\n".repeat(n)],
@@ -8242,6 +8242,177 @@ console.log("NRL-128: an inline container spanning a mid-paragraph <!-- makes th
 	{
 		const src = "a ==x\rProse <!--\nQHAQ\ny== b\n--> QVAQ.";
 		check("NRL-128 a lone CR in the window is refused (unchanged reading)", !spoken(src, ALL).includes("<!--"), spoken(src, ALL));
+	}
+}
+
+console.log("NRL-181: bracketClosesLater stays linear across a paragraph's lines, and exact");
+{
+	// bracketClosesLater re-walked every later line of the paragraph for each line
+	// with an unmatched `[`, so a paragraph of many such lines was quadratic in its
+	// line count. Measured on 028ef10 (Node 24.22.0, medians of 5) at 1,000 /
+	// 4,000 lines: `[a` 150 / 2,413 ms, `[^a` 167 / 2,503, `> [^a` 331 / 4,878,
+	// `[^1: x` 180 / 2,705. BracketCarryMemo answers each line's facts once per
+	// quote class.
+	//
+	// Each row first asks the acceptance bound (4,000 lines under a second, which
+	// is also what makes base fail fast), then the house scaling rule on 2,000 ->
+	// 8,000 lines: at 1,000 lines the fixed code runs 13-31 ms, where timer and GC
+	// noise dominated the ratio in plan review (one row-attempt of 72 at 17.7x on
+	// a loaded machine).
+	const timeOf = (src: string): number => {
+		const t0 = performance.now();
+		extractChunks(src, OPTS);
+		return performance.now() - t0;
+	};
+	const median = (src: string, runs: number): number | undefined => {
+		const times: number[] = [];
+		for (let r = 0; r < runs; r++) {
+			const ms = timeOf(src);
+			if (ms > 1000) return undefined;
+			times.push(ms);
+		}
+		times.sort((a, b) => a - b);
+		return times[Math.floor(times.length / 2)];
+	};
+	const lineOf = (line: string) => (n: number) => Array(n).fill(line).join("\n");
+	const family: Array<[string, (n: number) => string]> = [
+		["link-openers", lineOf("[a")],
+		["footnote-openers", lineOf("[^a")],
+		["quoted-footnote-openers", lineOf("> [^a")],
+		["definition-lines", lineOf("[^1: x")],
+		// Depth drift: every opener reaches each later line at a different depth,
+		// so a plain (line, depth) answer memo stays quadratic here.
+		["depth-drift", (n) => lineOf("[a\n[b] [c")(n / 2)],
+		["quote-then-lazy-openers", (n) => lineOf("> [a\n[a")(n / 2)],
+		["callout-title-then-openers", lineOf("[!note] [a")],
+		// One deep label in the middle: every opener after it starts below it.
+		["deep-chain", (n) => "[a\n".repeat(n / 2) + "[".repeat(n / 2) + "x]\n" + "] [a\n".repeat(n / 2)],
+	];
+	for (const [id, make] of family) {
+		timeOf(make(500));
+		const at4k = timeOf(make(4000));
+		check(`NRL-181 ${id}: 4,000 lines extract under 1000 ms`, at4k < 1000, `${at4k.toFixed(0)} ms`);
+		if (at4k >= 1000) continue;
+		let small: number | undefined;
+		let large: number | undefined;
+		let linear = false;
+		for (let attempt = 0; attempt < 2 && !linear; attempt++) {
+			small = median(make(2000), 3);
+			large = small === undefined ? undefined : median(make(8000), 3);
+			linear = small !== undefined && large !== undefined && (large < 50 || large < 10 * Math.max(small, 1));
+			if (small === undefined || large === undefined) break;
+		}
+		const shown = (ms: number | undefined) => (ms === undefined ? "over 1000 ms" : `${ms.toFixed(0)} ms`);
+		check(`NRL-181 ${id}: four times the lines takes under ten times as long`, linear, `${shown(small)} -> ${shown(large)}`);
+	}
+	// The other members of the family, each over a second at 4,000 lines on
+	// 028ef10, as fixed bounds. Not here, by measurement only: 32 quote depths
+	// cycling line by line (each depth is its own class, so the cost is lines x
+	// classes; about 360 ms at 4,000 on the fixed code).
+	const siblings: Array<[string, string]> = [
+		["deep-quote-openers", lineOf("> > > [a")(4000)],
+		["html-lead-openers", lineOf("<div>[a")(4000)],
+		["openers-before-comment-openers", lineOf("[a <!--")(4000)],
+		["openers-before-pct", lineOf("[a %%")(4000)],
+		["openers-before-math-signs", lineOf("[a $$")(4000)],
+		["openers-before-pipes", lineOf("[a |")(4000)],
+		["openers-before-lone-cr", lineOf("[a\r")(4000)],
+		["emphasis-then-openers", lineOf("*a [b")(4000)],
+		["indented-openers", lineOf("  [a")(4000)],
+		["matched-and-open-labels", lineOf("[a [b] [c")(4000)],
+		["depth-saw", Array.from({ length: 4000 }, (_, i) => (i % 2 ? "[d [e] [f" : "] g [h")).join("\n")],
+		["quote-depth-cycling", Array.from({ length: 4000 }, (_, i) => "> ".repeat(i % 8) + "[a").join("\n")],
+	];
+	for (const [id, src] of siblings) {
+		timeOf(src.slice(0, 2000));
+		const ms = timeOf(src);
+		check(`NRL-181 ${id}: 4,000 lines extract under 1000 ms`, ms < 1000, `${ms.toFixed(0)} ms`);
+	}
+
+	// One pinned note per way the plan's mutants broke the memo, expected value
+	// read off 028ef10. depth0 answers every line at depth 0; nocip keys the
+	// class on the quote budget alone; nonet drops the running depth sum; nomath
+	// drops the `$$` stop; noreset reuses a window past a stop; rawtail reads the
+	// `](`/`][` tail on the raw line instead of the peeled one.
+	const pins: Array<[string, string, string[]]> = [
+		["depth0", "> - [e\n[g [h] [i\n]`](d)", ["e", "g [h [i ]"]],
+		["nocip", "]`](d)\n- [a\n  [f\n<div>](d) z", ["] ](d)", "[a", "f z"]],
+		["nocip-ordered-list", "1. [j\n\t[a\n$$\n\t[a\n<div>](d) z", ["[j", "a $$ [a z"]],
+		["nonet", "1. [j\n[g [h] [i\n](d)", ["[j", "g [h i"]],
+		["nomath", "x\n] y](d)\n1. [j\n\t[a\n> <div>](d)\n`k\n\t[a\n1. [j\n$$\n$$\n    ](d)", ["x ] y](d)", "[j", "[a", "](d)", "k [a", "[j", "equation", "](d)"]],
+		["noreset", "[b\n    ](d)\nx\n](d)\n[b", ["b x ](d) [b"]],
+		["rawtail", ">> [c\n> ](d)", ["c"]],
+	];
+	for (const [id, src, want] of pins) {
+		const got = extractChunks(src, OPTS).map((c) => c.text);
+		check(`NRL-181 pin-${id}`, JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got));
+	}
+
+	let seed = 181;
+	const rnd = () => {
+		seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+		return seed / 0x7fffffff;
+	};
+	const pick = <T>(a: readonly T[]): T => a[Math.floor(rnd() * a.length)]!;
+
+	// labelProfile is a copy of labelClose's step that answers every incoming
+	// depth at once. Held together on seeded lines of the characters the step
+	// reacts to: for d below closes.length labelClose must close at closes[d],
+	// and above it must not close and must end at d + net.
+	{
+		const pieces = ["[", "[", "]", "]", "](", "][", "\\", "`", "``", "<!--", "-->", "%%", "![", "[[", "]]", "![[", "a", " ", "\r", "x]"];
+		let asked = 0;
+		let differing = 0;
+		let example = "";
+		for (let k = 0; k < 4000; k++) {
+			let line = "";
+			const count = Math.floor(rnd() * 24);
+			for (let t = 0; t < count; t++) line += pick(pieces);
+			const p = labelProfile(line);
+			for (let d = 0; d <= p.closes.length + 1; d++) {
+				const r = labelClose(line, 0, d);
+				const ok = d < p.closes.length ? r.close === p.closes[d] : r.close === -1 && r.depth === d + p.net;
+				asked += 1;
+				if (!ok) {
+					differing += 1;
+					if (example === "") example = `${JSON.stringify(line)} at depth ${d}`;
+				}
+			}
+		}
+		check(`NRL-181 labelProfile agrees with labelClose at every depth (${asked} asked)`, differing === 0 && asked > 8000, `${differing} differing, first ${example}`);
+	}
+
+	// The memo against the walk it replaced, which the extractor keeps as
+	// bracketWalkFresh: with the audit set, every armed opener is answered both
+	// ways. Whole lines from a small set, so openers of different classes (quote
+	// budget, list or not) share a paragraph and its windows, and stops (math,
+	// HTML, list markers, indented code) fall between them. On the plan's
+	// mutants this generator catches all six (see the history entry).
+	{
+		const set = ["- [a", "[b", "<div>](d) z", "> [c", ">> [c", "x", "](d)", "] y](d)", "    ](d)", "\t[a", "> ](d)", "> <div>](d)", "- x", "> - [e", "  [f", "[g [h] [i", "1. [j", "> > ](d)", "$$", "`k", "]`](d)", "[d [e] [f", "] g [h", ""];
+		let openers = 0;
+		let differing = 0;
+		let example = "";
+		let current = "";
+		auditBracketCarry((from, memo, fresh) => {
+			openers += 1;
+			if (memo !== fresh) {
+				differing += 1;
+				if (example === "") example = `${JSON.stringify(current)} opener line ${from}`;
+			}
+		});
+		try {
+			for (let k = 0; k < 6000; k++) {
+				const count = 2 + Math.floor(rnd() * 10);
+				const lines: string[] = [];
+				for (let l = 0; l < count; l++) lines.push(pick(set));
+				current = lines.join("\n");
+				extractChunks(current, OPTS);
+			}
+		} finally {
+			auditBracketCarry(undefined);
+		}
+		check(`NRL-181 the memo answers as the fresh walk for every armed opener (${openers} openers)`, differing === 0 && openers > 15000, `${differing} differing, first ${example}`);
 	}
 }
 

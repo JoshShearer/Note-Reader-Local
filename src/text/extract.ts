@@ -4640,7 +4640,7 @@ function opensMathBlock(lines: string[], n: number, quoteBudget = 0): boolean {
  * the single-line branches already do. A `[` or `]` hidden inside a
  * code span or a comment cannot move the depth.
  */
-function labelClose(line: string, from: number, depth: number): { close: number; depth: number } {
+export function labelClose(line: string, from: number, depth: number): { close: number; depth: number } {
 	// The first step with two plain scans, and the loop only if it comes round
 	// again (NRL-172). This runs for every later line of a paragraph and most
 	// calls return here, so it stays as small as it was; see
@@ -4710,16 +4710,10 @@ function labelCloseLoop(line: string, from: number, depth: number): { close: num
  * consumption site in cleanLine uses, so the two can never disagree about which
  * `]` is the label's own (NRL-88, D-88-10).
  */
-function bracketClosesLater(
-	lines: string[],
-	from: number,
-	htmlCloserAhead: readonly boolean[],
-	listDedented: readonly boolean[],
-	htmlLeadIndented: readonly boolean[],
-	htmlLeadLazy: readonly boolean[],
-	htmlLeadCode: readonly boolean[],
-	listStrip: readonly number[],
-): boolean {
+function bracketClosesLater(memo: BracketCarryMemo, from: number): boolean {
+	// The opener-line checks and the later-line walk read the same arrays, from
+	// the memo, so the two cannot be handed different ones (NRL-181).
+	const { lines, htmlCloserAhead, listDedented, htmlLeadIndented, htmlLeadLazy, htmlLeadCode, listStrip } = memo.at;
 	// `htmlCloserAhead` is indexed by RAW line number and stays so under the peel
 	// (NRL-95 landing under NRL-98). That is sound rather than an oversight: the
 	// array answers "is there a `-->` later in THIS line's paragraph", and
@@ -4762,8 +4756,50 @@ function bracketClosesLater(
 	// step with the depth it was given. Threading an openerAt argument through
 	// five sites to compute a constant 0 would be dead weight a later reader has
 	// to re-derive.
+	const answer = memo.closes(from + 1, op.quotes, containerInPlay);
+	if (carryAudit !== undefined) carryAudit(from, answer, bracketWalkFresh(memo.at, from + 1, op.quotes, containerInPlay));
+	return answer;
+}
+
+/**
+ * The per-line facts bracketClosesLater reads, by RAW line number. All of them
+ * are filled before extractChunks' main loop and nothing writes them after:
+ * BracketCarryMemo caches answers derived from them, so an edit that writes one
+ * of these arrays inside the main loop makes the memo stale. The in-suite
+ * differential against bracketWalkFresh is what would catch it.
+ */
+interface CarryLines {
+	readonly lines: string[];
+	readonly htmlCloserAhead: readonly boolean[];
+	readonly listDedented: readonly boolean[];
+	readonly htmlLeadIndented: readonly boolean[];
+	readonly htmlLeadLazy: readonly boolean[];
+	readonly htmlLeadCode: readonly boolean[];
+	readonly listStrip: readonly number[];
+}
+
+let carryAudit: ((from: number, memo: boolean, fresh: boolean) => void) | undefined;
+
+/**
+ * Test seam (NRL-181): with an audit set, every bracketClosesLater answer is
+ * also computed by the fresh walk and both are handed to it, so the suite can
+ * hold the memo to the walk it replaced on generated notes. Unset, it costs one
+ * comparison per armed opener.
+ */
+export function auditBracketCarry(audit: ((from: number, memo: boolean, fresh: boolean) => void) | undefined): void {
+	carryAudit = audit;
+}
+
+/**
+ * bracketClosesLater's walk over later lines as it was before NRL-181, kept
+ * verbatim as the reference the memo is audited against. It re-walks every
+ * later line for each opener, so a paragraph of many openers is quadratic; it
+ * runs only under auditBracketCarry.
+ */
+function bracketWalkFresh(at: CarryLines, start: number, quotes: number, containerInPlay: boolean): boolean {
+	const { lines, htmlCloserAhead, listDedented, htmlLeadIndented, htmlLeadLazy, htmlLeadCode, listStrip } = at;
 	let depth = 0;
-	for (let n = from + 1; n < lines.length; n++) {
+	for (let n = start; n < lines.length; n++) {
 		// Peeled for the predicate AND for labelClose, from the same string, so
 		// the bound and the closer search cannot disagree about what this line
 		// is. opensMathBlock is handed the same budget rather than the peeled
@@ -4773,16 +4809,16 @@ function bracketClosesLater(
 		// change left the budget off and that claim was FALSE - measured during
 		// critique, the carry crossed a quoted math block where the plain twin
 		// aborts, silencing a line Obsidian displays as math source.
-		const line = peelQuotes(lines[n]!, op.quotes);
+		const line = peelQuotes(lines[n]!, quotes);
 		// Every arm on the legacy peel, as base had it; the bare-marker arm (round 1's)
 		// on the renderer's reading of the line. See `quoteContent`.
 		if (
 			interruptsParagraphExceptBareMarker(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!, listStrip[n]!) ||
-			BARE_LIST_MARKER.test(quoteContent(lines[n]!, op.quotes)) ||
-			opensMathBlock(lines, n, op.quotes)
+			BARE_LIST_MARKER.test(quoteContent(lines[n]!, quotes)) ||
+			opensMathBlock(lines, n, quotes)
 		)
 			return false;
-		if (containerInPlay && containerCarryStops(line, op.quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!), htmlLeadLazy[n]!)) return false;
+		if (containerInPlay && containerCarryStops(line, quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!), htmlLeadLazy[n]!)) return false;
 		if (containerInPlay && htmlLeadCode[n]!) return false;
 		const found = labelClose(line, 0, depth);
 		if (found.close === -1) {
@@ -4793,6 +4829,147 @@ function bracketClosesLater(
 		return next === "(" || next === "[";
 	}
 	return false;
+}
+
+/**
+ * labelClose(line, 0, d) for every incoming depth d at once: the step path is
+ * the same whatever d is (d is read only at a `]` step reached with no inner
+ * `[` outstanding), so one walk gives `closes[d]`, the `]` that closes at depth
+ * d for d < closes.length, and `net`, the depth change for every larger d.
+ * Since c starts at 0 and falls by one per `]`, it never drops below
+ * -closes.length at a `]` step, so the closes are consecutive in d.
+ *
+ * A copy of labelClose's step rather than labelClose routed through it: NRL-172
+ * measured a shared step costing 4-11% on its shapes, and labelClose runs on
+ * every later line of a paragraph. Exported, with labelClose, only so the suite
+ * can hold the two together.
+ */
+export function labelProfile(line: string): { closes: number[]; net: number } {
+	const closes: number[] = [];
+	if (line.length === 0) return { closes, net: 0 };
+	let open = inlineContainerClose(line, 0, "[");
+	let shut = inlineContainerClose(line, 0, "]");
+	let c = 0;
+	let scan: CloserScan | undefined;
+	while (shut !== -1) {
+		let i: number;
+		if (open !== -1 && open < shut) {
+			c += 1;
+			i = open + 1;
+		} else {
+			if (c === -closes.length) closes.push(shut);
+			c -= 1;
+			i = shut + 1;
+		}
+		if (i >= line.length) break;
+		scan ??= new CloserScan(line);
+		open = scan.close(i, "[", false);
+		shut = scan.close(i, "]", false);
+	}
+	return { closes, net: c };
+}
+
+/**
+ * bracketClosesLater's walk over later lines, answered once per line (NRL-181).
+ * The walk's state at line n is (n, quote budget, containerInPlay, depth), and
+ * every per-line input it reads is a precomputed array indexed by n, so a line's
+ * facts per class (quotes, containerInPlay) are fixed: a stop, or a label
+ * profile. With S the running sum of `net` from the window's start and
+ * K[n] = S[n] - closes.length (minus infinity at a stop), a walk entering line i
+ * at depth 0 ends at the first n >= i with K[n] < S[i], at depth S[n] - S[i].
+ * A min segment tree over K answers that in O(log n) per query.
+ */
+class BracketCarryMemo {
+	private readonly classes = new Map<number, CarryClass>();
+	constructor(readonly at: CarryLines) {}
+
+	closes(i: number, quotes: number, containerInPlay: boolean): boolean {
+		const key = quotes * 2 + (containerInPlay ? 1 : 0);
+		let k = this.classes.get(key);
+		if (!k || i < k.lo || i > k.end + 1) {
+			k = new CarryClass(i);
+			this.classes.set(key, k);
+		}
+		const t = k.sum[i - k.lo] ?? k.next;
+		let n = k.first(i, t);
+		while (n === -1 && k.end + 1 < this.at.lines.length) {
+			const m = k.end + 1;
+			k.push(this.facts(m, quotes, containerInPlay));
+			if (k.k(m) < t) n = m;
+		}
+		if (n === -1) return false;
+		const closes = k.profile[n - k.lo];
+		if (closes === undefined) return false;
+		return closes[k.sum[n - k.lo]! - t]!;
+	}
+
+	private facts(n: number, quotes: number, containerInPlay: boolean): { closes: boolean[]; net: number } | undefined {
+		// The stop arms are bracketWalkFresh's, verbatim, with `return false` read
+		// as "a stop".
+		const { lines, htmlCloserAhead, listDedented, htmlLeadIndented, htmlLeadLazy, htmlLeadCode, listStrip } = this.at;
+		const line = peelQuotes(lines[n]!, quotes);
+		if (
+			interruptsParagraphExceptBareMarker(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!, listStrip[n]!) ||
+			BARE_LIST_MARKER.test(quoteContent(lines[n]!, quotes)) ||
+			opensMathBlock(lines, n, quotes)
+		)
+			return undefined;
+		if (containerInPlay && containerCarryStops(line, quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!), htmlLeadLazy[n]!)) return undefined;
+		if (containerInPlay && htmlLeadCode[n]!) return undefined;
+		// A closer's position is in the PEELED line, so its destination test is
+		// made here, on the string labelClose read.
+		const p = labelProfile(line);
+		return { closes: p.closes.map((c) => line[c + 1] === "(" || line[c + 1] === "["), net: p.net };
+	}
+}
+
+class CarryClass {
+	readonly sum: number[] = [];
+	readonly profile: Array<boolean[] | undefined> = [];
+	end: number;
+	next = 0;
+	private size = 16;
+	private tree = new Float64Array(32).fill(Infinity);
+	constructor(readonly lo: number) {
+		this.end = lo - 1;
+	}
+	k(n: number): number {
+		const p = this.profile[n - this.lo];
+		return p === undefined ? -Infinity : this.sum[n - this.lo]! - p.length;
+	}
+	push(f: { closes: boolean[]; net: number } | undefined): void {
+		this.end += 1;
+		if (this.end - this.lo >= this.size) this.grow();
+		this.sum.push(this.next);
+		this.profile.push(f?.closes);
+		let x = this.end - this.lo + this.size;
+		this.tree[x] = f === undefined ? -Infinity : this.next - f.closes.length;
+		if (f !== undefined) this.next += f.net;
+		for (x >>= 1; x >= 1; x >>= 1) this.tree[x] = Math.min(this.tree[2 * x]!, this.tree[2 * x + 1]!);
+	}
+	// Doubling keeps a paragraph's window linear in its own length, not the
+	// note's: each short paragraph gets a fresh window.
+	private grow(): void {
+		const size = this.size * 2;
+		const tree = new Float64Array(2 * size).fill(Infinity);
+		tree.set(this.tree.subarray(this.size, 2 * this.size), size);
+		for (let x = size - 1; x >= 1; x--) tree[x] = Math.min(tree[2 * x]!, tree[2 * x + 1]!);
+		this.size = size;
+		this.tree = tree;
+	}
+	/** The first pushed n >= i with K[n] < t, or -1. */
+	first(i: number, t: number): number {
+		if (i > this.end) return -1;
+		const r = this.find(1, 0, this.size, i - this.lo, t);
+		return r === -1 ? -1 : r + this.lo;
+	}
+	private find(x: number, l: number, r: number, from: number, t: number): number {
+		if (r <= from || this.tree[x]! >= t) return -1;
+		if (r - l === 1) return l;
+		const m = (l + r) >> 1;
+		const a = this.find(2 * x, l, m, from, t);
+		return a !== -1 ? a : this.find(2 * x + 1, m, r, from, t);
+	}
 }
 
 /**
@@ -7206,6 +7383,8 @@ export function extractChunks(
 		if (cleaned.text.trim() !== "") appendToParagraph(cleaned, lineStart + from);
 	};
 
+	// One per call, built on the first armed `[` so a note with none pays nothing.
+	let bracketMemo: BracketCarryMemo | undefined;
 	for (let lineNo = 0; lineNo < lines.length; lineNo++) {
 		const raw = lines[lineNo]!;
 		const lineStart = lineStarts[lineNo]!;
@@ -7802,7 +7981,10 @@ export function extractChunks(
 			(blockType === "paragraph" || blockType === "quote" || blockType === "list") &&
 			confirmed === undefined &&
 			cleaned.unclosedBracket !== undefined &&
-			bracketClosesLater(lines, lineNo, htmlClosesLaterAt, listDedented, htmlLeadIndented, htmlLeadLazy, htmlLeadCode, listStrip)
+			bracketClosesLater(
+				(bracketMemo ??= new BracketCarryMemo({ lines, htmlCloserAhead: htmlClosesLaterAt, listDedented, htmlLeadIndented, htmlLeadLazy, htmlLeadCode, listStrip })),
+				lineNo,
+			)
 		) {
 			confirmedBracket = cleaned.unclosedBracket;
 			cleaned = cleanLine(
