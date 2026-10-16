@@ -396,6 +396,18 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A defined reference label spanning lines is hidden (NRL-218, 2026-10-16)
+
+`[l][r` / `s] T.` with `[r s]: u` defined is a full reference link for the renderer and its
+label is hidden, but cleanLine sees the tail on one line only and spoke `[r s]`. The pass now
+adds that label's span (from the `[` to the `]`) to `hiddenSpans`/`strictSpans` before speaking.
+The renderer turned out stricter than CommonMark's label matching, so each guard is measured:
+paragraph lines only (no ATX, table or fence line), no indented-code lead, same container
+stack on every line, no literal or HTML line, plain label text, label text right after the `[`
+and right before the `]`, not followed by `(`, `[` or `:`, and no setext underline or rule
+after. Census over 183,600 cells: 0 newly disclosed, 0 newly lost, about 10,900 hidden tokens
+no longer spoken. Not run in Obsidian.
+
 ### The term-2 bound counts a `- > x` line's quoted body (NRL-187, 2026-10-16)
 
 In the `term2Stop` forward pass `term2QuoteView` cannot see a `>` behind a list marker, so

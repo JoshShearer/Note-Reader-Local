@@ -7034,8 +7034,9 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		shared.strictSpans = mergeRanges(shared.rendererHidden?.strictRanges ?? shared.hiddenSpans);
 	}
 	const rendererHidden = shared.rendererHidden ?? null;
-	const hiddenSpans = shared.hiddenSpans;
-	const strictSpans = shared.strictSpans ?? hiddenSpans;
+	// `let`: NRL-218 adds the spans of defined multi-line reference labels below.
+	let hiddenSpans = shared.hiddenSpans;
+	let strictSpans = shared.strictSpans ?? hiddenSpans;
 	// Offsets of the footnote characters the `%%` block lines emit (NRL-212).
 	const keptFootnote = new Set<number>();
 	const speak = (text: string, index: number[], start: number, blockType: BlockType): SpeechChunk[] => {
@@ -8611,13 +8612,70 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	const bodyOkLater = commentBodyOkAheadOf(term2StopOrCode);
 	const htmlBodyOkLaterAt: (boolean | undefined)[] = bodyOkLater.map((v, k) => (refineAt[k]! ? v : undefined));
 	const scopedOpeners = containerScopedOpeners(lines, refineAt, term2StopOrCode);
+	const refLabels = collectRefLabels(source);
+	// NRL-218: a full reference whose label spans lines (`[l][r` / `s]` with
+	// `[r s]: u` defined) is a link for the renderer and its label is hidden, but
+	// cleanLine sees the tail on one line only and spoke it. Hide that label span
+	// from the `[` to the `]`. Fail-closed: a top-level-or-container paragraph
+	// line, not literal or HTML, a `[x]` directly before the tail, plain label
+	// text (no brackets, backslash, backtick, `<` or `%`), at most four lines,
+	// no blank line, and not followed by `(` or `[` (an inline link or another
+	// pair reads otherwise).
+	if (refLabels.size > 0) {
+		const extra: Array<[number, number]> = [];
+		for (let k = 0; k + 1 < lines.length; k++) {
+			if (literalAt[k] !== undefined || htmlLineAt[k]!) continue;
+			const m = /\[(?:[^[\]\\`<%]|\\.)+\]\[([^[\]\\`<%]*)$/.exec(lines[k]!);
+			if (!m) continue;
+			// Paragraph text only: an ATX heading, table row or fence line is one
+			// line and its label cannot span lines (measured).
+			const kBody = lines[k]!.replace(/^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+[ \t>]*)*/, "");
+			if (/^(?:#{1,6}(?:\s|$)|\||```|~~~)/.test(kBody)) continue;
+			// Indented code is not in `literalAt`: refuse any lead holding a tab or
+			// four spaces in a row, on the tail's line or the closing line.
+			const codeLead = (l: string): boolean => /^[ >]*(?: {4}|\t)/.test(l) || /^[ \t>]*\t/.test(l);
+			if (codeLead(lines[k]!)) continue;
+			const parts = [m[1]!];
+			for (let j = k + 1; j < lines.length && j <= k + 4; j++) {
+				if (literalAt[j] !== undefined || htmlLineAt[j]!) break;
+				// Same container stack as the tail's line (a lazy line or a new
+				// quote level reads otherwise, measured).
+				const hk = containerHome[k]!, hj = containerHome[j]!;
+				if (hk.length !== hj.length || hk.some((id, x) => id !== hj[x])) break;
+				if (codeLead(lines[j]!)) break;
+				const lead = /^[ \t>]*/.exec(lines[j]!)![0].length;
+				const body = lines[j]!.slice(lead);
+				if (body.trim() === "") break;
+				const close = body.indexOf("]");
+				const seg = close === -1 ? body : body.slice(0, close);
+				if (/[[\\`<%]/.test(seg)) break;
+				parts.push(seg);
+				if (close === -1) continue;
+				const nextCh = body[close + 1];
+				// Label text right after the `[` and right before the `]`: `[l][r` / `] x`
+				// and `[l][r` / ` s ]` are shown literally by the renderer (measured).
+				// Not over a setext underline or rule, which makes the paragraph a
+				// heading the renderer splits differently (measured).
+				const after = lines[j + 1];
+				const underAfter = after !== undefined && /^[ \t>]*(?:=+|-+|(?:[-*_][ \t]*){3,})[ \t]*$/.test(after);
+				if (!underAfter && /^\S/.test(m[1]!) && /\S$/.test(seg) && nextCh !== "(" && nextCh !== "[" && nextCh !== ":" && refLabels.has(normaliseRefLabel(parts.join(" ")))) {
+					extra.push([lineStarts[k]! + m.index + m[0].length - m[1]!.length - 1, lineStarts[j]! + lead + close + 1]);
+				}
+				break;
+			}
+		}
+		if (extra.length > 0) {
+			hiddenSpans = mergeRanges([...hiddenSpans, ...extra]);
+			strictSpans = mergeRanges([...strictSpans, ...extra]);
+		}
+	}
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,
 		speakUrls: opts.speakUrls,
 		speakImageAlt: opts.speakImageAlt,
 		speakEmbeds: opts.speakEmbeds,
-		refLabels: collectRefLabels(source),
+		refLabels,
 		commentFootnoteAt: (o) => {
 			let lo = 0;
 			let hi = lineStarts.length;
