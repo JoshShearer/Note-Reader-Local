@@ -9305,7 +9305,19 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		if (
 			opts.skipCodeBlocks &&
 			prefix.callout &&
-			calloutTitleAt[lineNo]! &&
+			// NRL-217: `calloutTitleAt` cannot see a quote behind a list marker
+			// (`- > [!note]     X`). markerRule "first" covers those, but it also
+			// says "first" on an HTML block line (`<div>` / `> [!note]     X` is raw
+			// block text) and on a lazy paragraph line (`P` / `    - > [!note]
+			// X`), where the page shows the title (critic F1, 336 cells). So only
+			// on the note's first line or after a blank line, never an HTML line:
+			// fail-closed, the rest keeps base's reading. A tab-only line is NOT
+			// blank for the renderer (`QaQ` / `\t` / `    - > [!note]     X` is one
+			// paragraph, round 1 critic F1), so tabs do not count here, and nor does
+			// a CRLF blank (`\r`): containerViews misses a list item's `<pre>` there
+			// (NRL-210), measured 130 bad cells with it allowed.
+			(calloutTitleAt[lineNo]! ||
+				(markerRule[lineNo] === "first" && !htmlLineAt[lineNo] && (lineNo === 0 || /^[ >]*$/.test(lines[lineNo - 1]!)))) &&
 			body.trim() !== "" &&
 			/^(?: {4}|\t)/.test(/\s*$/.exec(raw.slice(0, prefixChars))![0].slice(1))
 		) {
