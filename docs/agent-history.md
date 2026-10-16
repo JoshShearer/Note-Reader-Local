@@ -551,6 +551,87 @@ them as four literal characters (cross-line through NRL-166's refinement, same-l
 
 NOT VERIFIED IN OBSIDIAN: lanes never deploy.
 
+### A quote ended by lazy indented code stops the term-2 pairing (NRL-170, 2026-10-14)
+
+ADR 0025 class (e), a #214 regression: `> Plain QPQ` / `> \t<!-- QAQ` / `` \t``` `` /
+`> QBQ -->` / `TAIL QDQ` spoke `Plain QPQ | TAIL QDQ` on ee80121 (DEF and ALL); the
+renderer ends the quote at the unquoted tab line (`indentedCode` is in module 6234's
+`interruptBlockquote`) and shows `<!-- QAQ` and `QBQ -->`. The lazy line is read in the
+term-2 scan's depth-0 branch, where `term2Stop[k] = endsTerm2Scan(line, paraLinesAbove)`
+and its `fenceOpensAt(lead, true)` never stops at a tab or four-space lead. The walker's
+RL_QUOTE branch now records such a line (`quoteCodeEnd`, refined walk, frame view), and
+it joins `term2StopOrCode` for `paraSure` openers only. ADR 0025's NRL-170 section has
+the figures: census 1,446,936 cells, fuzz 231,800, a build-phase generator 1,371,402 and
+a tab attack 68,040, all 0 newly disclosing, 0 newly lost, 0 newly speaking excluded
+content against ee80121 under DEF and ALL only; NRL-178's census replay is identical to
+base. Those figures are scoped to those corpora: both code critics' generators then found
+newly lost prose and newly spoken code and headings on 4ae003f (next bullet).
+
+- **Trap: per-shape gates over a cascade (fix round 1).** Ending a false comment pairing
+  displays the span it hid, and the per-line loop reads that span with misreadings the
+  pairing had masked (a gated `\t%% x` line as prose, a quoted setext h1 under
+  skipHeadings, a mid-quote `[!note] <!--->` line, quoted indented code); a code start
+  also drops `inList` for lines far below. Each gate 4ae003f added named one such shape.
+  Round 1 replaced the hunt with `quoteCodeChangeContained`: when any candidate exists,
+  extract the note with and without the change and keep the change only if every
+  differing line is a started code-run line or a walker-trusted paragraph line that only
+  gains non-heading speech, with no quote-ending code line and no underline below;
+  otherwise ee80121's answer for the whole note. 10 corpora x 7 masks (author, plan
+  critic, both code critics, a cascade generator; 54.5M cells) read 0 new disc / lost /
+  excl against ee80121 (ADR 0025, fix round 1), on LF and CRLF notes. Cost: a note with
+  a candidate is extracted twice; round 2's measured cost is in the next bullet. A grader
+  that only checks DEF and ALL cannot see the skipHeadings cases; use the 7-mask `g2.cjs`.
+  The fallback is whole-note: an edit far below a comment can switch its reading back to
+  ee80121's (fail-closed, never a new loss).
+- **Fix round 2: lone CR, linear check, pinned terms.** Round 1 missed three shapes, each
+  with a lone CR inside the started code run (code critic 1 F1-F3). Lone CRs stay
+  unmodelled (see "A lone CR cannot reach `extractChunks`" below): any note holding one
+  now gets ee80121's reading in a single pass (`NOTE_LONE_CR` in `extractChunks`). The
+  check's underline lookahead was quadratic on a blank-free run (critic 2 F1: 13.7 s on
+  a 230,669-char note); it is now linear (a backward `underlineBelow` pass and per-offset
+  block-type masks), and the flag-independent work (`rendererHiddenText`, both walker
+  runs) is shared between the passes (`PassShared`). Measured on a 200 KB vault-style
+  note with a candidate every 10 sections, medians of 5: 134 ms on ee80121, 362 ms on
+  2127af9, 246 ms on round 2 (1.83x); no candidate, 170 vs 165 ms; the full table is in
+  ADR 0025, fix round 2. Each term of the predicate has a direct row that only it
+  decides, mutation-checked (ADR 0025 lists which mutant each row kills).
+- **Trap: a timing row that only a generator could reach.** The quadratic sat in a
+  check that runs only when a candidate exists, so no existing scaling row reached it.
+  Any code that runs only behind a rare trigger needs its own scaling row with that
+  trigger present.
+- **Guards that test nothing:** two NRL-170 guards passed with their gate terms removed
+  (`paraSure` held them). Mutation-check every new guard against the term it names.
+  `!leads.unsureFresh[k]` in `quoteCodeEndSure` is unreachable (the line above a
+  quote-ending line is the quote's, never the ambiguous one): no output change over
+  175,130 notes x 7 masks.
+
+- **Trap: un-pairing exposes code as prose (plan critique F1).** The plan's prototype
+  newly spoke the code line (`foo QcQ`) under skipCodeBlocks, because its grader EXCUSED
+  every DEF sentinel shown only inside `<pre>`/`<code>`. Grade such sentinels as
+  excluded content (speaking them is a failure), never excuse them. The prototype reads
+  2,476 newly-speaking-excluded census cells under the corrected grader; the fix 0.
+- **Trap: the per-line loop's raw code test.** The same line now starts indented code
+  in the per-line loop (`quoteCodeStartsCode`), but only from the ROOT frame
+  (`quoteCodeEndRoot`): inside a list item the item's content column ends the run,
+  and a raw run swallowed a heading (`1.  \tx` / ... / `    # c`).
+- **Gates that keep base's answer:** a line holding `<!--` or `%%` (its own reading
+  decides comment state for every later line), and a quoted tab-led fence opener ahead
+  in the same non-blank run (`tabFenceAhead`; the per-line loop misreads it, and
+  un-pairing spoke its fenced text). Each was found as newly-speaking-excluded cells.
+- **Pin moved:** `pin-nrl118-v7-dash-break-is-no-list` now reads with code spoken; the
+  renderer shows its SECRET as indented code, which DEF now skips (new row beside it).
+- **Residuals (pre-existing, prose loss or code spoken):** (i) fresh-fence leads
+  ` \t```` after a quote stay `unknown`; (ii) a quote in a list item ended by a dedented
+  line; (iii) `%%` openers, and a code line holding `<!--`; (iv) the NRL-166 F2
+  list-item fence class; (v) lazy indented code after a quote in a NESTED frame is still
+  spoken under skipCodeBlocks (`> > P` / `> \tfoo`); (vi) a quoted fence opener with a
+  tab in its lead is misread by the per-line loop. And the classes behind the 13 rows of
+  "NRL-170 fix round 1", whose notes keep ee80121's reading: (vii) a `%%` code line
+  read as prose, (viii) a quoted setext h1 under skipHeadings, (ix) a mid-quote
+  `[!note] <!--->` / `<!-->` line read as a callout, (x) quoted indented code read as
+  prose (all NRL-185); (xi) a code start drops `inList`, so the note keeps base's
+  reading (NRL-170). The rows pin ee80121's speech and name the wrong words.
+
 ### Fence heads holding `-->` hidden where nothing is open (NRL-178, 2026-10-14)
 
 NRL-166 round 3's `if (/--!?>/.test(head)) return;` in `hideFenceLines` left every such
