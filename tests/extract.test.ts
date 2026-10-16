@@ -5116,6 +5116,18 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["residual-nrl217-list-callout-right-after-a-paragraph", "P\n- > [!note]     QtQ", "P QtQ"],
 		["guard-nrl217-r1f1-tab-only-line-is-not-blank", "QaQ\n\t\n    - > [!note]     QbQ", "QaQ QbQ"],
 		["guard-nrl217-r2-crlf-list-pre-block", "- <pre>\r\n  QaQ\r\n\r\n  - > [!note]     QbQ", "QaQ QbQ"],
+		// NRL-201: directly under a top-level footnote definition line or a table
+		// row, the renderer takes a link reference definition and hides it.
+		["pin-nrl201-definition-under-footnote-definition", "a[^1]\n\n[^1]: QfQ\n[x]: http://QuQ", "a QfQ"],
+		["pin-nrl201-definition-under-table-row", "| a | b |\n|---|---|\n| c | d |\n[x]: /QuQ \"QtQ\"", "| a | b | |---|---| | c | d |", {skipTables: false}],
+		["guard-nrl201-not-a-table-after-a-paragraph", "P\n| a |\n|---|\n[x]: /QuQ", "P | a | |---| x : /QuQ", {skipTables: false}],
+		["guard-nrl201-pipe-line-without-delimiter-row", "| a |\n[x]: QuQ", "| a | x : QuQ", {skipTables: false}],
+		["guard-nrl201-definition-after-paragraph-line", "P QpQ\n[x]: QuQ", "P QpQ x : QuQ"],
+		["guard-nrl201-c1-footnote-line-continuing-a-paragraph", "para QpQ\n[^1]: QfQ\n[QdQ]: QuQ", "para QpQ QfQ QdQ : QuQ"],
+		["guard-nrl201-c1-footnote-line-in-a-list-item", "- item\n  [^1]: QfQ\n[QdQ]: QuQ", "item : QfQ QdQ : QuQ"],
+		["guard-nrl201-c1c2-definition-is-setext-heading-text", "[^1]: QfQ\n[QdQ]: QuQ\n---", "QdQ : QuQ"],
+		["guard-nrl201-c1-footnote-line-in-an-html-block", "<div>\n[^1]: QfQ\n[QdQ]: QuQ", "QfQ QdQ : QuQ"],
+		["guard-nrl201-c1-definition-run-ending-in-setext", "[^1]: QfQ\n[QaQ]: u\n[QbQ]: v\n---", "QaQ : u QbQ : v"],
 		["guard-nrl212-c1f1-backtick-fence-in-block", "%%\n```\n^[QxQ]\n```\n%%\nd", "d"],
 		["guard-nrl212-c1f1-math-in-block", "%%\n$$\n^[QxQ]\n$$\n%%\nd", "d"],
 		["guard-nrl212-c1f1-html-comment-in-block", "%%\n<!--\n^[QxQ]\n-->\n%%\nd", "d"],
@@ -8438,6 +8450,12 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 		// against 68 ms on 5d41664, critic 1 of round 1).
 		["many-escaped-brackets-after-a-definition-colon", (n) => "]: " + "\\[a".repeat(n)],
 		["many-escaped-bracket-lines-after-a-definition-colon", (n) => "]: " + "\\[a\n".repeat(n)],
+		// NRL-201 round 1: the setext lookahead ran before the cheap footnote and
+		// table tests, so each definition line rescanned the run (1,598 ms at
+		// 8,000 on 652ef65 against 162 ms on d35e69a, round 1 critic).
+		// Doubled so the quadratic separates from linear at this table's sizes
+		// (round 1 code: 12.3x for 4x; fixed: 3.4x).
+		["many-definitions-under-a-paragraph", (n) => "word\n" + "[a]: u\n".repeat(2 * n) + "---"],
 		// NRL-128: containerScopedOpeners examines each paragraph once (its first
 		// `<!--`), with one backward pass for the next `-->` and next break. The
 		// plan's first prototype re-walked the paragraph for every `<!--` line and

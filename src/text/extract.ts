@@ -7899,6 +7899,46 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		lineStarts.push(offset);
 		offset += line.length + 1;
 	}
+	// NRL-201: line k sits directly under a top-level footnote definition line,
+	// or under a row of a table: a block (back to a blank line) whose first line
+	// is a header row and whose second is a delimiter row, since a table cannot
+	// interrupt a paragraph. One forward pass.
+	const TABLE_DELIM_ROW = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+	const tableRowAt: boolean[] = [];
+	{
+		let blockLine = 0;
+		let inTable = false;
+		for (const line of lines) {
+			if (line.trim() === "") {
+				blockLine = 0;
+				inTable = false;
+				tableRowAt.push(false);
+				continue;
+			}
+			if (blockLine === 1 && TABLE_DELIM_ROW.test(line) && line.includes("-")) inTable = true;
+			blockLine += 1;
+			tableRowAt.push(inTable && /^ {0,3}\|/.test(line));
+		}
+	}
+	// Fix round 1 (critic 1 F1): the footnote line must START a top-level block
+	// (first line, or a blank line above it), not continue a paragraph or list
+	// item; neither line may be in an HTML block or a literal (fence, math,
+	// frontmatter); and the definition must not be setext heading text.
+	const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+	const defAfterBlockAt = (k: number): boolean => {
+		if (k === 0) return false;
+		if (htmlLineAt[k]! || htmlLineAt[k - 1]! || literalAt[k] !== undefined || literalAt[k - 1] !== undefined) return false;
+		const underFootnote = /^\[\^[^\]\s]+\]:/.test(lines[k - 1]!) && (k === 1 || lines[k - 2]!.trim() === "");
+		if (!underFootnote && !tableRowAt[k - 1]!) return false;
+		// Only now, for the one line directly under a footnote line or table row:
+		// the run of definition lines below must not end in a setext underline
+		// (`[b]: v` / `---` there is heading text; base, top level, has that gap,
+		// under a footnote it spoke it). Walking before the cheap tests above was
+		// quadratic on a long run of definitions (commit security review).
+		let j = k + 1;
+		while (j < lines.length && LINK_REF_DEF.test(lines[j]!)) j++;
+		return !(j < lines.length && SETEXT_UNDERLINE.test(lines[j]!));
+	};
 	// NRL-212 fix round 1: whether an earlier line of the paragraph left a `[`
 	// open (fail-closed: it stays set to the paragraph's end), one forward pass.
 	const bracketOpenAbove: boolean[] = [];
@@ -9524,6 +9564,14 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		// was a buffered paragraph line, so `paraText !== ""` and this branch
 		// cannot fire - a soft-wrapped code span can never be cut short here.
 		if (blockType !== "heading" && paraText === "" && !wasPara && !wasContainer && LINK_REF_DEF.test(body)) {
+			continue;
+		}
+		// NRL-201: directly under a top-level footnote definition line or a row of
+		// a table (a delimiter row above it in the block), the renderer starts a
+		// new block and takes the definition, though our buffer holds that line.
+		// Top level only, fail-closed: everything else keeps the guard above.
+		if (blockType !== "heading" && prefixChars === 0 && LINK_REF_DEF.test(body) && defAfterBlockAt(lineNo)) {
+			flushParagraph();
 			continue;
 		}
 		// Output exclusions do not exclude parsing: an HTML or Obsidian comment
