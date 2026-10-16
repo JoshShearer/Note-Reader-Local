@@ -4818,22 +4818,25 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// fence heads skipped. The pinned `QKZQ--->` is NOT the renderer's truth: both
 		// renderers hide it. It is base's fail-closed answer (a known disclosure kept),
 		// so a later fix that hides these heads correctly turns them red on purpose.
+		// NRL-213 is that fix for the `- Q<!--` / four-space fence shape these rows use: every
+		// `QKZQ--->` below is now hidden, as in the renderer, so the rows still pin the QaQ text
+		// and the fence-head hiding but no longer discriminate the PI gate (not re-established).
 		// A `www.` autolink literal runs on through the backtick and emits the PI
 		// raw (critics on 6317015, F1). Uppercase `WWW.` is no autolink, but fails
 		// closed too.
-		["guard-nrl184-www-autolink", "a www.example.com`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-www-upper", "a WWW.example.com`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a WWW.example.com <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-link-cross", "a [`](u) <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a [ ](u) <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-math-code", "a $`$ <?x > <!-- QaQ ?> `$ b\n\n- Q<!--\n    ```QKZQ--->", "a $ $ <?x > <!-- QaQ ?> $ b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-pct-code", "a %%`%% <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-code-in-tag", "a <span title=\"`\"><?x > <!-- QaQ ?>`</span> b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-code-in-autolink", "a <http://a`><?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-code-esc-open", "a \\`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a `<?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-em-cross", "a *`* <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a * <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-wiki-cross", "a [[a`]] <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a a ]] <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-table-pipe", "| a | b |\n| - | - |\n| `a | <?x > <!-- QaQ ?>` | c |\n\n- Q<!--\n    ```QKZQ--->", "Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-double-backslash", "a \\\\<?x > <!-- QaQ ?> b\n\n- Q<!--\n    ```QKZQ--->", "a \\<?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-fence-head", "```<?x > <!-- QaQ ?>\nx\n```\n\n- Q<!--\n    ```QKZQ--->", "x Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-www-autolink", "a www.example.com`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-www-upper", "a WWW.example.com`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a WWW.example.com <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-link-cross", "a [`](u) <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a [ ](u) <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-math-code", "a $`$ <?x > <!-- QaQ ?> `$ b\n\n- Q<!--\n    ```QKZQ--->", "a $ $ <?x > <!-- QaQ ?> $ b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-pct-code", "a %%`%% <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-code-in-tag", "a <span title=\"`\"><?x > <!-- QaQ ?>`</span> b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-code-in-autolink", "a <http://a`><?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-code-esc-open", "a \\`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a `<?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-em-cross", "a *`* <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a * <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-wiki-cross", "a [[a`]] <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a a ]] <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-table-pipe", "| a | b |\n| - | - |\n| `a | <?x > <!-- QaQ ?>` | c |\n\n- Q<!--\n    ```QKZQ--->", "Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-double-backslash", "a \\\\<?x > <!-- QaQ ?> b\n\n- Q<!--\n    ```QKZQ--->", "a \\<?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-fence-head", "```<?x > <!-- QaQ ?>\nx\n```\n\n- Q<!--\n    ```QKZQ--->", "x Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
 		// An opener in an HTML block counts; here the block's own open comment
 		// (`openFrom`) already gives the same answer, so these pin the agreement.
 		["guard-nrl184-html-block", "<div>\n<?x > <!-- QaQ ?>\n</div>\n\n- Q<!--\n    ```QKZQ--->", "Q", { skipCodeBlocks: false, skipInlineCode: false }],
@@ -4850,6 +4853,55 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl184-pct-footnote-in-quote", "> %%\n> ^[<?x > <!-- QaQ ?>]\n> %%\n\n[^n]: Q<!--\n    ```QhQ-->QiQ\n\nref[^n]", "Q QiQ ref", { skipCodeBlocks: false, skipInlineCode: false }],
 		["guard-nrl184-pct-footnote-in-def", "[^m]: x\n    %%\n    ^[<?x > <!-- QaQ ?>]\n    %%\n\nr[^m]\n\n[^n]: Q<!--\n    ```QhQ-->QiQ\n\nref[^n]", "x r Q QiQ ref", { skipCodeBlocks: false, skipInlineCode: false }],
 		["guard-nrl184-pct-lazy-in-def", "[^m]: a\n    >d  c\n%%^[<?x > <!-- QaQ ?>]\n%%\n\nr[^m]\n\n[^n]: Q<!--\n    ```QhQ-->QiQ\n\nref[^n]", "a >d c r Q QiQ ref", { skipCodeBlocks: false, skipInlineCode: false }],
+		// NRL-213: a fence opened by a list item's own content, with MORE indent than
+		// its closer, never closed in the per-line loop, so later prose was read as
+		// code (a later `%%hidden%%` spoken under CODE, later prose lost under DEF).
+		// A closer's lead is relative to the container's content column; the loop now
+		// follows containerViews' open and close marks for a fence containerViews
+		// opened, outside quotes and not on a list marker line. Rows are the 1.13.7
+		// harness's answer (1.14.4 identical) per QxQ sentinel, "pin" rows red on
+		// f15bc99, "guard" rows not. Exception: the quote rows keep the loop's accepted
+		// reading, which speaks a quoted fence's body under DEF (the renderer shows it as
+		// code); CODE is the renderer's answer there. The loop has never tracked a
+		// quoted fence (NRL-93, NRL-98, NRL-114, NRL-115, NRL-166 pins).
+		["pin-nrl213-list-ol-open6-close3-def", "1. QiQ\n      ```js\n   QmQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-list-ol-open6-close3-code", "1. QiQ\n      ```js\n   QmQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-list-ol-open4-close3-def", "1. QiQ\n    ```js\n   QmQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-list-ol-open4-close3-code", "1. QiQ\n    ```js\n   QmQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-list-bullet-open5-close2-def", "- QiQ\n     ```js\n  QmQ\n  ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-list-bullet-open5-close2-code", "- QiQ\n     ```js\n  QmQ\n  ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-list-tilde-open6-close3-def", "1. QiQ\n      ~~~js\n   QmQ\n   ~~~\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-list-tilde-open6-close3-code", "1. QiQ\n      ~~~js\n   QmQ\n   ~~~\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-list-longer-closer-def", "1. QiQ\n      ```js\n   QmQ\n   `````\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-list-longer-closer-code", "1. QiQ\n      ```js\n   QmQ\n   `````\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-list-nested-open7-close4-def", "- - QiQ\n       ```\n    QmQ\n    ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["guard-nrl213-list-nested-open7-close4-code", "- - QiQ\n       ```\n    QmQ\n    ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-list-crlf-def", "1. QiQ\r\n      ```js\r\n   QmQ\r\n   ```\r\n\r\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-list-crlf-code", "1. QiQ\r\n      ```js\r\n   QmQ\r\n   ```\r\n\r\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-list-fence-ends-with-item-unclosed-def", "1. QiQ\n      ```js\n   QmQ\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-list-fence-ends-with-item-unclosed-code", "1. QiQ\n      ```js\n   QmQ\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-list-closer-in-comment-body-def", "1. QiQ\n      ```js\n   QmQ %%q QcQ%% QdQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-list-closer-in-comment-body-code", "1. QiQ\n      ```js\n   QmQ %%q QcQ%% QdQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ %%q QcQ%% QdQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-closer-indented-4-is-content-def", "1. QiQ\n   ```js\n   QmQ\n       ```\n   QnQ\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-closer-indented-4-is-content-code", "1. QiQ\n   ```js\n   QmQ\n       ```\n   QnQ\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ ``` QnQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-shorter-closer-is-content-def", "1. QiQ\n      ````js\n   QmQ\n   ```\n   QnQ\n   ````\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-shorter-closer-is-content-code", "1. QiQ\n      ````js\n   QmQ\n   ```\n   QnQ\n   ````\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ ``` QnQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-wrong-char-closer-is-content-def", "1. QiQ\n      ```js\n   QmQ\n   ~~~\n   QnQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-wrong-char-closer-is-content-code", "1. QiQ\n      ```js\n   QmQ\n   ~~~\n   QnQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ ~~~ QnQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-info-on-closer-is-content-def", "1. QiQ\n      ```js\n   QmQ\n   ```x\n   QnQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-info-on-closer-is-content-code", "1. QiQ\n      ```js\n   QmQ\n   ```x\n   QnQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ ```x QnQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-top-level-fence-def", "QiQ\n\n```js\nQmQ\n```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["guard-nrl213-top-level-fence-code", "QiQ\n\n```js\nQmQ\n```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-top-level-opener-deeper-than-closer-def", "QiQ\n\n   ```js\nQmQ\n```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["guard-nrl213-top-level-opener-deeper-than-closer-code", "QiQ\n\n   ```js\nQmQ\n```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-quote-fence-def", "> QiQ\n> ```js\n> QmQ\n> ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", {}],
+		["guard-nrl213-quote-fence-code", "> QiQ\n> ```js\n> QmQ\n> ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-quote-fence-closer-lead-3-def", "> QiQ\n> ```js\n> QmQ\n>    ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", {}],
+		["guard-nrl213-quote-fence-closer-lead-3-code", "> QiQ\n> ```js\n> QmQ\n>    ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-list-matching-indent-def", "1. QiQ\n   ```js\n   QmQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["guard-nrl213-list-matching-indent-code", "1. QiQ\n   ```js\n   QmQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-list-closer-deeper-than-opener-3-def", "1. QiQ\n   ```js\n   QmQ\n      ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-list-closer-deeper-than-opener-3-code", "1. QiQ\n   ```js\n   QmQ\n      ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });

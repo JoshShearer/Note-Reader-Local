@@ -396,6 +396,35 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A fence's closer is read in its container, not off the raw line (NRL-213, 2026-10-16)
+
+- **Bug (R-M08):** `1. QiQ` / six-space ```` ```js ```` / `   QmQ` / three-space ```` ``` ```` / blank /
+  `QxQ %%hidden QyQ%% QzQ` never closed the fence in the per-line loop of `extractChunks`: its
+  raw-lead opener test refuses six spaces after an open paragraph, so the closer was read as a
+  new opener that ran to the end of the note. Measured on f15bc99 against the 1.13.7 harness:
+  CODE spoke the hidden comment, DEF lost `QxQ QzQ`. Opener at 4 or 5 spaces and `- ` items: same.
+- **Fix:** the loop follows `containerViews`' `fenceAt` marks for a fence containerViews
+  opened (`fenceByView`): opened on `"open"`, closed on `"close"`, and closed silently on the
+  first line `literalAt` no longer calls code (the container ended). Fences the old raw tests
+  open keep the old raw closer test. Two exclusions, each found by a red existing pin: a line
+  inside a quote (the loop has never tracked a quoted fence; NRL-93/98/114/115/166 pins record
+  speaking its body under DEF as accepted) and a list marker line (containerViews does not
+  model that an ordered marker other than 1 cannot interrupt a paragraph, so `Para` /
+  `2. ~~~ js` read as a fence and lost `more`; NRL-114/182 pins). 13 `guard-nrl184-*` rows
+  changed: their `- Q<!--` / four-space fence shape is this bug's shape, `QKZQ--->` is now
+  hidden as in the renderer, and they no longer discriminate the PI gate (not re-established). On a CRLF note containerViews registers no list item, so
+  those marks come from a second pass over the `\r`-stripped lines (same device as
+  `markerRules`); only this tracking reads them.
+- **Evidence:** 80,000 generated notes (seeds 7, 11, 12, 13; 20,000 each; list/ordered/quote/
+  nested containers, opener and closer indent 0-6 relative, char and length, LF and CRLF) x DEF
+  and CODE, graded per sentinel against the 1.13.7 harness: 0 newly disclosing, 0 newly lost, 0
+  newly speaking excluded. Seed 7 alone: disclosing 2202 -> 791, lost 21575 -> 11940 (base ->
+  branch, sentinel counts; the quote and marker-line exclusions leave much of the rest). The
+  residue is identical on both arms and is not this ticket: quoted fences, and a fence opener
+  4-5 columns past the content column, which is paragraph text for the renderer and which
+  the loop still reads as an opener. Lockstep (`lock128.cjs`, CLEAN row) 0/0/0/0 on the fix arm.
+  Not observed in a running Obsidian.
+
 ### Inline PI/CDATA counted only where the renderer emits it raw (NRL-184, 2026-10-16)
 
 NRL-178 fix round 1's `INLINE_BOGUS_OPENER` exec counted any `<?` / `<![CDATA[` in the

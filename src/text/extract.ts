@@ -7061,6 +7061,15 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// `htmlLineAt[k]`: line k is a line of a markdown HTML block (any type,
 	// comments included) by the same parse, so it is raw HTML for the renderer.
 	const htmlLineAt: boolean[] = new Array<boolean>(lines.length).fill(false);
+	// The literal and fence marks the per-line loop's own fence tracking reads
+	// (NRL-213). `containerViews` registers no list item for a CRLF line, so on a
+	// CRLF note they come from a second pass over the lines with the `\r`
+	// removed, as `markerRules` does for its decision; only this tracking takes
+	// that reading, the arrays above keep theirs.
+	let fenceLiteral = literalAt;
+	let fenceMarks = fenceAt;
+	let fenceHomes = containerHome;
+	let fenceQuotes: ReadonlySet<number> = quoteIds;
 	{
 		const viewStart: number[] = new Array<number>(lines.length).fill(0);
 		// Obsidian's frontmatter is a `---` on line 0 and the next `---`: its lines
@@ -7084,6 +7093,25 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			fenceAt,
 			htmlLineAt,
 		);
+		if (lines.some((l) => l.endsWith("\r"))) {
+			const lf = lines.map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
+			fenceLiteral = literalAt.slice();
+			fenceMarks = new Array<"open" | "close" | undefined>(lines.length).fill(undefined);
+			for (let k = first; k < lines.length; k++) fenceLiteral[k] = undefined;
+			fenceHomes = lines.map(() => []);
+			const lfQuotes = new Set<number>();
+			fenceQuotes = lfQuotes;
+			containerViews(
+				lf.slice(first).map((text, i) => ({ k: i + first, text, off: 0 })),
+				new Array<number>(lines.length).fill(0),
+				fenceHomes,
+				[],
+				{ next: 0, quotes: lfQuotes },
+				fenceLiteral,
+				fenceMarks,
+				new Array<boolean>(lines.length).fill(false),
+			);
+		}
 		for (let k = 0; k < lines.length; k++) {
 			const raw = lines[k]!;
 			const peel = raw.match(BLOCKQUOTE)?.[0].length ?? 0;
@@ -7223,6 +7251,8 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	}
 
 	let inFence = false;
+	// Whether `inFence` was opened by containerViews' reading (NRL-213).
+	let fenceByView = false;
 	let inComment: CommentCloser | undefined;
 	// A `%%` block ends where Obsidian's own parser ends it (NRL-118, ADR 0006
 	// clause 5). The reading view tokenizes a blockquote, a list item or a
@@ -7951,6 +7981,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		// the `-` item, and the `*` line starts a new list whose `<!--` hides.
 		if (fenceHome !== undefined && (!inFence || !browserBlockHolds(lineNo, fenceHome))) {
 			if (inFence) inFence = false;
+			fenceByView = false;
 			fenceHome = undefined;
 		}
 		if (pctHome !== undefined && (!resumeBrowser || !browserBlockHolds(lineNo, pctHome))) {
@@ -8091,6 +8122,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 					if (fenceLine) {
 						flushParagraph();
 						inFence = fenceAt[lineNo] === "open";
+						fenceByView = false;
 						fenceHome = inFence ? blockHome(lineNo) : undefined;
 					}
 					continue;
@@ -8188,14 +8220,51 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		// unconditionally; char/length pairing with the opener is a separate,
 		// pre-existing, out-of-scope simplification (NRL-132's own AC), not
 		// touched here.
+		// A fence containerViews opened (`fenceByView`) is closed by containerViews'
+		// own reading, not the raw line's (NRL-213): the renderer takes a closer's
+		// lead relative to the container's content column, so a list item's fence
+		// opened at six spaces and closed at three is closed, while this loop's
+		// raw-lead tests never saw the opener (six spaces after an open paragraph
+		// is not an opener to them) and read the closer as a new opener that ran
+		// to the end of the note. A line that is no longer literal code (its
+		// container ended) closes it silently, and a shorter, other-character or
+		// info-carrying closer line is code, as containerViews already decided.
+		if (inFence && fenceByView) {
+			if (fenceLiteral[lineNo] !== "code") {
+				inFence = false;
+				fenceByView = false;
+			} else if (fenceMarks[lineNo] === "close") {
+				flushParagraph();
+				inFence = false;
+				fenceByView = false;
+				continue;
+			}
+		}
 		if (!inFence) {
 			const fenceLead = raw.match(/^[ \t]*/)![0];
+			// Not inside a quote: the loop has never tracked a quoted fence (its
+			// raw lead test cannot see past the `>`), and pins from NRL-93, NRL-98,
+			// NRL-114, NRL-115 and NRL-166 record that reading as accepted. Nor on
+			// a list marker line: containerViews does not model that an ordered
+			// marker other than 1 cannot interrupt a paragraph, and the pins on a
+			// marker line's fence (NRL-114, NRL-182) keep the old reading. Moving
+			// either is a different ticket than a closer's lead in a list item.
+			if (
+				fenceMarks[lineNo] === "open" &&
+				!LIST_BULLET.test(raw) &&
+				!fenceHomes[lineNo]!.some((id) => fenceQuotes.has(id))
+			) {
+				flushParagraph();
+				inFence = true;
+				fenceByView = true;
+				continue;
+			}
 			if (fenceOpensAt(fenceLead, wasPara) && FENCE.test(raw)) {
 				flushParagraph();
 				inFence = true;
 				continue;
 			}
-		} else if (BLOCK_END_FENCE.test(raw)) {
+		} else if (!fenceByView && BLOCK_END_FENCE.test(raw)) {
 			flushParagraph();
 			inFence = false;
 			continue;
