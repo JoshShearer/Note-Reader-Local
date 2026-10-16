@@ -396,6 +396,18 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A declined reference tail does not carry a label across lines (NRL-216, 2026-10-16)
+
+`[l][r` / `](u)`: the line declines `[r` as a reference tail (NRL-208's `declinedTail`), but
+the NRL-63 label carry still took it, so `(u)` was read as a destination and dropped, though
+the renderer shows the whole thing as text (1.13.7). The carry now refuses a declined `[`
+when it is the line's last `[`; a later `[` (`[l][r [s` / `](u)`) may open a real link, and
+base's reading stands there (refusing it too measured 240 newly disclosed cells). Generator
+4,368 cells (13 heads x 7 tails x 4 definition sets x 4 containers x DEF/CODE/ALL): 0 newly
+disclosed, 0 newly lost, 1,200 shown tokens recovered. Residual, base has it: a DEFINED
+multi-line reference label (`[l][r` / `s]` with `[r s]: /x`) is hidden by the renderer but
+spoken. Not run in Obsidian.
+
 ### Frontmatter fences are an exact `---` (NRL-198, 2026-10-16)
 
 `isFrontmatterFence` used `trim() === "---"`, so ` ---` or `--- ` delimited frontmatter and
