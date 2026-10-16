@@ -396,6 +396,28 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A defined reference label spanning lines is hidden (NRL-218, 2026-10-16)
+
+`[l][r` / `s] T.` with `[r s]: u` defined is a full reference link for the renderer and its
+label is hidden, but cleanLine sees the tail on one line only and spoke `[r s]`. The pass now
+adds that label's span (from the `[` to the `]`) to `hiddenSpans`/`strictSpans` before speaking.
+The renderer turned out stricter than CommonMark's label matching, so each guard is measured:
+paragraph lines only (no ATX, table or fence line), no indented-code lead, same container
+stack on every line, no literal or HTML line, plain label text, label text right after the `[`
+and right before the `]`, not followed by `(`, `[` or `:`, and no setext underline or rule
+after. Fix round 1 (both critics BLOCKed): the lenient `refLabels` counted definitions the
+renderer does not take (in indented or fenced code, an HTML block, a paragraph continuation,
+a label with a trailing space), and anything before the tail on its line (an escape, a
+footnote, an earlier bracket pair, a callout, a URL, code, math, HTML, emphasis) changes what
+the brackets are. Now a strict definition set (column 0, block start, not literal or HTML,
+plain alphanumeric label) and only plain prose before a plain `[x][label`; the line regex is
+anchored, so linear. Both critics' generators and the census gave 0/0 afterwards, with about
+4,650 hidden tokens no longer spoken (fewer than round 0, by design). Fix round 2 (round-1
+critic BLOCK): the tail regex was still quadratic on a run of spaces (the prose may not start
+with one now); a definition over a setext underline is heading text, and one inside a `%%`
+block is not taken (no strict definitions at all in a note holding `%%`). All generators 0/0.
+Not run in Obsidian.
+
 ### The term-2 bound counts a `- > x` line's quoted body (NRL-187, 2026-10-16)
 
 In the `term2Stop` forward pass `term2QuoteView` cannot see a `>` behind a list marker, so

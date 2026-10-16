@@ -7034,8 +7034,9 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		shared.strictSpans = mergeRanges(shared.rendererHidden?.strictRanges ?? shared.hiddenSpans);
 	}
 	const rendererHidden = shared.rendererHidden ?? null;
-	const hiddenSpans = shared.hiddenSpans;
-	const strictSpans = shared.strictSpans ?? hiddenSpans;
+	// `let`: NRL-218 adds the spans of defined multi-line reference labels below.
+	let hiddenSpans = shared.hiddenSpans;
+	let strictSpans = shared.strictSpans ?? hiddenSpans;
 	// Offsets of the footnote characters the `%%` block lines emit (NRL-212).
 	const keptFootnote = new Set<number>();
 	const speak = (text: string, index: number[], start: number, blockType: BlockType): SpeechChunk[] => {
@@ -8611,13 +8612,90 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	const bodyOkLater = commentBodyOkAheadOf(term2StopOrCode);
 	const htmlBodyOkLaterAt: (boolean | undefined)[] = bodyOkLater.map((v, k) => (refineAt[k]! ? v : undefined));
 	const scopedOpeners = containerScopedOpeners(lines, refineAt, term2StopOrCode);
+	const refLabels = collectRefLabels(source);
+	// NRL-218: a full reference whose label spans lines (`[l][r` / `s]` with
+	// `[r s]: u` defined) is a link for the renderer and its label is hidden, but
+	// cleanLine sees the tail on one line only and spoke it. Hide that label span
+	// from the `[` to the `]`. Fail-closed: a top-level-or-container paragraph
+	// line, not literal or HTML, a `[x]` directly before the tail, plain label
+	// text (no brackets, backslash, backtick, `<` or `%`), at most four lines,
+	// no blank line, and not followed by `(` or `[` (an inline link or another
+	// pair reads otherwise).
+	// Round 1 (critic 1): a strict definition set, unlike `refLabels`' lenient one:
+	// a line that is exactly a link reference definition at top level, not in a
+	// literal or HTML block, at a block start (first line or after a blank).
+	const strictRefLabels = new Set<string>();
+	// Round 2: none at all in a note holding `%%` (a definition inside a `%%`
+	// block is not taken, and `%%` lines are not in literalAt/htmlLineAt), and
+	// not over a setext underline or rule (the line is then heading text).
+	for (let k = 0; !source.includes("%%") && k < lines.length; k++) {
+		if (literalAt[k] !== undefined || htmlLineAt[k]! || (k > 0 && lines[k - 1]!.trim() !== "")) continue;
+		if (k + 1 < lines.length && /^[ \t]*(?:=+|-+|(?:[-*_][ \t]*){3,})[ \t]*$/.test(lines[k + 1]!)) continue;
+		const d = /^\[([A-Za-z0-9](?:[A-Za-z0-9 ]*[A-Za-z0-9])?)\]:[ \t]+\S+[ \t]*$/.exec(lines[k]!);
+		if (d) strictRefLabels.add(normaliseRefLabel(d[1]!));
+	}
+	if (strictRefLabels.size > 0) {
+		const extra: Array<[number, number]> = [];
+		for (let k = 0; k + 1 < lines.length; k++) {
+			if (literalAt[k] !== undefined || htmlLineAt[k]!) continue;
+			// Plain prose before the tail: only letters, digits, spaces and sentence
+			// punctuation from the line's content start to the `[x][` (round 1: an
+			// escape, footnote, earlier bracket pair, callout, URL, code span, math,
+			// HTML or emphasis there changes what the brackets are).
+			// The prose starts with a non-space, so the spaces before it have one
+			// owner and the match is linear (round 1 critic: quadratic on a run of
+			// spaces).
+			const m = /^([ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?)((?:[\p{L}\p{N},.;?'"-][\p{L}\p{N} ,.;?'"-]*)?)\[([\p{L}\p{N}][\p{L}\p{N} ]*)\]\[([\p{L}\p{N}][\p{L}\p{N} ]*)$/u.exec(lines[k]!);
+			if (!m) continue;
+			// Paragraph text only: an ATX heading, table row or fence line is one
+			// line and its label cannot span lines (measured).
+			const kBody = lines[k]!.replace(/^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+[ \t>]*)*/, "");
+			if (/^(?:#{1,6}(?:\s|$)|\||```|~~~)/.test(kBody)) continue;
+			// Indented code is not in `literalAt`: refuse any lead holding a tab or
+			// four spaces in a row, on the tail's line or the closing line.
+			const codeLead = (l: string): boolean => /^[ >]*(?: {4}|\t)/.test(l) || /^[ \t>]*\t/.test(l);
+			if (codeLead(lines[k]!)) continue;
+			const parts = [m[4]!];
+			for (let j = k + 1; j < lines.length && j <= k + 4; j++) {
+				if (literalAt[j] !== undefined || htmlLineAt[j]!) break;
+				// Same container stack as the tail's line (a lazy line or a new
+				// quote level reads otherwise, measured).
+				const hk = containerHome[k]!, hj = containerHome[j]!;
+				if (hk.length !== hj.length || hk.some((id, x) => id !== hj[x])) break;
+				if (codeLead(lines[j]!)) break;
+				const lead = /^[ \t>]*/.exec(lines[j]!)![0].length;
+				const body = lines[j]!.slice(lead);
+				if (body.trim() === "") break;
+				const close = body.indexOf("]");
+				const seg = close === -1 ? body : body.slice(0, close);
+				if (/[[\\`<%]/.test(seg)) break;
+				parts.push(seg);
+				if (close === -1) continue;
+				const nextCh = body[close + 1];
+				// Label text right after the `[` and right before the `]`: `[l][r` / `] x`
+				// and `[l][r` / ` s ]` are shown literally by the renderer (measured).
+				// Not over a setext underline or rule, which makes the paragraph a
+				// heading the renderer splits differently (measured).
+				const after = lines[j + 1];
+				const underAfter = after !== undefined && /^[ \t>]*(?:=+|-+|(?:[-*_][ \t]*){3,})[ \t]*$/.test(after);
+				if (!underAfter && /^[\p{L}\p{N} ]+$/u.test(seg) && /\S$/.test(seg) && nextCh !== "(" && nextCh !== "[" && nextCh !== ":" && strictRefLabels.has(normaliseRefLabel(parts.join(" ")))) {
+					extra.push([lineStarts[k]! + m[0].length - m[4]!.length - 1, lineStarts[j]! + lead + close + 1]);
+				}
+				break;
+			}
+		}
+		if (extra.length > 0) {
+			hiddenSpans = mergeRanges([...hiddenSpans, ...extra]);
+			strictSpans = mergeRanges([...strictSpans, ...extra]);
+		}
+	}
 	const stripOpts: StripOptions = {
 		stripTags: opts.stripTags,
 		skipInlineCode: opts.skipInlineCode,
 		speakUrls: opts.speakUrls,
 		speakImageAlt: opts.speakImageAlt,
 		speakEmbeds: opts.speakEmbeds,
-		refLabels: collectRefLabels(source),
+		refLabels,
 		commentFootnoteAt: (o) => {
 			let lo = 0;
 			let hi = lineStarts.length;
