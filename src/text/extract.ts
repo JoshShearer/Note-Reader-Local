@@ -1810,6 +1810,10 @@ function cleanLine(
 	 * real `](dest)` falls out as prose - the destination still leaked and the
 	 * alt text was silenced on top of it. One question, one helper, one answer.
 	 */
+	// The `[` that starts an undefined reference tail this line declined
+	// (NRL-208): the renderer reads that pair as text or an inline link, never
+	// as the next pair's reference tail, so it consumes no `[ref]` after it.
+	let declinedTail = -1;
 	if (incomingBracket !== undefined) {
 		const found = labelClose(raw, 0, incomingBracketDepth);
 		const close = found.close;
@@ -1835,8 +1839,17 @@ function cleanLine(
 					after = paren === -1 ? after + 1 : paren + 1;
 				}
 			} else if (raw[after] === "[") {
-				const refClose = raw.indexOf("]", after);
-				after = refClose === -1 ? after : refClose + 1;
+				const refClose = new CloserScan(raw).close(after + 1, "]", false);
+				const lit = refTailLiteral(raw, after, refClose, opts);
+				if (lit !== -1) {
+					pushSpace(rawStart + after);
+					const inner = cleanLine(raw.slice(after + 1, lit), rawStart + after + 1, opts);
+					for (let k = 0; k < inner.text.length; k++) emit(inner.text[k]!, inner.index[k] ?? rawStart + after + 1);
+					after = lit + 1;
+				} else {
+					after = refTailEnd(after, refClose, raw, opts);
+					if (after === close + 1) declinedTail = after;
+				}
 			}
 			i = after;
 			// Clamped, because a destination may be the last thing on the last line
@@ -2224,6 +2237,8 @@ function cleanLine(
 				continue;
 			}
 			let after = close + 1;
+			let refLit = -1;
+			let refAt = 0;
 			if (raw[after] === "(") {
 				if (raw[i + 2] !== "^" && carryDest(after + 1)) {
 					after = raw.length;
@@ -2235,8 +2250,17 @@ function cleanLine(
 				// Reference form. The tail names a link reference, not prose, and
 				// consuming it here is what stops `![alt][ref]` reaching the link
 				// branch below and speaking "ref".
-				const refClose = raw.indexOf("]", after);
-				after = refClose === -1 ? after : refClose + 1;
+				const refClose = (closers ??= new CloserScan(raw)).close(after + 1, "]", false);
+				refLit = refTailLiteral(raw, after, refClose, opts, i === declinedTail);
+				refAt = after;
+				if (refLit !== -1) after = refLit + 1;
+				// A pair that is itself a declined tail takes no tail, and does not
+				// re-arm the next pair: the renderer evaluates that one normally
+				// (round 1 critic 1 F2, `[x][y][z][a](u)`).
+				else if (i !== declinedTail) {
+					after = refTailEnd(after, refClose, raw, opts);
+					if (after === refAt) declinedTail = refAt;
+				}
 			}
 			if (opts.speakImageAlt) {
 				pushSpace(rawStart + i);
@@ -2244,6 +2268,11 @@ function cleanLine(
 				for (let k = 0; k < inner.text.length; k++) {
 					emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 2);
 				}
+			}
+			if (refLit !== -1) {
+				pushSpace(rawStart + refAt);
+				const inner = cleanLine(raw.slice(refAt + 1, refLit), rawStart + refAt + 1, opts);
+				for (let k = 0; k < inner.text.length; k++) emit(inner.text[k]!, inner.index[k] ?? rawStart + refAt + 1);
 			}
 			i = after;
 			pushSpace(rawStart + i);
@@ -2270,6 +2299,8 @@ function cleanLine(
 			}
 			const label = raw.slice(i + 1, close);
 			let after = close + 1;
+			let refLit = -1;
+			let refAt = 0;
 			if (raw[after] === "(") {
 				if (label[0] !== "^" && carryDest(after + 1)) {
 					after = raw.length;
@@ -2278,13 +2309,27 @@ function cleanLine(
 					after = paren === -1 ? after + 1 : paren + 1;
 				}
 			} else if (raw[after] === "[") {
-				const refClose = raw.indexOf("]", after);
-				after = refClose === -1 ? after : refClose + 1;
+				const refClose = (closers ??= new CloserScan(raw)).close(after + 1, "]", false);
+				refLit = refTailLiteral(raw, after, refClose, opts, i === declinedTail);
+				refAt = after;
+				if (refLit !== -1) after = refLit + 1;
+				// A pair that is itself a declined tail takes no tail, and does not
+				// re-arm the next pair: the renderer evaluates that one normally
+				// (round 1 critic 1 F2, `[x][y][z][a](u)`).
+				else if (i !== declinedTail) {
+					after = refTailEnd(after, refClose, raw, opts);
+					if (after === refAt) declinedTail = refAt;
+				}
 			}
 			// Re-clean the label so nested markup inside link text is handled too.
 			const inner = cleanLine(label, rawStart + i + 1, opts);
 			for (let k = 0; k < inner.text.length; k++) {
 				emit(inner.text[k]!, inner.index[k] ?? rawStart + i + 1);
+			}
+			if (refLit !== -1) {
+				pushSpace(rawStart + refAt);
+				const lin = cleanLine(raw.slice(refAt + 1, refLit), rawStart + refAt + 1, opts);
+				for (let k = 0; k < lin.text.length; k++) emit(lin.text[k]!, lin.index[k] ?? rawStart + refAt + 1);
 			}
 			i = after;
 			pushSpace(rawStart + i);
@@ -2399,6 +2444,84 @@ interface StripOptions {
 	speakUrls: boolean;
 	speakImageAlt: boolean;
 	speakEmbeds: boolean;
+	/**
+	 * Normalised link reference labels the note defines (NRL-208). Undefined
+	 * means unknown, and then every `[ref]` tail is consumed as before.
+	 */
+	refLabels?: ReadonlySet<string>;
+}
+
+/**
+ * CommonMark label matching: case-insensitive (approximated by toLowerCase, not
+ * a full Unicode case fold) with internal whitespace collapsed.
+ */
+function normaliseRefLabel(label: string): string {
+	// Upper then lower folds `ß` and `ẞ` to `ss`, as the renderer matches them
+	// (NRL-208 critic 1 F2); toLowerCase alone does not.
+	return label.trim().replace(/\s+/g, " ").toLowerCase().toUpperCase().toLowerCase();
+}
+
+/**
+ * Every `[label]:` anywhere in the note, a label allowed to span lines (their
+ * `>` and indentation dropped), ignoring footnotes. Deliberately an
+ * over-approximation of the renderer's definitions (NRL-208 critic 1 F2: a
+ * line-start scan missed `- [ ] [a]:`, `- > [a]:`, multi-line labels and lone
+ * CR line ends, and a missed definition spoke a hidden label). A false positive
+ * consumes the tail, which is the pre-NRL-208 reading.
+ *
+ * One pass, not a global regex: a regex retried at every escaped `[` of a
+ * `\[a\[a...` line walked to the line's end from each, quadratic (security
+ * review of round 1, measured 1.7 s at 20,000 repeats against 28 ms on base).
+ * An escaped `[` never starts a label here, and an unescaped one restarts it.
+ */
+function collectRefLabels(source: string): Set<string> {
+	const out = new Set<string>();
+	if (source.indexOf("]:") === -1) return out;
+	let start = -1;
+	for (let i = 0; i < source.length; i++) {
+		const c = source[i];
+		if (c === "\\") {
+			i += 1;
+		} else if (c === "[") {
+			start = source[i + 1] === "^" ? -1 : i + 1;
+		} else if (c === "]") {
+			if (start !== -1 && i > start && source[i + 1] === ":") {
+				out.add(normaliseRefLabel(source.slice(start, i).replace(/(?:\r\n?|\n)[ \t>]*/g, " ")));
+			}
+			start = -1;
+		}
+	}
+	return out;
+}
+
+/**
+ * Where a link or image continues after its `]` when `raw[after]` is `[`. A
+ * full reference `[x][ref]` is a link only when `ref` is defined in the note;
+ * otherwise `[ref]` is separate text the loop must read (NRL-208). An empty
+ * tail (`[x][]`) names the label itself and carries no speakable text, so it is
+ * always consumed.
+ */
+function refTailEnd(after: number, refClose: number, raw: string, opts: StripOptions): number {
+	if (refClose === -1) return after;
+	const ref = raw.slice(after + 1, refClose);
+	if (opts.refLabels === undefined || ref.trim() === "" || opts.refLabels.has(normaliseRefLabel(ref))) return refClose + 1;
+	return after;
+}
+
+/**
+ * The `[ref](` case of an undefined reference (NRL-208): the renderer shows the
+ * whole `[x][ref](dest)` as text, `[ref]` included, and does not read `[ref](dest)`
+ * as a link. Returns the index of the `]` closing `[ref]` when that is the
+ * shape, else -1. The caller speaks `ref` and leaves `(dest)` to the loop.
+ */
+function refTailLiteral(raw: string, after: number, refClose: number, opts: StripOptions, afterFailedTail = false): number {
+	// Measured on the 1.13.7 and 1.14.4 parsers: `[x][a][b](u)` shows `[b](u)` as a
+	// link, so a bracket pair that directly follows another one's `]` is not the case.
+	if (afterFailedTail) return -1;
+	if (refClose === -1 || raw[refClose + 1] !== "(") return -1;
+	const ref = raw.slice(after + 1, refClose);
+	if (opts.refLabels === undefined || ref.trim() === "" || opts.refLabels.has(normaliseRefLabel(ref))) return -1;
+	return refClose;
 }
 
 /**
@@ -8142,6 +8265,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		speakUrls: opts.speakUrls,
 		speakImageAlt: opts.speakImageAlt,
 		speakEmbeds: opts.speakEmbeds,
+		refLabels: collectRefLabels(source),
 	};
 	/*
 	 * Frontmatter is metadata, not markdown prose, so a spoken line is cleaned
