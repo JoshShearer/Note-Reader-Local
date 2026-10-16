@@ -4736,6 +4736,40 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl178-r1-inline-pi-after-fence", "> ```QhQ-->QiQ\n\nQpaQ <?x > <!-- QpbQ ?>", "QpaQ <?x > <!-- QpbQ ?>", { skipCodeBlocks: false }],
 		["guard-nrl178-r1-inline-declaration-before-fence", "QpaQ <!X x > <!-- QpbQ\n\n> ```QhQ-->QiQ", "QpaQ <!X x > <!-- QpbQ", { skipCodeBlocks: false }],
 		["guard-nrl178-r1-inline-closed-comment-before-fence", "QpaQ <!-- QpbQ --> QpcQ\n\n> ```QhQ-->QiQ", "QpaQ QpcQ", { skipCodeBlocks: false }],
+		// NRL-183: under a comment an earlier block left open, a fence's info string
+		// reaches the page as `class="language-<first word>`, escapes removed and
+		// references decoded (`&gt;`, `&#62;`, `&#x3E;`, `&GT;`, `&gt`, `\&gt;`, `&#45;`...), so
+		// only that word can close the comment, and a closer written as a reference
+		// does. Every row's spoken text equals the QxQ markers the 1.13.7 harness's
+		// browser-visible text holds (1.14.4 identical), except the one marked residual.
+		// The residual: a `--!>` in the word closes in the browser and in nothing here,
+		// on every revision.
+		["pin-nrl183-row-a-entity-gt-first-word", "- <!-- a\n\n```QdQ--&gt;QeQ\n```", "QeQ", { skipCodeBlocks: false }],
+		["pin-nrl183-row-b-closer-in-second-word-hidden", "- <!-- a\n\n``` QdQ -->QeQ\n```", "", { skipCodeBlocks: false }],
+		["pin-nrl183-decimal-reference", "- <!-- a\n\n```QdQ--&#62;QeQ\n```", "QeQ", { skipCodeBlocks: false }],
+		["pin-nrl183-hex-reference-uppercase", "- <!-- a\n\n```QdQ--&#x3E;QeQ\n```", "QeQ", { skipCodeBlocks: false }],
+		["pin-nrl183-gt-without-semicolon", "- <!-- a\n\n```QdQ--&gtQeQ\n```", "QeQ", { skipCodeBlocks: false }],
+		["pin-nrl183-uppercase-named-gt", "- <!-- a\n\n```QdQ--&GT;QeQ\n```", "QeQ", { skipCodeBlocks: false }],
+		["pin-nrl183-escaped-ampersand-still-decodes", "- <!-- a\n\n```QdQ--\\&gt;QeQ\n```", "QeQ", { skipCodeBlocks: false }],
+		["pin-nrl183-hyphen-by-reference", "- <!-- a\n\n```QdQ-&#45;&gt;QeQ\n```", "QeQ", { skipCodeBlocks: false }],
+		["pin-nrl183-tilde-fence", "- <!-- a\n\n~~~QdQ--&gt;QeQ\n~~~", "QeQ", { skipCodeBlocks: false }],
+		["pin-nrl183-quote-fence", "- <!-- a\n\n> ```QdQ--&gt;QeQ\n> ```", "QeQ", { skipCodeBlocks: false }],
+		["pin-nrl183-list-item-fence", "- <!-- a\n\n- ```QdQ--&gt;QeQ\n  ```", "QeQ", { skipCodeBlocks: false }],
+		["pin-nrl183-second-word-closer-after-open-first", "- <!-- a\n\n```QdQ QeQ-->QfQ\n```", "", { skipCodeBlocks: false }],
+		["pin-nrl183-decoded-space-ends-word", "- <!-- a\n\n```QdQ&#32;--&gt;QeQ\n```", "", { skipCodeBlocks: false }],
+		["pin-nrl183-decoded-tab-ends-word", "- <!-- a\n\n```QdQ&Tab;--&gt;QeQ\n```", "", { skipCodeBlocks: false }],
+		["guard-nrl183-plain-closer-first-word", "- <!-- a\n\n```QdQ-->QeQ\n```", "QeQ", { skipCodeBlocks: false }],
+		["guard-nrl183-bang-closer-first-word-residual", "- <!-- a\n\n```QdQ--!>QeQ\n```", "", { skipCodeBlocks: false }],
+		["guard-nrl183-tilde-plain-closer", "- <!-- a\n\n~~~QdQ-->QeQ\n~~~", "QeQ", { skipCodeBlocks: false }],
+		["guard-nrl183-quote-plain-closer", "<!-- a\n\n> ~~~QdQ-->QeQ", "QeQ", { skipCodeBlocks: false }],
+		["guard-nrl183-escaped-plain-closer", "- <!-- a\n\n```QdQ\\-->QeQ\n```", "QeQ", { skipCodeBlocks: false }],
+		["guard-nrl183-nothing-open-entity-head", "QaQ\n\n```QdQ--&gt;QeQ\n```", "QaQ", { skipCodeBlocks: false }],
+		["guard-nrl183-ampersand-amp-not-gt", "- <!-- a\n\n```QdQ--&amp;gt;QeQ\n```", "", { skipCodeBlocks: false }],
+		["guard-nrl183-excl-without-semicolon-not-bang", "- <!-- a\n\n```QdQ--&excl>QeQ\n```", "", { skipCodeBlocks: false }],
+		["guard-nrl183-longer-name-wins-gtrdot", "- <!-- a\n\n```QdQ--&gtrdot;QeQ\n```", "", { skipCodeBlocks: false }],
+		["guard-nrl183-second-word-entity-closer", "- <!-- a\n\n``` QdQ --&gt;QeQ\n```", "", { skipCodeBlocks: false }],
+		["guard-nrl183-comment-in-rest-of-word-keeps-old", "- <!-- a\n\n```QdQ--&gt;<!--QeQ\n```", "", { skipCodeBlocks: false }],
+		["guard-nrl183-leading-decoded-space-no-class", "- <!-- a\n\n```&#32;QdQ--&gt;QeQ\n```", "", { skipCodeBlocks: false }],
 		// Fix round 1 (/critique on d0442e5, second run, F1). The last line of an
 		// unterminated fence is its closer only under the tokenizer's own rule (at
 		// most three leading spaces, no tab); indented four or by a tab it is

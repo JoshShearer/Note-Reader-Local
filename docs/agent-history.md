@@ -867,6 +867,34 @@ seeds 20261014 / 31337 x 20,000 notes, 0 newly disclosing and 0 newly lost again
 
 NOT VERIFIED IN OBSIDIAN: lanes never deploy.
 
+### A fence's info string closes an open comment by its first word only (NRL-183, 2026-10-16)
+
+Under a comment an earlier block left open, the renderer writes a fence's info into
+`class="language-<first word>"` after removing backslash escapes and decoding character
+references, so `QdQ--&gt;QeQ` closes it (page `QeQ">`; fddeb00 spoke nothing) and
+`QdQ -->QeQ` does not (the `-->` is in word 2; fddeb00 spoke `QeQ`). `fenceClassCloser`
+in `obsidianBlocks.ts` models the class and serves both layers: the deferral in
+`hideFenceLines` (a closer in the first word only) and `fenceHeadClose` in `extract.ts`,
+which places the closer in the raw line for both comment states (browser and plain).
+Measured on 1.13.7 (1.14.4 identical on every graded note): `&gt`, `&GT;`, `&#62`,
+`&#x3E`, `&#45;` and `&#33;` decode as in a browser; `&nvgt;` decodes to `>` plus a
+mark; `&excl;`, `&Tab;` and `&#32;` act before the word is cut; `\&gt;` unescapes then
+decodes; a decoded leading space writes no class at all; `&gtrdot;` is another
+character while `&gtx;` is `>x;`. Of the renderer's 2,125 entities only `gt`, `GT`,
+`nvgt`, `excl` and `Tab` yield a byte the test reads.
+
+- **Accepted trade: a new closer shows only its word's rest.** Where the raw search could
+  not see the closer the remainder is cut at the word's end; where it did (plain `-->`),
+  the whole rest is still spoken, as before, so later words still disclose there. A `<`
+  in the rest of the word keeps the old answer, since the plain-`-->` twin already speaks
+  what the comment that `<!--` opens would hide.
+- **Residual, unchanged.** A `--!>` in the first word closes in the browser and in
+  nothing here on any revision (`guard-nrl183-bang-closer-first-word-residual`).
+- **Evidence limit.** Grading used the generator in `.claude/runs/NRL-183/grade.cjs`
+  (40,000 notes x DEF and CODE, seeds 11 and 12): 0 newly disclosing and 0 newly lost
+  against fddeb00, with wrong arms (no decoding, all words) failing both ways. NOT
+  VERIFIED IN OBSIDIAN: lanes never deploy.
+
 ### extractChunks closer scans made linear (NRL-172, 2026-10-14)
 
 A line of many `[^` with no `]` froze the reader at read start. Base 499038d, Node 24.21.0, this

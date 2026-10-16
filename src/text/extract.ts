@@ -2,7 +2,7 @@ import type { BlockType, SpeechChunk } from "../audio/types";
 // words.ts imports nothing but its own types, so this edge adds no node builtin
 // and no new entry to main.js's require() list (non-negotiable 7).
 import { findWords, hasCjkScript } from "../audio/words";
-import { fallbackHtmlHidden, rendererHiddenText } from "./obsidianBlocks";
+import { fallbackHtmlHidden, fenceClassCloser, rendererHiddenText } from "./obsidianBlocks";
 import {
 	type SegmenterSource,
 	graphemeBoundaries,
@@ -7734,6 +7734,36 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		home.every((id) => containerHome[lineNo]!.includes(id));
 
 	/**
+	 * Where a browser comment closes on a fence's opening line (NRL-183). The line
+	 * reaches the page only as its info string's first word in a `class`, escapes
+	 * removed and references decoded, so that word's closer ends the comment,
+	 * wherever the raw line writes it: `--&gt;` closes, and a `-->` in a later
+	 * word does not. `found` is the raw search's answer, kept for any other line
+	 * and for a `--!>` in the word, which the raw search does not read either way.
+	 * A closer the raw search could not see shows only the rest of its word, so
+	 * `raw` is cut there; one it saw keeps the whole rest, as before.
+	 */
+	const fenceHeadClose = (raw: string, lineNo: number, found: number): { close: number; raw: string } => {
+		const same = { close: found, raw };
+		if (fenceAt[lineNo] !== "open") return same;
+		const prefix = prefixAt(raw, lineNo).chars;
+		const fence = /^[ \t]*(`{3,}|~{3,})/.exec(raw.slice(prefix));
+		if (fence === null) return same;
+		const base = prefix + fence[0].length;
+		const closer = fenceClassCloser(raw.slice(base));
+		if (closer === null) return { close: -1, raw };
+		if (closer.bang) return same;
+		const close = base + closer.end - 3;
+		if (close === found) return same;
+		// A `<` in the rest of the word may open a tag or a comment the page then
+		// leaves open, which the remainder's cleaning does not follow (measured:
+		// the plain `-->` twin already speaks the text such a comment hides), so
+		// that shape keeps the old answer.
+		const tail = raw.slice(close + 3, base + closer.wordEnd);
+		return tail.includes("<") ? same : { close, raw: raw.slice(0, base + closer.wordEnd) };
+	};
+
+	/**
 	 * A BROWSER comment closes at `close` on this line (NRL-136). Returns true
 	 * when the line must then be processed as an ordinary line.
 	 *
@@ -8008,7 +8038,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 				const peeled = raw.slice(prefix.chars);
 				const fenceLine = fenceAt[lineNo] !== undefined;
 				const blockLine = htmlBlockLineAt(raw, lineNo);
-				const close = browserCloserAt(
+				const rawClose = browserCloserAt(
 					raw,
 					0,
 					!fenceLine &&
@@ -8018,6 +8048,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 						!closesInHeadingAttribute(raw) &&
 						!browserSetextText(lineNo),
 				);
+				const { close, raw: closeRaw } = fenceHeadClose(raw, lineNo, rawClose);
 				const pct = peeled.indexOf("%%");
 				const pctAt = raw.length - peeled.length + pct;
 				// A callout marker's `%%` is title text, not a block: module 6234 hands
@@ -8059,13 +8090,13 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 				}
 				inComment = undefined;
 				inCommentBrowser = false;
-				readWhole = closeBrowserComment(raw, close, lineStart, lineNo);
+				readWhole = closeBrowserComment(closeRaw, close, lineStart, lineNo);
 				if (!readWhole) continue;
 			} else {
-				const close = raw.indexOf(inComment);
+				const { close, raw: closeRaw } = inComment === "-->" ? fenceHeadClose(raw, lineNo, raw.indexOf(inComment)) : { close: raw.indexOf(inComment), raw };
 				if (close === -1) continue;
 				if (!resumeBrowser) {
-					appendRemainder(raw, close + inComment.length, lineStart, lineNo);
+					appendRemainder(closeRaw, close + inComment.length, lineStart, lineNo);
 					continue;
 				}
 				// The `%%` block opened under a browser comment has closed; the
