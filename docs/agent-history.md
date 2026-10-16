@@ -657,6 +657,25 @@ was prose (also a backtick in the title opened a code carry that silenced the re
   `## x ##` closing sequence; lazy `===` underline; callout-title heading; list-marker-line
   fences; a 4-5 column opener. NOT VERIFIED IN OBSIDIAN: reading-view harness evidence only.
 
+### A plain `^[footnote]` inside a `%%` comment is spoken (NRL-212, 2026-10-16)
+
+The renderer hides a `%%` comment's own text but still collects an inline footnote
+written inside it into the footnotes section (1.13.7 and 1.14.4 agree; `<!-- ^[x] -->`
+collects nothing, and `%%\n[^1]: x\n%%` shows no definition). `commentFootnoteSpans` in
+`extract.ts` now speaks it as `^text` at its position, the convention for an uncommented
+one, and nothing else of the comment. It is fail-closed: the comment body must be only
+letters, digits, spaces and `.,;:?!'"` plus `^[plain]` footnotes, else it stays silent
+(code spans, markup, nested brackets, `%`, `<`, escapes, an unclosed `^[`, multi-line).
+Two sites: the inline pair in `cleanLine`, and the swallowed lines of a `%%` block. The
+block site needed `strictRanges` from `obsidianBlocks.ts`: `speak` drops every character in
+the renderer-hidden ranges, which include `%%` blocks, so the footnote characters are
+exempt from those and only those. Measured on the generator (7,728 cases DEF, 23,184
+over DEF/CODE/ALL, `%%`/`<!--` x footnote bodies x containers): newly disclosed 0,
+newly lost 0, lockstep 0; 742 sentinels newly spoken (DEF). A mutant that also admits
+`<!--` pairs shows 21 disclosures, so the generator can see the failure class. Deliberate
+residuals: the footnote on a `%%` opener line (`%% ^[x]` / `%%`), a block whose body
+sits behind a `>` prefix, and everything the gate refuses. Not run in Obsidian.
+
 ### Inline PI/CDATA counted only where the renderer emits it raw (NRL-184, 2026-10-16)
 
 NRL-178 fix round 1's `INLINE_BOGUS_OPENER` exec counted any `<?` / `<![CDATA[` in the

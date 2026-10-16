@@ -1412,6 +1412,77 @@ function opensObsidianBlock(view: string, at: number, dedentedByList: boolean): 
 }
 
 /**
+ * Plain inline footnotes `^[text]` inside the body of an Obsidian `%%` comment
+ * (NRL-212). The renderer hides a `%%` comment's own text but still collects an
+ * inline footnote written inside it into the footnotes section, so the footnote
+ * is visible (R-M08) and, before this, silent. Measured on 1.13.7 and 1.14.4:
+ * `a %% QaQ ^[QxQ] QbQ %% b` shows `a  b` and a footnote `QxQ`; QaQ and QbQ stay
+ * hidden. An HTML comment (`<!-- ^[QxQ] -->`) collects nothing, so this is
+ * `%%` only.
+ *
+ * FAIL-CLOSED. Speaking a token the page hides is a privacy-class regression, a
+ * silence is the old behaviour, so the whole body is refused unless every
+ * character is either plain prose (letters, digits, spaces and `.,;:?!'"`) or
+ * inside a `^[...]` whose content is also plain, non-empty and starts
+ * with a letter or digit, and ends on a letter, digit or sentence mark. Markup, code spans, brackets, escapes,
+ * `%`, `<` and a `^[` with no `]` all refuse it, which is what keeps nested
+ * brackets, a `%%` inside the footnote, an escaped `\^[` and a multi-line
+ * footnote (each line is judged alone) silent. One linear pass.
+ *
+ * Returns [from, to) of each footnote's `^[` .. `]` in `body`, in order, or an
+ * empty list.
+ */
+const COMMENT_FOOTNOTE_PLAIN = /^[\p{L}\p{N} .,;:?!'"]$/u;
+function commentFootnoteSpans(body: string): Array<[number, number]> {
+	const spans: Array<[number, number]> = [];
+	let k = 0;
+	while (k < body.length) {
+		const c = body[k]!;
+		if (c === "^") {
+			if (body[k + 1] !== "[") return [];
+			const end = body.indexOf("]", k + 2);
+			if (end === -1) return [];
+			const inner = body.slice(k + 2, end);
+			if (!/^[\p{L}\p{N}](?:[\p{L}\p{N} .,;:?!'"]*[\p{L}\p{N}.,;:?!'"])?$/u.test(inner)) return [];
+			spans.push([k, end + 1]);
+			k = end + 1;
+			continue;
+		}
+		if (!COMMENT_FOOTNOTE_PLAIN.test(c)) return [];
+		k += 1;
+	}
+	return spans;
+}
+
+/**
+ * The speakable form of the spans above, as parallel text and raw offsets:
+ * `^` then the content, as outside a comment (`a ^[QxQ] b` speaks `a ^QxQ b`),
+ * a whitespace run collapsed to one space mapped at its first character, and a
+ * space between footnotes. `base` is the raw offset of `body[0]`.
+ */
+function commentFootnoteText(body: string, base: number): { text: string; index: number[] } {
+	const chars: string[] = [];
+	const index: number[] = [];
+	for (const [from, to] of commentFootnoteSpans(body)) {
+		if (chars.length > 0 && chars[chars.length - 1] !== " ") {
+			chars.push(" ");
+			index.push(base + from);
+		}
+		chars.push("^");
+		index.push(base + from);
+		for (let k = from + 2; k < to - 1; k++) {
+			const ch = body[k]!;
+			if (ch === " ") {
+				if (chars[chars.length - 1] === " ") continue;
+			}
+			chars.push(ch);
+			index.push(base + k);
+		}
+	}
+	return { text: chars.join(""), index };
+}
+
+/**
  * Strip inline markdown from a single line, recording source offsets.
  *
  * `incomingCode` is the length of a backtick run opened on an earlier line
@@ -2092,6 +2163,14 @@ function cleanLine(
 					raw.indexOf("<!--") === i &&
 					raw.indexOf("-->", i + 2) === -1;
 				openCommentBrowser = htmlComment && blockComments && htmlRawLine && !openCommentBlock;
+				// A `%%` block's own line may carry a footnote after the opener (NRL-212).
+				if (obsidianComment && blockComments && !htmlRawLine && !containerCodeLine && !carrying) {
+					const fn = commentFootnoteText(raw.slice(i + 2), rawStart + i + 2);
+					if (fn.text !== "") {
+						pushSpace(rawStart + i);
+						for (let k = 0; k < fn.text.length; k++) emit(fn.text[k]!, fn.index[k]!);
+					}
+				}
 				// The space before the comment would double with the line join.
 				if (chars[chars.length - 1] === " ") {
 					chars.pop();
@@ -2100,6 +2179,11 @@ function cleanLine(
 				break;
 			}
 			pushSpace(rawStart + i);
+			if (obsidianComment && blockComments && !htmlRawLine && !containerCodeLine && !carrying) {
+				const fn = commentFootnoteText(raw.slice(i + 2, close), rawStart + i + 2);
+				for (let k = 0; k < fn.text.length; k++) emit(fn.text[k]!, fn.index[k]!);
+				if (fn.text !== "") pushSpace(rawStart + close);
+			}
 			i = close + closer.length;
 			continue;
 		}
@@ -2586,6 +2670,18 @@ function mergeRanges(ranges: ReadonlyArray<readonly [number, number]>): Array<[n
 	return out;
 }
 
+/** Is `o` in one of `spans` (sorted, disjoint `[start, end)`)? Binary search. */
+function inSpans(spans: ReadonlyArray<readonly [number, number]>, o: number): boolean {
+	let lo = 0;
+	let hi = spans.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (spans[mid]![0] <= o) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo > 0 && spans[lo - 1]![1] > o;
+}
+
 /**
  * `text` and its `index` less every character whose source offset lies in one
  * of `spans` (sorted, disjoint), in lockstep (NRL-166 fix round 2). Where a run
@@ -2594,7 +2690,16 @@ function mergeRanges(ranges: ReadonlyArray<readonly [number, number]>): Array<[n
  * it as `sourceOffsetOfSpace` maps a synthetic one. `index` is monotone, so one
  * pointer walks the spans.
  */
-function dropHiddenText(text: string, index: readonly number[], spans: ReadonlyArray<readonly [number, number]>): { text: string; index: number[] } {
+function dropHiddenText(
+	text: string,
+	index: readonly number[],
+	spans: ReadonlyArray<readonly [number, number]>,
+	// NRL-212: offsets of a plain footnote inside a `%%` comment, and the spans
+	// that hide for any other reason. A kept offset survives its span only when
+	// no `strict` span holds it too, so the exemption is for `%%` alone.
+	keep?: (o: number) => boolean,
+	strict?: ReadonlyArray<readonly [number, number]>,
+): { text: string; index: number[] } {
 	const chars: string[] = [];
 	const out: number[] = [];
 	// The first span that can hold any of `index`, by binary search, so a note of
@@ -2613,7 +2718,7 @@ function dropHiddenText(text: string, index: readonly number[], spans: ReadonlyA
 	for (let k = 0; k < text.length; k++) {
 		const o = index[k]!;
 		while (s < spans.length && spans[s]![1] <= o) s++;
-		if (s < spans.length && spans[s]![0] <= o) {
+		if (s < spans.length && spans[s]![0] <= o && !(keep?.(o) === true && !inSpans(strict ?? spans, o))) {
 			seam = true;
 			continue;
 		}
@@ -6707,6 +6812,8 @@ interface PassShared {
 	rendererHidden?: ReturnType<typeof rendererHiddenText>;
 	/** The merged ranges every spoken character is checked against. */
 	hiddenSpans?: Array<[number, number]>;
+	/** `hiddenSpans` less the `%%` block comments (NRL-212). */
+	strictSpans?: Array<[number, number]>;
 	/** The two walker runs, without and with NRL-166 fix round 1's refinements. */
 	leadsPlain?: RendererLeads;
 	leadsRefined?: RendererLeads;
@@ -6852,11 +6959,17 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	if (shared.hiddenSpans === undefined) {
 		shared.rendererHidden = rendererHiddenText(source, lines.length);
 		shared.hiddenSpans = mergeRanges(shared.rendererHidden?.ranges ?? fallbackHtmlHidden(source));
+		// Everything that hides except a `%%` block comment (NRL-212); merged spans
+		// cannot say what made them, so obsidianBlocks tracks it unmerged.
+		shared.strictSpans = mergeRanges(shared.rendererHidden?.strictRanges ?? shared.hiddenSpans);
 	}
 	const rendererHidden = shared.rendererHidden ?? null;
 	const hiddenSpans = shared.hiddenSpans;
+	const strictSpans = shared.strictSpans ?? hiddenSpans;
+	// Offsets of the footnote characters the `%%` block lines emit (NRL-212).
+	const keptFootnote = new Set<number>();
 	const speak = (text: string, index: number[], start: number, blockType: BlockType): SpeechChunk[] => {
-		const kept = hiddenSpans.length === 0 ? { text, index } : dropHiddenText(text, index, hiddenSpans);
+		const kept = hiddenSpans.length === 0 ? { text, index } : dropHiddenText(text, index, hiddenSpans, keptFootnote.size === 0 ? undefined : (o) => keptFootnote.has(o), strictSpans);
 		return splitSentences(kept.text, kept.index, start, segmentCtx, blockType);
 	};
 	// Whether the renderer opens a `%%` block on each line, where that answer may
@@ -8820,6 +8933,15 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 				if (!readWhole) continue;
 			} else {
 				const { close, raw: closeRaw } = inComment === "-->" ? fenceHeadClose(raw, lineNo, raw.indexOf(inComment)) : { close: raw.indexOf(inComment), raw };
+				// NRL-212: a plain inline footnote in a hidden `%%` block line is still
+				// collected by the renderer. Not under a browser comment (resumeBrowser).
+								if (inComment === "%%" && !resumeBrowser) {
+					const fn = commentFootnoteText(close === -1 ? raw : raw.slice(0, close), lineStart);
+					if (fn.text !== "") {
+						for (const at of fn.index) keptFootnote.add(at);
+						appendToParagraph({ text: fn.text, index: fn.index }, lineStart);
+					}
+				}
 				if (close === -1) continue;
 				if (!resumeBrowser) {
 					appendRemainder(closeRaw, close + inComment.length, lineStart, lineNo);

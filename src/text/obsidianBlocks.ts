@@ -1825,6 +1825,13 @@ function openQuoteEnd(source: string, from: number, quote: string, elsewhere?: (
 export interface RendererHiddenText {
 	/** Source offset ranges `[start, end)`, sorted by start, possibly overlapping. */
 	ranges: Array<readonly [number, number]>;
+	/**
+	 * `ranges` less the `%%` block comments' own (NRL-212): HTML comment and
+	 * bogus-comment spans and dropped footnote definitions. Only a `%%` block
+	 * lets a plain `^[...]` footnote through, so a character in one of these
+	 * stays dropped.
+	 */
+	strictRanges: Array<readonly [number, number]>;
 	/** 0-based note lines on which the reading view opens a `%%` block comment. */
 	percentStarts: Set<number>;
 	/** As `percentBlockEnds` reports it, from the same scan. */
@@ -2176,6 +2183,8 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 		}
 	}
 	const ranges: Array<readonly [number, number]> = scanner.hidden.map((h) => [offset(h.start), offset(h.end)] as const);
+	// Everything that hides except a `%%` block comment (NRL-212); filled beside `ranges`.
+	const strictRanges: Array<readonly [number, number]> = scanner.hidden.flatMap((h, k) => (scanner.bogus.has(k) ? [[offset(h.start), offset(h.end)] as const] : []));
 	const sortRanges = (): void => {
 		ranges.sort((x, y) => x[0] - y[0]);
 	};
@@ -2401,7 +2410,10 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 		let at = -1;
 		const emit = (to: number): void => {
 			const top = stack[stack.length - 1];
-			if (top !== undefined && top.dropped && to > at) ranges.push([at, to]);
+			if (top !== undefined && top.dropped && to > at) {
+				ranges.push([at, to]);
+				strictRanges.push([at, to]);
+			}
 			at = to;
 		};
 		for (const sp of spans) {
@@ -2458,7 +2470,7 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	}
 	const hiddenRawLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	for (const [a, b, kind] of scanner.rawBlocks) if (HIDDEN_RAW_BLOCKS.has(kind)) for (let l = a; l <= b && l < lineCount; l++) hiddenRawLines[l] = true;
-	return { ranges, percentStarts, percentEnds, footnoteLines, browserRiskLines, openRiskThrough, frontmatterLastLine: scanner.frontmatterLastLine, hiddenRawLines };
+	return { ranges, strictRanges, percentStarts, percentEnds, footnoteLines, browserRiskLines, openRiskThrough, frontmatterLastLine: scanner.frontmatterLastLine, hiddenRawLines };
 }
 
 /**
