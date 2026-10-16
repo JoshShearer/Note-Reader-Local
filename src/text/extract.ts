@@ -4927,7 +4927,7 @@ export function auditBracketCarry(audit: ((from: number, memo: boolean, fresh: b
  * runs only under auditBracketCarry.
  */
 function bracketWalkFresh(at: CarryLines, start: number, quotes: number, containerInPlay: boolean): boolean {
-	const { lines, htmlCloserAhead, listDedented, htmlLeadIndented, htmlLeadLazy, htmlLeadCode, listStrip } = at;
+	const { lines, htmlCloserAhead, listDedented, htmlLeadIndented, htmlLeadLazy, listStrip } = at;
 	let depth = 0;
 	for (let n = start; n < lines.length; n++) {
 		// Peeled for the predicate AND for labelClose, from the same string, so
@@ -4949,7 +4949,7 @@ function bracketWalkFresh(at: CarryLines, start: number, quotes: number, contain
 		)
 			return false;
 		if (containerInPlay && containerCarryStops(line, quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!), htmlLeadLazy[n]!)) return false;
-		if (containerInPlay && htmlLeadCode[n]!) return false;
+		// No htmlLeadCode stop on a later line; see BracketCarryMemo.facts (NRL-204).
 		const found = labelClose(line, 0, depth);
 		if (found.close === -1) {
 			depth = found.depth;
@@ -5036,7 +5036,7 @@ class BracketCarryMemo {
 	private facts(n: number, quotes: number, containerInPlay: boolean): { closes: boolean[]; net: number } | undefined {
 		// The stop arms are bracketWalkFresh's, verbatim, with `return false` read
 		// as "a stop".
-		const { lines, htmlCloserAhead, listDedented, htmlLeadIndented, htmlLeadLazy, htmlLeadCode, listStrip } = this.at;
+		const { lines, htmlCloserAhead, listDedented, htmlLeadIndented, htmlLeadLazy, listStrip } = this.at;
 		const line = peelQuotes(lines[n]!, quotes);
 		if (
 			interruptsParagraphExceptBareMarker(line, htmlCloserAhead[n]!, listDedented[n]!, htmlLeadIndented[n]!, listStrip[n]!) ||
@@ -5045,7 +5045,11 @@ class BracketCarryMemo {
 		)
 			return undefined;
 		if (containerInPlay && containerCarryStops(line, quotes > 0 && !ANY_QUOTE_MARKER.test(lines[n]!), htmlLeadLazy[n]!)) return undefined;
-		if (containerInPlay && htmlLeadCode[n]!) return undefined;
+		// No htmlLeadCode stop here (NRL-204): the opener check in bracketClosesLater
+		// keeps it, but on a LATER line it never changed an answer. Single-arm
+		// mutants survived the audit row on every line shape tried, and removing it
+		// from this walk and the memo left extractChunks's text and sourceIndex
+		// identical on 600,000 generated notes against 1803e8a.
 		// A closer's position is in the PEELED line, so its destination test is
 		// made here, on the string labelClose read.
 		const p = labelProfile(line);
