@@ -8243,6 +8243,20 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// same paths as the label carry.
 	let openDest: DestState | undefined;
 	let inIndentedCode = false;
+	// NRL-157: a top-level line right after a leaf block that cannot continue is
+	// a block start for the renderer, where module 134 opens indented code: an
+	// ATX heading, a `---`/`***`/`___` rule (a setext `---` underline included)
+	// and the last line of a closed fence, display math or frontmatter. Not a
+	// `===` line, which alone is paragraph text a tab line continues lazily.
+	// Fail-closed: a previous line that is HTML or carries `<`, `%` or a backtick
+	// outside a closed literal keeps the blank-line rule.
+	const afterLeafEnd = (k: number): boolean => {
+		if (k === 0) return false;
+		if (literalAt[k - 1] !== undefined) return literalAt[k] === undefined;
+		const p = lines[k - 1]!;
+		if (htmlLineAt[k - 1]! || /[<%`]/.test(p)) return false;
+		return /^ {0,3}#{1,6}[ \t]/.test(p) || /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(p);
+	};
 	// Inside a list item, an indented line is item content or a nested item,
 	// never code. Kept across blank lines, since loose lists have them.
 	let inList = false;
@@ -9157,10 +9171,10 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 				}
 				inIndentedCode = false;
 				flushParagraph();
-			} else if (!blank && !inList && (wasBlank || quoteCodeStartsCode[lineNo]!) && INDENTED_CODE.test(raw)) {
+			} else if (!blank && !inList && (wasBlank || quoteCodeStartsCode[lineNo]! || afterLeafEnd(lineNo)) && INDENTED_CODE.test(raw)) {
 				flushParagraph();
 				inIndentedCode = true;
-				quoteCodeRun = !wasBlank;
+				quoteCodeRun = !wasBlank && quoteCodeStartsCode[lineNo]!;
 				if (quoteCodeRun) qc.codeRun[lineNo] = true;
 				if (!opts.skipCodeBlocks) appendToParagraph(verbatimLine(raw, lineStart), lineStart);
 				continue;

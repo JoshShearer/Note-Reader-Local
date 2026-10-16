@@ -396,6 +396,20 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### Indented code opens right after a heading, a rule or a closed literal (NRL-157, 2026-10-16)
+
+Top-level indented code opened only after a blank line. Module 134 opens it at any block
+start, and the line right after an ATX heading, a `---`/`***`/`___` rule (a setext `---`
+underline included) or the last line of a closed fence, display math or frontmatter is one.
+So `# Head` / `\t<!--` showed `<!--` as code and the rest as text, while we opened a hidden
+HTML block to EOF (prose loss), and `# H` / `\tcode` was spoken under skipCodeBlocks.
+`afterLeafEnd` adds those positions. It is fail-closed: not after a `===` line (alone it is
+paragraph text a tab line continues lazily), and not when the previous line is HTML or holds
+`<`, `%` or a backtick outside a closed literal. Census over 3,276 cells (26 previous-line
+shapes x 7 leads x 6 bodies x DEF/CODE/ALL): 0 newly disclosed, 0 newly lost outside a
+`<pre>`, 616 fixed. Ten NRL-155/115/93/114 rows re-pinned to the page. lock128 CLEAN. Not
+run in Obsidian.
+
 ### A declined reference tail does not carry a label across lines (NRL-216, 2026-10-16)
 
 `[l][r` / `](u)`: the line declines `[r` as a reference tail (NRL-208's `declinedTail`), but
