@@ -412,7 +412,11 @@ footnote, an earlier bracket pair, a callout, a URL, code, math, HTML, emphasis)
 the brackets are. Now a strict definition set (column 0, block start, not literal or HTML,
 plain alphanumeric label) and only plain prose before a plain `[x][label`; the line regex is
 anchored, so linear. Both critics' generators and the census gave 0/0 afterwards, with about
-4,650 hidden tokens no longer spoken (fewer than round 0, by design). Not run in Obsidian.
+4,650 hidden tokens no longer spoken (fewer than round 0, by design). Fix round 2 (round-1
+critic BLOCK): the tail regex was still quadratic on a run of spaces (the prose may not start
+with one now); a definition over a setext underline is heading text, and one inside a `%%`
+block is not taken (no strict definitions at all in a note holding `%%`). All generators 0/0.
+Not run in Obsidian.
 
 ### The term-2 bound counts a `- > x` line's quoted body (NRL-187, 2026-10-16)
 

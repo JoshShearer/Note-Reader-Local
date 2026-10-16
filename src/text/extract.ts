@@ -8625,8 +8625,12 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// a line that is exactly a link reference definition at top level, not in a
 	// literal or HTML block, at a block start (first line or after a blank).
 	const strictRefLabels = new Set<string>();
-	for (let k = 0; k < lines.length; k++) {
+	// Round 2: none at all in a note holding `%%` (a definition inside a `%%`
+	// block is not taken, and `%%` lines are not in literalAt/htmlLineAt), and
+	// not over a setext underline or rule (the line is then heading text).
+	for (let k = 0; !source.includes("%%") && k < lines.length; k++) {
 		if (literalAt[k] !== undefined || htmlLineAt[k]! || (k > 0 && lines[k - 1]!.trim() !== "")) continue;
+		if (k + 1 < lines.length && /^[ \t]*(?:=+|-+|(?:[-*_][ \t]*){3,})[ \t]*$/.test(lines[k + 1]!)) continue;
 		const d = /^\[([A-Za-z0-9](?:[A-Za-z0-9 ]*[A-Za-z0-9])?)\]:[ \t]+\S+[ \t]*$/.exec(lines[k]!);
 		if (d) strictRefLabels.add(normaliseRefLabel(d[1]!));
 	}
@@ -8638,7 +8642,10 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			// punctuation from the line's content start to the `[x][` (round 1: an
 			// escape, footnote, earlier bracket pair, callout, URL, code span, math,
 			// HTML or emphasis there changes what the brackets are).
-			const m = /^([ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?)([\p{L}\p{N} ,.;?'"-]*)\[([\p{L}\p{N}][\p{L}\p{N} ]*)\]\[([\p{L}\p{N}][\p{L}\p{N} ]*)$/u.exec(lines[k]!);
+			// The prose starts with a non-space, so the spaces before it have one
+			// owner and the match is linear (round 1 critic: quadratic on a run of
+			// spaces).
+			const m = /^([ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?)((?:[\p{L}\p{N},.;?'"-][\p{L}\p{N} ,.;?'"-]*)?)\[([\p{L}\p{N}][\p{L}\p{N} ]*)\]\[([\p{L}\p{N}][\p{L}\p{N} ]*)$/u.exec(lines[k]!);
 			if (!m) continue;
 			// Paragraph text only: an ATX heading, table row or fence line is one
 			// line and its label cannot span lines (measured).

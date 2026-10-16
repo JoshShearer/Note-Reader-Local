@@ -5205,6 +5205,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl218-r1-definition-label-trailing-space", "A [l][QaQ\nQbQ] T.\n\n[QaQ QbQ ]: x", "A l [QaQ QbQ] T."],
 		["guard-nrl218-r1-escaped-bracket-before", "A \\[x][QaQ\nQbQ] T.\n\n[QaQ QbQ]: x", "A [x][QaQ QbQ] T."],
 		["guard-nrl218-r1-earlier-bracket-pair", "A [y][x][QaQ\nQbQ] T.\n\n[QaQ QbQ]: x", "A y x [QaQ QbQ] T."],
+		["guard-nrl218-r2-definition-over-setext-is-heading", "A [l][QaQ\nQbQ] T.\n\n[QaQ QbQ]: u\n===", "A l [QaQ QbQ] T. ==="],
+		["guard-nrl218-r2-definition-in-pct-block", "A [l][QaQ\nQbQ] T.\n\n%%\n\n[QaQ QbQ]: u\n%%", "A l [QaQ QbQ] T."],
 		["pin-nrl216-declined-tail-spanning-lines-keeps-dest", "A [QlQ][QrQ\n](QuQ) T.", "A QlQ [QrQ ](QuQ) T."],
 		["guard-nrl216-spaced-label-is-a-real-link", "A [QlQ] [QrQ\n](QuQ) T.", "A QlQ QrQ T."],
 		["guard-nrl216-later-bracket-may-carry", "A [QlQ][QrQ [QsQ\n](QuQ) T.", "A QlQ QrQ [QsQ T."],
