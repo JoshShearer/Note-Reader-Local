@@ -8703,6 +8703,9 @@ console.log("NRL-170 fix round 2: the containment check is linear");
 	};
 	const shapes: Array<[string, (n: number) => string, number]> = [
 		["one-candidate-above-a-long-blank-free-run", (n) => "> P start <!-- a\n\tfoo\n" + Array.from({ length: n }, (_, i) => `line ${i} of the log`).join("\n") + "\n> end -->", 1000],
+		// `tabFenceAhead` tests every line; its fence check must not backtrack on a
+		// quote marker followed by a long tab run (the regex form took 6.6 s at 80,000 tabs).
+		["quote-marker-then-a-long-tab-run", (n) => "a\n>" + "\t".repeat(40 * n) + "x", 1000],
 		["many-candidate-blocks-without-blank-lines", (n) => Array.from({ length: n }, (_, i) => `> P ${i} <!-- a\n\tfoo ${i}\n> b ${i} -->`).join("\n"), 500],
 	];
 	for (const [id, make, n] of shapes) {

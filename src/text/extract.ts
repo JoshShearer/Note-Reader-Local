@@ -3312,8 +3312,16 @@ const TERM2_SETEXT_DASH = /^--+\r?$/;
  */
 const INDENTED_CODE = /^(?: {4}|\t)/;
 // A quoted fence-shaped line with a tab somewhere in its lead after the last
-// marker (NRL-170's `tabFenceAhead`): `>   \t````, `> > \t~~~`.
-const QUOTED_TAB_FENCE = /^(?:[ \t]*>)+[ \t]*\t[ \t]*(?:`{3,}|~{3,})/;
+// marker (NRL-170's `tabFenceAhead`): `>   \t````, `> > \t~~~`. Written as a
+// scan, not as `/^(?:[ \t]*>)+[ \t]*\t[ \t]*(?:`{3,}|~{3,})/`: that regex
+// backtracks quadratically on a quote marker followed by a long tab run.
+const QUOTE_LEAD = /^[ \t>]*/;
+const FENCE_RUN = /^(?:`{3}|~{3})/;
+function quotedTabFence(line: string): boolean {
+	const lead = QUOTE_LEAD.exec(line)![0];
+	const last = lead.lastIndexOf(">");
+	return last >= 0 && lead.includes("\t", last + 1) && FENCE_RUN.test(line.slice(lead.length));
+}
 const TABLE_ROW = /^\s*\|/;
 /**
  * Thematic break: three or more of the same marker, optionally spaced. Checked
@@ -7298,7 +7306,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	for (let k = lines.length - 2, seen = false; k >= 0; k--) {
 		const next = lines[k + 1]!;
 		if (next.trim() === "") seen = false;
-		else if (QUOTED_TAB_FENCE.test(next)) seen = true;
+		else if (quotedTabFence(next)) seen = true;
 		tabFenceAhead[k] = seen;
 	}
 	const quoteCodeEndSure = leads.quoteCodeEnd.map(
