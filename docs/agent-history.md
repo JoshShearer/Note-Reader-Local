@@ -396,6 +396,16 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### Inline HTML tags follow the CommonMark tag grammar (NRL-202, 2026-10-16)
+
+The element whitelist spoke every tag outside it, though the renderer hides any CommonMark
+raw-HTML tag (`see <my file.md> now` shows `see  now`; `x<y and z>w` shows `xw`, on 1.13.7 and
+1.14.4). `CM_TAG` now drops such a tag after the unchanged whitelist branch, separating the
+words either side (ADR 0038, srs.md R-M08 amended). Generator: 3,060 cells, 0 newly disclosed,
+0 newly lost, 542 hidden tokens dropped. Four whitelist tests and eight NRL-166 pins were
+re-pinned to the page; no sentinel moved. Note: the `stripTags` option is Obsidian `#tags`,
+not HTML; HTML tags were always stripped unconditionally. Not run in Obsidian.
+
 ### A link reference definition under a footnote definition or table row is dropped (NRL-201, 2026-10-16)
 
 The definition drop needs an empty paragraph buffer and no paragraph or container line
