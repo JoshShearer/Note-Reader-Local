@@ -8450,6 +8450,12 @@ console.log("NRL-166 fix rounds 1 and 2: the new per-line gates and scans stay l
 		// against 68 ms on 5d41664, critic 1 of round 1).
 		["many-escaped-brackets-after-a-definition-colon", (n) => "]: " + "\\[a".repeat(n)],
 		["many-escaped-bracket-lines-after-a-definition-colon", (n) => "]: " + "\\[a\n".repeat(n)],
+		// NRL-201 round 1: the setext lookahead ran before the cheap footnote and
+		// table tests, so each definition line rescanned the run (1,598 ms at
+		// 8,000 on 652ef65 against 162 ms on d35e69a, round 1 critic).
+		// Doubled so the quadratic separates from linear at this table's sizes
+		// (round 1 code: 12.3x for 4x; fixed: 3.4x).
+		["many-definitions-under-a-paragraph", (n) => "word\n" + "[a]: u\n".repeat(2 * n) + "---"],
 		// NRL-128: containerScopedOpeners examines each paragraph once (its first
 		// `<!--`), with one backward pass for the next `-->` and next break. The
 		// plan's first prototype re-walked the paragraph for every `<!--` line and
