@@ -2928,19 +2928,14 @@ const CALLOUT = /^\[![^\]]+\][+-]?(?:\s+|$)/;
  */
 const CALLOUT_GLUED_LINK = /^\[![A-Za-z][\w-]*\][+-]?(?=\[)/;
 /**
- * The pre-NRL-182 marker test, kept for a marker on a LATE quote line, where the
- * renderer shows it as text whatever its shape. Stripping it there is the
- * existing late-marker loss (`> P` / `> [!note] Q` drops the shown `[!note]`),
- * left as it was on purpose: the widened `CALLOUT` there newly lost shown
- * `[!1]`, `[!e f]` and the prose after a moved `<!--` (critic 2 F1, 31,104 cells
- * a quarter), and NOT stripping there at all newly disclosed text that NRL-166's
- * `%%` handling hides only because the strip puts `%%` at line start (a link
- * title or tag attribute spanning lines, `pin-nrl166-r2c-f1-*`) and lost text it
- * pairs. Both directions measured; fixing the late class is its own ticket.
- * Also the peel on a line that is fenced code, display math or frontmatter for
- * the renderer (NRL-182 fix round 2): nothing there is a marker, and the widened
- * rule newly peeled `[!1] ` off `> - > [!1] %%QbQ` inside a fence, so its `%%`
- * hid the rest of the shown code (critic 2 F2, 262 cells).
+ * The pre-NRL-182 marker test. Since NRL-209 a marker on a LATE quote line (one
+ * continuing its quote) is shown text and is no longer stripped; this peel is
+ * what remains for the shapes `lateLineMarker` and `markerRules` keep fail-closed
+ * (they would newly disclose or newly lose text if the marker stayed), and for a
+ * line that is fenced code, display math or frontmatter for the renderer
+ * (NRL-182 fix round 2): nothing there is a marker, and the widened rule newly
+ * peeled `[!1] ` off `> - > [!1] %%QbQ` inside a fence, so its `%%` hid the rest
+ * of the shown code (critic 2 F2, 262 cells).
  */
 const LATE_CALLOUT_PEEL = /^\[![A-Za-z][\w-]*\][+-]?\s*/;
 /**
@@ -2954,14 +2949,44 @@ const LATE_CALLOUT_PEEL = /^\[![A-Za-z][\w-]*\][+-]?\s*/;
  * type is stripped exactly as before.
  */
 const CALLOUT_CODE_TITLE_NEW_TYPE = /^\[!(?![A-Za-z][\w-]*\])[^\]]+\][+-]?\s(?: {4}|\t)/;
+/** An earlier line that could have opened an inline construct still open on a late marker line. */
+const LATE_OPEN_CHARS = /[`<"'($]/;
+/** A line that is only container markers and whitespace: it ends the paragraph. */
+const LATE_BLANK = /^(?:[ \t]*(?:>|[-*+]|\d{1,9}[.)]))*[ \t\r]*$/;
+/**
+ * The marker a LATE quote line gives up (NRL-209). `[!note]` on a line that
+ * continues its quote is paragraph text the renderer shows, so it stays in the
+ * line and is spoken like any other non-callout marker (`!note`), where the
+ * pre-NRL-209 peel dropped shown text. Two shapes keep that old peel, because
+ * the marker's presence there moves a reading the extractor gets right only by
+ * the strip:
+ * - a `%%` or `<!--` right after the marker. Stripped, the opener lands at line
+ *   start, where NRL-166's block rules hide what the renderer hides (a tag
+ *   attribute or footnote definition the line sits in); left inline, measured
+ *   newly speaking hidden text (`>P <b title="QqQ` / `>[!note]%% QaQ`, `> [^1]: a`
+ *   / `> [!e] %% QJQ`).
+ * - a marker glued to `[` (`[!note][QaQ](u)`): left in, `cleanLine` reads
+ *   `[!note][QaQ]` as a full reference link and drops the shown label, the
+ *   hole `CALLOUT_GLUED_LINK` documents (measured newly lost).
+ * Both are fail-closed: they keep exactly what 5174376 did.
+ */
+const LATE_PEEL_KEEPS_OPENER = /^(?:%%|<!--)/;
+function lateLineMarker(rest: string): RegExpMatchArray | null {
+	const peel = rest.match(LATE_CALLOUT_PEEL);
+	if (!peel) return null;
+	return LATE_PEEL_KEEPS_OPENER.test(rest.slice(peel[0].length)) || CALLOUT_GLUED_LINK.test(rest) ? peel : null;
+}
 /**
  * Which marker test `containerPrefix` applies on a line (NRL-182 fix rounds 1
  * and 2): "first" is the renderer's rule (`CALLOUT`), for a line that can start
- * a quote; "late" is base's peel on a line continuing its quote unless a list
- * marker on the line opens a new item; "literal" is base's peel on a line the
- * renderer reads as fenced code, display math or frontmatter.
+ * a quote; "late" is a line continuing its quote, where the marker is text
+ * (`lateLineMarker`, NRL-209) unless a list marker on the line opens a new item;
+ * "lateOpen" is a late line whose paragraph so far could hold an inline
+ * construct still open there (`LATE_OPEN_CHARS`), which keeps the pre-NRL-209
+ * peel; "literal" is base's peel on a line the renderer reads as fenced code,
+ * display math or frontmatter.
  */
-type MarkerRule = "first" | "late" | "literal";
+type MarkerRule = "first" | "late" | "lateOpen" | "literal";
 /**
  * A title LED BY A WHITESPACE RUN and opened by `%%` or `<!--`, for a type base
  * never took (NRL-182 fix round 2, critic 1 F2). `CALLOUT` consumes the whole
@@ -3217,9 +3242,11 @@ function containerPrefix(
 		const rest = levelsHere > 0 ? line.slice(chars) : "";
 		const marker =
 			levelsHere > 0
-				? markerRule === "literal" || (markerRule === "late" && !sawList)
+				? markerRule === "literal" || (markerRule === "lateOpen" && !sawList)
 					? rest.match(LATE_CALLOUT_PEEL)
-					: firstLineMarker(rest)
+					: markerRule === "late" && !sawList
+						? lateLineMarker(rest)
+						: firstLineMarker(rest)
 				: null;
 		if (marker) {
 			chars += marker[0].length;
@@ -6464,8 +6491,22 @@ function markerRules(
 	quotes: ReadonlySet<number>,
 	literal: ReadonlyArray<LiteralKind | undefined>,
 ): MarkerRule[] {
+	// NRL-209: a late marker line left whole is measured to disclose or lose text
+	// when an inline construct (a tag attribute, a link title, a code span) was
+	// opened on an earlier line of the paragraph and is still open at the marker:
+	// the old strip dropped the marker from that construct's reading, so the
+	// fail-closed answer is the old peel for any paragraph that could hold one.
+	// One forward pass (a backward walk per line was quadratic, NRL-181's class).
+	const openAbove: boolean[] = [];
+	let open = false;
+	for (const l of lines) {
+		openAbove.push(open);
+		open = LATE_BLANK.test(l) ? false : open || LATE_OPEN_CHARS.test(l);
+	}
 	const rule = (h: readonly number[][], q: ReadonlySet<number>, lit: ReadonlyArray<LiteralKind | undefined>) =>
-		lines.map((_, k): MarkerRule => (lit[k] !== undefined ? "literal" : quoteContinuesIn(h, q, k) ? "late" : "first"));
+		lines.map((_, k): MarkerRule =>
+			lit[k] !== undefined ? "literal" : quoteContinuesIn(h, q, k) ? (openAbove[k] ? "lateOpen" : "late") : "first",
+		);
 	if (!lines.some((l) => l.endsWith("\r"))) return rule(homes, quotes, literal);
 	const lf = lines.map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
 	const lfHomes: number[][] = lf.map(() => []);
@@ -7539,7 +7580,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		if (k + 1 >= lines.length || quoteHeads[k + 1] !== "under" || !plainQuoteLine(k) || !plainQuoteLine(k + 1)) return false;
 		if (prefixAt(lines[k + 1]!, k + 1).quotes > prefixAt(lines[k]!, k).quotes) return false;
 		if (k > 0 && /^[ \t]*$/.test(lines[k - 1]!.replace(QUOTE_PREFIX_PEEL, "")) && /\t/.test(lines[k - 1]!)) return false;
-		if (qh === "setextAfterTitle") return k > 0 && prefixAt(lines[k - 1]!, k - 1).callout && markerRule[k - 1] !== "late";
+		if (qh === "setextAfterTitle") return k > 0 && prefixAt(lines[k - 1]!, k - 1).callout && markerRule[k - 1] !== "late" && markerRule[k - 1] !== "lateOpen";
 		return true;
 	};
 	const leftAQuote = (k: number): boolean =>

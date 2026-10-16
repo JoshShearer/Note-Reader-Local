@@ -396,6 +396,69 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A late quote line keeps its `[!note]` marker as text (NRL-209, 2026-10-16)
+
+On a line that continues its quote, `[!note]` is shown text (`> P` / `> [!note] QAQ` renders
+`[!note] QAQ`, harness 1.13.7 and 1.14.4 agree), but `containerPrefix` applied `LATE_CALLOUT_PEEL`
+and dropped it: base 5174376 spoke `P | QAQ` (R-M08, lost text). Reproduced on a bundle of
+5174376 first (also `>[!e]QaQ`, `> [!tip] T` / `> [!note] QAQ`, CRLF). Now `markerRule` "late"
+leaves the marker in the line (`lateLineMarker`) and it is spoken as every non-callout marker is
+since NRL-182: `P | !note QAQ`, `!e QaQ`, `!QtQ + QAQ` (the `[`/`]` are dropped by `cleanLine`, the
+fold `+`/`-` is spoken). A list marker on the line still opens a new quote (first-line rule), and
+"literal" lines keep the old peel.
+
+**Fail-closed shapes keep 5174376's peel exactly** (each found by grading the plain "never strip
+late lines" arm, 1/400 sample of the new generator: newDisc 14, newLost 35):
+- a `%%` or `<!--` right after the marker (`LATE_PEEL_KEEPS_OPENER`): the strip puts the opener at
+  line start, where NRL-166's block rules hide what the renderer hides (`>P <b title="QqQ` /
+  `>[!note]%% QaQ`, `> [^1]: a` / `> [!e] %% QJQ`);
+- a marker glued to `[` (`CALLOUT_GLUED_LINK`): `[!note][QaQ](u)` left whole reads as a reference
+  link and drops the shown label (the NRL-182 hole);
+- a late line whose paragraph so far holds one of `` ` < " ' ( $ `` (`LATE_OPEN_CHARS`, new rule
+  "lateOpen", one forward pass in `markerRules`, reset by a container-only line): an inline
+  construct (code span, tag attribute, link title) may still be open, and the old strip dropped the
+  marker from its reading. Without this third gate, one 1/8 sample (213,856 notes, 6,295,002 cells)
+  of the new generator gave newDisc 1,393 and newExcl 848 (the marker type `QtQ` spoken from inside
+  `<b title="..`, `[x](u ".." and a multi-line code span). Residual, pinned as
+  `residual-nrl209-late-marker-after-open-code-span-base-parity` and `...-glued-link-base-parity`:
+  the shown marker is still not spoken there. `[` is NOT in the set: with it `> [!tip] T` /
+  `> [!note] QAQ` kept the loss; measured 0/0/0 without it.
+
+**Pins re-derived.** Of the 30 checks that moved under the plain arm, 25 are unchanged by the
+gates (their `%%` / `<!--` follows the marker or a `<`/`` ` ``/`(` sits above it) and 5 changed
+expectation to speak the shown marker (`guard-nrl114-f2-callout-marker-on-a-later-line-is-text`,
+`...-title-after-a-title-is-text`, three `guard-nrl206-late-marker-before-setext-*`; the renderer
+shows the marker line in each). NRL-205's link-title fix is why the plain arm's
+link-title newly-disclosed class is gone, but tag attributes and footnote definitions still need the
+opener gate. New pins `pin-nrl209-*`, `guard-nrl209-*`, `residual-nrl209-*`.
+
+**Grade** (own bundles of 5174376 and the arm; harness selftest OK on 1.13.7 and 1.14.4; cls8 per
+sentinel on 1.13.7 with the 1.14.4 visible set cross-checked, d14 0, crashes 0, sourceIndex spot
+lock 0 in every run; three directions; 7 masks DEF/CODE/ALL/DEFH/CODEH/ALLC/ALLT):
+
+| corpus | cells | newDisc | newLost | newExcl | fixedLost |
+|---|---|---|---|---|---|
+| new generator, 1/8 (late marker of 5 types x 3 folds x 4 separators x 15 tails x 11 previous-line shapes x 8 containers x 9 follows x LF/CRLF) | 6,295,002 | 0 | 0 | 0 | 41,545 |
+| NRL-182 gen-r1 (all) | 3,517,710 | 0 | 0 | 0 | 13,755 (fixedDisc 1,029) |
+| NRL-182 gen-r2, 1/12 | 3,276,469 | 0 | 0 | 0 | 21,084 |
+| corp182 | 561,869 | 0 | 0 | 0 | 0 |
+| critic-r0 critic 1 (24,000, seed 7) | 428,092 | 0 | 0 | 0 | 0 |
+| critic-r0 critic 2, 1/8 sel 0 | 1,147,188 | 0 | 0 | 144 | 14,496 |
+| critic-r1 c1 gen2, 1/3 | 4,000,136 | 0 | 0 | 0 | 29,701 |
+| critic-r1 c1 gen, 1/10 | 4,757,200 | 0 | 0 | 540 | 43,644 |
+
+newExcl (684 cells) is the known quoted-block mask gap: 540 are a sentinel in a tab-led quoted code
+block (`>\tQpQ` / `>\t> [!QtQ] ..`), 144 in a quoted setext heading with a `~~~ js` tail
+(`>` / `>[!QTQ]]+ ~~~ js` / `>---`); for each, the twin with the marker line replaced by plain
+`x <sentinel>` is still excluded content for the renderer and 5174376 speaks it (checked
+mechanically: 540 of 540 by the twin for the code blocks; the 144 setext cells by hand-checking one
+shape of the single family, `>x QTQ ~~~ js` / `>---` under skipHeadings speaks QTQ on base). Wrong
+arms, all measured: no gates newDisc 14 / newLost 35 (1/400 sample); opener and glued gates only
+newDisc 1,393 / newExcl 848 (1/8). Lockstep `lock128.cjs` ARM=bundle: CLEAN 0/0/0/0, every mutator
+fires. fixedLost counts cells where the shown marker type sentinel is newly spoken.
+
+NOT VERIFIED IN OBSIDIAN: reading-view harness only, no Live Preview, no deployed build.
+
 ### A link tail `(dest "title")` that spans lines is dropped whole (NRL-205, 2026-10-16)
 
 On 3e763e2 `[a](u "t QAQ` / `more QBQ") after QCQ` (top level, in a quote, lazy quote, list
@@ -659,7 +722,7 @@ containments, each keeping base's answer where the new rule alone moved text the
   QSQ / QRZQ in `pin-nrl166-r3-c-withheld-pct-*`; 27 pins moved. `lateCallout`'s container ids alone
   also called `> - > [!note] <!-- Q` after `>   > P` late (392 newly disclosed cells), hence the
   list-marker override. The existing late-marker loss (`> P` / `> [!note] Q` drops the shown
-  `[!note]`) stays: its own ticket, after the link-title-spanning-lines class.
+  `[!note]`) stayed for its own ticket, fixed in NRL-209 below.
 - **Title as indented code** (`CALLOUT_CODE_TITLE_NEW_TYPE`, critic 1 F3): measured, 1,680 of 1,680
   callout lines on 1.13.7 and 1.14.4, the title is an indented code block exactly when, after the
   marker's one whitespace character, it starts with four spaces or a tab (`> [!e] \tQAAQ`,

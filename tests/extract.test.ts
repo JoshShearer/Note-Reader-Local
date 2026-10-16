@@ -2858,8 +2858,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// that narrow. GUARDS, green on every arm: a `[!type]` line that is not a
 		// quote's first line is paragraph text; a list line inside a quoted fence or
 		// a nested item's fence is code content; a raw HTML block swallows the line.
-		["guard-nrl114-f2-callout-marker-on-a-later-line-is-text", "> x\n> [!note] ~~~ QBQ", "x ~~~ QBQ"],
-		["guard-nrl114-f2-callout-title-after-a-title-is-text", "> [!note] Title\n> [!tip] ~~~ QBQ", "Title ~~~ QBQ"],
+		["guard-nrl114-f2-callout-marker-on-a-later-line-is-text", "> x\n> [!note] ~~~ QBQ", "x !note ~~~ QBQ"],
+		["guard-nrl114-f2-callout-title-after-a-title-is-text", "> [!note] Title\n> [!tip] ~~~ QBQ", "Title !tip ~~~ QBQ"],
 		["guard-nrl114-f2-item-inside-a-quoted-fence-is-content", "> ```\n> - ~~~ QBQ\n> ```", "~~~ QBQ"],
 		["guard-nrl114-f2-nested-item-inside-a-fence-is-content", "- ```\n  - ~~~ QBQ\n  ```", "~~~ QBQ", { skipCodeBlocks: false }],
 		["guard-nrl114-f2-item-inside-an-html-block-is-raw", "<div>\n- ~~~ QBQ", "~~~ QBQ"],
@@ -5005,9 +5005,34 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl206-callout-title-not-setext-def", "> [!note] QTQ\n> ===\nQZQ", "QTQ === QZQ", {}],
 		["guard-nrl206-callout-title-not-setext-code", "> [!note] QTQ\n> ===\nQZQ", "QTQ === QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
 		["guard-nrl206-callout-title-not-setext-defh", "> [!note] QTQ\n> ===\nQZQ", "QTQ === QZQ", {skipHeadings: true}],
-		["guard-nrl206-late-marker-before-setext-def", "> QAQ\n> [!tip]\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {}],
-		["guard-nrl206-late-marker-before-setext-code", "> QAQ\n> [!tip]\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
-		["guard-nrl206-late-marker-before-setext-defh", "> QAQ\n> [!tip]\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {skipHeadings: true}],
+		["guard-nrl206-late-marker-before-setext-def", "> QAQ\n> [!tip]\n> QXQ\n> ===\nQZQ", "QAQ !tip QXQ === QZQ", {}],
+		["guard-nrl206-late-marker-before-setext-code", "> QAQ\n> [!tip]\n> QXQ\n> ===\nQZQ", "QAQ !tip QXQ === QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-late-marker-before-setext-defh", "> QAQ\n> [!tip]\n> QXQ\n> ===\nQZQ", "QAQ !tip QXQ === QZQ", {skipHeadings: true}],
+		// NRL-209: a marker on a line that CONTINUES its quote is paragraph text the
+		// renderer shows (`> P` / `> [!note] QAQ` renders `[!note] QAQ`), so it is
+		// spoken as the other non-callout markers are (`!note`) instead of stripped.
+		// Harness 1.13.7 and 1.14.4 agree on every source below.
+		["pin-nrl209-late-note-marker-is-spoken", "> P\n> [!note] QAQ", "P !note QAQ"],
+		["pin-nrl209-late-marker-no-space-is-spoken", "> P\n>[!e]QaQ", "P !e QaQ"],
+		["pin-nrl209-late-marker-after-a-callout-title", "> [!tip] T\n> [!note] QAQ", "T !note QAQ"],
+		["pin-nrl209-late-marker-crlf", "> P\r\n> [!note] QAQ", "P !note QAQ"],
+		["pin-nrl209-late-marker-in-a-list-item-quote", "- > P\n  > [!note] QAQ", "P !note QAQ"],
+		["pin-nrl209-late-marker-nested-quote", "> > P\n> > [!note] QAQ", "P !note QAQ"],
+		["pin-nrl209-late-marker-type-is-shown", "> P\n> [!QtQ]+ QAQ", "P !QtQ + QAQ"],
+		["pin-nrl209-late-marker-after-a-blank-quote-line", "> QpQ `QqQ`\n>\n> [!note] QaQ", "QpQ !note QaQ"],
+		// Fail-closed shapes keep 5174376's peel exactly: a `%%` right after the
+		// marker over a tag attribute (the arm without the gate spoke hidden QBQ and
+		// QCQ), and a marker after a line that could leave an inline construct open
+		// (code span, tag attribute, link title: 1,393 newly disclosed and 848 newly
+		// excluded cells on one generator sample without the gate).
+		["guard-nrl209-late-marker-then-pct-over-tag-attribute", "> P <b title=\"QAQ\n> [!note]%% QBQ\n> QCQ\">QDQ</b>", "P <b title=\"QAQ"],
+		["guard-nrl209-late-marker-then-pct-over-footnote", "> [^1]: a\n> [!e] %% QJQ `[^1]`", "a"],
+		["guard-nrl209-late-marker-after-open-link-title", "> QpQ [x](u \"QqQ\n> [!QtQ] QaQ\n> QbQ\")", "QpQ x"],
+		["guard-nrl209-late-marker-after-open-tag-attribute", "> QpQ <b title=\"QqQ\n> [!QtQ] QaQ\n> QbQ\">\n> QcQ", "QpQ <b title=\"QqQ QaQ QbQ\"> QcQ"],
+		["residual-nrl209-late-marker-after-open-code-span-base-parity", "> QpQ `QqQ\n> [!QtQ] QaQ\n> `\n> QbQ", "QpQ QqQ QaQ QbQ"],
+		["residual-nrl209-late-marker-glued-link-base-parity", "> QpQ %% QqQ\n> [!note][[QaQ]]\nQbQ", "QpQ %% QqQ QaQ QbQ"],
+		["guard-nrl209-first-line-callout-unchanged", "> [!note] QAQ\n> QBQ", "QAQ QBQ"],
+		["guard-nrl209-new-item-callout-unchanged", "> P\n- > [!note] QAQ", "P QAQ"],
 		["guard-nrl206-tab-blank-before-setext-def", "> QAQ\n> \t\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {}],
 		["guard-nrl206-tab-blank-before-setext-code", "> QAQ\n> \t\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
 		["guard-nrl206-tab-blank-before-setext-defh", "> QAQ\n> \t\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {skipHeadings: true}],
