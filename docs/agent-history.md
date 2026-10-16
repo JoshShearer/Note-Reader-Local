@@ -407,7 +407,13 @@ and hid the heading's tail (loss). A `- > x` / `1. > x` / `- > > x` line (spaces
 gap, `TERM2_ITEM_QUOTE`) now hands its quoted body's count (`term2QuotedStop(..).next`) to the
 next line. Fail-closed: only when that line, and the one after it unless blank, sit at the
 same quote depth (the plan critic measured 4,104 newly lost cells without the depth gate);
-a lazy next line keeps the old count. Plan v1 CONCERNS 68, addressed. Census: the plan
+a lazy next line keeps the old count. Fix round 1 (critic 1): the hand-off made a `- > x`
+quote behave like a plain `> x` quote, which has its own gaps (a deeper `> >` line further
+down is not a stop once the count reaches two, and constructs in the body), so the hand-off
+now also needs the whole paragraph below, up to a blank line or a list marker, at one depth
+and plain prose (at most one `<!--`; no backtick, `[`, `%`, `$` or other `<`). After that,
+critic 1's generator (3 seeds x 20,000) gave 0/0, and both round-0 generators kept their
+fixes with 0/0. Plan v1 CONCERNS 68, addressed. Census: the plan
 critic's generator (4 shards x 98,784 cells) gave 3,096 fixed and 0/0. The planner's
 generator gave 1,728 fixed and 0/0. Spike hazard grid: 66 disclosure and 30 loss cells
 fixed. Not run in Obsidian.

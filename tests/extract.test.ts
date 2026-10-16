@@ -5187,6 +5187,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl187-deeper-next-line", "- > P1Q\n  > > T1Q <!--\n  > > ===\n  > > S1Q\n  > > -->\n\nZ9Q", "P1Q T1Q <!-- === S1Q --> Z9Q"],
 		["guard-nrl187-shallower-next-line", "- > > P1Q\n  > T1Q <!--\n  > ===\n  > S1Q\n  > -->\n\nZ9Q", "P1Q T1Q <!-- === S1Q --> Z9Q"],
 		["guard-nrl187-deeper-underline", "- > P1Q\n  > T1Q <!--\n  > > ===\n  > S1Q\n  > -->\n\nZ9Q", "P1Q T1Q <!-- === S1Q --> Z9Q"],
+		["guard-nrl187-r1-deeper-quote-after-underline-keeps-base", "-  > Q0Q\n   > Title Q1Q <!--\n   > ===\n   > > Q2Q %% Q3Q --> Q4Q %% Q5Q", "Q0Q Title Q1Q <!-- === Q2Q Q5Q"],
+		["guard-nrl187-r1-comment-on-marker-line-keeps-base", "* > Q0Q <!-- Q1Q\n  > Title Q2Q\n  > ===\n  > > Q5Q --> Q7Q", "Q0Q <!-- Q1Q Title Q2Q === Q5Q --> Q7Q"],
 		["guard-nrl187-tab-gap-unchanged", "-\t> Para.\n\t> Title <!--\n\t> ===\n\t> ZQSX\n\t> -->", "Para. Title"],
 		["pin-nrl216-declined-tail-spanning-lines-keeps-dest", "A [QlQ][QrQ\n](QuQ) T.", "A QlQ [QrQ ](QuQ) T."],
 		["guard-nrl216-spaced-label-is-a-real-link", "A [QlQ] [QrQ\n](QuQ) T.", "A QlQ QrQ T."],

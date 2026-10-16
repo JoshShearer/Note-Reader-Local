@@ -7213,8 +7213,26 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 					// the same quote depth (plan review I1/I2): a deeper or shallower
 					// line there starts or ends a quote the count does not describe,
 					// and handing it over newly hid shown prose (4,104 cells).
-					const same = (j: number): boolean => j >= lines.length || lines[j]!.trim() === "" || term2QuoteView(lines[j]!).depth === inner.depth;
-					if (inner.depth > 0 && k + 1 < lines.length && term2QuoteView(lines[k + 1]!).depth === inner.depth && same(k + 2)) {
+					// Round 1 (critic 1): the whole paragraph below, up to a blank line or
+					// the next list marker, must stay at that depth. A deeper `> >` line
+					// further down is a stop the plain-quote scan misses once the count
+					// reaches two (an older plain `>` gap), and the hand-off exposed it.
+					// And plain prose only: at most one `<!--` and no backtick, `[`, `%`,
+					// `$` or other `<` in it (round 1), since the plain-quote scan's
+					// construct handling has its own gaps the hand-off would expose.
+					let sameDepth = inner.depth > 0;
+					let text = line;
+					for (let j = k + 1; sameDepth && j < lines.length; j++) {
+						const lj = lines[j]!;
+						if (lj.trim() === "" || TERM2_LIST.test(lj)) break;
+						if (term2QuoteView(lj).depth !== inner.depth) sameDepth = false;
+						text += "\n" + lj;
+					}
+					if (sameDepth) {
+						const openers = text.split("<!--").length - 1;
+						if (openers > 1 || /[`[%$]|<(?!!--)/.test(text)) sameDepth = false;
+					}
+					if (sameDepth && k + 1 < lines.length && lines[k + 1]!.trim() !== "") {
 						itemQuoteNext = term2QuotedStop(inner.body, true, 0).next;
 					}
 				}
