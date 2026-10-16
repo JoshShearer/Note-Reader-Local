@@ -4774,7 +4774,14 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// escaped backtick, a table cell, an even backslash run, a fence head. Each is
 		// RED on a scratch mutation of the gate: no whitelist (`$`/`[[`/`%%` checks
 		// off), table and heading lines skipped, any backslash run escaping, or
-		// fence heads skipped.
+		// fence heads skipped. The pinned `QKZQ--->` is NOT the renderer's truth: both
+		// renderers hide it. It is base's fail-closed answer (a known disclosure kept),
+		// so a later fix that hides these heads correctly turns them red on purpose.
+		// A `www.` autolink literal runs on through the backtick and emits the PI
+		// raw (critics on 6317015, F1). Uppercase `WWW.` is no autolink, but fails
+		// closed too.
+		["guard-nrl184-www-autolink", "a www.example.com`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-www-upper", "a WWW.example.com`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a WWW.example.com <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
 		["guard-nrl184-link-cross", "a [`](u) <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a [ ](u) <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
 		["guard-nrl184-math-code", "a $`$ <?x > <!-- QaQ ?> `$ b\n\n- Q<!--\n    ```QKZQ--->", "a $ $ <?x > <!-- QaQ ?> $ b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
 		["guard-nrl184-pct-code", "a %%`%% <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],

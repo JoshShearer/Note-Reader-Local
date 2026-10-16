@@ -1898,6 +1898,10 @@ function inlineBogusGate(
 				const cp = source.codePointAt(k)!;
 				const w = cp > 0xffff ? 2 : 1;
 				if (!SPAN_SAFE_CHAR.test(source.slice(k, k + w))) return k;
+				// `www.` starts an autolink literal that runs on through a backtick
+				// (`www.a.co\`<?x ?>` emits the PI raw), though every character is in
+				// the safe set. Both critics on 6317015 (F1); either case fails closed.
+				if (cp === 46 && k >= 3 && source.slice(k - 3, k).toLowerCase() === "www") return k;
 				k += w;
 			}
 			return b;
