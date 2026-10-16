@@ -2376,7 +2376,9 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// The four fail-closed stops inside a container, so the widened
 		// confirmation is shown still to give up where NRL-63 made it give up.
 		["guard-nrl98-blank-in-quote", "> A ![alt\n>\n> words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
-		["guard-nrl98-fence-in-quote", "> A ![alt\n> ```\n> words](zdestz.png) B", "A [alt words](zdestz.png) B", { speakImageAlt: false }],
+		// NRL-206: the quoted fence is now read as one; 1.13.7 renders `words](zdestz.png) B`
+		// inside <pre>, so DEF no longer speaks it.
+		["guard-nrl98-fence-in-quote", "> A ![alt\n> ```\n> words](zdestz.png) B", "A [alt", { speakImageAlt: false }],
 		["guard-nrl98-comment-in-quote", "> A ![alt\n> %%\n> words](zdestz.png) B", "A [alt", { speakImageAlt: false }],
 		// The DISPLAY-MATH stop is root 3 (ADR 0023 clause 7a) and the ONLY one of
 		// the four that is not in `interruptsParagraph`, so the peel does not
@@ -3132,7 +3134,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// the only thing that would remove it and a quoted heading inside a list item
 		// is not reached by the heading branch. Pinned with the `#` so the fixture
 		// records what we really say rather than what we would like to say.
-		["pin-nrl93-arm1-quoted-heading-in-item", "- item\n> # H\n	%% SECRETA\nTAILVIS", "item # H"],
+		// NRL-206: 1.13.7 renders `> # H` as an h1, so its `#` run is not spoken.
+		["pin-nrl93-arm1-quoted-heading-in-item", "- item\n> # H\n	%% SECRETA\nTAILVIS", "item H"],
 		// ARM 2, which the arm-1 guard does NOT cover and which is why both came off
 		// together. `blankBefore` may end a run only when the line's RAW indent is
 		// empty as well as its peeled body's: two columns of indent reach a `- item`'s
@@ -4239,11 +4242,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl115-setext-dash1-space-tab", "PROSEP\n-\n \t<!--\nSECRET\nVISIBLE", "PROSEP"],
 		["pin-nrl115-setext-dash2-2sp-tab", "PROSEP\n--\n  \t<!--\nSECRET\nVISIBLE", "PROSEP"],
 		["pin-nrl115-setext-leading-space-content", "   PROSEP\n===\n \t<!--\nSECRET\nVISIBLE", "PROSEP"],
-		["pin-nrl115-setext-quote", "> PROSEP\n> ===\n>  \t<!--\n> SECRET\n> VISIBLE", "PROSEP ==="],
-		["pin-nrl115-setext-nested-quote", "> > PROSEP\n> > ===\n> >  \t<!--\n> > SECRET\n> > VISIBLE", "PROSEP ==="],
+		// NRL-206: the quoted and callout rows' `===` is an underline (1.13.7: an h1 PROSEP),
+		// so it is no longer spoken; the hiding is unchanged.
+		["pin-nrl115-setext-quote", "> PROSEP\n> ===\n>  \t<!--\n> SECRET\n> VISIBLE", "PROSEP"],
+		["pin-nrl115-setext-nested-quote", "> > PROSEP\n> > ===\n> >  \t<!--\n> > SECRET\n> > VISIBLE", "PROSEP"],
 		["pin-nrl115-setext-list", "- PROSEP\n  ===\n   \t<!--\n  SECRET\n  VISIBLE", "PROSEP ==="],
 		["pin-nrl115-setext-ordered", "1. PROSEP\n   =\n    \t<!--\n   SECRET\n   VISIBLE", "PROSEP ="],
-		["pin-nrl115-setext-callout", "> [!note]\n> PROSEP\n> ===\n>  \t<!--\n> SECRET\n> VISIBLE", "PROSEP ==="],
+		["pin-nrl115-setext-callout", "> [!note]\n> PROSEP\n> ===\n>  \t<!--\n> SECRET\n> VISIBLE", "PROSEP"],
 		["pin-nrl115-setext-quote-in-list", "- > PROSEP\n  > ===\n  >  \t<!--\n  > SECRET\n  > VISIBLE", "PROSEP ==="],
 		["pin-nrl115-setext-list-in-quote", "> - PROSEP\n>   ===\n>    \t<!--\n>   SECRET\n>   VISIBLE", "PROSEP ==="],
 		// Underline-shaped lines that are NOT a heading for Obsidian (two content
@@ -4379,7 +4384,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl115-fuzz-table-shaped-line-is-paragraph-text", ">>|\nZ\n>>-\n>>\t<!--\nZLFZ", "| Z -"],
 		// (3) The same for an underline-shaped or table-shaped line that is itself
 		// setext content: `=` over `-` is an h2, and the next line a comment.
-		["pin-nrl115-fuzz-underline-shaped-line-is-setext-content", ">>=\n>>-\n>>  \t<!--\nZPIZ", "= -"],
+		// NRL-206: 1.13.7 renders `>>=` / `>>-` as an h2 `=`; the `-` underline is not spoken.
+		["pin-nrl115-fuzz-underline-shaped-line-is-setext-content", ">>=\n>>-\n>>  \t<!--\nZPIZ", "="],
 		// (4) A list cut short at a line that MAY interrupt it (`$$`): the item's
 		// dedent is the least indent over its WHOLE content, `$$` included, so the
 		// walker's shorter item over-dedented ` \t<!--` to a bare tab. The last item
@@ -4900,14 +4906,117 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl213-top-level-fence-code", "QiQ\n\n```js\nQmQ\n```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
 		["guard-nrl213-top-level-opener-deeper-than-closer-def", "QiQ\n\n   ```js\nQmQ\n```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
 		["guard-nrl213-top-level-opener-deeper-than-closer-code", "QiQ\n\n   ```js\nQmQ\n```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl213-quote-fence-def", "> QiQ\n> ```js\n> QmQ\n> ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", {}],
+		// NRL-206 flipped the two DEF rows below to the renderer's reading (QmQ is in
+		// <pre> on 1.13.7); the CODE rows still speak it, now without the `>`.
+		["guard-nrl213-quote-fence-def", "> QiQ\n> ```js\n> QmQ\n> ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
 		["guard-nrl213-quote-fence-code", "> QiQ\n> ```js\n> QmQ\n> ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl213-quote-fence-closer-lead-3-def", "> QiQ\n> ```js\n> QmQ\n>    ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", {}],
+		["guard-nrl213-quote-fence-closer-lead-3-def", "> QiQ\n> ```js\n> QmQ\n>    ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
 		["guard-nrl213-quote-fence-closer-lead-3-code", "> QiQ\n> ```js\n> QmQ\n>    ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
 		["guard-nrl213-list-matching-indent-def", "1. QiQ\n   ```js\n   QmQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
 		["guard-nrl213-list-matching-indent-code", "1. QiQ\n   ```js\n   QmQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
 		["pin-nrl213-list-closer-deeper-than-opener-3-def", "1. QiQ\n   ```js\n   QmQ\n      ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
 		["pin-nrl213-list-closer-deeper-than-opener-3-code", "1. QiQ\n   ```js\n   QmQ\n      ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		// NRL-206: fences and headings inside a quote or callout, each row read against the
+		// 1.13.7 harness (pins are red on 3cc2bea). Guards keep 3cc2bea's reading where the
+		// renderer differs but the change is refused fail-closed (a comment in a quoted
+		// fence's body, `> - # x`, a late marker or tab-blank before a setext pair) or where
+		// base already matches (`>\t# x` is code, `>#x` a tag, a two-line or deeper pair).
+		["pin-nrl206-callout-fence-def", "> [!note] T\n> ```js\n> QBBQ\n> ```\nAfter QZQ", "T After QZQ", {}],
+		["pin-nrl206-callout-fence-defh", "> [!note] T\n> ```js\n> QBBQ\n> ```\nAfter QZQ", "T After QZQ", {skipHeadings: true}],
+		["pin-nrl206-callout-fence-crlf-def", "> [!note] T\r\n> ```js\r\n> QBBQ\r\n> ```\r\nAfter QZQ", "T After QZQ", {}],
+		["pin-nrl206-callout-fence-crlf-defh", "> [!note] T\r\n> ```js\r\n> QBBQ\r\n> ```\r\nAfter QZQ", "T After QZQ", {skipHeadings: true}],
+		["pin-nrl206-callout-atx-def", "> [!note] T\n> # QHQ\n> body", "T QHQ body", {}],
+		["pin-nrl206-callout-atx-code", "> [!note] T\n> # QHQ\n> body", "T QHQ body", {skipCodeBlocks: false, skipInlineCode: false}],
+		["pin-nrl206-callout-atx-defh", "> [!note] T\n> # QHQ\n> body", "T body", {skipHeadings: true}],
+		["pin-nrl206-callout-atx-crlf-def", "> [!note] T\r\n> # QHQ\r\n> body", "T QHQ body", {}],
+		["pin-nrl206-callout-atx-crlf-code", "> [!note] T\r\n> # QHQ\r\n> body", "T QHQ body", {skipCodeBlocks: false, skipInlineCode: false}],
+		["pin-nrl206-callout-atx-crlf-defh", "> [!note] T\r\n> # QHQ\r\n> body", "T body", {skipHeadings: true}],
+		["pin-nrl206-setext-eq-nospace-def", "> QXQ\n>===\nQZQ", "QXQ QZQ", {}],
+		["pin-nrl206-setext-eq-nospace-code", "> QXQ\n>===\nQZQ", "QXQ QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["pin-nrl206-setext-eq-nospace-defh", "> QXQ\n>===\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-setext-eq-nospace-crlf-def", "> QXQ\r\n>===\r\nQZQ", "QXQ QZQ", {}],
+		["pin-nrl206-setext-eq-nospace-crlf-code", "> QXQ\r\n>===\r\nQZQ", "QXQ QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["pin-nrl206-setext-eq-nospace-crlf-defh", "> QXQ\r\n>===\r\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-setext-dash-defh", "> QXQ\n> ---\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-setext-dash-crlf-defh", "> QXQ\r\n> ---\r\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-tilde-fence-def", "> ~~~\n> QBBQ\n> ~~~\nQZQ", "QZQ", {}],
+		["pin-nrl206-tilde-fence-defh", "> ~~~\n> QBBQ\n> ~~~\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-tilde-fence-crlf-def", "> ~~~\r\n> QBBQ\r\n> ~~~\r\nQZQ", "QZQ", {}],
+		["pin-nrl206-tilde-fence-crlf-defh", "> ~~~\r\n> QBBQ\r\n> ~~~\r\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-nested-fence-def", "> > ```\n> > QBBQ\n> > ```\n\nQZQ", "QZQ", {}],
+		["pin-nrl206-nested-fence-defh", "> > ```\n> > QBBQ\n> > ```\n\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-nested-fence-crlf-def", "> > ```\r\n> > QBBQ\r\n> > ```\r\n\r\nQZQ", "QZQ", {}],
+		["pin-nrl206-nested-fence-crlf-defh", "> > ```\r\n> > QBBQ\r\n> > ```\r\n\r\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-nospace-fence-def", ">```\n>QBBQ\n>```\nQZQ", "QZQ", {}],
+		["pin-nrl206-nospace-fence-defh", ">```\n>QBBQ\n>```\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-nospace-fence-crlf-def", ">```\r\n>QBBQ\r\n>```\r\nQZQ", "QZQ", {}],
+		["pin-nrl206-nospace-fence-crlf-defh", ">```\r\n>QBBQ\r\n>```\r\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-info-fence-def", "> ~~~ py title\n> QBBQ\n> ~~~\nQZQ", "QZQ", {}],
+		["pin-nrl206-info-fence-defh", "> ~~~ py title\n> QBBQ\n> ~~~\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-info-fence-crlf-def", "> ~~~ py title\r\n> QBBQ\r\n> ~~~\r\nQZQ", "QZQ", {}],
+		["pin-nrl206-info-fence-crlf-defh", "> ~~~ py title\r\n> QBBQ\r\n> ~~~\r\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-unclosed-fence-def", "> ```\n> QBBQ\n\nQZQ", "QZQ", {}],
+		["pin-nrl206-unclosed-fence-defh", "> ```\n> QBBQ\n\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-unclosed-fence-crlf-def", "> ```\r\n> QBBQ\r\n\r\nQZQ", "QZQ", {}],
+		["pin-nrl206-unclosed-fence-crlf-defh", "> ```\r\n> QBBQ\r\n\r\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-lazy-body-def", "> ```\nQLAZYQ\n> ```\nQZQ", "QZQ", {}],
+		["pin-nrl206-lazy-body-defh", "> ```\nQLAZYQ\n> ```\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-lazy-body-crlf-def", "> ```\r\nQLAZYQ\r\n> ```\r\nQZQ", "QZQ", {}],
+		["pin-nrl206-lazy-body-crlf-defh", "> ```\r\nQLAZYQ\r\n> ```\r\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-closer-wrong-length-def", "> ````\n> QBBQ\n> ```\n> QCCQ\n> ````\nQZQ", "QZQ", {}],
+		["pin-nrl206-closer-wrong-length-code", "> ````\n> QBBQ\n> ```\n> QCCQ\n> ````\nQZQ", "QBBQ ``` QCCQ QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["pin-nrl206-closer-wrong-length-defh", "> ````\n> QBBQ\n> ```\n> QCCQ\n> ````\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-closer-wrong-length-crlf-def", "> ````\r\n> QBBQ\r\n> ```\r\n> QCCQ\r\n> ````\r\nQZQ", "QZQ", {}],
+		["pin-nrl206-closer-wrong-length-crlf-code", "> ````\r\n> QBBQ\r\n> ```\r\n> QCCQ\r\n> ````\r\nQZQ", "QBBQ ``` QCCQ QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["pin-nrl206-closer-wrong-length-crlf-defh", "> ````\r\n> QBBQ\r\n> ```\r\n> QCCQ\r\n> ````\r\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-closer-wrong-char-def", "> ```\n> QBBQ\n> ~~~\n> ```\nQZQ", "QZQ", {}],
+		["pin-nrl206-closer-wrong-char-defh", "> ```\n> QBBQ\n> ~~~\n> ```\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-closer-wrong-char-crlf-def", "> ```\r\n> QBBQ\r\n> ~~~\r\n> ```\r\nQZQ", "QZQ", {}],
+		["pin-nrl206-closer-wrong-char-crlf-defh", "> ```\r\n> QBBQ\r\n> ~~~\r\n> ```\r\nQZQ", "QZQ", {skipHeadings: true}],
+		["pin-nrl206-nested-atx-def", "> > # QHQ\n> > body", "QHQ body", {}],
+		["pin-nrl206-nested-atx-code", "> > # QHQ\n> > body", "QHQ body", {skipCodeBlocks: false, skipInlineCode: false}],
+		["pin-nrl206-nested-atx-defh", "> > # QHQ\n> > body", "body", {skipHeadings: true}],
+		["pin-nrl206-nested-atx-crlf-def", "> > # QHQ\r\n> > body", "QHQ body", {}],
+		["pin-nrl206-nested-atx-crlf-code", "> > # QHQ\r\n> > body", "QHQ body", {skipCodeBlocks: false, skipInlineCode: false}],
+		["pin-nrl206-nested-atx-crlf-defh", "> > # QHQ\r\n> > body", "body", {skipHeadings: true}],
+		["pin-nrl206-callout-setext-h2-defh", "> [!note] QTQ\n> QXQ\n> ---\nQZQ", "QTQ QZQ", {skipHeadings: true}],
+		["pin-nrl206-callout-setext-h2-crlf-defh", "> [!note] QTQ\r\n> QXQ\r\n> ---\r\nQZQ", "QTQ QZQ", {skipHeadings: true}],
+		// Fix round 1 (both critics on d218283): a backtick run whose rest holds a
+		// backtick is an inline code span, not a fence, and a lone-CR note is one
+		// split line; both keep 3cc2bea's reading (red on d218283).
+		["guard-nrl206-backtick-info-is-inline-code", "> [!note] T\n> ```js``` is inline QIQ\n> more\n\nQAQ", "T is inline QIQ more QAQ", {}],
+		["guard-nrl206-backtick-in-info-is-no-fence", "> ``` `x`\n> QBQ\n\nQAQ", "QBQ QAQ", {}],
+		["guard-nrl206-lone-cr-note-keeps-base", "> ```\r> QBQ\r> ```\rQAQ", "QAQ", {}],
+		["guard-nrl206-tab-atx-is-code-def", ">\t# QHQ\nQZQ", "# QHQ QZQ", {}],
+		["guard-nrl206-tab-atx-is-code-code", ">\t# QHQ\nQZQ", "# QHQ QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-tab-atx-is-code-defh", ">\t# QHQ\nQZQ", "# QHQ QZQ", {skipHeadings: true}],
+		["guard-nrl206-hash-no-space-is-tag-def", ">#QHQ\nQZQ", "QZQ", {}],
+		["guard-nrl206-hash-no-space-is-tag-code", ">#QHQ\nQZQ", "QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-hash-no-space-is-tag-defh", ">#QHQ\nQZQ", "QZQ", {skipHeadings: true}],
+		["guard-nrl206-two-line-para-not-setext-def", "> a\n> QXQ\n> ===\nQZQ", "a QXQ === QZQ", {}],
+		["guard-nrl206-two-line-para-not-setext-code", "> a\n> QXQ\n> ===\nQZQ", "a QXQ === QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-two-line-para-not-setext-defh", "> a\n> QXQ\n> ===\nQZQ", "a QXQ === QZQ", {skipHeadings: true}],
+		["guard-nrl206-deeper-underline-def", "> QXQ\n> > ===\nQZQ", "QXQ === QZQ", {}],
+		["guard-nrl206-deeper-underline-code", "> QXQ\n> > ===\nQZQ", "QXQ === QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-deeper-underline-defh", "> QXQ\n> > ===\nQZQ", "QXQ === QZQ", {skipHeadings: true}],
+		["guard-nrl206-indented-underline-def", "> QXQ\n>  ===\nQZQ", "QXQ === QZQ", {}],
+		["guard-nrl206-indented-underline-code", "> QXQ\n>  ===\nQZQ", "QXQ === QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-indented-underline-defh", "> QXQ\n>  ===\nQZQ", "QXQ === QZQ", {skipHeadings: true}],
+		["guard-nrl206-callout-title-not-setext-def", "> [!note] QTQ\n> ===\nQZQ", "QTQ === QZQ", {}],
+		["guard-nrl206-callout-title-not-setext-code", "> [!note] QTQ\n> ===\nQZQ", "QTQ === QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-callout-title-not-setext-defh", "> [!note] QTQ\n> ===\nQZQ", "QTQ === QZQ", {skipHeadings: true}],
+		["guard-nrl206-late-marker-before-setext-def", "> QAQ\n> [!tip]\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {}],
+		["guard-nrl206-late-marker-before-setext-code", "> QAQ\n> [!tip]\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-late-marker-before-setext-defh", "> QAQ\n> [!tip]\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {skipHeadings: true}],
+		["guard-nrl206-tab-blank-before-setext-def", "> QAQ\n> \t\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {}],
+		["guard-nrl206-tab-blank-before-setext-code", "> QAQ\n> \t\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-tab-blank-before-setext-defh", "> QAQ\n> \t\n> QXQ\n> ===\nQZQ", "QAQ QXQ === QZQ", {skipHeadings: true}],
+		["guard-nrl206-list-in-quote-atx-residual-def", "> - # QHQ\nQZQ", "# QHQ QZQ", {}],
+		["guard-nrl206-list-in-quote-atx-residual-code", "> - # QHQ\nQZQ", "# QHQ QZQ", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-list-in-quote-atx-residual-defh", "> - # QHQ\nQZQ", "# QHQ QZQ", {skipHeadings: true}],
+		["guard-nrl206-fence-comment-body-refused-def", "> ```\n> <!-- QCQ\n> ```\nQZQ", "", {}],
+		["guard-nrl206-fence-comment-body-refused-code", "> ```\n> <!-- QCQ\n> ```\nQZQ", "", {skipCodeBlocks: false, skipInlineCode: false}],
+		["guard-nrl206-fence-comment-body-refused-defh", "> ```\n> <!-- QCQ\n> ```\nQZQ", "", {skipHeadings: true}],
 		// NRL-213 fix round 1 (critic 1 F1): an ordered item numbered other than 1 cannot
 		// interrupt a paragraph, so `  2. QbQ` after `- QaQ` (or after a top-level text line)
 		// is the paragraph's lazy text and the six-space fence under it is text too: 1.13.7

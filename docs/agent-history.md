@@ -407,7 +407,7 @@ forbade.
   opened (`fenceByView`): opened on `"open"`, closed on `"close"`, and closed silently on the
   first line `literalAt` no longer calls code (the container ended). Fences the old raw tests
   open keep the old raw closer test. Two exclusions, each found by a red existing pin: a line
-  inside a quote (the loop has never tracked a quoted fence; NRL-93/98/114/115/166 pins record
+  inside a quote (the loop did not track a quoted fence until NRL-206, which now opens one through this same view path under its own fail-closed gates; NRL-93/98/114/115/166 pins record
   speaking its body under DEF as accepted) and a list marker line (containerViews does not
   model that an ordered marker other than 1 cannot interrupt a paragraph, so `Para` /
   `2. ~~~ js` read as a fence and lost `more`; NRL-114/182 pins). 13 `guard-nrl184-*` rows
@@ -480,6 +480,50 @@ forbade.
   per-fence scan failed NRL-166's many-fences timing check (360 ms -> 5126 ms). Lockstep CLEAN
   0/0/0/0 on both arms. Not established: anything beyond this one generator's three seeds (other
   generators, corpora), and behaviour in a running Obsidian.
+
+### Quoted fences and headings follow containerViews, fail-closed (NRL-206, 2026-10-16)
+
+- **Bug (R-M08, skipCodeBlocks, skipHeadings):** on 3cc2bea a fence inside a quote or callout was
+  read as quote prose (its body spoken under DEF), `> # x` spoke its `#` run and was never dropped
+  under skipHeadings, and a quoted setext pair spoke `===` and kept its content under skipHeadings.
+  Measured on the 1.13.7 harness: `> [!note] T` / `> ```js` / `> QBBQ` / `> ``` ` / `After QZQ`
+  speaks `T QBBQ After QZQ` under DEF; the renderer has QBBQ in `<pre>`.
+- **Fix:** the per-line loop's view-fence path (NRL-213's `fenceByView`) now opens quoted fences,
+  and a quoted fence's body is spoken from its container's content column (`fenceCols`, the CRLF
+  re-pass's offsets on a CRLF note), so `>` is never read out. `containerViews` emits quoted ATX
+  and setext marks (`ids.heads`, type `QuoteHead`) from its own per-view paragraph state; the loop
+  takes them only on a plain, tab-free quote line (`plainQuoteLine`, `quotedSetextAt`), drops the
+  underline, and lets the existing heading path drop or speak the text.
+- **Fail-closed gates** (plan critique F2: any cause not gated exactly is refused and keeps
+  3cc2bea's reading). A quoted fence is refused when: a `<!--`/`%%` is above it (as NRL-213) or
+  in its body (critique F1: this replaces the plan's narrowed `firstComment`, and keeps base's
+  runaway comment, so the F1 cascade cannot occur); `$$` count above it is odd; its outermost
+  quote has a tab in a line's first columns, mixed depth, a list marker past its first line, or
+  a lazy line unless unnested and list-free (`plainQuoteBlock`); fence text precedes it in the
+  same quote, or comment, math, HTML or fence text follows it there; indented code follows it in
+  the quote; the quote starts straight after a text line; or it is left open with a text line
+  next. A quoted heading is refused under an odd `$$` count or a `riskyRun` (since the last blank
+  line: an HTML start, fence run, `$$`, comment opener or closer, or a tab-whitespace line). Each
+  gate answers a measured regression on the generators below; none is modelled.
+- **Evidence** (grade206 cls8 per sentinel on 1.13.7, 1.14.4 `d14` cross-check, vs 3cc2bea;
+  newDisc/newLost/newExcl, then fixedLost/fixedExcl): gen206 32,880 notes x 6 masks 0/0/0,
+  0/30,640; NRL-170 critic-r2-1 seed 7 (8,000) 0/0/0, 0/248, seeds 11 and 12 (4,000 each) 0/0/0;
+  critic-r1-1, r1-2 and r2-2 generators, seeds 7/11/12, 3,000 each, all 0/0/0; NRL-182 gen-r1
+  1/60 sample 0/0/0, 0/456; a new wild quote-fence generator (`build/genq.cjs` under
+  `.claude/runs/NRL-206/`: quote, callout, list+quote and quote+list containers, tabs, `$$`,
+  comments before/inside/after, title fences, `> \t`, several fences per note, 25% CRLF), seeds
+  7/11/12 x 4,000, 0/0/0 (fixed 18/1,131, 3/1,040, 18/1,193). The intermediate builds without
+  the later gates read up to 52/230-class counts on that generator (e.g. 0/65/133 on seed 7),
+  so the grader discriminates. Lockstep `lock128.cjs` CLEAN 0/0/0/0 and the grade206 sentinel
+  check 0 on every run. NRL-184: with `inlineBogusGate` forced `always` 16 pins go red, forced
+  `never` 20 guards go red: 36 discriminate, as before. 20,000-line callout-heavy note, DEF, best
+  of 3: base 471 ms, branch 474 ms; one callout of 1,250 fences: 127 ms, 100 ms.
+- **Given back:** gen206's fixedLost (28,878 with the plan prototype) is 0: those came from base's
+  runaway comment after a comment-bodied quoted fence, now refused. Residuals to file: a
+  comment-bodied quoted fence; a lazy line after a nested quoted fence; `> - # x` (quoted list
+  heading, critique F5) and top-level `- # x`; `QPQ` / `> QXQ` / `> ===` (h1 on 1.13.7);
+  `## x ##` closing sequence; lazy `===` underline; callout-title heading; list-marker-line
+  fences; a 4-5 column opener. NOT VERIFIED IN OBSIDIAN: reading-view harness evidence only.
 
 ### Inline PI/CDATA counted only where the renderer emits it raw (NRL-184, 2026-10-16)
 

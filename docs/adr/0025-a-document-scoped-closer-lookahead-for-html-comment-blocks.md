@@ -4773,3 +4773,14 @@ parser and renderer executed out of the installed asar. Live Preview was not exa
 R-M08 is still NOT met and the `2 of 16` MUST headline count does not move: this closes
 the blank-line-with-a-tab disclosure NRL-155 pinned and deferred, not the requirement;
 the container axis and the pre-existing `INDENTED_CODE` miss both stay open against it.
+
+## AMENDED by NRL-206 (2026-10-16): quoted fences open through the view path, fail-closed
+
+The per-line loop's view-fence path (NRL-213) now opens a fence inside a quote or callout, so a
+`<!--` or `%%` on a line of a trusted quoted fence's body is code and opens no comment. To keep
+this ADR's comment pairing unchanged where it was measured, a quoted fence with a `<!--` or `%%`
+in its body, or one above it, is refused and keeps 3cc2bea's reading (the body is quote prose and
+its comment opener pairs as before). The NRL-184 rows that rely on that refusal still
+discriminate (36 of 38). Quoted ATX and setext headings are taken from `containerViews` marks and
+refused under any comment opener or closer since the last blank line. Evidence and the full gate
+list: `docs/agent-history.md`, NRL-206.
