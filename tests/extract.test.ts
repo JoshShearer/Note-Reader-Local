@@ -652,6 +652,8 @@ console.log("inline markup (NRL-9)");
 	eq("nrl202 heart stays text", "i <3 you", "i <3 you");
 	eq("nrl202 arrow stays text", "a <-> b", "a <-> b");
 	eq("nrl202 space after < stays text", "a < x> b", "a < x> b");
+	eq("nrl202 r1 tag-shaped alias is shown literally", "a [[note|<x>]] b", "a <x> b");
+	eq("nrl202 r1 formatting name with a bare attribute joins the word", "un<b class>bold</b>ed", "unbolded");
 	eq("closing tag", "a </b> b", "a b");
 	eq("<br/> is a tag", "one<br/>two", "one two");
 	eq("<br /> is a tag", "one<br />two", "one two");
@@ -5132,6 +5134,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl201-c1c2-definition-is-setext-heading-text", "[^1]: QfQ\n[QdQ]: QuQ\n---", "QdQ : QuQ"],
 		["guard-nrl201-c1-footnote-line-in-an-html-block", "<div>\n[^1]: QfQ\n[QdQ]: QuQ", "QfQ QdQ : QuQ"],
 		["guard-nrl201-c1-definition-run-ending-in-setext", "[^1]: QfQ\n[QaQ]: u\n[QbQ]: v\n---", "QaQ : u QbQ : v"],
+		["guard-nrl202-r1-frontmatter-value-tag-shaped-is-literal", "---\nauthor: <Josh QjQ>\n---\nbody", "author: <Josh QjQ> body", {skipFrontmatter: false}],
 		["guard-nrl212-c1f1-backtick-fence-in-block", "%%\n```\n^[QxQ]\n```\n%%\nd", "d"],
 		["guard-nrl212-c1f1-math-in-block", "%%\n$$\n^[QxQ]\n$$\n%%\nd", "d"],
 		["guard-nrl212-c1f1-html-comment-in-block", "%%\n<!--\n^[QxQ]\n-->\n%%\nd", "d"],

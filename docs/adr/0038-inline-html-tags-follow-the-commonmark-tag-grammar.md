@@ -28,9 +28,13 @@ which R-M08 forbids. NRL-194's critic measured 1,103 such cells.
   open tag is `<name` + attributes (`name`, or `name=value` unquoted, single or double quoted)
   + optional `/` + `>`. A closing tag is `</name>`. The name is ASCII letters, digits and `-`,
   starting with a letter. On one line.
-- Such a tag separates the words either side: it is not a known formatting element, and a
-  merged word is worse to hear than a space.
-- Text that cannot be a tag stays text: `a < b`, `<3`, `<->`, `< x>`, `<1a>`, `<a@b>`.
+- Such a tag separates the words either side, unless its name is a known formatting element
+  the whitelist refused only for an attribute shape (`un<b class>bold</b>ed` stays one word,
+  as the page shows it): a merged word is worse to hear than a space.
+- Not in an alias or a frontmatter value: Obsidian shows a tag-shaped `<x>` literally in a
+  wikilink or embed alias and in frontmatter, so only the whitelist applies there
+  (`StripOptions.literalTags`, fix round 1).
+- Text that cannot be a tag stays text: `a < b`, `<3`, `<->`, `< x>`, `<1a>`.
 
 ## Consequences
 

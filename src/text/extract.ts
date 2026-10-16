@@ -1644,7 +1644,9 @@ function cleanLine(
 		if (useAlias) {
 			// The alias is display text the author wrote, so nested markup in
 			// it is stripped the same way as a markdown link label.
-			const inner = cleanLine(alias, rawStart + pipe + 1, opts);
+			// NRL-202 round 1: Obsidian does not parse inline HTML in an alias, so a
+			// tag-shaped `<x>` there is shown literally (critic 1 F1).
+			const inner = cleanLine(alias, rawStart + pipe + 1, { ...opts, literalTags: true });
 			for (let k = 0; k < inner.text.length; k++) {
 				emit(inner.text[k]!, inner.index[k] ?? rawStart + pipe + 1);
 			}
@@ -2242,11 +2244,15 @@ function cleanLine(
 			// NRL-202: any other tag the renderer parses as an element. Not a known
 			// formatting element, so it separates the words either side rather
 			// than gluing them.
-			const cm = CM_TAG.exec(raw.slice(i));
+			const cm = opts.literalTags === true ? null : CM_TAG.exec(raw.slice(i));
 			if (cm) {
-				pushSpace(rawStart + i);
+				// A formatting element the whitelist refused only for a bare
+				// attribute (`un<b class>bold</b>ed`) still joins the word.
+				const cmName = /^<\/?([A-Za-z][A-Za-z0-9-]*)/.exec(cm[0])![1]!.toLowerCase();
+				const joins = INLINE_ELEMENTS.has(cmName);
+				if (!joins) pushSpace(rawStart + i);
 				i += cm[0].length;
-				pushSpace(rawStart + i);
+				if (!joins) pushSpace(rawStart + i);
 				continue;
 			}
 		}
@@ -2561,6 +2567,12 @@ interface StripOptions {
 	 * no footnote is read out of it. Undefined means allowed.
 	 */
 	commentFootnoteAt?: (rawOffset: number) => boolean;
+	/**
+	 * NRL-202: true where the renderer shows a tag-shaped `<x>` literally rather
+	 * than parsing it as an element (a wikilink or embed alias, a frontmatter
+	 * value), so only the formatting whitelist, as before, is dropped there.
+	 */
+	literalTags?: boolean;
 }
 
 /**
@@ -8503,6 +8515,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		...stripOpts,
 		stripTags: false,
 		skipInlineCode: false,
+		literalTags: true,
 	};
 
 	let paraText = "";
