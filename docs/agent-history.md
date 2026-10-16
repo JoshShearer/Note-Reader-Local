@@ -396,6 +396,91 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A fence's closer is read in its container, not off the raw line (NRL-213, 2026-10-16)
+
+- **Bug (R-M08):** `1. QiQ` / six-space ```` ```js ```` / `   QmQ` / three-space ```` ``` ```` / blank /
+  `QxQ %%hidden QyQ%% QzQ` never closed the fence in the per-line loop of `extractChunks`: its
+  raw-lead opener test refuses six spaces after an open paragraph, so the closer was read as a
+  new opener that ran to the end of the note. Measured on f15bc99 against the 1.13.7 harness:
+  CODE spoke the hidden comment, DEF lost `QxQ QzQ`. Opener at 4 or 5 spaces and `- ` items: same.
+- **Fix:** the loop follows `containerViews`' `fenceAt` marks for a fence containerViews
+  opened (`fenceByView`): opened on `"open"`, closed on `"close"`, and closed silently on the
+  first line `literalAt` no longer calls code (the container ended). Fences the old raw tests
+  open keep the old raw closer test. Two exclusions, each found by a red existing pin: a line
+  inside a quote (the loop has never tracked a quoted fence; NRL-93/98/114/115/166 pins record
+  speaking its body under DEF as accepted) and a list marker line (containerViews does not
+  model that an ordered marker other than 1 cannot interrupt a paragraph, so `Para` /
+  `2. ~~~ js` read as a fence and lost `more`; NRL-114/182 pins). 13 `guard-nrl184-*` rows
+  changed: their `- Q<!--` / four-space fence shape is this bug's shape, `QKZQ--->` is now
+  hidden as in the renderer, and they no longer discriminate the PI gate (not re-established). On a CRLF note containerViews registers no list item, so
+  those marks come from a second pass over the `\r`-stripped lines (same device as
+  `markerRules`); only this tracking reads them.
+- **Evidence:** 80,000 generated notes (seeds 7, 11, 12, 13; 20,000 each; list/ordered/quote/
+  nested containers, opener and closer indent 0-6 relative, char and length, LF and CRLF) x DEF
+  and CODE, graded per sentinel against the 1.13.7 harness: 0 newly disclosing, 0 newly lost, 0
+  newly speaking excluded. Seed 7 alone: disclosing 2202 -> 791, lost 21575 -> 11940 (base ->
+  branch, sentinel counts; the quote and marker-line exclusions leave much of the rest). The
+  residue is identical on both arms and is not this ticket: quoted fences, and a fence opener
+  4-5 columns past the content column, which is paragraph text for the renderer and which
+  the loop still reads as an opener. Lockstep (`lock128.cjs`, CLEAN row) 0/0/0/0 on the fix arm.
+  Not observed in a running Obsidian.
+- Fix round 1 (critics on 3bbe1fd). The "0 newly disclosing, 0 newly lost" above held only for
+  the builder's generator. Critic 1 found a nested ordered marker other than 1 after a paragraph
+  line (`- QaQ` / `  2. QbQ` / `      ```` / `QxQ <!-- QyQ --> QzQ`): containerViews registers the
+  item, the renderer reads it as the paragraph's lazy text (no `<pre>` on 1.13.7 or 1.14.4), and
+  the view path opened a fence that never closed (QxQ/QzQ lost under DEF, QyQ spoken under
+  CODE). containerViews now names such items (`ids.lazy`: a list whose first item is numbered
+  other than 1, or is empty, starting under this parse's open paragraph, including one carried
+  out of a quote or list that ended on one, via its new boolean return), and the view path
+  refuses a fence line inside one. The literal and fence marks are unchanged for every other
+  caller. A tried second change, closing a view fence on a line containerViews keeps in an item
+  only as lazy text, made the generator much worse (lost 59-80 -> 365-442 per seed): Obsidian's
+  list parser (module 745) keeps lazy lines in the item whatever its open block, so it was
+  dropped. 22 new rows (`guard-nrl213-lazy-*` for `2.`, `3)`, `10.`, tab marker, top level, CRLF,
+  `%%` tail, DEF and CODE; `guard-nrl213-ol1-*`; `pin-nrl213-body-*` for a `%%`, `<!--` or `<div>`
+  line in a view fence's body, red on f15bc99). Critic 2 F4 asked for a closer that is also an
+  HTML-block or `%%` line; containerViews' closer is fence characters and whitespace only, so
+  none can be built, and the body rows stand in for it.
+- Fix round 1, NRL-184 coverage: the 27 rows that used the `- Q<!--` / four-space tail (12 pins,
+  `pin-nrl184-crlf`, the `$$` math-body pin, 13 guards) now use `> Q<!--` / `> ```QKZQ--->`.
+  Measured with `inlineBogusGate` forced to count every opener (`always`) and none (`never`), on
+  f15bc99 and this tree: 36 of the 38 nrl184 rows discriminate on both (pins red under
+  `always`, guards under `never`); `guard-nrl184-html-block` and `-line-start-after-span` never
+  did. They discriminate because the loop does not track a quoted fence; a ticket that models
+  quoted fences blinds them again. The guards' spoken `QKZQ--->` is the conservative answer, as
+  before; the 1.13.7 page shows `">`.
+- Fix round 1 grading, NOT 0/0: a wilder generator (scratch `gen.cjs`: bullets and `1.`/`1)`/
+  `2.`/`3)`/`10.` markers, nested items after paragraph lines, tab markers and indents, fences
+  at 0-8 columns or a tab with `%%`, `<!--` and `<div>` body lines, short/other/info closers,
+  unclosed fences, HTML and `%%` comments opened before lists, CRLF on 25%), 3000 notes per seed,
+  DEF and CODE, per sentinel against 1.13.7 `L.browserVisible`, f15bc99 -> fix round 1 sentinels
+  newly disclosing / lost / speaking excluded: seed 7 10/80/93, seed 11 14/59/71, seed 12 6/54/87,
+  against fixed 622/4927/2504, 659/4879/2461, 617/4707/2550. 3bbe1fd on seed 11 was 81/418/248.
+  Reduced examples mix a comment opened inside or before a list item with a view-opened fence
+  (`- QaQ` / `   ```` x` / `-  QpQ --> QoQ` / `\t1. <!-- QrQ` / ...), and a new list of another
+  delimiter after an item's unclosed fence. Not root-caused. Lockstep CLEAN 0/0/0/0 on both arms.
+  Not observed in a running Obsidian.
+- Fix round 1, cont.: the view-opened fence is narrowed FAIL-CLOSED (`viewFenceTrusted` in
+  `extractChunksPass`), not modelled. Refusing every view-opened fence measured identical to
+  f15bc99 on seed 7 (0 differing notes), so each refusal falls back to the pre-NRL-213 reading.
+  Refused: a `<!--` or `%%` on any earlier line (from the note's start; scoping it to the start of
+  the outermost list was measured and still regressed: 12/68, 35/116, 9/102 disclose/lost); an item
+  containerViews names lazy at or before the fence line; the fence's item going on after the fence
+  ends; an unclosed fence whose item ends at another list item's marker line; any later line with
+  indented-code lead. Kept trusted: a fence the item's end closes before a non-list line (the
+  `fence-ends-with-item-unclosed` and `closer-indented-4` pins) and one that runs to the end of
+  the note (refusing that cost about two thirds of the fixes and was not needed for 0/0). Same
+  generator, same seeds, f15bc99 -> this commit newly disclosing / lost / speaking excluded:
+  seed 7 0/0/0, seed 11 0/0/0, seed 12 0/0/0; fixed 8/285/276, 1/243/245, 7/261/263. Most of round
+  1's fixes are given back by the narrowing; the ticket repro stays fixed under DEF and CODE. The
+  residues behind each refusal (comment before, other list after an unclosed fence, next item
+  after an unclosed fence, item going on after the closer, indented code after the closer, lazy
+  item before) are `guard-nrl213-refused-*` rows pinned to f15bc99's reading, which is not always
+  the renderer's. The comment and lazy prefixes and the indented-code suffix are precomputed: a
+  per-fence scan failed NRL-166's many-fences timing check (360 ms -> 5126 ms). Lockstep CLEAN
+  0/0/0/0 on both arms. Not established: anything beyond this one generator's three seeds (other
+  generators, corpora), and behaviour in a running Obsidian.
+
 ### Inline PI/CDATA counted only where the renderer emits it raw (NRL-184, 2026-10-16)
 
 NRL-178 fix round 1's `INLINE_BOGUS_OPENER` exec counted any `<?` / `<![CDATA[` in the
