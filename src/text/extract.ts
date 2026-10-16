@@ -2399,7 +2399,12 @@ function cleanLine(
 				// The same soft-wrap carry the image branch above takes, by the same
 				// scanner, because a link label crosses a break the same way (NRL-63).
 				// Unconfirmed, the `[` is still emitted as the text it is.
-				if (unclosedBracket === undefined && outgoingBracket === "link") {
+				// Not when this `[` is a reference tail the line declined (NRL-216):
+				// `[l][r` / `](u)` is all text for the renderer, as the one-line
+				// `[l][r](u)` is (NRL-208), so no label is carried and `(u)` is read.
+				// Only when it is the line's last `[`: a later one (`[l][r [s` / `](u)`)
+				// may itself open the carried label, and base's reading stands then.
+				if (unclosedBracket === undefined && outgoingBracket === "link" && !(i === declinedTail && raw.indexOf("[", i + 1) === -1)) {
 					emitLabelRegion(i + 1, raw.length, "link");
 					openBracket = "link";
 					i = raw.length;
