@@ -396,6 +396,20 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A link reference definition under a footnote definition or table row is dropped (NRL-201, 2026-10-16)
+
+The definition drop needs an empty paragraph buffer and no paragraph or container line
+before it. A footnote definition line or a table row leaves the buffer full, so a
+definition directly under one was spoken, though the renderer starts a new block and hides
+it (1.13.7). A second drop arm takes it when the line directly above is a top-level
+`[^x]:` line, or a row of a table (`tableRowAt`, one forward pass: a block whose first line
+is a header row and whose second is a delimiter row, since a table cannot interrupt a
+paragraph). The arm is top level only, so a definition in a quote or list keeps the old
+guard. Generator over 7,656 cells (29 preceding shapes x 11 definition shapes x 4 tails x
+skipTables on and off x DEF/CODE/ALL): newly disclosed 0, newly lost 0, 1,064 hidden tokens
+no longer spoken; lock128 CLEAN; linear (`| b |` / `[x]: u` x 20,000 at base parity). Not
+run in Obsidian.
+
 ### CRLF text never reaches extractChunks (NRL-203 and NRL-210, 2026-10-16)
 
 Static evidence, not a live run. Every caller of `extractChunks` in `src/main.ts` (whole-note

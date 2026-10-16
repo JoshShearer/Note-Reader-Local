@@ -5116,6 +5116,13 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["residual-nrl217-list-callout-right-after-a-paragraph", "P\n- > [!note]     QtQ", "P QtQ"],
 		["guard-nrl217-r1f1-tab-only-line-is-not-blank", "QaQ\n\t\n    - > [!note]     QbQ", "QaQ QbQ"],
 		["guard-nrl217-r2-crlf-list-pre-block", "- <pre>\r\n  QaQ\r\n\r\n  - > [!note]     QbQ", "QaQ QbQ"],
+		// NRL-201: directly under a top-level footnote definition line or a table
+		// row, the renderer takes a link reference definition and hides it.
+		["pin-nrl201-definition-under-footnote-definition", "a[^1]\n\n[^1]: QfQ\n[x]: http://QuQ", "a QfQ"],
+		["pin-nrl201-definition-under-table-row", "| a | b |\n|---|---|\n| c | d |\n[x]: /QuQ \"QtQ\"", "| a | b | |---|---| | c | d |", {skipTables: false}],
+		["guard-nrl201-not-a-table-after-a-paragraph", "P\n| a |\n|---|\n[x]: /QuQ", "P | a | |---| x : /QuQ", {skipTables: false}],
+		["guard-nrl201-pipe-line-without-delimiter-row", "| a |\n[x]: QuQ", "| a | x : QuQ", {skipTables: false}],
+		["guard-nrl201-definition-after-paragraph-line", "P QpQ\n[x]: QuQ", "P QpQ x : QuQ"],
 		["guard-nrl212-c1f1-backtick-fence-in-block", "%%\n```\n^[QxQ]\n```\n%%\nd", "d"],
 		["guard-nrl212-c1f1-math-in-block", "%%\n$$\n^[QxQ]\n$$\n%%\nd", "d"],
 		["guard-nrl212-c1f1-html-comment-in-block", "%%\n<!--\n^[QxQ]\n-->\n%%\nd", "d"],

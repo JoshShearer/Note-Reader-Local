@@ -7899,6 +7899,28 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		lineStarts.push(offset);
 		offset += line.length + 1;
 	}
+	// NRL-201: line k sits directly under a top-level footnote definition line,
+	// or under a row of a table: a block (back to a blank line) whose first line
+	// is a header row and whose second is a delimiter row, since a table cannot
+	// interrupt a paragraph. One forward pass.
+	const TABLE_DELIM_ROW = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+	const tableRowAt: boolean[] = [];
+	{
+		let blockLine = 0;
+		let inTable = false;
+		for (const line of lines) {
+			if (line.trim() === "") {
+				blockLine = 0;
+				inTable = false;
+				tableRowAt.push(false);
+				continue;
+			}
+			if (blockLine === 1 && TABLE_DELIM_ROW.test(line) && line.includes("-")) inTable = true;
+			blockLine += 1;
+			tableRowAt.push(inTable && /^ {0,3}\|/.test(line));
+		}
+	}
+	const defAfterBlockAt = (k: number): boolean => k > 0 && (/^ {0,3}\[\^[^\]\s]+\]:/.test(lines[k - 1]!) || tableRowAt[k - 1]!);
 	// NRL-212 fix round 1: whether an earlier line of the paragraph left a `[`
 	// open (fail-closed: it stays set to the paragraph's end), one forward pass.
 	const bracketOpenAbove: boolean[] = [];
@@ -9524,6 +9546,14 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		// was a buffered paragraph line, so `paraText !== ""` and this branch
 		// cannot fire - a soft-wrapped code span can never be cut short here.
 		if (blockType !== "heading" && paraText === "" && !wasPara && !wasContainer && LINK_REF_DEF.test(body)) {
+			continue;
+		}
+		// NRL-201: directly under a top-level footnote definition line or a row of
+		// a table (a delimiter row above it in the block), the renderer starts a
+		// new block and takes the definition, though our buffer holds that line.
+		// Top level only, fail-closed: everything else keeps the guard above.
+		if (blockType !== "heading" && prefixChars === 0 && LINK_REF_DEF.test(body) && defAfterBlockAt(lineNo)) {
+			flushParagraph();
 			continue;
 		}
 		// Output exclusions do not exclude parsing: an HTML or Obsidian comment
