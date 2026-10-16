@@ -396,6 +396,26 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### CRLF text never reaches extractChunks (NRL-203 and NRL-210, 2026-10-16)
+
+Static evidence, not a live run. Every caller of `extractChunks` in `src/main.ts` (whole-note
+read, read from cursor, read selection) passes `currentEditor().source`, which is
+`view.editor.getValue()`. That holds in reading view and Live Preview alike, since both go
+through the MarkdownView's editor. The Read Me bridge (`src/engines/bridge/readMe.ts`) is an
+engine: it receives chunks already extracted from that same text and never reads a file.
+Obsidian's app.js (1.13.7, the installed flatpak version) defines CodeMirror's
+`lineSeparator` facet but never sets it (0 `.of(` calls). With the facet unset, CM6 splits an
+incoming document on `/\r\n?|\n/` and joins with `"\n"`. So `getValue()` is LF whatever the
+file on disk uses, and CRLF or lone-CR text does not reach the extractor today.
+
+The extractor's CRLF handling (`markerRules`' second pass, CRLF test rows and generator
+shares) is defence in depth only. Two gaps stay open but unreachable: `LINK_REF_DEF`
+(`[ \t]*$`) never matches a CRLF line (NRL-203), and `containerViews` registers no list
+container on a CRLF line (NRL-210). Re-open both if an entry point ever reads raw file text
+(`vault.read`, `cachedRead`). Not established: a live check over CDP of
+`getValue().includes("\r")` on a CRLF file. Obsidian was running without
+`--remote-debugging-port`, and the owner's session was not restarted.
+
 ### An undefined full reference `[x][ref]` keeps `[ref]` (NRL-208, 2026-10-16)
 
 `cleanLine`'s link, image and carried-label sites consumed a `[ref]` tail unconditionally, so
