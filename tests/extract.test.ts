@@ -4794,20 +4794,21 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// (`inlineBogusGate`). Each pin is the 1.13.7 and 1.14.4 renderers' answer
 		// for the fence, and RED on 4e67084 and 071a37e, which speak `QKZQ--->`,
 		// `~~~QhQ-->QiQ` or `QiQ`. The PI text itself is the known NRL-178 residual.
-		["pin-nrl184-code-span", "Use `<?x > <!-- QaQ ?>` here.\n\n- Q<!--\n    ```QKZQ--->", "Use <?x > <!-- QaQ ?> here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-double-span", "Use ``a <?x > <!-- QaQ ?>`` here.\n\n- Q<!--\n    ```QKZQ--->", "Use a <?x > <!-- QaQ ?> here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-code-after-span", "Use `a` `<?x > <!-- QaQ ?>` here.\n\n- Q<!--\n    ```QKZQ--->", "Use a <?x > <!-- QaQ ?> here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-indented", "    <?x > <!-- QaQ ?>\n\n- Q<!--\n    ```QKZQ--->", "<?x > <!-- QaQ ?> Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-fenced-body", "```php\n<?x > <!-- QaQ ?>\n```\n\n- Q<!--\n    ```QKZQ--->", "<?x > <!-- QaQ ?> Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-tilde-body", "~~~\n<?x > <!-- QaQ ?>\n~~~\n\n- Q<!--\n    ```QKZQ--->", "<?x > <!-- QaQ ?> Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-pct-block", "%%\n<?x > <!-- QaQ ?>\n%%\n\n- Q<!--\n    ```QKZQ--->", "Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-escaped", "a \\<?x > <!-- QaQ ?> b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-unclosed", "a <?x > <!-- QaQ b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-lower-cdata", "a <![cdata[ > <!-- QaQ ]]> b\n\n- Q<!--\n    ```QKZQ--->", "a < cdata[ > ]> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-cdata-span", "Use `<![CDATA[ > <!-- QaQ ]]>` here.\n\n- Q<!--\n    ```QKZQ--->", "Use <![CDATA[ > <!-- QaQ ]]> here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-row-a-ticket", "Use `<?php` here.\n\n- Q<!--\n    ```QKZQ--->", "Use <?php here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		// The fence sits in a quote since NRL-213 fix round 1 (see the guards below).
+		["pin-nrl184-code-span", "Use `<?x > <!-- QaQ ?>` here.\n\n> Q<!--\n> ```QKZQ--->", "Use <?x > <!-- QaQ ?> here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-double-span", "Use ``a <?x > <!-- QaQ ?>`` here.\n\n> Q<!--\n> ```QKZQ--->", "Use a <?x > <!-- QaQ ?> here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-code-after-span", "Use `a` `<?x > <!-- QaQ ?>` here.\n\n> Q<!--\n> ```QKZQ--->", "Use a <?x > <!-- QaQ ?> here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-indented", "    <?x > <!-- QaQ ?>\n\n> Q<!--\n> ```QKZQ--->", "<?x > <!-- QaQ ?> Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-fenced-body", "```php\n<?x > <!-- QaQ ?>\n```\n\n> Q<!--\n> ```QKZQ--->", "<?x > <!-- QaQ ?> Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-tilde-body", "~~~\n<?x > <!-- QaQ ?>\n~~~\n\n> Q<!--\n> ```QKZQ--->", "<?x > <!-- QaQ ?> Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-pct-block", "%%\n<?x > <!-- QaQ ?>\n%%\n\n> Q<!--\n> ```QKZQ--->", "Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-escaped", "a \\<?x > <!-- QaQ ?> b\n\n> Q<!--\n> ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-unclosed", "a <?x > <!-- QaQ b\n\n> Q<!--\n> ```QKZQ--->", "a <?x > <!-- QaQ b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-lower-cdata", "a <![cdata[ > <!-- QaQ ]]> b\n\n> Q<!--\n> ```QKZQ--->", "a < cdata[ > ]> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-cdata-span", "Use `<![CDATA[ > <!-- QaQ ]]>` here.\n\n> Q<!--\n> ```QKZQ--->", "Use <![CDATA[ > <!-- QaQ ]]> here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-row-a-ticket", "Use `<?php` here.\n\n> Q<!--\n> ```QKZQ--->", "Use <?php here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
 		["pin-nrl184-row-b-callout", "Use `<?x > <!-- QaQ ?>` here.\n\n> [!e]\n>~~~QhQ-->QiQ", "Use <?x > <!-- QaQ ?> here.", { skipCodeBlocks: false, skipInlineCode: false }],
-		["pin-nrl184-crlf", "Use `<?x > <!-- QaQ ?>` here.\r\n\r\n- Q<!--\r\n    ```QKZQ--->", "Use <?x > <!-- QaQ ?> here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl184-crlf", "Use `<?x > <!-- QaQ ?>` here.\r\n\r\n> Q<!--\r\n> ```QKZQ--->", "Use <?x > <!-- QaQ ?> here. Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
 		["pin-nrl184-pct-fn-body-fence", "%%\n^[<?x > <!-- QaQ ?>]\n%%\n\n- Q<!--\n    ```QhQ-->QiQ", "Q", { skipCodeBlocks: false, skipInlineCode: false }],
 		// Guards keep the base answer where the renderer emits the opener raw, or
 		// where the scan cannot be sure it does not: a backtick an earlier construct
@@ -4818,25 +4819,30 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// fence heads skipped. The pinned `QKZQ--->` is NOT the renderer's truth: both
 		// renderers hide it. It is base's fail-closed answer (a known disclosure kept),
 		// so a later fix that hides these heads correctly turns them red on purpose.
-		// NRL-213 is that fix for the `- Q<!--` / four-space fence shape these rows use: every
-		// `QKZQ--->` below is now hidden, as in the renderer, so the rows still pin the QaQ text
-		// and the fence-head hiding but no longer discriminate the PI gate (not re-established).
+		// NRL-213 was that fix for the old `- Q<!--` / four-space fence tail, which blinded
+		// these rows and the pins above to the gate. Fix round 1 moved all 27 to a quoted
+		// tail (`> Q<!--` / `> ```QKZQ--->`), measured to discriminate again on f15bc99 and
+		// on this tree: each pin is red with the gate forced to count every opener, each
+		// guard red with it forced to count none. They discriminate only because the loop
+		// does not track a quoted fence (see the NRL-213 rows below); a ticket that models
+		// quoted fences will blind them again and must re-home the tail. The guards' spoken
+		// `QKZQ--->` is the conservative answer, as before: the 1.13.7 page shows `">`.
 		// A `www.` autolink literal runs on through the backtick and emits the PI
 		// raw (critics on 6317015, F1). Uppercase `WWW.` is no autolink, but fails
 		// closed too.
-		["guard-nrl184-www-autolink", "a www.example.com`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-www-upper", "a WWW.example.com`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a WWW.example.com <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-link-cross", "a [`](u) <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a [ ](u) <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-math-code", "a $`$ <?x > <!-- QaQ ?> `$ b\n\n- Q<!--\n    ```QKZQ--->", "a $ $ <?x > <!-- QaQ ?> $ b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-pct-code", "a %%`%% <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-code-in-tag", "a <span title=\"`\"><?x > <!-- QaQ ?>`</span> b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-code-in-autolink", "a <http://a`><?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-code-esc-open", "a \\`<?x > <!-- QaQ ?>` b\n\n- Q<!--\n    ```QKZQ--->", "a `<?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-em-cross", "a *`* <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a * <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-wiki-cross", "a [[a`]] <?x > <!-- QaQ ?> ` b\n\n- Q<!--\n    ```QKZQ--->", "a a ]] <?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-table-pipe", "| a | b |\n| - | - |\n| `a | <?x > <!-- QaQ ?>` | c |\n\n- Q<!--\n    ```QKZQ--->", "Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-double-backslash", "a \\\\<?x > <!-- QaQ ?> b\n\n- Q<!--\n    ```QKZQ--->", "a \\<?x > <!-- QaQ ?> b Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
-		["guard-nrl184-fence-head", "```<?x > <!-- QaQ ?>\nx\n```\n\n- Q<!--\n    ```QKZQ--->", "x Q<!--", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-www-autolink", "a www.example.com`<?x > <!-- QaQ ?>` b\n\n> Q<!--\n> ```QKZQ--->", "a > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-www-upper", "a WWW.example.com`<?x > <!-- QaQ ?>` b\n\n> Q<!--\n> ```QKZQ--->", "a WWW.example.com <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-link-cross", "a [`](u) <?x > <!-- QaQ ?> ` b\n\n> Q<!--\n> ```QKZQ--->", "a [ ](u) <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-math-code", "a $`$ <?x > <!-- QaQ ?> `$ b\n\n> Q<!--\n> ```QKZQ--->", "a $ $ <?x > <!-- QaQ ?> $ b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-pct-code", "a %%`%% <?x > <!-- QaQ ?> ` b\n\n> Q<!--\n> ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-code-in-tag", "a <span title=\"`\"><?x > <!-- QaQ ?>`</span> b\n\n> Q<!--\n> ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-code-in-autolink", "a <http://a`><?x > <!-- QaQ ?>` b\n\n> Q<!--\n> ```QKZQ--->", "a <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-code-esc-open", "a \\`<?x > <!-- QaQ ?>` b\n\n> Q<!--\n> ```QKZQ--->", "a `<?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-em-cross", "a *`* <?x > <!-- QaQ ?> ` b\n\n> Q<!--\n> ```QKZQ--->", "a * <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-wiki-cross", "a [[a`]] <?x > <!-- QaQ ?> ` b\n\n> Q<!--\n> ```QKZQ--->", "a a ]] <?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-table-pipe", "| a | b |\n| - | - |\n| `a | <?x > <!-- QaQ ?>` | c |\n\n> Q<!--\n> ```QKZQ--->", "Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-double-backslash", "a \\\\<?x > <!-- QaQ ?> b\n\n> Q<!--\n> ```QKZQ--->", "a \\<?x > <!-- QaQ ?> b Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl184-fence-head", "```<?x > <!-- QaQ ?>\nx\n```\n\n> Q<!--\n> ```QKZQ--->", "x Q<!-- QKZQ--->", { skipCodeBlocks: false, skipInlineCode: false }],
 		// An opener in an HTML block counts; here the block's own open comment
 		// (`openFrom`) already gives the same answer, so these pin the agreement.
 		["guard-nrl184-html-block", "<div>\n<?x > <!-- QaQ ?>\n</div>\n\n- Q<!--\n    ```QKZQ--->", "Q", { skipCodeBlocks: false, skipInlineCode: false }],
@@ -4902,6 +4908,41 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl213-list-matching-indent-code", "1. QiQ\n   ```js\n   QmQ\n   ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
 		["pin-nrl213-list-closer-deeper-than-opener-3-def", "1. QiQ\n   ```js\n   QmQ\n      ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QxQ QzQ", {}],
 		["pin-nrl213-list-closer-deeper-than-opener-3-code", "1. QiQ\n   ```js\n   QmQ\n      ```\n\nQxQ %%hidden QyQ%% QzQ", "QiQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		// NRL-213 fix round 1 (critic 1 F1): an ordered item numbered other than 1 cannot
+		// interrupt a paragraph, so `  2. QbQ` after `- QaQ` (or after a top-level text line)
+		// is the paragraph's lazy text and the six-space fence under it is text too: 1.13.7
+		// and 1.14.4 show no `<pre>`. containerViews still registers it as a list item; the
+		// view-opened fence refuses to trust a line inside such an item (`ids.lazy`), so
+		// the loop keeps f15bc99's reading. RED on 3bbe1fd, which lost QxQ/QzQ under DEF and
+		// spoke QyQ under CODE. Not the renderer's whole page: the marker text `2.` and the
+		// lazy ```` ``` ```` are dropped on base as here (pre-existing, not this ticket).
+		// The `ol1` rows guard the legitimate nested `1.` item, whose fence stays code.
+		// The `body-*` rows (critic 2 F4) put a `%%`, `<!--` or `<div>` line in a view-opened
+		// fence's body, where the loop's earlier per-line branches would otherwise read it;
+		// the closer itself cannot be such a line (containerViews' closer is fence
+		// characters and spaces only). Those six are red on f15bc99.
+		["guard-nrl213-lazy-ol2-after-bullet-def", "- QaQ\n  2. QbQ\n      ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", {}],
+		["guard-nrl213-lazy-ol2-after-bullet-code", "- QaQ\n  2. QbQ\n      ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-lazy-ol2-after-bullet-crlf-def", "- QaQ\r\n  2. QbQ\r\n      ```\r\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", {}],
+		["guard-nrl213-lazy-ol2-after-bullet-crlf-code", "- QaQ\r\n  2. QbQ\r\n      ```\r\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-lazy-ol3paren-after-bullet-def", "- QaQ\n  3) QbQ\n       ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", {}],
+		["guard-nrl213-lazy-ol3paren-after-bullet-code", "- QaQ\n  3) QbQ\n       ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-lazy-ol10-after-bullet-def", "- QaQ\n  10. QbQ\n       ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", {}],
+		["guard-nrl213-lazy-ol10-after-bullet-code", "- QaQ\n  10. QbQ\n       ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-lazy-ol2-tab-marker-def", "-\tQaQ\n    2.\tQbQ\n        ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", {}],
+		["guard-nrl213-lazy-ol2-tab-marker-code", "-\tQaQ\n    2.\tQbQ\n        ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-lazy-ol2-top-level-def", "QaQ\n2. QbQ\n      ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", {}],
+		["guard-nrl213-lazy-ol2-top-level-code", "QaQ\n2. QbQ\n      ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-lazy-ol2-pct-def", "- QaQ\n  2. QbQ\n      ```\nQxQ %%QyQ%% QzQ", "QaQ QbQ QxQ QzQ", {}],
+		["guard-nrl213-lazy-ol2-pct-code", "- QaQ\n  2. QbQ\n      ```\nQxQ %%QyQ%% QzQ", "QaQ QbQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["guard-nrl213-ol1-after-bullet-def", "- QaQ\n  1. QbQ\n      ```\n     QmQ\n     ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QxQ QzQ", {}],
+		["guard-nrl213-ol1-after-bullet-code", "- QaQ\n  1. QbQ\n      ```\n     QmQ\n     ```\nQxQ <!-- QyQ --> QzQ", "QaQ QbQ QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-body-pct-def", "1. QiQ\n      ```\n   %%\n   QmQ\n   ```\n\nQxQ <!-- QyQ --> QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-body-pct-code", "1. QiQ\n      ```\n   %%\n   QmQ\n   ```\n\nQxQ <!-- QyQ --> QzQ", "QiQ %% QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-body-comment-def", "1. QiQ\n      ```\n   <!--\n   QmQ\n   ```\n\nQxQ %%QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-body-comment-code", "1. QiQ\n      ```\n   <!--\n   QmQ\n   ```\n\nQxQ %%QyQ%% QzQ", "QiQ <!-- QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
+		["pin-nrl213-body-div-def", "1. QiQ\n      ```\n   <div>\n   QmQ\n   ```\n\nQxQ %%QyQ%% QzQ", "QiQ QxQ QzQ", {}],
+		["pin-nrl213-body-div-code", "1. QiQ\n      ```\n   <div>\n   QmQ\n   ```\n\nQxQ %%QyQ%% QzQ", "QiQ <div> QmQ QxQ QzQ", { skipCodeBlocks: false, skipInlineCode: false }],
 	];
 	for (const [id, src, expected, overrides] of cases) {
 		const chunks = extractChunks(src, { ...OPTS, ...overrides });
@@ -4928,7 +4969,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 	// ADR 0004 placeholder "equation", which the loop's character-identity check
 	// cannot map. RED on 4e67084 and 071a37e, which also speak `QKZQ--->`.
 	{
-		const src = "$$\n<?x > <!-- QaQ ?>\n$$\n\n- Q<!--\n    ```QKZQ--->";
+		const src = "$$\n<?x > <!-- QaQ ?>\n$$\n\n> Q<!--\n> ```QKZQ--->";
 		const chunks = extractChunks(src, { ...OPTS, skipCodeBlocks: false, skipInlineCode: false });
 		check("NRL-184 pin-nrl184-math-body: visible output", chunks.map(c => c.text).join(" ") === "equation Q<!--");
 		check("NRL-184 pin-nrl184-math-body: sourceIndex lockstep", chunks.every(c => c.sourceIndex.length === c.text.length));

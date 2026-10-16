@@ -4300,13 +4300,18 @@ function containerViews(
 	out: number[],
 	homes: number[][],
 	home: number[],
-	ids: { next: number; quotes: Set<number> },
+	ids: { next: number; quotes: Set<number>; lazy?: Set<number> },
 	literal: Array<LiteralKind | undefined>,
 	fences: Array<"open" | "close" | undefined>,
 	htmlLines: boolean[],
 	depth = 0,
-): void {
+): boolean {
 	let n = 0;
+	// A paragraph left open at the end of the quote or list this level just
+	// parsed (its recursion's answer), so a list starting on the line after it
+	// is known to follow text (NRL-213 fix round 1, `lazyStart`). Read only there,
+	// so the literal and fence marks keep their reading.
+	let carried = false;
 	// The literal block open at THIS level: a fence (its character and length)
 	// or display math (its `$` run). Measured closers: a fence closes on a line
 	// of at most three columns of lead holding only the SAME character, at least
@@ -4327,7 +4332,9 @@ function containerViews(
 		const t = views[n]!.text;
 		const shallow = indentStops(t).indent < 4;
 		const wasOpen: boolean = paraOpen;
+		const textBefore = wasOpen || carried;
 		paraOpen = false;
+		carried = false;
 		if (rawUntil !== undefined) {
 			const k = views[n]!.k;
 			if (rawUntil === "blank") {
@@ -4411,7 +4418,7 @@ function containerViews(
 				out[r.k] = r.off;
 				homes[r.k] = quoteHome;
 			}
-			if (depth < RL_MAX_DEPTH) containerViews(run, out, homes, quoteHome, ids, literal, fences, htmlLines, depth + 1);
+			carried = depth < RL_MAX_DEPTH ? containerViews(run, out, homes, quoteHome, ids, literal, fences, htmlLines, depth + 1) : true;
 			n = m;
 			continue;
 		}
@@ -4493,6 +4500,19 @@ function containerViews(
 			}
 			prevBlank = blank && !marker;
 		}
+		// A list that starts right under a text line at this level, with a first
+		// item numbered other than 1 or with no content, is where this parse is
+		// knowingly wrong (NRL-213 fix round 1): such an item cannot interrupt a
+		// paragraph, so the renderer reads the marker line, and the lines this
+		// parse gives the item, as the paragraph's text. Measured on 1.13.7 and
+		// 1.14.4: `- QaQ` / `  2. QbQ` / `      ```` is one paragraph, no `<pre>`.
+		// The items are still parsed as before (every other caller keeps its
+		// reading); `ids.lazy` only names them, so a caller can refuse to trust a
+		// line inside one. "Under a text line" is this parse's own paragraph state,
+		// carried out of a quote or list that ended on one (`- QaQ` / `2. QbQ` is
+		// QaQ's text too).
+		const head = views[n]!.text.match(LIST_ITEM_OPEN)!;
+		const lazyStart = textBefore && ((/\d/.test(head[2]!) && Number(head[2]!.slice(0, -1)) !== 1) || head[4]!.trim() === "");
 		for (const item of items) {
 			const first = views[item[0]!]!;
 			const m = first.text.match(LIST_ITEM_OPEN)!;
@@ -4519,15 +4539,17 @@ function containerViews(
 				}
 				content.push({ k: v.k, text: v.text.slice(cut), off: v.off + cut });
 			}
+			if (lazyStart) ids.lazy?.add(ids.next);
 			const itemHome = [...home, ids.next++];
 			for (const c of content) {
 				out[c.k] = c.off;
 				homes[c.k] = itemHome;
 			}
-			if (depth < RL_MAX_DEPTH) containerViews(content, out, homes, itemHome, ids, literal, fences, htmlLines, depth + 1);
+			carried = depth < RL_MAX_DEPTH ? containerViews(content, out, homes, itemHome, ids, literal, fences, htmlLines, depth + 1) : true;
 		}
 		n = k;
 	}
+	return paraOpen || carried;
 }
 
 function isSetextContentLine(lines: readonly string[], k: number, lazyInListItem: boolean): boolean {
@@ -7070,6 +7092,10 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	let fenceMarks = fenceAt;
 	let fenceHomes = containerHome;
 	let fenceQuotes: ReadonlySet<number> = quoteIds;
+	// The list items containerViews names as the renderer's paragraph text (see
+	// `lazyStart` there), which the view-opened fence below refuses to trust.
+	const lazyItems = new Set<number>();
+	let fenceLazy: ReadonlySet<number> = lazyItems;
 	{
 		const viewStart: number[] = new Array<number>(lines.length).fill(0);
 		// Obsidian's frontmatter is a `---` on line 0 and the next `---`: its lines
@@ -7088,7 +7114,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			viewStart,
 			containerHome,
 			[],
-			{ next: 0, quotes: quoteIds },
+			{ next: 0, quotes: quoteIds, lazy: lazyItems },
 			literalAt,
 			fenceAt,
 			htmlLineAt,
@@ -7100,13 +7126,15 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			for (let k = first; k < lines.length; k++) fenceLiteral[k] = undefined;
 			fenceHomes = lines.map(() => []);
 			const lfQuotes = new Set<number>();
+			const lfLazy = new Set<number>();
 			fenceQuotes = lfQuotes;
+			fenceLazy = lfLazy;
 			containerViews(
 				lf.slice(first).map((text, i) => ({ k: i + first, text, off: 0 })),
 				new Array<number>(lines.length).fill(0),
 				fenceHomes,
 				[],
-				{ next: 0, quotes: lfQuotes },
+				{ next: 0, quotes: lfQuotes, lazy: lfLazy },
 				fenceLiteral,
 				fenceMarks,
 				new Array<boolean>(lines.length).fill(false),
@@ -8249,10 +8277,13 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			// marker other than 1 cannot interrupt a paragraph, and the pins on a
 			// marker line's fence (NRL-114, NRL-182) keep the old reading. Moving
 			// either is a different ticket than a closer's lead in a list item.
+			// Nor inside an item containerViews names lazy (fix round 1): its fence
+			// line is the renderer's paragraph text, so a fence opened there would
+			// run to the end of the note under default options.
 			if (
 				fenceMarks[lineNo] === "open" &&
 				!LIST_BULLET.test(raw) &&
-				!fenceHomes[lineNo]!.some((id) => fenceQuotes.has(id))
+				!fenceHomes[lineNo]!.some((id) => fenceQuotes.has(id) || fenceLazy.has(id))
 			) {
 				flushParagraph();
 				inFence = true;

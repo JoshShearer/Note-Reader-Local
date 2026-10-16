@@ -424,6 +424,42 @@ forbade.
   4-5 columns past the content column, which is paragraph text for the renderer and which
   the loop still reads as an opener. Lockstep (`lock128.cjs`, CLEAN row) 0/0/0/0 on the fix arm.
   Not observed in a running Obsidian.
+- Fix round 1 (critics on 3bbe1fd). The "0 newly disclosing, 0 newly lost" above held only for
+  the builder's generator. Critic 1 found a nested ordered marker other than 1 after a paragraph
+  line (`- QaQ` / `  2. QbQ` / `      ```` / `QxQ <!-- QyQ --> QzQ`): containerViews registers the
+  item, the renderer reads it as the paragraph's lazy text (no `<pre>` on 1.13.7 or 1.14.4), and
+  the view path opened a fence that never closed (QxQ/QzQ lost under DEF, QyQ spoken under
+  CODE). containerViews now names such items (`ids.lazy`: a list whose first item is numbered
+  other than 1, or is empty, starting under this parse's open paragraph, including one carried
+  out of a quote or list that ended on one, via its new boolean return), and the view path
+  refuses a fence line inside one. The literal and fence marks are unchanged for every other
+  caller. A tried second change, closing a view fence on a line containerViews keeps in an item
+  only as lazy text, made the generator much worse (lost 59-80 -> 365-442 per seed): Obsidian's
+  list parser (module 745) keeps lazy lines in the item whatever its open block, so it was
+  dropped. 22 new rows (`guard-nrl213-lazy-*` for `2.`, `3)`, `10.`, tab marker, top level, CRLF,
+  `%%` tail, DEF and CODE; `guard-nrl213-ol1-*`; `pin-nrl213-body-*` for a `%%`, `<!--` or `<div>`
+  line in a view fence's body, red on f15bc99). Critic 2 F4 asked for a closer that is also an
+  HTML-block or `%%` line; containerViews' closer is fence characters and whitespace only, so
+  none can be built, and the body rows stand in for it.
+- Fix round 1, NRL-184 coverage: the 27 rows that used the `- Q<!--` / four-space tail (12 pins,
+  `pin-nrl184-crlf`, the `$$` math-body pin, 13 guards) now use `> Q<!--` / `> ```QKZQ--->`.
+  Measured with `inlineBogusGate` forced to count every opener (`always`) and none (`never`), on
+  f15bc99 and this tree: 36 of the 38 nrl184 rows discriminate on both (pins red under
+  `always`, guards under `never`); `guard-nrl184-html-block` and `-line-start-after-span` never
+  did. They discriminate because the loop does not track a quoted fence; a ticket that models
+  quoted fences blinds them again. The guards' spoken `QKZQ--->` is the conservative answer, as
+  before; the 1.13.7 page shows `">`.
+- Fix round 1 grading, NOT 0/0: a wilder generator (scratch `gen.cjs`: bullets and `1.`/`1)`/
+  `2.`/`3)`/`10.` markers, nested items after paragraph lines, tab markers and indents, fences
+  at 0-8 columns or a tab with `%%`, `<!--` and `<div>` body lines, short/other/info closers,
+  unclosed fences, HTML and `%%` comments opened before lists, CRLF on 25%), 3000 notes per seed,
+  DEF and CODE, per sentinel against 1.13.7 `L.browserVisible`, f15bc99 -> fix round 1 sentinels
+  newly disclosing / lost / speaking excluded: seed 7 10/80/93, seed 11 14/59/71, seed 12 6/54/87,
+  against fixed 622/4927/2504, 659/4879/2461, 617/4707/2550. 3bbe1fd on seed 11 was 81/418/248.
+  Reduced examples mix a comment opened inside or before a list item with a view-opened fence
+  (`- QaQ` / `   ```` x` / `-  QpQ --> QoQ` / `\t1. <!-- QrQ` / ...), and a new list of another
+  delimiter after an item's unclosed fence. Not root-caused. Lockstep CLEAN 0/0/0/0 on both arms.
+  Not observed in a running Obsidian.
 
 ### Inline PI/CDATA counted only where the renderer emits it raw (NRL-184, 2026-10-16)
 
