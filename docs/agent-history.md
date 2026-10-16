@@ -396,6 +396,173 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A callout marker is what the renderer reads as one (NRL-182, 2026-10-15)
+
+`CALLOUT` (the container peel, which strips the marker) was `^\[![A-Za-z][\w-]*\][+-]?\s*`: it
+needed no whitespace after `]` and a letter-led word type. Obsidian 1.13.7 reads `>[!e]QaQ` as an
+ordinary quote paragraph displaying `[!e]QaQ`, so the peel dropped displayed text on every revision
+from 44a037a (R-M08); the NRL-178 plan filed it from `>[!e]%%` / `>~~~-->QIQ`.
+
+**Measured rule** (harness `selftest.cjs` OK first; `.claude/runs/NRL-182/plan/marker.cjs`, 2,295
+marker sources rendered on 1.13.7 AND 1.14.4, **0 differences** between them). A quote line starts a
+callout exactly when it is `[!` + ONE OR MORE characters other than `]` + `]` + optional `+` or `-`
++ whitespace or the end of the line. Not callouts: `[!e]X`, `[!e]+X`, `[!e]-X`, `[!e]]`, `[!e]++ X`,
+`[!]` (empty type), `[!e]%%`, `[!e]*b*`, `[!e]<b>` (anything glued to the marker). Callouts the old
+test missed: `[!1]`, `[!-]`, `[!_]`, `[!e f]` (type `e-f`), `[!日本]`, `[! ]`, `[!x|y]` (type `x`), and
+any punctuation type. Whitespace is JS `\s` (NBSP, em space, ideographic space, VT, FF, U+2028 and
+U+FEFF count; ZWSP does not). A lone CR is NOT title whitespace: the renderer treats it as a line
+ending, so `> [!e]\rQAAQ` is a callout titled `E` with QAAQ as content (both revisions speak QAAQ;
+lone-CR line structure stays unmodelled, e.g. `> [!e]\r>     QAAQ` renders QAAQ in `<pre>` and both
+speak `> QAAQ`; critic 1 F4). The same in `>`, `> `, `>>`, `> > `, `- > `, `1. > `; not in `> - ` or `>  ` (two
+spaces), which are not callouts at all. Title: the text after the marker, else the capitalised type.
+
+**Change:** `CALLOUT = /^\[![^\]]+\][+-]?(?:\s+|$)/`, now the same test as `TERM2_CALLOUT_TITLE`,
+`walkLeadQuote` and `obsidianBlocks.ts`, applied only where a quote STARTS. Fix round 1 added three
+containments, each keeping base's answer where the new rule alone moved text the wrong way:
+
+- **Glued `[`** (`CALLOUT_GLUED_LINK`, critic 1 F1): `> [!note][[QAAQ]]`, `>[!tip][QAAQ](u)`,
+  `> [!e][QAAQ] QBBQ` show everything as text (so the stripped marker, a url and, in
+  `> [!e][QAAQ][QBBQ]`, QBBQ are shown and not spoken: a base-parity loss, pinned as
+  `residual-nrl182-r1-glued-*-base-parity`), but with the marker left in, `cleanLine` read
+  `[!e][label]` as a full reference link and dropped the label (151 newly lost cells on critic 1's
+  corpus, speaking `!note ]`). The plain twin `>[x][QAAQ](u)` speaks `x (u)` on every revision: the
+  undefined-reference hole. A letter-led marker glued to `[` is stripped as before; other types keep
+  base's reading.
+- **Late quote lines** (`markerRule` "late" / `LATE_CALLOUT_PEEL`, critic 2 F1): the renderer forms a
+  callout only on a quote's first line. A line that continues its innermost quote (`quoteContinues`,
+  from `containerHome`) keeps the pre-NRL-182 peel; a list marker peeled on the line overrides it (a
+  new item starts a new quote). As written in fix round 1 this held only where `containerHome` sees
+  the quote continue, which is NOT the case for a CRLF line in a list item's quote (fix round 2
+  below), and the list-marker override also fired on fenced code lines. With the widened rule on every line, `> P` / `> [!1] QaQ` newly
+  lost `!1` and `>[!9T] <!-- QaQ` moved `<!--` to line start (31,104 cells a quarter). Not stripping
+  on late lines at all was measured too and is WRONG: it newly disclosed text NRL-166's `%%` handling
+  hides only because the old strip puts `%%` at line start (`pin-nrl166-r2c-f1-tag-attribute-over-
+  lazy-pct` spoke hidden QBQ and QCQ; `-link-title-` QBQ; `-r2c-f2-code-span-` QJQ) and newly lost
+  QSQ / QRZQ in `pin-nrl166-r3-c-withheld-pct-*`; 27 pins moved. `lateCallout`'s container ids alone
+  also called `> - > [!note] <!-- Q` after `>   > P` late (392 newly disclosed cells), hence the
+  list-marker override. The existing late-marker loss (`> P` / `> [!note] Q` drops the shown
+  `[!note]`) stays: its own ticket, after the link-title-spanning-lines class.
+- **Title as indented code** (`CALLOUT_CODE_TITLE_NEW_TYPE`, critic 1 F3): measured, 1,680 of 1,680
+  callout lines on 1.13.7 and 1.14.4, the title is an indented code block exactly when, after the
+  marker's one whitespace character, it starts with four spaces or a tab (`> [!e] \tQAAQ`,
+  `> [!e]     QAAQ`). Unmodelled on every revision (the title is spoken as prose). For a type base
+  never took (`[!%%]`, `[!1]`) the marker is left as base left it: stripping put `%%` at the title's
+  start and hid shown code (67 newly lost cells, `> > [!%%]     %% QAAQ %%`). Residual, pinned as
+  `residual-nrl182-r1-code-title-new-type`.
+
+**Kept loose on purpose.** `LEADING_CALLOUT_MARKER` only decides whether a `[` could pair. Narrowed to
+the renderer's rule it gave 2,576 NEWLY LOST cells (grader below): `>[!e]<!--Q1Q` / `><!-- Q2Q -->`
+loses Q1Q, which its twin `>[x]<!--Q1Q` / `><!-- Q2Q -->` already loses on base, because a live `[`
+withholds the comment refinement. Left as on base; that twin class belongs to NRL-166. The fence-head
+test in the long-lived scan (`[!..]` then optional blanks then a fence) is an over-approximation that
+only sets `longLived`, the safe direction, and is also left.
+
+**Edited pins:** `pin-nrl178-row-b-callout-pct-fence-info-hidden` (+ `-code`) now expect `!e %%`
+(they encoded the wrong strip). `pin-nrl166-r2c-f1-link-title-over-lazy-pct` (space form) and its
+`-no-space` twin both hold only through the late-marker peel: line 2 is a quote continuation, so
+`[!e]` is no callout in either. They go red when the late class is fixed, and the twin
+`>[](u "` / `>[x] %%QBQ")` speaks QBQ on every revision (link title spanning lines, untracked; filed
+from fix round 1), so that class comes first (critic 2 F2/F3).
+
+**Grade** (`g182.cjs`, NRL-128's grader on a 43,803-note generator `corp182.cjs`: 5 types x 22
+tails x 8 containers x 22 following shapes x lazy/not, 5,283 CRLF, 7 masks DEF/CODE/ALL/DEFH/CODEH/
+ALLC/ALLT, 561,869 cells, base vs arm, renderer = 1.13.7 with the 1.14.4 visible set cross-checked,
+d14 = 0). Branch: **newDisc 0, newLost 0, newExcl 218, fixedLost 10,201** (on THIS corpus only; it
+put no quote line before the marker and no `[` after it, which is how it missed both critics' newly
+lost classes). **newExcl mechanism (corrected, critic 1 F2):** every newExcl cell is a sentinel in a
+QUOTED fenced code block or a QUOTED (setext) heading. Quoted fences and headings ignore
+`skipCodeBlocks` / `skipHeadings` on every revision (base: `> QAAQ` / `> ```` / `> QBBQ` / `> ````
+speaks QBBQ under skipCodeBlocks; `>x<!--Q` / `>---` speaks Q under skipHeadings). Base hid these
+cells only by wrongly LOSING the displayed `[!e]%%...` / `[!e]<!--...` prose (the strip made the
+opener line-start and swallowed the block). Checked mechanically (`r1/mech.cjs`): for every newExcl
+cell, the twin with the marker line replaced by `P` is still excluded content and base speaks it,
+except the setext rows whose sentinel sits on the marker line itself, hand-checked. Accepted as a
+recorded exception to the run's 0-new rule, for the owner or orchestrator to confirm; the quoted-
+block mask gap is filed from fix round 1.
+
+**Fix round 1 grade** (`.claude/runs/NRL-182/r1/grade.cjs`, base 071a37e vs fix-round arm, cls8 per
+sentinel, 1.13.7 with the 1.14.4 visible set, three directions; sentinels in link destinations and
+image/embed targets count as disclosures): corp182 561,869 cells: newDisc 0, newLost 0, newExcl 218,
+fixedLost 10,201. Critic 1's generator (24,000 notes, seed 7, 428,092 cells, 7 masks): newDisc 0,
+newLost 0 (was 151), newExcl 23, fixedDisc 7,317, fixedLost 908, fixedExcl 88. Critic 2's grid, two
+disjoint 1/8 samples x DEF/CODE/ALL (491,652 and 498,672 cells): newDisc 0, newLost 0 (was 31,104 a
+quarter), newExcl 120 and 0, fixedLost 12,900 and 11,520, fixedDisc 39,600 and 41,040. New generator
+`r1/gen-r1.cjs` (marker then link / wikilink / image / embed / footnote / code / emphasis / reference
+tails, first vs late quote line, nested, list-then-quote, LF and CRLF; 162,834 notes, 3,517,710 cells, 7 masks):
+newDisc 0, newLost 0, newExcl 1,101, fixedDisc 87,745, fixedLost 34,242 (the 020c64d arm there: newLost
+61,822). Those zeros are scoped to the corpora named: gen-r1's 26,754 CRLF notes hold no CRLF late
+marker line under a list item, no mixed whitespace title lead and no list-marker line in a fence, and
+the round-1 critics measured newly lost cells in all three on b5c5db3 (fix round 2 below). Every newExcl cell across all four passed the mechanism check above. Lockstep
+(`r1/lock-r1.cjs`, NRL-128's mutators over 18,885 notes x 5 masks drawn from all four generators):
+CLEAN 0/0/0/0 on both arms, every mutator and both exemption rows fire. Wrong arms: spaces required everywhere (w1) newLost 2,576; letter-led type
+kept (w3) newLost 2,576; narrowed `LEADING_CALLOUT_MARKER` (leadtight) newLost 2,576; old whitespace
+rule with the new types (w2) newLost 10,740 and fixedLost 0. NRL-153 spike grids (47,520 cells,
+main/hazard/extra on 1.13.7 and 1.14.4, both arms): 0 moved, but those grids hold no `[!` marker, so
+that is a null result, not evidence. There is no speak-callout-title option in `src/` today: the
+title is always spoken.
+
+**Fix round 2** (2026-10-15; critiques of b5c5db3). Three shapes newly lost displayed text on
+b5c5db3, all extending an existing letter-type loss to the new types:
+
+- **CRLF list-item quotes** (both critics' F1). `containerViews` registers no container for a CRLF
+  list-item line (`- > P\r` / `  > [!1] QaQ` gives line 1 no quote shared with line 0), so a late line
+  there read as a first line and the widened `CALLOUT` dropped the shown `[!1]` or moved `<!--` to the
+  body's start (`- > QpQ\r\n  > [!1] QaQ` spoke `QpQ | QaQ`). Fix: `markerRules` reads the rule off the
+  note with each line's trailing `\r` removed (a second `containerViews` pass, only when some line
+  ends in `\r`). Only the marker decision takes that LF reading; the CRLF list gap itself is older
+  than NRL-182, still feeds `literalAt`, `htmlLineAt`, `listStrip` and `lateCallout`, and is not
+  fixed. Reach in the plugin is probably small: `src/main.ts` passes `editor.getValue()`, which
+  CodeMirror normalises to LF by default (not verified in Obsidian).
+- **Whitespace-led titles opened by `%%` / `<!--`** (critic 1 F2). `CALLOUT` consumes the whole
+  whitespace run; the renderer takes ONE character as the marker's and keeps the rest in the title, so
+  `[!1]-   \t%%QaQ` shows `%%QaQ` but b5c5db3 hid it. Measured on 7,290 probes (`r2/leads.cjs`: 405
+  leads x `> ` / `- > ` / `> > ` x `[!1]` / `[!1]-` / `[!e]` x `%%` / `<!--`; 1.13.7 = 1.14.4 on all): after the marker's character, up to three spaces then the
+  opener hide it; a tab that reaches the opener at some columns and any non-ASCII whitespace show it.
+  Four arms on critic 1's second generator (150,316 notes, 2,857,240 cells, 5 masks; b5c5db3 there:
+  newLost 67,324, 63,791 of them CRLF, fixedDisc 107,547): leave the marker for any `\s\s` lead (critic
+  1's suggestion) newLost 0 / fixedDisc 30,228; for `\s\s+` then an opener 0 / 54,183; for a lead other
+  than 0-3 spaces then an opener 0 / 75,377; peel only the marker and its one character there
+  (`CALLOUT_ONE_SPACE`) newLost 3,436 / fixedDisc 104,797 (the body's lead tests read NBSP as space);
+  no guard 6,367 / 104,797. Chosen: peel one character (`CALLOUT_LED_OPENER_NEW_TYPE`), except when a
+  non-ASCII whitespace follows the marker's own, where the marker stays as base left it
+  (`CALLOUT_WIDE_SPACE_OPENER_NEW_TYPE`): newLost 0, fixedDisc 96,412. The NBSP case keeps base's
+  disclosure of the type (`> [!1] \u00a0%%QaQ` speaks `!1`), pinned as residual.
+- **List-marker lines in fenced code** (critic 2 F2). The list-marker override made `> - > [!1] %%QbQ`
+  inside a fence peel `[!1] `, and its `%%` hid the rest of the code under skipCodeBlocks false (262
+  cells in critic 2's samples). A line the LF reading calls literal (fence, display math, frontmatter)
+  now keeps base's peel outright (`markerRule` "literal").
+
+**Fix round 2 grade** (`.claude/runs/NRL-182/r2/grade.cjs`; harness selftest OK on 1.13.7 and 1.14.4
+first; own esbuild bundles of 071a37e and the arm; base 071a37e vs the arm; cls8 per sentinel on
+1.13.7, 1.14.4 visible set cross-checked, d14 = 0 and crashes 0 in every run; three directions; sourceIndex
+spot lock 0 everywhere). Masks: 7 (DEF/CODE/ALL/DEFH/CODEH/ALLC/ALLT) for the round-0/1 corpora and
+gen-r2, 5 (DEF/CODE/ALL/DEFH/ALL+skipCode+skipHeadings) for the round-1 critics' generators, as they ran them.
+
+| corpus | cells | newDisc | newLost | newExcl | fixedDisc | fixedLost |
+|---|---|---|---|---|---|---|
+| corp182 | 561,869 | 0 | 0 | 218 | 0 | 10,201 |
+| round-0 critic 1 (24,000, seed 7) | 428,092 | 0 | 0 | 23 | 7,317 | 908 |
+| round-0 critic 2, 1/8 sel 0 | 1,147,188 | 0 | 0 | 1,320 | 92,160 | 28,980 |
+| round-0 critic 2, 1/8 sel 4 | 1,163,568 | 0 | 0 | 960 | 95,760 | 25,920 |
+| gen-r1 | 3,517,710 | 0 | 0 | 1,101 | 87,745 | 34,242 |
+| round-1 critic 1 gen, 1/10 seed s2 | 3,398,000 | 0 | 0 | 149 | 176,860 | 5,796 |
+| round-1 critic 1 gen2, 1/3 seed t | 2,857,240 | 0 | 0 | 0 | 96,412 | 0 |
+| round-1 critic 2 grid, 4 samples | 2,442,645 | 0 | 0 | 18 | 3,005 | 1,337 |
+| gen-r2, 1/12 | 3,276,049 | 0 | 0 | 0 | 60,333 | 2,429 |
+
+18,792,361 cells in all. `r2/gen-r2.cjs` is new: 13 list and quote containers x first / late / late
+after an empty quote line / lazy between / new item / a fence in the container / a list-marker line
+inside that fence x 8 types x 2 folds x 17 whitespace leads (ASCII, tab, NBSP, ideographic, em space,
+mixed) x 7 tails with `%%` / `<!--` openers x 5 follow shapes x LF and CRLF. b5c5db3 on the same
+sample: newLost 151,903 (115,654 CRLF), newExcl 1,215, fixedDisc 69,258, fixedExcl 45,630; the arm
+gives up those fixedExcl cells, which b5c5db3 hid only through the fenced-code `%%` strip above.
+Every one of the 3,789 newExcl cells passed `r2/mech.cjs`: 1,823 by the marker-line-to-`P` twin, 1,960
+by a plain-prose twin keeping a sentinel that sits on the marker line (setext content), 6 by the `[x]`
+twin; each twin is still excluded content for the renderer and base speaks it (the quoted fence and
+heading mask gap, NRL-206). Lockstep (`r2/lock-r2.cjs`, NRL-128's mutators, 49,512 notes from all
+generators x 5 masks): CLEAN 0/0/0/0 on both arms; every mutator and both exemption rows fire. NOT
+VERIFIED IN OBSIDIAN: reading-view harness only, no Live Preview, no deployed build.
+
 ### bracketClosesLater made linear across a paragraph's lines (NRL-181, 2026-10-15)
 
 A paragraph of many lines each holding an unmatched `[` froze read start: bracketClosesLater
