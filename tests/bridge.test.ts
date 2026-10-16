@@ -7,28 +7,31 @@
  * tests/player.test.ts and tests/fallback.test.ts use. No socket, no
  * obsidian import.
  *
- * The rate checks are the reason this file exists. The bridge renders at
- * whatever rate it is asked for, and the player applies the user's rate to
- * every buffer it plays, so an engine that forwarded the user's rate would
- * be heard at rate squared: 4x at a 2x setting (non-negotiable 9).
+ * Since Read Me's ADR 0014 the engine owns playback: Read Me reads the note
+ * in its own service (`/play`, `/status`, `/control`), because Android muted
+ * Obsidian's own audio about 5 s after Obsidian left the screen. The rate
+ * checks still matter: Read Me applies the user's rate at synthesis, so the
+ * player must apply none, or the note is heard at rate squared
+ * (non-negotiable 9).
  */
 
 import { Player } from "../src/audio/player.ts";
 import { playWithFallback, stopsFallback, type FallbackCandidate } from "../src/audio/fallback.ts";
-import { pcmToWav } from "../src/audio/wav.ts";
 import { rankEngines, selectEngine } from "../src/engines/selection.ts";
 import { shouldConstructBridgeEngine } from "../src/engines/platform.ts";
 import { normaliseSettings, DEFAULT_SETTINGS } from "../src/settings/index.ts";
 import {
 	BRIDGE_HOST,
 	BridgeBusyError,
+	BridgeStoppedError,
+	PLAY_MAX_CHUNKS,
 	HEALTH_TIMEOUT_MS,
 	ReadMeBridgeEngine,
 	type BridgeRequest,
 	type BridgeResponse,
 	type BridgeTransport,
 } from "../src/engines/bridge/readMe.ts";
-import { EngineUnavailableError, type SpeechChunk, type SpeechEngine, type SynthResult } from "../src/audio/types.ts";
+import { EngineUnavailableError, type SpeechChunk, type SpeechEngine, type SynthRequest } from "../src/audio/types.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = ""): void {
@@ -118,9 +121,6 @@ function chunk(text: string, i = 0): SpeechChunk {
 	};
 }
 
-/** One second of 22,050 Hz mono silence, the shape Android's TTS writes. */
-const WAV_1S = pcmToWav(new Int16Array(22050).buffer, 22050);
-
 function json(status: number, body: unknown): BridgeResponse {
 	const bytes = new TextEncoder().encode(JSON.stringify(body));
 	return { status, header: () => "application/json", body: bytes.buffer as ArrayBuffer };
@@ -135,6 +135,7 @@ const HEALTHY = {
 	port: 8787,
 	busy: false,
 	maxChars: 3900,
+	play: true,
 };
 
 /** A transport that records requests and answers from a route table. */
@@ -151,11 +152,52 @@ function fakeTransport(
 	};
 }
 
-function healthyBridge(): BridgeResponse | ((req: BridgeRequest) => BridgeResponse) {
-	return (req: BridgeRequest) =>
-		req.url.endsWith("/health")
-			? json(200, HEALTHY)
-			: { status: 200, header: () => "audio/wav", body: WAV_1S.slice(0) };
+/**
+ * Read Me's side of `/play`, `/status` and `/control`, in memory. Each
+ * `/status` while playing reports the current chunk and then moves on by
+ * `step`, standing in for Read Me reading; `ended` after the last.
+ */
+class FakeReadMe {
+	session = 0;
+	state = "none";
+	index = 0;
+	chunks: string[] = [];
+	step = 1;
+	busy = false;
+	controls: string[] = [];
+	answer = (req: BridgeRequest): BridgeResponse => {
+		const path = req.url.replace(/^http:\/\/[^/]+/, "");
+		if (path === "/health") return json(200, HEALTHY);
+		if (path.startsWith("/play")) {
+			if (this.busy) return json(503, { error: "busy", reason: "playback" });
+			this.chunks = String(req.body).split("\u001e");
+			this.session += 1;
+			this.state = "playing";
+			this.index = 0;
+			return json(200, { session: this.session, chunks: this.chunks.length });
+		}
+		if (path === "/status") {
+			const now = { session: this.session, state: this.state, index: this.index };
+			if (this.state === "playing") {
+				this.index += this.step;
+				if (this.index >= this.chunks.length) {
+					this.index = this.chunks.length - 1;
+					this.state = "ended";
+				}
+			}
+			return json(200, now);
+		}
+		if (path.startsWith("/control")) {
+			this.controls.push(path);
+			const session = Number(/session=(\d+)/.exec(path)?.[1]);
+			if (session !== this.session) return json(409, { error: "stale-session", session: this.session });
+			if (path.includes("action=pause")) this.state = "paused";
+			if (path.includes("action=resume")) this.state = "playing";
+			if (path.includes("action=stop")) this.state = "stopped";
+			return json(200, { session: this.session, state: this.state, index: this.index });
+		}
+		return json(404, { error: "not-found" });
+	};
 }
 
 function engineWith(
@@ -163,8 +205,19 @@ function engineWith(
 	config = { port: 8787, token: TOKEN },
 ): { engine: ReadMeBridgeEngine; requests: BridgeRequest[] } {
 	const { transport, requests } = fakeTransport(answer);
-	return { engine: new ReadMeBridgeEngine(() => config, transport), requests };
+	return { engine: new ReadMeBridgeEngine(() => config, transport, () => tick()), requests };
 }
+
+function readMe(config = { port: 8787, token: TOKEN }): { fake: FakeReadMe; engine: ReadMeBridgeEngine; requests: BridgeRequest[] } {
+	const fake = new FakeReadMe();
+	return { fake, ...engineWith(fake.answer, config) };
+}
+
+function req(c: SpeechChunk, rate = 1, following: SpeechChunk[] = []): SynthRequest {
+	return { chunk: c, rate, pitch: 0, following: () => following };
+}
+
+const plays = (requests: BridgeRequest[]): BridgeRequest[] => requests.filter((r) => r.url.includes("/play"));
 
 async function caught(p: Promise<unknown>): Promise<Error | null> {
 	try {
@@ -175,76 +228,128 @@ async function caught(p: Promise<unknown>): Promise<Error | null> {
 	}
 }
 
-// --- B1: the rate on the wire is always 1.0 ---------------------------------
+// --- B1: the user's rate goes to Read Me, once -------------------------------
 
-console.log("B1 /synthesize is always asked for rate=1.0, whatever the user's rate");
+console.log("B1 /play carries the user's rate, and nothing else does");
 for (const rate of [0.5, 1, 1.7, 2]) {
-	const { engine, requests } = engineWith(healthyBridge() as (r: BridgeRequest) => BridgeResponse);
-	await engine.synthesize({ chunk: chunk(SECRET_TEXT), rate, pitch: 0 }, new AbortController().signal);
-	const url = requests[0]?.url ?? "";
+	const { engine, requests } = readMe();
+	await engine.synthesize(req(chunk(SECRET_TEXT), rate), new AbortController().signal);
+	const url = plays(requests)[0]?.url ?? "";
 	const rates = rateParams(url);
-	check(`rate ${rate}: query rate is exactly "1.0"`, rates[0] === "1.0", url);
+	check(`rate ${rate}: /play asks for exactly ${rate.toFixed(2)}`, rates[0] === rate.toFixed(2), url);
 	check(`rate ${rate}: no other rate parameter`, rates.length === 1, url);
+	check(`rate ${rate}: no request but /play carries a rate`, requests.filter((r) => /rate=/.test(r.url)).length === 1);
 }
 
 // --- B2: text in the body, token in a header, loopback only ----------------
 
-console.log("B2 text goes in the POST body and the token in a header, to 127.0.0.1 only");
+console.log("B2 the chunks go in the POST body and the token in a header, to 127.0.0.1 only");
 {
-	const { engine, requests } = engineWith(healthyBridge() as (r: BridgeRequest) => BridgeResponse, {
-		port: 8790,
-		token: `  ${TOKEN}  `,
-	});
-	await engine.synthesize({ chunk: chunk(SECRET_TEXT), rate: 2, pitch: 0 }, new AbortController().signal);
-	const req = requests[0]!;
-	check("method is POST", req.method === "POST", req.method);
-	check("body is the chunk text, exactly", req.body === SECRET_TEXT, String(req.body));
-	check("the URL never carries the text", !req.url.includes("ZSECRETZ") && !req.url.includes("note"), req.url);
-	check("the URL never carries the token", !req.url.includes(TOKEN), req.url);
-	check("Authorization is Bearer <trimmed token>", req.headers.Authorization === `Bearer ${TOKEN}`, req.headers.Authorization);
-	check("host is the IPv4 loopback and the port is the configured one", req.url.startsWith(`http://${BRIDGE_HOST}:8790/`), req.url);
+	const { engine, requests } = readMe({ port: 8790, token: `  ${TOKEN}  ` });
+	await engine.synthesize(req(chunk(SECRET_TEXT), 2, [chunk("Second.", 1)]), new AbortController().signal);
+	const play = plays(requests)[0]!;
+	check("method is POST", play.method === "POST", play.method);
+	check("body is the chunks, separated by U+001E", play.body === `${SECRET_TEXT}\u001eSecond.`, JSON.stringify(play.body));
+	for (const r of requests) {
+		check(`${r.method} ${r.url.replace(/\?.*/, "")}: the URL never carries the text`, !r.url.includes("ZSECRETZ") && !r.url.includes("note"), r.url);
+		check(`${r.method} ${r.url.replace(/\?.*/, "")}: the URL never carries the token`, !r.url.includes(TOKEN), r.url);
+		check(`${r.method} ${r.url.replace(/\?.*/, "")}: to the IPv4 loopback and the configured port`, r.url.startsWith(`http://${BRIDGE_HOST}:8790/`), r.url);
+	}
+	check("Authorization is Bearer <trimmed token>", play.headers.Authorization === `Bearer ${TOKEN}`, play.headers.Authorization);
 	check("BRIDGE_HOST is 127.0.0.1 (not localhost, not ::1)", BRIDGE_HOST === "127.0.0.1", BRIDGE_HOST);
 }
 
-// --- B3: the result is a buffer the player can play ------------------------
+// --- B3: the engine owns playback ------------------------------------------
 
-console.log("B3 a 200 WAV becomes a buffer result with its real duration and no word timings");
+console.log("B3 the engine owns playback: a streamed result, no buffer, no word timings");
 {
-	const { engine } = engineWith(healthyBridge() as (r: BridgeRequest) => BridgeResponse);
-	const result: SynthResult = await engine.synthesize(
-		{ chunk: chunk("Hello."), rate: 1, pitch: 0 },
-		new AbortController().signal,
-	);
-	check("kind is buffer", result.kind === "buffer", result.kind);
-	if (result.kind === "buffer") {
-		check("duration read from the WAV header", Math.abs(result.durationMs - 1000) < 1, String(result.durationMs));
-		check("sample rate read from the WAV header", result.sampleRate === 22050, String(result.sampleRate));
-		check("no word timings are invented", result.words.length === 0, String(result.words.length));
-	}
+	const { engine } = readMe();
+	const result = await engine.synthesize(req(chunk("Hello.")), new AbortController().signal);
+	check("kind is streamed", result.kind === "streamed", result.kind);
 	check("declares timing none", engine.capabilities.timing === "none");
-	check("is a buffer engine: ownsPlayback false", engine.capabilities.ownsPlayback === false);
+	check("ownsPlayback true (Read Me's ADR 0014)", engine.capabilities.ownsPlayback === true);
+	check("pause and resume are a pair", engine.capabilities.pause && engine.capabilities.resume);
 	check("not desktop-only", engine.capabilities.desktopOnly === false);
 }
 
-// --- B4: the whole chain at 2.0 is 2.0, not 4.0 ------------------------------
+// --- B4: the whole chain through the real Player ----------------------------
 
-console.log("B4 through the real Player at a 2.0 setting: element 2.0 x bridge 1.0 = 2.0 total");
+console.log("B4 through the real Player at 2.0: one /play at 2.00 for the whole note, the element untouched");
 {
-	const { engine, requests } = engineWith(healthyBridge() as (r: BridgeRequest) => BridgeResponse);
+	const { fake, engine, requests } = readMe();
 	const player = new Player({ bufferAhead: 1 });
-	void player.play(engine, [chunk("One."), chunk("Two.", 1)], 2.0, 0);
-	for (let i = 0; i < 20 && player.getState() !== "playing"; i++) await tick();
-	const synth = requests.filter((r) => r.url.includes("/synthesize"));
-	const bridgeRate = Number(rateParams(synth[0]?.url ?? "")[0]);
-	check("player reached playing", player.getState() === "playing", player.getState());
-	check("element playbackRate is exactly 2.0", fakeAudio.playbackRate === 2, String(fakeAudio.playbackRate));
-	check("bridge rendered at exactly 1.0", bridgeRate === 1, String(bridgeRate));
-	check(
-		"total speed-up is exactly 2.0 (4.0 would be the double-rate defect)",
-		fakeAudio.playbackRate * bridgeRate === 2,
-		String(fakeAudio.playbackRate * bridgeRate),
-	);
-	player.stop();
+	const progress: number[] = [];
+	player.on("progress", (p) => progress.push(p.chunkIndex));
+	const notes = [chunk("One.", 0), chunk("Two.", 1), chunk("Three.", 2)];
+	void player.play(engine, notes, 2.0, 0);
+	for (let i = 0; i < 200 && player.getState() !== "finished"; i++) await tick();
+	check("player reached finished", player.getState() === "finished", player.getState());
+	check("exactly one /play for three chunks", plays(requests).length === 1, String(plays(requests).length));
+	check("Read Me got all three chunks", fake.chunks.join("|") === "One.|Two.|Three.", fake.chunks.join("|"));
+	check("Read Me reads at exactly 2.00", rateParams(plays(requests)[0]!.url)[0] === "2.00");
+	check("the player's own element never played (4.0 would be the double-rate defect)", fakeAudio === undefined || fakeAudio.src === "");
+	check("the highlight visited every chunk in order", [0, 1, 2].every((i) => progress.includes(i)), JSON.stringify(progress));
+}
+
+console.log("B4b the session follows Read Me: past chunks resolve at once, a replay or a new rate starts again");
+{
+	const { fake, engine, requests } = readMe();
+	fake.step = 0;
+	const notes = [chunk("A.", 0), chunk("B.", 1), chunk("C.", 2)];
+	const first = engine.synthesize(req(notes[0]!, 1, notes.slice(1)), new AbortController().signal);
+	await tick();
+	fake.index = 2; // Read Me read on while Obsidian was in the background.
+	await first;
+	await engine.synthesize(req(notes[1]!, 1, notes.slice(2)), new AbortController().signal);
+	check("a chunk Read Me already read resolves without a new /play", plays(requests).length === 1);
+	fake.state = "ended";
+	await engine.synthesize(req(notes[2]!, 1, []), new AbortController().signal);
+	check("the last chunk resolves once Read Me has ended", plays(requests).length === 1);
+	fake.step = 1;
+	await engine.synthesize(req(notes[0]!, 1, notes.slice(1)), new AbortController().signal);
+	check("going back to an earlier chunk starts a new session", plays(requests).length === 2);
+	await engine.synthesize(req(notes[1]!, 1.5, notes.slice(2)), new AbortController().signal);
+	check("a new rate starts a new session at that rate", plays(requests).length === 3 && rateParams(plays(requests)[2]!.url)[0] === "1.50");
+}
+
+console.log("B4c what /play can carry: no separator inside a chunk, a blank chunk ends the session, the limit");
+{
+	const { fake, engine } = readMe();
+	await engine.synthesize(req(chunk("Odd\u001etext.", 0), 1, [chunk("Fine.", 1), chunk("   ", 2), chunk("After.", 3)]), new AbortController().signal);
+	check("a separator inside a chunk becomes a space, so indexes hold", fake.chunks.join("|") === "Odd text.|Fine.", fake.chunks.join("|"));
+	const blank = await engine.synthesize(req(chunk("   ", 2), 1, [chunk("After.", 3)]), new AbortController().signal);
+	check("a blank chunk resolves without asking Read Me", blank.kind === "streamed");
+	const many = Array.from({ length: PLAY_MAX_CHUNKS + 5 }, (_, i) => chunk(`S${i}.`, i + 1));
+	await engine.synthesize(req(chunk("Start.", 0), 1, many), new AbortController().signal);
+	check(`at most ${PLAY_MAX_CHUNKS} chunks in one /play`, fake.chunks.length === PLAY_MAX_CHUNKS, String(fake.chunks.length));
+}
+
+console.log("B4d pause, resume and stop act on Read Me's session; a stop from Read Me ends the read");
+{
+	const { fake, engine } = readMe();
+	fake.step = 0;
+	const controller = new AbortController();
+	const pending = engine.synthesize(req(chunk("One.", 0), 1, [chunk("Two.", 1)]), controller.signal);
+	await tick();
+	engine.pause();
+	engine.resume();
+	await tick();
+	check("pause then resume reach /control with the session", fake.controls.join(",") === "/control?action=pause&session=1,/control?action=resume&session=1", fake.controls.join(","));
+	controller.abort();
+	const err = await caught(pending);
+	await tick();
+	check("an abort (the player's Stop) rejects with AbortError", err?.name === "AbortError", err?.name);
+	check("and tells Read Me to stop", fake.controls.at(-1) === "/control?action=stop&session=1", fake.controls.join(","));
+}
+{
+	const { fake, engine } = readMe();
+	fake.step = 0;
+	const pending = engine.synthesize(req(chunk("One.", 0), 1, [chunk("Two.", 1)]), new AbortController().signal);
+	await tick();
+	fake.state = "stopped"; // the lock screen's Stop, or an article started in Read Me
+	const err = await caught(pending);
+	check("Read Me stopping the session ends the read", err instanceof BridgeStoppedError, err?.name);
+	check("and does not fall back to another engine", !!err && stopsFallback(err));
 }
 
 // --- B5: availability -------------------------------------------------------
@@ -289,6 +394,12 @@ console.log("B5 availability is probed on /health with a short timeout and never
 {
 	const { engine } = engineWith(() => json(200, { ...HEALTHY, ttsReady: false }));
 	check("speech engine not ready: unavailable", !(await engine.isAvailable()).available);
+}
+{
+	const { play: _play, ...older } = HEALTHY;
+	const { engine } = engineWith(() => json(200, older));
+	const result = await engine.isAvailable();
+	check("a Read Me without /play: unavailable, and says to update it", !result.available && /update it to 1\.1\.0/.test(result.reason), !result.available ? result.reason : "available");
 }
 {
 	const { engine } = engineWith(() => ({
@@ -347,61 +458,16 @@ check("guard: an ordinary Error does not stop the fallback chain", !stopsFallbac
 	check("a Stop mid-request surfaces as AbortError, not a bridge failure", err?.name === "AbortError", err?.name);
 }
 
-// --- B6b: requests are serialized; a full queue is not "Read Me is playing"
-
-console.log("B6b one request at a time, so a prefetching player never overruns the bridge's queue");
-{
-	let inFlight = 0;
-	let maxInFlight = 0;
-	const { engine, requests } = engineWith(async (req) => {
-		if (req.url.endsWith("/health")) return json(200, HEALTHY);
-		inFlight++;
-		maxInFlight = Math.max(maxInFlight, inFlight);
-		await new Promise((r) => setTimeout(r, 5));
-		inFlight--;
-		return { status: 200, header: () => "audio/wav", body: WAV_1S.slice(0) };
-	});
-	const results = await Promise.all(
-		Array.from({ length: 8 }, (_, i) =>
-			engine.synthesize({ chunk: chunk(`Sentence ${i}.`, i), rate: 1, pitch: 0 }, new AbortController().signal),
-		),
-	);
-	check("8 parallel calls: all succeed", results.every((r) => r.kind === "buffer"));
-	check("8 parallel calls: never more than one in flight", maxInFlight === 1, String(maxInFlight));
-	check(
-		"8 parallel calls: sent in call order",
-		requests.map((r) => r.body).join("|") === Array.from({ length: 8 }, (_, i) => `Sentence ${i}.`).join("|"),
-	);
-}
-{
-	let release!: () => void;
-	const gate = new Promise<void>((r) => (release = r));
-	const { engine, requests } = engineWith(async () => {
-		await gate;
-		return { status: 200, header: () => "audio/wav", body: WAV_1S.slice(0) };
-	});
-	const first = engine.synthesize({ chunk: chunk("First."), rate: 1, pitch: 0 }, new AbortController().signal);
-	const controller = new AbortController();
-	const second = engine.synthesize({ chunk: chunk("Second."), rate: 1, pitch: 0 }, controller.signal);
-	controller.abort();
-	release();
-	await first;
-	const err = await caught(second);
-	check("a request aborted while queued is never sent", requests.length === 1, String(requests.length));
-	check("a request aborted while queued rejects with AbortError", err?.name === "AbortError", err?.name);
-	const third = await engine.synthesize({ chunk: chunk("Third."), rate: 1, pitch: 0 }, new AbortController().signal);
-	check("the queue keeps working after an aborted waiter", third.kind === "buffer");
-}
 {
 	const { engine } = engineWith(() => json(503, { error: "busy", reason: "queue" }));
 	const err = await caught(engine.synthesize({ chunk: chunk("Hi."), rate: 1, pitch: 0 }, new AbortController().signal));
 	check("503 busy/queue: not a BridgeBusyError", !(err instanceof BridgeBusyError), err?.name);
-	check("503 busy/queue: does not end the read (the defect seen on the MatePad)", !!err && !stopsFallback(err));
+	check("503 busy/queue: does not end the read", !!err && !stopsFallback(err));
 }
 
 // --- B7: a busy bridge ends the read, it does not fall to Kokoro -----------
 
-console.log("B7 a busy bridge on the first sentence stops the read and never tries the next engine");
+console.log("B7 a busy bridge on the first sentence ends the read and never tries the next engine");
 {
 	const { engine } = engineWith((req) =>
 		req.url.endsWith("/health") ? json(200, HEALTHY) : json(503, { error: "busy", reason: "playback" }),
@@ -422,7 +488,8 @@ console.log("B7 a busy bridge on the first sentence stops the read and never tri
 		dispose: async () => {},
 	};
 	const player = new Player({ bufferAhead: 0 });
-	player.on("error", () => undefined);
+	const reported: Error[] = [];
+	player.on("error", (err) => reported.push(err));
 	let stoppedOn: string | null = null;
 	let fellBack = false;
 	const candidates: FallbackCandidate[] = [
@@ -437,10 +504,17 @@ console.log("B7 a busy bridge on the first sentence stops the read and never tri
 			fellBack = true;
 		},
 	});
-	check("no candidate is reported as succeeding", result === null);
-	check("onStop names the bridge", stoppedOn === "readme", String(stoppedOn));
+	for (let i = 0; i < 50 && reported.length === 0; i++) await tick();
+	// An engine that owns playback is "playing" before its first request is
+	// answered (player.ts announcePlaying), so the refusal arrives as the
+	// player's error, not as a failed attempt: onStop does not fire, and the
+	// read still ends where it is (plugin ADR 0037).
+	check("the bridge is the candidate the read stayed on", result?.id === "readme", String(result?.id));
+	check("Read Me's refusal reaches the player's error report", reported[0] instanceof BridgeBusyError, reported[0]?.name);
+	check("onStop is not the route any more", stoppedOn === null, String(stoppedOn));
 	check("onFallback never fired", !fellBack);
 	check("the next engine was never asked to synthesize", !secondTried);
+	check("the read ended", player.getState() !== "playing", player.getState());
 }
 
 // --- B8: where it exists, how it ranks, how its setting is stored ----------

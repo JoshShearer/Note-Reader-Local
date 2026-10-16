@@ -345,6 +345,7 @@ export class Player {
 				rate: engine.capabilities.ownsPlayback ? this.rate : 1,
 				pitch: this.pitch,
 				onWord: this.onEngineWord,
+				following: engine.capabilities.ownsPlayback ? () => this.chunks.slice(index + 1) : undefined,
 			},
 			signal,
 		);

@@ -226,6 +226,8 @@ Installed Android TTS Engine  ──►  WAV  ──►  the plugin's Player app
 
 The host is fixed at `127.0.0.1`; only the port is configurable. The engine always requests rate 1.0 and the Player applies the user's rate. It declares no word timings, so the word highlight is unavailable on it (R-S03; the sentence highlight remains). The pairing token is stored per device, never in vault-synced plugin data.
 
+Amended 2026-10-16 (`docs/adr/0037`, Read Me REA-39 and its ADR 0014): Android 17 muted the WebView's own audio about 5 s after Obsidian left the screen, so Read Me Offline now reads the note itself. The engine owns playback: it sends the chunk and the chunks after it to `POST /play?rate=<the user's rate>` in one request, follows `GET /status` to move the sentence highlight, and pauses, resumes and stops Read Me's session through `POST /control`. Read Me applies the rate once and the Player applies none. The diagram above is the earlier, `/synthesize` route, which the engine no longer uses; it needs a Read Me that reports `"play": true` on `/health` (1.1.0 and later).
+
 ---
 
 ### R-M04 — No External TTS API
