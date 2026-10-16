@@ -5114,6 +5114,8 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl217-c1f1-html-block-above-list", "<div>\n- > [!note]     QbQ", "QbQ"],
 		["guard-nrl217-c1f1-lazy-paragraph-line", "QaQ\n    - > [!note]     QbQ", "QaQ QbQ"],
 		["residual-nrl217-list-callout-right-after-a-paragraph", "P\n- > [!note]     QtQ", "P QtQ"],
+		["guard-nrl217-r1f1-tab-only-line-is-not-blank", "QaQ\n\t\n    - > [!note]     QbQ", "QaQ QbQ"],
+		["guard-nrl217-r2-crlf-list-pre-block", "- <pre>\r\n  QaQ\r\n\r\n  - > [!note]     QbQ", "QaQ QbQ"],
 		["guard-nrl212-c1f1-backtick-fence-in-block", "%%\n```\n^[QxQ]\n```\n%%\nd", "d"],
 		["guard-nrl212-c1f1-math-in-block", "%%\n$$\n^[QxQ]\n$$\n%%\nd", "d"],
 		["guard-nrl212-c1f1-html-comment-in-block", "%%\n<!--\n^[QxQ]\n-->\n%%\nd", "d"],
