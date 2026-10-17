@@ -1,6 +1,6 @@
 # 0018. Speak What the Renderer Shows
 
-- Status: accepted
+- Status: accepted, amended by ADR 0039 (which mismatches are worth fixing)
 - Date: 2026-09-30
 - Ticket: NRL-45
 

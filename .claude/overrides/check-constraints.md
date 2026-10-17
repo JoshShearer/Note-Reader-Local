@@ -1,6 +1,6 @@
 # /check-constraints - Local TTS Reader detection table
 
-Rules: `AGENTS.md` "Non-negotiables" (1-10) and "Verification rules" (11-14). Use these checks in
+Rules: `AGENTS.md` "Non-negotiables" (1-10) and "Verification rules" (11-15). Use these checks in
 place of derived ones (Step 1). `BASE` as in the shared command. A hit is a candidate; read around
 it. Cite by function or constant name, not line number: lines drift (`AGENTS.md` "Style").
 
@@ -18,6 +18,8 @@ it. Cite by function or constant name, not line number: lines drift (`AGENTS.md`
 | 10 | `±` in `src/settings/`, `src/main.ts`, `deploy.mjs`: `normaliseSettings\|DEFAULT_SETTINGS\|saveData\|loadData\|Object\.keys\|delete \|KEEP_BY_NAME` | Normalisation drops keys it does not recognise; a new persisted key bypasses that; an added `delete`/`Object.keys` filter over stored data; `deploy.mjs` stops protecting `data.json` or dotfiles | |
 | 13 | number with unit, as the shared measurement grep, plus `threads?\|chars/s` | as the shared rule | |
 | 14 | `+` `which\(\|spawn\(\|npm run \|npx \|--version` | A dependency on a binary or script absent here: `which spd-say espeak-ng obsidian`, `node -e "console.log(Object.keys(require('./package.json').scripts).join(' '))"`. Check this machine; the history's install facts are dated | |
+
+| 15 | `±` in `src/text/`; a ticket body or PR body this change files or cites | An extraction fix whose ticket has no `Vault evidence:` line and no owner report (WARN, not BLOCK, for a pre-ADR-0039 ticket); a ticket or PR body that quotes note text or a note path (BLOCK, rule 1); a BLOCK raised only from a generated input that the vault does not contain (strike it, list it as a residual) | no `src/text/` change |
 
 The `\|` above is table escaping: in the shell it is a plain `|` inside `grep -E`.
 

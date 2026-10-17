@@ -18,6 +18,13 @@ label (see `tickets.md`); carry it in `## Constraints`.
 
 Before filing, check `docs/agent-history.md` "Known state" as the known-defects list.
 
+**Extraction bugs need vault evidence (rule 15, ADR 0039).** Before filing an extraction
+mismatch, run the shape through the vault check or count vault notes that contain it and fire.
+No real note and no owner report: do not file; say so and stop. A filed ticket carries
+`Vault evidence: <n> notes (vault check, <date>, main <sha>)` and a synthetic repro. Never a note's
+text or path: Linear is a cloud service and the vault is private (rule 1). Never file a
+"residual" or "remainder" ticket for shapes found only by a generator.
+
 ## Cross-repo work
 
 The phone side of the bridge (Read Me Offline's `BridgeServer`) belongs in the Read-Me repo's own

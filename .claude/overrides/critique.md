@@ -1,6 +1,6 @@
 # /critique - Local TTS Reader additions
 
-Rules are `AGENTS.md` "Non-negotiables" 1-10 and "Verification rules" 11-14; numbers in brackets
+Rules are `AGENTS.md` "Non-negotiables" 1-10 and "Verification rules" 11-15; numbers in brackets
 are those rules. Mechanical greps are in `overrides/check-constraints.md`; this file adds the
 adversarial checks a grep cannot do. Before judging a change to extraction, playback, engines,
 highlighting, settings or persistence, search `docs/agent-history.md` for the function or ticket:
@@ -70,6 +70,17 @@ engines know nothing about documents or the editor, `Player` alone decides what 
 - **Lifetime.** Every `await` in `Player.run()`/`playBuffer()` rechecks `runToken` and the abort
   signal; `stop()` clears pending, revokes object URLs and calls `engine.cancelPending?.()`; the
   worker's `drain()` yields before each job and checks `currentGeneration` before posting.
+
+## Extraction findings: what may BLOCK (rule 15, ADR 0039)
+
+Generated inputs are how you test an extraction change, and you should still write your own
+generator. But a mismatch only a generated input reaches is a **residual**: list it in your
+verdict under "Residuals (generated inputs)" with the shape and the cell count, and do not
+BLOCK on it or ask for a ticket. BLOCK only on a regression against base that the vault check,
+the suite or a shape a person plausibly types shows, or on a spoken hidden comment body
+(`%%`, `<!-- -->`) in such a shape. Run the vault check before and after the change
+(`~/.local/share/note-reader-local/vault-check/run.sh <checkout> <out dir outside the repo>`)
+and report both totals; a note that newly flags is a real regression.
 
 ## Spec alignment
 
