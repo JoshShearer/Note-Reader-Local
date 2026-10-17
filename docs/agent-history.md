@@ -413,7 +413,12 @@ text (`alt="!x <!-- QBAQ\nQCAQ"`) and spoken only with `speakImageAlt`. Adversar
 four shapes at 2k/8k scales linearly, like base. lock128 CLEAN. Residual, fail-closed:
 `pendingEnd` is cleared only by a top-level closer line, so a quoted multi-line comment
 withholds later stops (costs fixes, never discloses). NRL-200 (`%%` inside a type-6 block) is a
-separate change. Not run in Obsidian.
+separate change. Fix round 1 (critic 1 BLOCK: 0 disclosed, 11 to 29 lost per 3,000 documents):
+a stop unmasked a `%%` inside the `<div>` block it starts (raw text on the page) and the pass
+opened a comment to EOF, so a stop with a `%%` line before the next `-->` line is refused; and
+an H6 stop after a quote started inside the run lost a lazy tab line, so it is refused there.
+The critic's generator (4 seeds x 3,000 documents) then gave 0 disclosed and 0 lost on o13
+and o14, and the plan grid kept 2,316 of round 0's 2,700 fixed cells. Not run in Obsidian.
 
 ### A defined reference label spanning lines is hidden (NRL-218, 2026-10-16)
 

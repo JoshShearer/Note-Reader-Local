@@ -7263,6 +7263,20 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	// line, so a quoted multi-line comment withholds later stops: fail-closed,
 	// costs fixes only); a fence, `$$` or `%%` still open (`pendingLit`).
 	{
+		// A stop unmasks what the comment hid up to its closer: a `%%` there
+		// would open a comment the page does not have (inside the HTML block the
+		// stop starts, `%%` is raw text), so a stop with a `%%` line before the
+		// next `-->` line is refused. Indexes from the end keep this linear.
+		const pctBeforeClose: boolean[] = new Array<boolean>(lines.length).fill(false);
+		{
+			let seenPct = false;
+			for (let k = lines.length - 1; k >= 0; k--) {
+				const l = lines[k]!;
+				if (l.includes("-->")) seenPct = l.includes("%%") && l.indexOf("%%") < l.indexOf("-->");
+				else if (l.includes("%%")) seenPct = true;
+				pctBeforeClose[k] = seenPct;
+			}
+		}
 		let pendingEnd: RegExp | undefined;
 		let pendingLit: string | undefined;
 		// Whether the open raw block or fence started at top level, the only
@@ -7271,6 +7285,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		let inRun = false;
 		let htmlish = false;
 		let allZero = true;
+		let quoteStarted = false;
 		for (let k = 0; k < lines.length; k++) {
 			const line = lines[k]!;
 			const { depth, body } = term2QuoteView(line);
@@ -7311,17 +7326,22 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 				inRun = false;
 				continue;
 			}
-			if (inRun && !htmlish) {
+			if (inRun && !htmlish && !pctBeforeClose[k]) {
 				if (depth > 0 && allZero) term2Stop[k] = true;
-				else {
+				// A quote started inside the run takes lazy lines (a tab-led one
+				// included) that a later H6 stop measured losing, so H6 is refused
+				// after one. A run quoted from its first line is not this case.
+				else if (!quoteStarted) {
 					const lead = /^ */.exec(body)![0].length;
 					if (lead <= 3 && !/\s/.test(body.charAt(lead)) && rawBlockOpener(body.slice(lead)) === "blank") term2Stop[k] = true;
 				}
 			}
+			if (inRun && depth > 0 && allZero) quoteStarted = true;
 			if (!inRun) {
 				inRun = true;
 				htmlish = false;
 				allZero = true;
+				quoteStarted = false;
 			}
 			if (/^ {0,3}</.test(body) || /^\s*</.test(line)) htmlish = true;
 			if (depth !== 0 || containerPrefix(line).quotes !== 0) allZero = false;

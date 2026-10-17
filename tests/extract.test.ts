@@ -5214,6 +5214,11 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl197-closing-div-ends-inline-comment-paragraph", "Para.\n\nTitle <!--\n</div>\nZQSX\n-->\n\nZAFTX", "Para. Title <!-- ZQSX --> ZAFTX"],
 		["pin-nrl197-three-space-div-ends-inline-comment-paragraph", "Para.\n\nTitle <!--\n   <div>\nZQSX\n-->\n\nZAFTX", "Para. Title <!-- ZQSX --> ZAFTX"],
 		["pin-nrl197-three-space-quote-ends-inline-comment-paragraph", "Para.\n\nTitle <!--\n   > x\nZQSX\n-->\n\nZAFTX", "Para. Title <!-- x ZQSX --> ZAFTX"],
+		// NRL-197 round 1: a stop would unmask a `%%` the page keeps as raw text
+		// inside the `<div>` block, and a quote started in the run takes a lazy
+		// tab line a later H6 stop lost; both keep base's reading.
+		["guard-nrl197-pct-in-div-block-refuses-stop", "a <!-- b\n<div>\n%% c\nd --> e", "a e"],
+		["guard-nrl197-h6-after-started-quote-refused", "a <!-- b\n> c\n\td\n<h1> e", "a <!-- b c d e"],
 		["guard-nrl197-script-is-not-a-stop", "T <!--\n<script>\nZQSX\n-->", "T"],
 		["guard-nrl197-span-is-not-a-stop", "T <!--\n<span>\nZQSX -->", "T"],
 		["guard-nrl197-quote-continuation-stays-hidden", "> T <!--\n> HIDDEN\n> -->", "T"],
