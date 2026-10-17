@@ -7114,11 +7114,31 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		};
 		let nextRisk = lines.length;
 		let nextPct = -1;
+		// The first risk line at or after each line, for NRL-200's reach past a block.
+		const nextRiskFrom: number[] = new Array<number>(lines.length + 1).fill(lines.length);
+		const { quietHtmlBlockStart: quietStart, quietHtmlBlockEnd: quietEnd } = rendererHidden;
 		for (let k = lines.length - 1; k >= 0; k--) {
 			if (rendererHidden.browserRiskLines[k]! || rendererHidden.footnoteLines[k]! || rendererHidden.hiddenRawLines[k]! || lineMayHold(k) || openCommentOnLine(lines[k]!)) nextRisk = k;
+			nextRiskFrom[k] = nextRisk;
 			const reach = nextPct === -1 ? lines.length - 1 : nextPct;
 			const chained = nextPct === -1 || (percentOpensAt[nextPct] !== undefined && onePct(lines[nextPct]!));
 			if (nextRisk > reach && !constructSinceBlank[k]! && chained) percentOpensAt[k] = rendererHidden.percentStarts.has(k);
+			// NRL-200: a `%%` line inside a top-level `<div>`-type (condition 6)
+			// HTML block is raw HTML text for the renderer, which opens no block
+			// there; ours hid everything to the next `%%` or the note's end
+			// (`<div>` / `x` / `%%` / `` / `ZAFTX` showed ZAFTX, we dropped it).
+			// The block's own lines are risks only as HTML, so they do not count
+			// here when the block leaves nothing open and holds no `<!--`; past the
+			// block, the usual reach rule applies.
+			else if (chained && quietStart[k]! !== -1 && !rendererHidden.percentStarts.has(k)) {
+				const a = quietStart[k]!;
+				const b = quietEnd[k]!;
+				const head = lines[a]!;
+				const typeSix = /^ {0,3}</.test(head) && rawBlockOpener(head.trimStart()) === "blank";
+				const past = reach <= b || nextRiskFrom[b + 1]! > reach;
+				const safe = k < rendererHidden.browserOpenFrom && k > rendererHidden.openRiskThrough;
+				if (typeSix && past && safe) percentOpensAt[k] = false;
+			}
 			if (lines[k]!.includes("%%")) nextPct = k;
 		}
 	}

@@ -396,6 +396,45 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A `%%` line inside a `<div>` block opens no comment (NRL-200, 2026-10-17)
+
+`<div>` / `ZQSX` / `%%` / blank / `ZAFTX` displays `ZQSX %% ZAFTX` on 1.13.7 and 1.14.4:
+the `%%` is raw HTML text inside the block. Our opener hid everything to the next `%%` or EOF.
+`percentOpensAt` keeps our opener wherever a risk line lies in its reach, and every HTML block
+line is a risk, so the renderer's own "no block" answer (`rendererHidden.percentStarts`) was
+never taken there. `rendererHiddenText` now also returns `quietHtmlBlockStart`/`End` and
+`browserOpenFrom`. A `%%` line in a quiet block takes the renderer's answer when:
+- the block is top-level and of condition 6;
+- it is before `browserOpenFrom` and after `openRiskThrough`;
+- nothing past the block's end is a risk up to the reach.
+
+A block is quiet when it leaves nothing open, holds no `<!--`, fence or `$$`, and holds only
+well-formed allowlisted tags without `style`, `popover`, `hidden` or `inert`.
+
+The ticket's fence, quote and ATX twins already matched on main (eae0e2e).
+
+Plan v1 BLOCK (55) found 12 newly disclosed cells: `<div>` / `<a c"> S` / `%% U`. The page
+hides everything from the malformed tag on, but the scanner reported the block closed. Plan v2
+CONCERNS (74) found 0 new disclosures on its own generator, but showed that a refusal list
+cannot be complete: `<video>`, `<rp>`, `popover` and inline CSS hide text the harness grades
+as visible. The build therefore uses an allowlist. Earlier guards came from measured cells:
+fences and `$$` in the block (our model opened code on the raw line), and an unclosed `<pre>`
+(84 excluded-speech cells).
+
+Measured on the build, sentinel-graded on o13 and o14 under DEF/CODE/ALL:
+- four generators (the author's, both plan critics', and NRL-197's two), 0 newly disclosed;
+- the NRL-197 plan grid's `%%` opener, 4,968 cells fixed;
+- the only "lost" cells are a tab-led `%%` line after the block, which the page shows as
+  indented code, so DEF now skips it (a correct exclusion);
+- lock128 CLEAN, and timing on four shapes at 2k/8k is linear.
+
+Residuals, all fail-closed:
+- chained quiet blocks keep base (the second block is a risk in the first's reach);
+- quoted and list HTML blocks keep base;
+- CSS from an earlier `<style>` or a snippet is not modelled.
+
+Not run in Obsidian.
+
 ### A `<div>` line or a starting quote ends an inline-comment paragraph (NRL-197, 2026-10-16)
 
 `Title <!--` / `<div>` / `ZQSX` / `-->` hid `ZQSX`, but the renderer ends the paragraph at the

@@ -1563,3 +1563,21 @@ footnote whatever surrounds it. ADR 0025, "NRL-166 fix round 3".
   real module and local gates. Deployment, actual reading, and highlight
   placement in the real editor are still pending; human verification remains
   required by the ticket's acceptance criteria.
+
+## AMENDED by NRL-200 (2026-10-17): a `%%` line inside a quiet `<div>` block opens no block
+
+The reading view treats a `%%` line inside an HTML block as raw HTML text, so it opens no
+comment. Ours did open one, and it hid everything up to the next `%%` or the end of the note
+(`<div>` / `x` / `%%` / blank / `ZAFTX` displays ZAFTX). `percentOpensAt` now takes the
+renderer's "no block" answer on such a line, under these conditions:
+- the block is top-level, starts with a condition-6 tag at 0-3 spaces, and leaves nothing open;
+- it holds no `<!--`, fence or `$$`;
+- every `<` in it starts a well-formed tag from an allowlist of names, with no `style`,
+  `popover`, `hidden` or `inert` attribute;
+- past the block's last line, the usual risk rule holds up to the next `%%` line.
+
+The allowlist exists because a browser hides text in many ways the parser harness cannot
+grade, such as `<video>` fallback, `<rp>`, `<details>`, `popover` and inline CSS. Any other
+block keeps our opener (fail-closed). This includes blocks inside quotes or lists, and a
+block followed by another HTML block within the reach. Evidence: `docs/agent-history.md`,
+NRL-200.

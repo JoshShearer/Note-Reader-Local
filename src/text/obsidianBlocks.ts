@@ -1869,6 +1869,18 @@ export interface RendererHiddenText {
 	 * fenced and indented code blocks, whose text the page displays as written.
 	 */
 	hiddenRawLines: boolean[];
+	/**
+	 * Per 0-based line, the first line of the HTML block holding it when that
+	 * block leaves nothing open, holds no `<!--`, fence or `$$`, and holds only
+	 * allowed, well-formed tags (`quietHtmlText`), else -1
+	 * (NRL-200). A `%%`
+	 * line there is raw HTML text for the renderer, so it opens no block.
+	 */
+	quietHtmlBlockStart: number[];
+	/** As `quietHtmlBlockStart`, the block's last line, else -1. */
+	quietHtmlBlockEnd: number[];
+	/** The first line a browser may be inside something an HTML block left open. */
+	browserOpenFrom: number;
 }
 
 /** Characters that open no inline construct: a backtick run after only these is the one the renderer pairs. */
@@ -2089,6 +2101,30 @@ function inlineBogusGate(
  * falls inside one from the spoken text can never disclose, and it is how
  * `extractChunks` drops text its own model would otherwise read.
  */
+
+// NRL-200: what a quiet HTML block (`quietHtmlBlockStart`) may hold. Tags are
+// allowed by name, not refused by name: a refusal list cannot be complete, and
+// the parser harness's visibility check cannot see much of what a browser hides
+// (`<video>` fallback, `<rp>`, `<details>`, `popover`, inline CSS; plan review
+// v1 and v2). Every `<` must start a well-formed tag (`QUIET_TAG`, whose
+// whitespace may span lines, as a browser's does): a malformed one (`<a c">`,
+// a quote in an attribute name) can make the browser hide the rest of the page
+// while the scanner reports nothing open. An unclosed `<pre>` or `<code>`
+// makes the browser show what follows as code, so neither is allowed.
+const QUIET_TAG = /<\/?([A-Za-z][A-Za-z0-9-]*)((?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*)\s*\/?>/g;
+const QUIET_TAG_NAMES = new Set(
+	"div p table thead tbody tfoot tr td th caption colgroup col section article aside header footer nav main figure figcaption blockquote center address ul ol li dl dt dd h1 h2 h3 h4 h5 h6 hr br span b i u s em strong small sub sup mark a abbr cite q kbd samp var del ins".split(" "),
+);
+// Attributes that hide or move what an allowed tag holds.
+const QUIET_REFUSED_ATTRIBUTE = /(?:^|\s)(?:style|popover|hidden|inert)\b/i;
+const quietHtmlText = (text: string): boolean => {
+	let ok = true;
+	const rest = text.replace(QUIET_TAG, (_m, name: string, attrs: string) => {
+		if (!QUIET_TAG_NAMES.has(name.toLowerCase()) || QUIET_REFUSED_ATTRIBUTE.test(attrs)) ok = false;
+		return "";
+	});
+	return ok && !rest.includes("<");
+};
 
 export function rendererHiddenText(source: string, lineCount: number): RendererHiddenText | null {
 	if (/\r(?!\n)/.test(source)) return null;
@@ -2470,7 +2506,34 @@ export function rendererHiddenText(source: string, lineCount: number): RendererH
 	}
 	const hiddenRawLines: boolean[] = new Array<boolean>(lineCount).fill(false);
 	for (const [a, b, kind] of scanner.rawBlocks) if (HIDDEN_RAW_BLOCKS.has(kind)) for (let l = a; l <= b && l < lineCount; l++) hiddenRawLines[l] = true;
-	return { ranges, strictRanges, percentStarts, percentEnds, footnoteLines, browserRiskLines, openRiskThrough, frontmatterLastLine: scanner.frontmatterLastLine, hiddenRawLines };
+	const quietHtmlBlockStart: number[] = new Array<number>(lineCount).fill(-1);
+	const quietHtmlBlockEnd: number[] = new Array<number>(lineCount).fill(-1);
+	for (const [a, b, open] of scanner.htmlBlocks) {
+		// A fence or `$$` line in the block is raw HTML text here, but our own
+		// model would open code or math on it once no `%%` block covers it.
+		const text = source.slice(lineStart[a], lineEnd[b]);
+		// An unclosed `<pre>` or `<code>` makes the browser show what follows as
+		// code, and a raw-text tag may swallow it, which base hid by accident.
+		if (open !== null || b >= lineCount || text.includes("<!--") || /```|~~~|\$\$/.test(text) || !quietHtmlText(text)) continue;
+		for (let l = a; l <= b; l++) {
+			quietHtmlBlockStart[l] = a;
+			quietHtmlBlockEnd[l] = b;
+		}
+	}
+	return {
+		ranges,
+		strictRanges,
+		percentStarts,
+		percentEnds,
+		footnoteLines,
+		browserRiskLines,
+		openRiskThrough,
+		frontmatterLastLine: scanner.frontmatterLastLine,
+		hiddenRawLines,
+		quietHtmlBlockStart,
+		quietHtmlBlockEnd,
+		browserOpenFrom: openFrom,
+	};
 }
 
 /**
