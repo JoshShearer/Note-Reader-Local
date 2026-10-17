@@ -5207,6 +5207,26 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl218-r1-earlier-bracket-pair", "A [y][x][QaQ\nQbQ] T.\n\n[QaQ QbQ]: x", "A y x [QaQ QbQ] T."],
 		["guard-nrl218-r2-definition-over-setext-is-heading", "A [l][QaQ\nQbQ] T.\n\n[QaQ QbQ]: u\n===", "A l [QaQ QbQ] T. ==="],
 		["guard-nrl218-r2-definition-in-pct-block", "A [l][QaQ\nQbQ] T.\n\n%%\n\n[QaQ QbQ]: u\n%%", "A l [QaQ QbQ] T."],
+		// NRL-200: a `%%` line inside a quiet top-level `<div>`-type HTML block is raw
+		// HTML text for the renderer and opens no block; refused blocks keep base.
+		["pin-nrl200-pct-in-div-after-title-pct", "Para.\n\nTitle %%\n<div>\nZQSX\n%%\n\nZAFTX", "Para. Title %% ZQSX %% ZAFTX"],
+		["pin-nrl200-pct-in-div-block-is-text", "<div>\nZQSX\n%%\n\nZAFTX", "ZQSX %% ZAFTX"],
+		["pin-nrl200-pct-in-closing-div-block", "</div>\nZQSX\n%%\n\nZAFTX", "ZQSX %% ZAFTX"],
+		["pin-nrl200-pct-in-table-block", "<table>\nZQSX\n%%\n\nZAFTX", "ZQSX %% ZAFTX"],
+		["pin-nrl200-pct-under-closed-attribute", "<div>\n<b title=\"x\">T</b>\n%% U\n\nV", "T %% U V"],
+		["pin-nrl200-real-pct-block-after-div-still-hides", "<div>\nZQSX\n%%\n\nZAFTX\n%%\nZHID", "ZQSX %% ZAFTX"],
+		["pin-nrl200-unclosed-tilde-fence-after-block-is-code", "<div>\nZQSX\n%%\n\n~~~\nZCODE", "ZQSX %%"],
+		["guard-nrl200-malformed-tag-keeps-base", "<div>\n<a c\"> S\n%% U\n\nV", "S"],
+		["guard-nrl200-chained-blocks-keep-base", "<div>\nA\n%%\n\n<div>\nB\n%%\n\nC", "A C"],
+		["guard-nrl200-hidden-attribute-keeps-base", "<div hidden>\nT\n%% U\n\nV", "T"],
+		["guard-nrl200-video-fallback-keeps-base", "<div>\n<video> ZA\n%% ZU\n\nZV", "ZA"],
+		["guard-nrl200-inline-style-keeps-base", "<div style=\"opacity:0\">\nZA\n%% ZU\n\nZV", "ZA"],
+		["guard-nrl200-fence-in-block-keeps-base", "<div>\n```\n%% ZU\n\nZV", ""],
+		["guard-nrl200-math-in-block-keeps-base", "<div>\n$$\n%% ZU\n\nZV", "$$"],
+		["guard-nrl200-unclosed-pre-keeps-base", "<div>\n<pre>\n%% ZU\n\nZV", ""],
+		["guard-nrl200-comment-in-block-keeps-base", "<div><!-- x\n%% ZU\n\nZV", ""],
+		["guard-nrl200-quoted-div-keeps-base", "> <div>\n> ZA\n> %% ZU\n\nZV", "ZA"],
+		["guard-nrl200-four-space-div-keeps-base", "    <div>\nZA\n%% ZU\n\nZV", "ZA"],
 		// NRL-197: a `<div>`-type line or a quote starting under a top-level
 		// paragraph ends it, so an inline `<!--` before it is text.
 		["pin-nrl197-div-ends-inline-comment-paragraph", "Para.\n\nTitle <!--\n<div>\nZQSX\n-->\n\nZAFTX", "Para. Title <!-- ZQSX --> ZAFTX"],
