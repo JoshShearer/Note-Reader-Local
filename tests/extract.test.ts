@@ -5217,7 +5217,10 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["pin-nrl200-real-pct-block-after-div-still-hides", "<div>\nZQSX\n%%\n\nZAFTX\n%%\nZHID", "ZQSX %% ZAFTX"],
 		["pin-nrl200-unclosed-tilde-fence-after-block-is-code", "<div>\nZQSX\n%%\n\n~~~\nZCODE", "ZQSX %%"],
 		["guard-nrl200-malformed-tag-keeps-base", "<div>\n<a c\"> S\n%% U\n\nV", "S"],
-		["guard-nrl200-chained-blocks-keep-base", "<div>\nA\n%%\n\n<div>\nB\n%%\n\nC", "A C"],
+		// NRL-220: a second quiet block in the reach, and a quoted quiet block.
+		["pin-nrl220-chained-quiet-blocks", "<div>\nA\n%%\n\n<div>\nB\n%%\n\nC", "A %% B %% C"],
+		["guard-nrl220-chained-hidden-block-keeps-base", "<div>\nA\n%%\n\n<div hidden>\nB\n%%\n\nC", "A C"],
+		["guard-nrl220-chained-pre-block-keeps-base", "<div>\nA\n%%\n\n<pre>\nB\n%%\n\nC", "A C"],
 		["guard-nrl200-hidden-attribute-keeps-base", "<div hidden>\nT\n%% U\n\nV", "T"],
 		["guard-nrl200-video-fallback-keeps-base", "<div>\n<video> ZA\n%% ZU\n\nZV", "ZA"],
 		["guard-nrl200-inline-style-keeps-base", "<div style=\"opacity:0\">\nZA\n%% ZU\n\nZV", "ZA"],
@@ -5225,7 +5228,9 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl200-math-in-block-keeps-base", "<div>\n$$\n%% ZU\n\nZV", "$$"],
 		["guard-nrl200-unclosed-pre-keeps-base", "<div>\n<pre>\n%% ZU\n\nZV", ""],
 		["guard-nrl200-comment-in-block-keeps-base", "<div><!-- x\n%% ZU\n\nZV", ""],
-		["guard-nrl200-quoted-div-keeps-base", "> <div>\n> ZA\n> %% ZU\n\nZV", "ZA"],
+		["pin-nrl220-quoted-quiet-block", "> <div>\n> ZA\n> %% ZU\n\nZV", "ZA %% ZU ZV"],
+		["pin-nrl220-quoted-quiet-block-then-quote-text", "> <div>\n> ZA\n> %% ZU\n>\n> ZV\n\nZW", "ZA %% ZU ZV ZW"],
+		["guard-nrl220-list-item-block-keeps-base", "- <div>\n  ZA\n  %% ZU\n\nZV", "ZA"],
 		["guard-nrl200-four-space-div-keeps-base", "    <div>\nZA\n%% ZU\n\nZV", "ZA"],
 		// NRL-197: a `<div>`-type line or a quote starting under a top-level
 		// paragraph ends it, so an inline `<!--` before it is text.

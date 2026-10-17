@@ -396,6 +396,30 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### A `%%` line in a quoted or chained quiet `<div>` block opens no comment (NRL-220, 2026-10-17)
+
+Two shapes NRL-200 left on base's reading:
+- `> <div>` / `> ZA` / `> %% ZU` / blank / `ZV` shows `ZA %% ZU ZV`; we spoke `ZA`.
+- `<div>` / `A` / `%%` / blank / `<div>` / `B` / `%%` / blank / `C` shows `A %% B %% C`; we
+  spoke `A C`.
+
+The changes are in the `percentOpensAt` backward pass:
+- `quietSix(k)` reads a block's first line after its `>` markers.
+- The reach past a block uses `nextRiskFrom`, which now skips lines of quiet condition-6 blocks
+  inside the `browserOpenFrom`/`openRiskThrough` window.
+
+Refused blocks still count as risks, and a list-item block keeps base.
+
+Measured against main 7a04b47, sentinel-graded on o13 and o14 under DEF/CODE/ALL:
+- NRL-200's four generators and NRL-197's two, 2 seeds each: 0 newly disclosed and 0 newly lost,
+  with 12 to 220 shown tokens newly spoken per run;
+- the NRL-197 plan grid's `%%` opener: 5,832 fixed (NRL-200 alone gave 4,968);
+- lock128 CLEAN;
+- timing on three shapes at 2k/8k: linear.
+
+Two NRL-200 guard rows that pinned the old reading of these shapes became NRL-220 pins. Not run
+in Obsidian.
+
 ### A `%%` line inside a `<div>` block opens no comment (NRL-200, 2026-10-17)
 
 `<div>` / `ZQSX` / `%%` / blank / `ZAFTX` displays `ZQSX %% ZAFTX` on 1.13.7 and 1.14.4:
