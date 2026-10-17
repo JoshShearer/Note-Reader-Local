@@ -2184,7 +2184,7 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// line. We hide HIDDENQ3. Fail-closed, identical on base, and only fixable
 		// with container-prefix awareness (the NRL-88 root-1 class). When that
 		// lands this expectation must change ON PURPOSE.
-		["pin-nrl95-quote-starting-after-opener-still-hidden", "Prose <!--\n> HIDDENQ3\nmore -->", "Prose"],
+		["pin-nrl95-quote-starting-after-opener-still-hidden", "Prose <!--\n> HIDDENQ3\nmore -->", "Prose <!-- HIDDENQ3 more -->"],  // NRL-197: re-pinned to the page (o13 and o14)
 		// G4: TABLE_ROW is dropped because NO table row can interrupt a paragraph
 		// in Obsidian at all - `table` appears nowhere in `u.interruptParagraph`
 		// (read from app.js this session) and the only terms ever inserted into
@@ -3046,14 +3046,14 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl166-r1-pi-block-in-body", "P <!-- QAQ -- QBQ\n<?x QEQ\nQCQ --> QDQ", "P QDQ"],
 		["guard-nrl166-r1-tag-opens-in-body", "P <!-- QAQ -- <b title=\"QBQ\nQCQ -->\">QDQ</b>", "P \">QDQ"],
 		["guard-nrl166-r1-link-title-in-body", "P <!-- QAQ -- QBQ [x](u \"QEQ\nQCQ -->\") QDQ", "P \") QDQ"],
-		["guard-nrl166-r1-declaration-block-before-code-stop", "P <!-- QAAQ\n><!X QBAQ\n    QDAQ\n> \tQEAQ --->", "P", { skipCodeBlocks: false }],
-		["guard-nrl166-r1-image-label-before-code-stop", "![!x <!-- QBAQ\nQCAQ](a.png)\n>\t]] -->", "[!x", { skipCodeBlocks: false }],
+		["guard-nrl166-r1-declaration-block-before-code-stop", "P <!-- QAAQ\n><!X QBAQ\n    QDAQ\n> \tQEAQ --->", "P <!-- QAAQ QDAQ QEAQ --->", { skipCodeBlocks: false }],  // NRL-197: re-pinned to the page (o13 and o14)
+		["guard-nrl166-r1-image-label-before-code-stop", "![!x <!-- QBAQ\nQCAQ](a.png)\n>\t]] -->", "!x QCAQ ]] -->", { skipCodeBlocks: false }],  // NRL-197: re-pinned to the page (o13 and o14)
 		["guard-nrl166-r1-walker-code-line-over-image-label", "> > QAAQ\n>\t[r]: \"<!-- QCAQ\n![QDAQ\nQEAQ -->](a.png)", "QAAQ r : \" ](a.png)", { skipCodeBlocks: false }],
 		// /critique round 3, Q1: a `---` block extractChunks does not take as
 		// frontmatter is still `pre.frontmatter` for the renderer; a note whose first
 		// line is `---` keeps main's answer.
 		["guard-nrl166-r1-unrecognised-frontmatter-keeps-old-answer", "---\nk: v\nP <!-- QAQ -- QBQ\nQCQ --> QDQ\n---\nQEQ", "k: v P QDQ QEQ"],
-		["guard-nrl166-r1-footnote-under-comment", "P <!-- QAAQ\n> \t<div>\n[^1]: QBAQ --> QCAQ\n- QDAQ -->", "P QDAQ -->", { skipCodeBlocks: false }],
+		["guard-nrl166-r1-footnote-under-comment", "P <!-- QAAQ\n> \t<div>\n[^1]: QBAQ --> QCAQ\n- QDAQ -->", "P <!-- QAAQ QDAQ -->", { skipCodeBlocks: false }],  // NRL-197: re-pinned to the page (o13 and o14)
 		// Class B: `- > \t` opens indented code inside the item's quote, so its
 		// `<!--` is code. A `%%` line below ends the list uncertainly and the walker
 		// skipped the whole last item; its FIRST line does not depend on where the
@@ -5207,6 +5207,27 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		["guard-nrl218-r1-earlier-bracket-pair", "A [y][x][QaQ\nQbQ] T.\n\n[QaQ QbQ]: x", "A y x [QaQ QbQ] T."],
 		["guard-nrl218-r2-definition-over-setext-is-heading", "A [l][QaQ\nQbQ] T.\n\n[QaQ QbQ]: u\n===", "A l [QaQ QbQ] T. ==="],
 		["guard-nrl218-r2-definition-in-pct-block", "A [l][QaQ\nQbQ] T.\n\n%%\n\n[QaQ QbQ]: u\n%%", "A l [QaQ QbQ] T."],
+		// NRL-197: a `<div>`-type line or a quote starting under a top-level
+		// paragraph ends it, so an inline `<!--` before it is text.
+		["pin-nrl197-div-ends-inline-comment-paragraph", "Para.\n\nTitle <!--\n<div>\nZQSX\n-->\n\nZAFTX", "Para. Title <!-- ZQSX --> ZAFTX"],
+		["pin-nrl197-quote-start-ends-inline-comment-paragraph", "Para.\n\nTitle <!--\n> x\nZQSX\n-->\n\nZAFTX", "Para. Title <!-- x ZQSX --> ZAFTX"],
+		["pin-nrl197-closing-div-ends-inline-comment-paragraph", "Para.\n\nTitle <!--\n</div>\nZQSX\n-->\n\nZAFTX", "Para. Title <!-- ZQSX --> ZAFTX"],
+		["pin-nrl197-three-space-div-ends-inline-comment-paragraph", "Para.\n\nTitle <!--\n   <div>\nZQSX\n-->\n\nZAFTX", "Para. Title <!-- ZQSX --> ZAFTX"],
+		["pin-nrl197-three-space-quote-ends-inline-comment-paragraph", "Para.\n\nTitle <!--\n   > x\nZQSX\n-->\n\nZAFTX", "Para. Title <!-- x ZQSX --> ZAFTX"],
+		// NRL-197 round 1: a stop would unmask a `%%` the page keeps as raw text
+		// inside the `<div>` block, and a quote started in the run takes a lazy
+		// tab line a later H6 stop lost; both keep base's reading.
+		["guard-nrl197-pct-in-div-block-refuses-stop", "a <!-- b\n<div>\n%% c\nd --> e", "a e"],
+		["guard-nrl197-h6-after-started-quote-refused", "a <!-- b\n> c\n\td\n<h1> e", "a <!-- b c d e"],
+		// NRL-197 round 2: a `%%` on the closer line or anywhere earlier in the
+		// run, and an indented lazy line under a quote, keep base's reading.
+		["guard-nrl197-pct-after-closer-refuses-stop", "a1 <!-- a2\n<div> a3\na4 --> %% a5\n%% a6\nb1 after", "a1 a6 b1 after"],
+		["guard-nrl197-tab-lazy-in-quoted-run-refuses-h6", "> [!note] q1 <!-- q2\n> q3 -->\n\tq4 lazy\n<div> q5", "q1 q4 lazy q5"],
+		["guard-nrl197-indented-lazy-in-quoted-run-refuses-h6", "> q1 <!-- q2\n> q3 -->\n     q4 lazy\n<div> q5", "q1 q4 lazy q5"],
+		["guard-nrl197-script-is-not-a-stop", "T <!--\n<script>\nZQSX\n-->", "T"],
+		["guard-nrl197-span-is-not-a-stop", "T <!--\n<span>\nZQSX -->", "T"],
+		["guard-nrl197-quote-continuation-stays-hidden", "> T <!--\n> HIDDEN\n> -->", "T"],
+		["guard-nrl197-four-space-quote-is-lazy", "T <!--\n    > x\nZQSX -->", "T"],
 		["pin-nrl216-declined-tail-spanning-lines-keeps-dest", "A [QlQ][QrQ\n](QuQ) T.", "A QlQ [QrQ ](QuQ) T."],
 		["guard-nrl216-spaced-label-is-a-real-link", "A [QlQ] [QrQ\n](QuQ) T.", "A QlQ QrQ T."],
 		["guard-nrl216-later-bracket-may-carry", "A [QlQ][QrQ [QsQ\n](QuQ) T.", "A QlQ QrQ [QsQ T."],
