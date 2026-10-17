@@ -5219,6 +5219,11 @@ console.log("Obsidian comment exclusion (NRL-38)");
 		// tab line a later H6 stop lost; both keep base's reading.
 		["guard-nrl197-pct-in-div-block-refuses-stop", "a <!-- b\n<div>\n%% c\nd --> e", "a e"],
 		["guard-nrl197-h6-after-started-quote-refused", "a <!-- b\n> c\n\td\n<h1> e", "a <!-- b c d e"],
+		// NRL-197 round 2: a `%%` on the closer line or anywhere earlier in the
+		// run, and an indented lazy line under a quote, keep base's reading.
+		["guard-nrl197-pct-after-closer-refuses-stop", "a1 <!-- a2\n<div> a3\na4 --> %% a5\n%% a6\nb1 after", "a1 a6 b1 after"],
+		["guard-nrl197-tab-lazy-in-quoted-run-refuses-h6", "> [!note] q1 <!-- q2\n> q3 -->\n\tq4 lazy\n<div> q5", "q1 q4 lazy q5"],
+		["guard-nrl197-indented-lazy-in-quoted-run-refuses-h6", "> q1 <!-- q2\n> q3 -->\n     q4 lazy\n<div> q5", "q1 q4 lazy q5"],
 		["guard-nrl197-script-is-not-a-stop", "T <!--\n<script>\nZQSX\n-->", "T"],
 		["guard-nrl197-span-is-not-a-stop", "T <!--\n<span>\nZQSX -->", "T"],
 		["guard-nrl197-quote-continuation-stays-hidden", "> T <!--\n> HIDDEN\n> -->", "T"],

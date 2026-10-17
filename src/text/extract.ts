@@ -7270,11 +7270,17 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		const pctBeforeClose: boolean[] = new Array<boolean>(lines.length).fill(false);
 		{
 			let seenPct = false;
+			// A `%%` up to the blank line that ends the block the stop starts.
+			let seenToBlank = false;
 			for (let k = lines.length - 1; k >= 0; k--) {
 				const l = lines[k]!;
-				if (l.includes("-->")) seenPct = l.includes("%%") && l.indexOf("%%") < l.indexOf("-->");
+				// Any `%%` on the `-->` line counts too: after the stop it is raw
+				// text in the block while a later `%%` line still opens.
+				if (l.includes("-->")) seenPct = l.includes("%%");
 				else if (l.includes("%%")) seenPct = true;
-				pctBeforeClose[k] = seenPct;
+				if (l.trim() === "") seenToBlank = false;
+				else if (l.includes("%%")) seenToBlank = true;
+				pctBeforeClose[k] = seenPct || seenToBlank;
 			}
 		}
 		let pendingEnd: RegExp | undefined;
@@ -7286,6 +7292,7 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 		let htmlish = false;
 		let allZero = true;
 		let quoteStarted = false;
+		let tabAfterQuote = false;
 		for (let k = 0; k < lines.length; k++) {
 			const line = lines[k]!;
 			const { depth, body } = term2QuoteView(line);
@@ -7328,22 +7335,29 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 			}
 			if (inRun && !htmlish && !pctBeforeClose[k]) {
 				if (depth > 0 && allZero) term2Stop[k] = true;
-				// A quote started inside the run takes lazy lines (a tab-led one
-				// included) that a later H6 stop measured losing, so H6 is refused
-				// after one. A run quoted from its first line is not this case.
-				else if (!quoteStarted) {
+				// A quote started inside the run takes lazy lines that a later H6
+				// stop measured losing, so H6 is refused after one.
+				else if (!quoteStarted && !tabAfterQuote) {
 					const lead = /^ */.exec(body)![0].length;
 					if (lead <= 3 && !/\s/.test(body.charAt(lead)) && rawBlockOpener(body.slice(lead)) === "blank") term2Stop[k] = true;
 				}
 			}
 			if (inRun && depth > 0 && allZero) quoteStarted = true;
+			// A run quoted from its first line also loses a lazy line indented
+			// four columns or a tab to a later H6 stop (measured), so such a line
+			// after a quote refuses H6.
+			if (inRun && !allZero && /^(?: {4}| {0,3}\t)/.test(line)) tabAfterQuote = true;
 			if (!inRun) {
 				inRun = true;
 				htmlish = false;
 				allZero = true;
 				quoteStarted = false;
+				tabAfterQuote = false;
 			}
 			if (/^ {0,3}</.test(body) || /^\s*</.test(line)) htmlish = true;
+			// A `%%` earlier in the run may open an inline comment a stop would
+			// reshape (measured loss), so the rest of the run keeps base.
+			if (line.includes("%%")) htmlish = true;
 			if (depth !== 0 || containerPrefix(line).quotes !== 0) allZero = false;
 		}
 	}

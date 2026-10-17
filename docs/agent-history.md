@@ -418,7 +418,13 @@ a stop unmasked a `%%` inside the `<div>` block it starts (raw text on the page)
 opened a comment to EOF, so a stop with a `%%` line before the next `-->` line is refused; and
 an H6 stop after a quote started inside the run lost a lazy tab line, so it is refused there.
 The critic's generator (4 seeds x 3,000 documents) then gave 0 disclosed and 0 lost on o13
-and o14, and the plan grid kept 2,316 of round 0's 2,700 fixed cells. Not run in Obsidian.
+and o14, and the plan grid kept 2,316 of round 0's 2,700 fixed cells. Fix round 2 (round-1 critic BLOCK:
+0 disclosed, 4 to 46 lost per seed): a `%%` after `-->` on the closer line, a `%%` up to the
+block's blank line, and a `%%` anywhere earlier in the run now refuse stops; an H6 stop is also
+refused after a lazy line indented a tab or four columns under a quote. All three generators
+(round-1 critic's 6 seeds x 1,500, critic 1's 4 x 3,000, the plan grid) give 0 disclosed and 0
+lost; the plan grid still fixes 2,316 cells. Merged by hand after round 2 (no third review).
+Not run in Obsidian.
 
 ### A defined reference label spanning lines is hidden (NRL-218, 2026-10-16)
 
