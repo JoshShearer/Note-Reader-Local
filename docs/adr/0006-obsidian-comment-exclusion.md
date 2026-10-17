@@ -1581,3 +1581,14 @@ grade, such as `<video>` fallback, `<rp>`, `<details>`, `popover` and inline CSS
 block keeps our opener (fail-closed). This includes blocks inside quotes or lists, and a
 block followed by another HTML block within the reach. Evidence: `docs/agent-history.md`,
 NRL-200.
+
+## AMENDED by NRL-220 (2026-10-17): quoted quiet blocks, and quiet blocks in the reach
+
+NRL-200's exception now also covers two shapes:
+- a quiet condition-6 block inside a quote, where the block's first line is read after its `>`
+  markers;
+- a reach that crosses another quiet condition-6 block, whose lines are no longer risks.
+
+Quiet blocks are still bounded by `browserOpenFrom` and `openRiskThrough`, as before. A refused
+block (for example `<div hidden>` or `<pre>`) still counts as a risk, and a block inside a list
+item keeps our opener. Evidence: `docs/agent-history.md`, NRL-220.
