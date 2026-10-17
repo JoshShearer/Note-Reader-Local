@@ -30,7 +30,9 @@ before blaming `origin/main`; a `release`-suite `ENOENT` on `main.js` means the 
 
 ## Phase 0: Triage
 
-Also block: a ticket needing an Android device (R-M03, the `readme` bridge engine, mobile
+Block any ticket touching `src/text/**` whose description has no `Vault evidence:` line and does
+not say the owner reported it (rule 15, ADR 0039); the reason is `no vault evidence`. Also
+block: a ticket needing an Android device (R-M03, the `readme` bridge engine, mobile
 placement), a second GPU or a non-Linux desktop. A ticket that amends `srs.md` needs an ADR in the
 same PR (`tests/adrNumbers.test.ts` checks the numbering).
 
@@ -45,6 +47,8 @@ Manual Test Plan gives exact note contents to paste and the expected speech for 
 
 ## Critic: must-BLOCK
 
+Each only on a shape the vault check, the suite or a person plausibly typing reaches, as a
+regression against base (rule 15); generated-only mismatches are residuals in the PR body.
 Prose silently lost; private text spoken; `sourceIndex` drift; a node builtin reachable at module
 scope or through `import()`; note text, spoken text or the bridge token in a `trace()`, `Notice`,
 log or error.

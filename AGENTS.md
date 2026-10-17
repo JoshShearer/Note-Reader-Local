@@ -130,6 +130,13 @@ Breaking a product promise is a BLOCK.
     come from this session or a named prior measurement with its scope attached.
 14. **Verify actual install paths and commands.** Repository existence is not
     proof that a tool or file exists on this host.
+15. **Extraction work needs a real note.** File or fix an extraction mismatch only
+    when the vault check (`~/.local/share/note-reader-local/vault-check/`) shows it
+    on a real note, with the note count in a `Vault evidence:` line, or the owner
+    reported it. Mismatches found only on generated inputs go in the PR body under
+    "Residuals (generated inputs)", never into a ticket, a BLOCK or a Fix round.
+    A hidden comment body spoken on a shape a person plausibly types is still a
+    BLOCK. Never put note text or note paths in a ticket. ADR 0039.
 
 The old audit found 2 of 16 MUST requirements met. That is a historical floor,
 not a current tally. Closing a ticket or passing bare-Node tests does not move a
