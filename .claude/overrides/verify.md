@@ -1,6 +1,6 @@
 # /verify override - Local TTS Reader
 
-Rules: `AGENTS.md` "Verification rules" 11-14. CDP traps: `docs/agent-history.md` "Driving a real
+Rules: `AGENTS.md` "Verification rules" 11-15. CDP traps: `docs/agent-history.md` "Driving a real
 Obsidian over CDP". `<vault>` is the default vault in `deploy.mjs`;
 `SLOT=<vault>/.obsidian/plugins/local-tts-reader`.
 

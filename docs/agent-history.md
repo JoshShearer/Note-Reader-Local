@@ -249,6 +249,28 @@ The working tree passes its gates. The audit against `srs.md` that opened this r
 2 of 16 MUST requirements fully met. That count has not been re-run since, and several
 tickets have closed gaps against it, so treat it as a floor rather than as current state.
 
+**Vault corpus check, 2026-10-17 (ADR 0039, rule 15).** Main `38f3fce`, harness 1.14.4,
+default settings, the owner's vault of 2,329 notes, compared by word bag with
+`~/.local/share/note-reader-local/vault-check/`: 1,936 clean and 393 flagged, then 300 flagged
+with the five shapes below neutralised. A sample of about 120 remaining aligned hunks was
+checker noise. Real-note defects it found, each confirmed by running the shape through the
+extractor and the harness directly:
+
+- Numeric `#123` (`Key Idea #1`, `Trail #772`) is dropped as a tag. Obsidian does not make an
+  all-digit tag and shows it as text. 145 notes contain the shape.
+- A bare `www.example.com` is dropped whole. The renderer links it, and a scheme URL would be
+  spoken as its host (ADR 0003). About 15 notes.
+- HTML entities (`&gt;`, `&amp;`, `&nbsp;`) are passed to the engine raw. About 10 notes, mostly
+  HTML imports.
+- A lone `*` inside a word (`f*ck`) is dropped and the word joins. 32 notes contain the shape.
+  `word[7][10]` also joins (`audience7`), 3 notes.
+- A 5.2 MB note takes 50 s in `extractChunks` and a 2.0 MB note 3.3 s, on the main thread.
+
+Of the 32 open extraction tickets on that day, only NRL-190 (a pipe table directly under a
+paragraph line, 5 notes) fired on a real note. The others were canceled under ADR 0039. Those
+counts come from regex approximations of each ticket's trigger, plus a window-and-ablation
+check on flagged notes.
+
 **NRL-96 bundled the ONNX runtime and, for the first time in this repo, exercised the
 plugin in a real Obsidian.** The runtime is packed into `main.js` by
 `esbuild.config.mjs` (`docs/adr/0028`, superseding ADR 0024's distribution decision),

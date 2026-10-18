@@ -102,7 +102,7 @@ Highest risk first. The numbers are `AGENTS.md` non-negotiables.
 
 ## Non-negotiables
 
-`AGENTS.md`, sections "Non-negotiables" (rules 1-10) **and** "Verification rules" (rules 11-14).
+`AGENTS.md`, sections "Non-negotiables" (rules 1-10) **and** "Verification rules" (rules 11-15).
 A BLOCK in either stops `/ship`.
 
 ## Spec
