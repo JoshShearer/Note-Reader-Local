@@ -134,6 +134,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 
 		this.renderEngineSection(contentEl);
 		if (this.plugin.getBridge()) this.renderBridgeSection(contentEl);
+		if (this.plugin.getPiper()) this.renderPiperSection(contentEl);
 		if (this.plugin.activeEngine()?.id === "kokoro") {
 			this.renderKokoroRuntime(contentEl);
 			this.renderKokoroInstall(contentEl);
@@ -163,6 +164,9 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				}
 				dropdown.setValue(this.plugin.settings.engine).onChange(async (value) => {
 					await this.plugin.setEngine(value as never);
+					// Choosing Piper is the user asking for it, so ask its server
+					// now; nothing else on this page makes a request to it.
+					if (value === "piper") await this.plugin.checkPiper();
 					// Voice ids are engine-scoped, so the list must reload.
 					this.display();
 				});
@@ -267,6 +271,59 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	}
 
 	/**
+	 * The optional Piper server (NRL-148, docs/adr/0040): its status, a button
+	 * to check it, and its port.
+	 *
+	 * Unlike the bridge section above, drawing this makes no request. The
+	 * status row shows the engine's cached answer, and only Check connection
+	 * (or choosing Piper, or starting a read with it) asks the server.
+	 */
+	private renderPiperSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Piper server").setHeading();
+
+		const describe = (): string => {
+			const piper = this.plugin.getPiper();
+			if (!piper) return "";
+			const availability = piper.lastAvailability();
+			return availability.available ? "Connected." : availability.reason;
+		};
+		const status = new Setting(containerEl).setName("Status").setDesc(describe());
+		status.addButton((button) =>
+			button.setButtonText("Check connection").onClick(async () => {
+				status.setDesc("Checking...");
+				await this.plugin.checkPiper();
+				// Voices and the status both come from the check; redraw both.
+				this.display();
+			}),
+		);
+
+		new Setting(containerEl)
+			.setName("Port")
+			.setDesc(
+				"The port your Piper server listens on, on this computer (127.0.0.1). Default 5011. " +
+					"Changing it needs a new Check connection.",
+			)
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text.setValue(String(this.plugin.settings.piperPort));
+				text.onChange(async (value) => {
+					const port = Number(value);
+					if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+					this.plugin.settings.piperPort = port;
+					await this.plugin.saveSettings();
+					status.setDesc(describe());
+				});
+			});
+
+		new Setting(containerEl)
+			.setName("Setting up the server")
+			.setDesc(
+				"Piper is installed and started separately; this plugin never installs it or downloads voices. " +
+					"See companion/piper/README.md in the plugin's repository.",
+			);
+	}
+
+	/**
 	 * What can honestly be claimed about network use, keyed to the RESOLVED
 	 * engine (`activeEngine()?.id`, the same idiom as line 102 above and
 	 * renderVoiceSection below), not a single static sentence covering all
@@ -288,6 +345,8 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				return "This engine runs entirely on this device; it never sends your notes anywhere.";
 			case "speechd":
 				return "This engine speaks through a local daemon, but it cannot report whether a given voice's synthesis needs the network (see the voice list below).";
+			case "piper":
+				return "This engine sends each sentence to the Piper server on this computer (127.0.0.1); nothing leaves the device.";
 			case "readme":
 				return "This engine hands each sentence to Read Me Offline on this device, over a connection nothing outside the device can reach, and Read Me speaks it with this device's own voices. Read Me Offline only offers voices that need no network.";
 			case "webspeech":
@@ -655,9 +714,16 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				});
 			});
 
+		// Piper's voices come from its server, and listing them makes no
+		// request, so before a check the list is empty for a reason worth saying.
+		const piper = this.plugin.getPiper();
+		const piperHint =
+			piper && engine === piper && !piper.lastAvailability().available
+				? " Voices appear after Check connection (Advanced > Piper server) or the first read."
+				: "";
 		const setting = new Setting(containerEl)
 			.setName("Voice")
-			.setDesc(`Which voice ${engine.label} should use.`);
+			.setDesc(`Which voice ${engine.label} should use.${piperHint}`);
 
 		setting.addDropdown(async (dropdown) => {
 			dropdown.addOption("", "Loading voices...");

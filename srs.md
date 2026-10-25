@@ -146,7 +146,7 @@ See ADR 0028 (0028-bundle-executable-runtime.md), which supersedes ADR 0024 (ort
 
 Quality gates run before any release:
 - `npm run typecheck` (TypeScript must compile).
-- `npm test` (all 27 test suites must pass).
+- `npm test` (all 28 test suites must pass).
 - `npm run build` (production esbuild must succeed).
 
 `.github/workflows/release.yml` enforces these gates on tagged commits, and `.github/workflows/ci.yml` enforces them on every push and pull request. Only tagged commits that pass all gates are released to GitHub.
@@ -183,6 +183,11 @@ The plugin SHOULD NOT require one specific underlying engine such as:
 - Festival.
 
 if Speech Dispatcher can abstract the configured engine.
+
+Note (NRL-148): an optional `piper` engine talks to a user-run Piper server on
+127.0.0.1 (docs/adr/0040). It is never required, never selected automatically and
+not a default, so this requirement's text is unchanged; Speech Dispatcher stays the
+zero-setup path.
 
 ---
 

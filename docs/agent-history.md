@@ -421,6 +421,29 @@ self-inflicted (three overlapping `read-note` commands), and Verify could **not*
 unreplicated. **No ticket is filed for it**, deliberately: filing blind is what the plan
 forbade.
 
+### Optional Piper engine over a loopback server (NRL-148, 2026-10-25)
+
+- **What:** `src/engines/piper/piper.ts`, a buffer engine that POSTs `{ text, voice? }` to
+  `http://127.0.0.1:<piperPort>/synthesize` on a user-run `piper.http_server` and plays the WAV.
+  Linux desktop only, manual-only (no `rankEngines` slot), `ownsPlayback: false`, no
+  `length_scale` sent. ADR 0040; recipe `companion/piper/README.md`.
+- **Regression traps:** `isAvailable()`, `listVoices()` and `lastAvailability()` must stay
+  cache-only (they run from onload, prewarm and settings renders). The gate in `runJob` (probe
+  `/voices` before any POST when the cache is not ready for the port) and the invalidation on
+  every failed synthesis are what keep text off a port that did not just answer like Piper.
+  `send()` refuses any path outside `ALLOWED_PATHS`. `tests/piper.test.ts` mutation-checked
+  each of these (rate key in the body, I/O in `isAvailable`, gate removed, query in the URL,
+  error body echoed, no invalidation on a 500, allowlist removed): each broke the suite.
+- **Evidence limits:** the upstream protocol (routes, body keys, `/voices` shape) is
+  reviewer-read from piper1-gpl v1.8.0, never run in the pipeline; Piper was not installed and
+  nothing listened on 5011. The three `confirmManual` call sites in `main.ts`, the settings
+  section and the real `requestUrl` are not exercised in bare Node (the mapping is, through
+  `makeRequestUrlTransport`). NOT VERIFIED IN OBSIDIAN: the engine going ready, rates within
+  ~10%, the per-sentence gap at 1.7x, `ps` showing no text, no request on startup.
+- **Open:** `.claude/project.md`'s `outbound fetch` risk area and the Network rule texts in
+  `.claude/overrides/critique.md` and `check-constraints.md` do not name the Piper loopback
+  server; owner follow-up in the PR.
+
 ### A `%%` line in a quoted or chained quiet `<div>` block opens no comment (NRL-220, 2026-10-17)
 
 Two shapes NRL-200 left on base's reading:

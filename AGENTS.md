@@ -33,7 +33,7 @@ lint, build and tests on pushes and PRs. The release workflow gates tagged commi
 without lint.
 
 ```bash
-npm test          # 27 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, modelStore, adrNumbers, vaultPersistence, loadingNotice, suiteRegistry, bridge, deployGuard, docCitations
+npm test          # 28 suites: extract, engine, player, paths, kokoro, settings, positionThrottle, highlightColour, highlight, affordances, engineSelection, webspeechVoices, fallback, espeak, types, release, voiceChoice, platform, readSelection, modelStore, adrNumbers, vaultPersistence, loadingNotice, suiteRegistry, bridge, deployGuard, docCitations, piper
 npm run typecheck # tsc --noEmit --skipLibCheck
 npm run lint      # eslint src; errors fail CI, warnings are tolerated
 npm run build     # typecheck + esbuild production; worker and ONNX runtime inlined into main.js

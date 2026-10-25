@@ -101,6 +101,12 @@ export interface Settings {
 	 * storage instead (docs/adr/0036).
 	 */
 	bridgePort: number;
+	/**
+	 * Loopback port of the user-run Piper server (NRL-148, docs/adr/0040).
+	 * Like `bridgePort`, only the port is a setting: the host is fixed at
+	 * 127.0.0.1 in the engine, so no setting can send note text off the device.
+	 */
+	piperPort: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -148,6 +154,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	kokoroThreads: 4,
 	kokoroWeights: "auto",
 	bridgePort: 8787,
+	piperPort: 5011,
 };
 
 /**
@@ -189,6 +196,7 @@ const VALID_ENGINE_SELECTIONS: EngineSelection[] = [
 	"speechd",
 	"webspeech",
 	"readme",
+	"piper",
 ];
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -274,5 +282,6 @@ export function normaliseSettings(raw: unknown): Settings {
 				? data.kokoroWeights
 				: DEFAULT_SETTINGS.kokoroWeights,
 		bridgePort: Math.round(clampNumber(data.bridgePort, 1, 65535, DEFAULT_SETTINGS.bridgePort)),
+		piperPort: Math.round(clampNumber(data.piperPort, 1, 65535, DEFAULT_SETTINGS.piperPort)),
 	};
 }

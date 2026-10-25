@@ -2,6 +2,8 @@ import { Platform } from "obsidian";
 import type { EngineId, SpeechEngine } from "../audio/types";
 import { shouldConstructBridgeEngine, shouldConstructLinuxDesktopEngines } from "./platform";
 import { ReadMeBridgeEngine, type BridgeConfig } from "./bridge/readMe";
+import { DEFAULT_PIPER_PORT, PiperEngine, type PiperConfig, type PiperTransport } from "./piper/piper";
+import { requestUrlTransport } from "./piper/requestUrlTransport";
 import { EspeakEngine } from "./system/espeak";
 import { SpeechDispatcherEngine } from "./system/speechd";
 import { getProcessRunner } from "./system/spawn";
@@ -31,6 +33,8 @@ export function createEngines(
 	kokoroStore: ModelStore,
 	kokoroOptions: Partial<KokoroOptions> = {},
 	bridgeConfig: () => BridgeConfig = () => ({ port: 8787, token: "" }),
+	piperConfig: () => PiperConfig = () => ({ port: DEFAULT_PIPER_PORT }),
+	piperTransport: PiperTransport = requestUrlTransport,
 ): SpeechEngine[] {
 	const engines: SpeechEngine[] = [new KokoroEngine(kokoroStore, kokoroOptions)];
 
@@ -47,6 +51,10 @@ export function createEngines(
 	if (shouldConstructLinuxDesktopEngines(Platform)) {
 		const runner = getProcessRunner();
 		engines.push(new EspeakEngine(runner), new SpeechDispatcherEngine(runner));
+		// The optional Piper engine talks to a server the user runs on this
+		// machine (docs/adr/0040). Constructing it makes no request; it stays
+		// "not checked yet" until the user checks or starts a read with it.
+		engines.push(new PiperEngine(piperConfig, piperTransport));
 	}
 
 	engines.push(new WebSpeechEngine());

@@ -66,6 +66,10 @@ export interface RankedCandidate {
  * A given kokoro probe can only satisfy one of slots 1 and 4, never both -
  * `kokoroGpuFp32Live` is a single boolean - so kokoro never appears twice in
  * the same list.
+ *
+ * `piper` (docs/adr/0040) has no slot, on purpose: it is manual-only. Ranking
+ * it would put a loopback request on the automatic path that runs on load,
+ * and its availability is a cache that is never filled without a user action.
  */
 export function rankEngines(probes: EngineProbe[]): RankedCandidate[] {
 	const byId = new Map(probes.map((p) => [p.id, p]));
