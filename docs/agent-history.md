@@ -258,6 +258,9 @@ extractor and the harness directly:
 
 - Numeric `#123` (`Key Idea #1`, `Trail #772`) is dropped as a tag. Obsidian does not make an
   all-digit tag and shows it as text. 145 notes contain the shape.
+  Fixed by NRL-222: the `cleanLine` tag branch now refuses a scanned name made only of ASCII
+  digits. Measured on the 1.14.4 harness: `#1-2`, `#1_000`, `#2026/05`, `#1a`, `#-1`, `#_1` are
+  tags and stay stripped; `#0` and `#12.5` (name `12`) are text. Vault check not re-run in the lane.
 - A bare `www.example.com` is dropped whole. The renderer links it, and a scheme URL would be
   spoken as its host (ADR 0003). About 15 notes.
 - HTML entities (`&gt;`, `&amp;`, `&nbsp;`) are passed to the engine raw. About 10 notes, mostly
