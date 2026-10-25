@@ -524,6 +524,19 @@ check("a delete keeps an unknown settings key", afterDelete.settings?.futureSett
 check("a delete leaves the version alone", afterDelete.version === PLUGIN_DATA_VERSION, String(afterDelete.version));
 }
 
+
+console.log("piperPort and the piper engine selection (NRL-148)");
+{
+check("default piperPort is 5011", DEFAULT_SETTINGS.piperPort === 5011, String(DEFAULT_SETTINGS.piperPort));
+check("a stored piperPort round-trips", normaliseSettings({ piperPort: 5012 }).piperPort === 5012);
+check("a garbage piperPort falls back to the default", normaliseSettings({ piperPort: "x" }).piperPort === 5011);
+check("an out-of-range piperPort is clamped", normaliseSettings({ piperPort: 99999 }).piperPort === 65535 && normaliseSettings({ piperPort: 0 }).piperPort === 1);
+check("a fractional piperPort is rounded", normaliseSettings({ piperPort: 5011.6 }).piperPort === 5012);
+check("engine 'piper' is a valid manual selection", normaliseSettings({ engine: "piper" }).engine === "piper");
+const kept = normaliseSettings({ piperPort: 6000, positions: { "a.md": 3 }, futureSetting: "keep-me" }) as unknown as Record<string, unknown>;
+check("a piperPort change keeps unknown keys and positions (non-negotiable 10)", kept.futureSetting === "keep-me" && kept.positions !== undefined && kept.piperPort === 6000, JSON.stringify(kept.positions));
+}
+
 if (failures > 0) {
 	console.log(`\n${failures} failure(s)`);
 	process.exit(1);

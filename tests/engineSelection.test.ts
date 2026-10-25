@@ -130,6 +130,14 @@ console.log("all probes unavailable: selectEngine never throws and never returns
 	check("actionable reason", result.reason.length > 0, result.reason);
 }
 
+console.log("piper is manual-only: never ranked or selected automatically (NRL-148)");
+{
+	const piperOn: EngineProbe = { id: "piper", available: true };
+	check("rankEngines never lists an available piper", !rankEngines([piperOn, kokoroUnavailable, speechdOff, espeakOff, webOff]).some((c) => c.id === "piper"));
+	check("rankEngines with piper and espeak: espeak only", JSON.stringify(rankEngines([piperOn, espeakOn]).map((c) => c.id)) === '["espeak"]');
+	check("selectEngine with only piper available does not pick it", selectEngine([piperOn, kokoroUnavailable, speechdOff, espeakOff, webOff]).id !== "piper");
+}
+
 console.log("");
 if (failures > 0) {
 	console.log(`${failures} FAILURE(S)`);

@@ -22,6 +22,11 @@ export interface PlatformFlags {
  * either: srs.md's "Linux Backend" section, which serves R-M02 Linux Support,
  * requires only that "Desktop-only Node functionality MUST be loaded only
  * after determining that the plugin is running on Linux desktop."
+ *
+ * It also gates the optional `PiperEngine` (NRL-148, docs/adr/0040). That
+ * engine needs no builtin, but the recipe for its loopback server is a Linux
+ * one, and constructing it nowhere else keeps it out of every other engine
+ * list.
  */
 export function shouldConstructLinuxDesktopEngines(platform: PlatformFlags): boolean {
 	return platform.isDesktopApp && platform.isLinux;

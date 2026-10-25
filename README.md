@@ -4,11 +4,11 @@ Read your notes aloud with on-device text-to-speech and word highlighting. No cl
 
 ## Features
 
-- **On-Device Speech Synthesis** - Four TTS backends, all running locally on your machine or
+- **On-Device Speech Synthesis** - Several TTS backends, all running locally on your machine or
   device. Which ones you can actually use depends on the host; see
   [System Requirements](#system-requirements).
   - Linux desktop: Speech Dispatcher (eSpeak NG, Festival, Piper, etc.), or `espeak-ng` driven
-    directly
+    directly, or optionally a Piper server you run yourself on `127.0.0.1` (see [Linux](#linux))
   - macOS/Windows: System-provided voices (via Web Speech API)
   - All platforms including Android: Local neural TTS via Kokoro (WebGPU where the host offers an adapter, otherwise WASM. Android is always the WASM path, single-threaded - see [Android](#android))
 - **Word-Level Highlighting** - Current word highlights as you read, driven by source offsets
@@ -39,6 +39,11 @@ What the plugin does touch, all of it disclosed here:
 - **System speech programs on Linux desktop.** The Speech Dispatcher and eSpeak NG engines run
   the `spd-say` and `espeak-ng` programs already installed on your system. Text is passed to
   them on standard input, never on the command line.
+- **127.0.0.1 on Linux desktop, if you set up the optional Piper engine.** It sends each sentence
+  in a request body to a Piper server you run on this computer (`127.0.0.1`, port 5011 by
+  default; the host is fixed). It asks that server only when you press Check connection, choose
+  Piper as the engine, or start a read with it, never on load. It never asks the server to
+  download anything.
 
 The speech runtime (ONNX Runtime) is part of the plugin itself: there is no runtime download
 and no CDN.
@@ -97,6 +102,13 @@ The separate `espeak-ng` engine skips the daemon and drives the `espeak-ng` bina
 install the `espeak-ng` package if you want it. Of the two Linux paths, Speech Dispatcher is the
 one this repo's tests exercise against a real daemon - `espeak-ng` is covered against a fake
 process runner only - so treat it as the less exercised of the two.
+
+**Optional: Piper, a more natural voice.** If you run a Piper server on this computer, bound to
+`127.0.0.1`, you can pick **Piper (local server)** as the engine. It is never selected
+automatically and nothing about it is required. Setup, including the systemd user unit and
+the warnings about the server's own options, is in
+[companion/piper/README.md](companion/piper/README.md). Settings > Advanced > Piper server has
+the port and a Check connection button.
 
 ### macOS / Windows
 
@@ -302,11 +314,13 @@ That means it appears on `Kokoro (local neural)` and `espeak-ng`, and is absent 
 
 ## Architecture
 
-The plugin splits speech synthesis into four independent engines, each with its own backend:
+The plugin splits speech synthesis into independent engines, each with its own backend:
 
 - **Speech Dispatcher** (Linux desktop) - Interfaces with the system's configured speech engine
 - **espeak-ng** (Linux desktop) - Drives the `espeak-ng` binary directly, with no daemon in
   between
+- **Piper** (Linux desktop, optional) - Sends each sentence to a Piper server the user runs on
+  `127.0.0.1` and plays the WAV it returns. Manual-only; never picked automatically
 - **Web Speech API** (Browser) - Uses browser voices (online/offline detection provided)
 - **Kokoro** (All platforms) - Local neural synthesis via transformers.js + ONNX Runtime
   - The only engine available on Android, for the reasons above

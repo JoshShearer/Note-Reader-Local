@@ -11,7 +11,7 @@ import {
 import { EditorView } from "@codemirror/view";
 
 import { Player } from "./audio/player";
-import { describeUnavailable, type SpeechChunk, type SpeechEngine, type VoiceInfo } from "./audio/types";
+import { describeUnavailable, type EngineAvailability, type SpeechChunk, type SpeechEngine, type VoiceInfo } from "./audio/types";
 import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
 import { extractChunks } from "./text/extract";
 import { platformSegmenters } from "./text/segment";
@@ -19,6 +19,7 @@ import { resolveStoredVoice } from "./audio/voiceChoice";
 import { applySelectionReadGate, clipChunksToSelection, type SelectionReadPort } from "./audio/clip";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
 import { ReadMeBridgeEngine } from "./engines/bridge/readMe";
+import { PiperEngine, confirmManualEngine } from "./engines/piper/piper";
 
 /** Local-storage key for the Read Me bridge pairing token (see getBridgeToken). */
 const BRIDGE_TOKEN_KEY = "local-tts-reader:bridge-token";
@@ -159,10 +160,15 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			this.kokoroModelPath(),
 		);
 
-		this.engines = createEngines(this.modelStore, this.kokoroOptions(), () => ({
-			port: this.settings.bridgePort,
-			token: this.getBridgeToken(),
-		}));
+		this.engines = createEngines(
+			this.modelStore,
+			this.kokoroOptions(),
+			() => ({
+				port: this.settings.bridgePort,
+				token: this.getBridgeToken(),
+			}),
+			() => ({ port: this.settings.piperPort }),
+		);
 
 		// Which backend the engine settled on, and why the faster ones were
 		// rejected, is the single most useful thing in a performance report.
@@ -655,6 +661,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			}
 			t("engine matched", engineId);
 
+			if (!(await this.confirmManual(engine))) return;
+
 			t("checking isAvailable", engineId);
 			const availability = await engine.isAvailable();
 			t("isAvailable returned", `${engineId}=${availability.available}`);
@@ -882,6 +890,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				new Notice(`Engine ${selection} not available.`, 8000);
 				return;
 			}
+			if (!(await this.confirmManual(engine))) return;
 			candidates = [{ engine, id: selection, reason: "" }];
 		}
 
@@ -951,6 +960,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				new Notice(`Engine ${selection} not available.`, 8000);
 				return;
 			}
+			if (!(await this.confirmManual(engine))) return;
 			candidates = [{ engine, id: selection, reason: "" }];
 		}
 
@@ -1302,6 +1312,38 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	setBridgeToken(token: string): void {
 		const trimmed = token.trim();
 		this.app.saveLocalStorage(BRIDGE_TOKEN_KEY, trimmed === "" ? null : trimmed);
+	}
+
+	/** The Piper engine on this platform, or null where it is not constructed (docs/adr/0040). */
+	getPiper(): PiperEngine | null {
+		const engine = findEngine(this.engines, "piper");
+		return engine instanceof PiperEngine ? engine : null;
+	}
+
+	/**
+	 * Ask the Piper server now. Only ever called from a user action (Check
+	 * connection, choosing Piper): its `isAvailable()` never makes a request.
+	 */
+	async checkPiper(): Promise<EngineAvailability | null> {
+		return (await this.getPiper()?.check()) ?? null;
+	}
+
+	/**
+	 * The availability step for a manually pinned engine that only reports a
+	 * cached answer (Piper). Probes it, so its voices are known before the
+	 * pinned voice is chosen, and refuses the read with its reason. A no-op
+	 * for every other engine. False means the read was refused.
+	 */
+	private async confirmManual(engine: SpeechEngine): Promise<boolean> {
+		const availability = await confirmManualEngine(engine);
+		if (availability && !availability.available) {
+			new Notice(
+				`Local TTS Reader: ${describeUnavailable(availability.reason, "Pick another engine in settings.")}`,
+				8000,
+			);
+			return false;
+		}
+		return true;
 	}
 
 	/** The bridge engine on this platform, or null where it is not constructed. */

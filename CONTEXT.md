@@ -22,7 +22,7 @@ is what makes highlighting possible, and it is the load-bearing idea in the code
 | **chunk** | One utterance handed to an engine. Usually a sentence. `SpeechChunk` in `src/audio/types.ts`. |
 | **source offset** | A character position in the note's **raw markdown**, not in the spoken text. |
 | **`sourceIndex`** | Per-character array on a chunk: `sourceIndex[i]` is the raw offset that produced `text[i]`. Survives stripping. |
-| **engine** | A speech backend implementing `SpeechEngine`. Four exist: `kokoro`, `espeak`, `speechd`, `webspeech`. |
+| **engine** | A speech backend implementing `SpeechEngine`. Six exist: `kokoro`, `espeak`, `speechd`, `webspeech`, `readme` (Android app only, ADR 0036) and `piper` (Linux desktop only, optional and manual-only, ADR 0040). The last two are platform-gated in `src/engines/platform.ts`. |
 | **capabilities** | What an engine can do (`EngineCapabilities`). The UI reads these before offering a control. |
 | **affordance** | What the UI does with a capability: enabled or disabled, plus a reason. `src/ui/affordances.ts`, pure so bare-Node tests can drive it. |
 | **`SegmenterSource`** | Where `Intl.Segmenter` instances come from. Injected, so the no-segmenter path is a value (`noSegmenters`) rather than a deleted global. `src/text/segment.ts`. |
@@ -97,6 +97,9 @@ src/
 │   ├── platform.ts             which platform constructs which engines (Linux desktop, Android app)
 │   ├── bridge/
 │   │   └── readMe.ts           Read Me Offline's loopback bridge, Android only (ADR 0036)
+│   ├── piper/
+│   │   ├── piper.ts            optional Piper engine over a user-run 127.0.0.1 server, Linux desktop (ADR 0040)
+│   │   └── requestUrlTransport.ts  binds Obsidian's requestUrl as the Piper transport
 │   ├── system/
 │   │   ├── spawn.ts            ProcessRunner; the only child_process touch point
 │   │   ├── espeak.ts           espeak-ng → WAV
