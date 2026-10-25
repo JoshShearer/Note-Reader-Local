@@ -2481,7 +2481,10 @@ function cleanLine(
 		if (ch === "#" && opts.stripTags && (i === 0 || !isWordChar(raw[i - 1]!))) {
 			let end = i + 1;
 			while (end < raw.length && /[\w/-]/.test(raw[end]!)) end += 1;
-			if (end > i + 1) {
+			// Obsidian makes no tag of an all-digit name (`#1`, `#772`); it shows the
+			// text, so fall through and emit the `#` and digits with their raw offsets.
+			// Punctuated names (`#1-2`, `#1_000`, `#2026/05`) are tags (1.14.4 harness).
+			if (end > i + 1 && !/^[0-9]+$/.test(raw.slice(i + 1, end))) {
 				i = end;
 				pushSpace(rawStart + i);
 				continue;

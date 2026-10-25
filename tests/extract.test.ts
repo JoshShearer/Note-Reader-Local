@@ -9537,6 +9537,38 @@ console.log("NRL-205: a link or image whose (dest \"title\") spans lines of one 
 	}
 }
 
+// NRL-222: Obsidian makes no tag of an all-digit name, so `#1` and `#772` are text.
+// Shapes checked against the 1.14.4 parser harness: `#1-2`, `#1_000`, `#2026/05`, `#1a` are tags.
+{
+	console.log("all-digit #name is text, not a tag (NRL-222)");
+	const rows222: [string, string, string, string][] = [
+		["heading number", "# Key Idea #1: Overcome stress", "Key Idea #1: Overcome stress", "Key Idea #1: Overcome stress"],
+		["prose number", "The Trail #772 begins.", "The Trail #772 begins.", "The Trail #772 begins."],
+		["mixed", "Tagged #real and #2026 and #a1.", "Tagged and #2026 and .", "Tagged #real and #2026 and #a1."],
+		["guard-a1", "x #a1 y", "x y", "x #a1 y"],
+		["guard-real", "x #real y", "x y", "x #real y"],
+		["guard-nested", "x #tag/sub y", "x y", "x #tag/sub y"],
+		["guard-digit-dash", "x #1-2 y", "x y", "x #1-2 y"],
+		["guard-digit-underscore", "x #1_000 y", "x y", "x #1_000 y"],
+		["guard-digit-slash", "x #2026/05 y", "x y", "x #2026/05 y"],
+		["guard-digit-letter", "x #1a y", "x y", "x #1a y"],
+	];
+	for (const [name, src, on, off] of rows222) {
+		for (const [stripTags, want] of [[true, on], [false, off]] as const) {
+			const chunks = extractChunks(src, { ...OPTS, stripTags });
+			const got = chunks.map((c) => c.text).join(" | ");
+			check(`nrl222 ${name} stripTags=${stripTags}`, got === want, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+			for (const c of chunks) {
+				let ok = c.text.length === c.sourceIndex.length;
+				for (let k = 0; ok && k < c.text.length; k++) {
+					if (c.text[k] !== " " && c.text[k] !== src[c.sourceIndex[k]!]) ok = false;
+				}
+				check(`nrl222 ${name} stripTags=${stripTags} lockstep`, ok, JSON.stringify(c.text));
+			}
+		}
+	}
+}
+
 console.log("");
 
 if (failures > 0) {
