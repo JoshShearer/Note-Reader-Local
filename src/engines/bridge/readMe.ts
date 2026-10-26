@@ -87,12 +87,12 @@ export const READ_ME_URL = "https://github.com/JoshShearer/Read-Me";
 /** The F-Droid listing, shown as a plain link in Settings. Never fetched; the user's click opens it. */
 export const READ_ME_FDROID_URL = "https://f-droid.org/en/packages/io.loopstring.readme/";
 
-/** What to do in Read Me's Settings to pair, in order. */
+/** What to do, in Read Me and then in this plugin, to pair, in order. */
 export const READ_ME_SETUP_STEPS: readonly string[] = [
 	'Turn on "Use the bridge".',
 	"Allow the notification.",
 	"Copy the token here.",
-	"Leave Speech engine on Automatic.",
+	"Leave this plugin's Speech engine on Automatic.",
 ];
 
 /**
