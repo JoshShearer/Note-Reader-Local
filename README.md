@@ -372,8 +372,11 @@ Full notices and license texts are in `THIRD_PARTY_NOTICES.md`, and are also app
 - Linux: optional Piper engine that speaks through a Piper HTTP server you run yourself on
   127.0.0.1 (port configurable, default 5011). The plugin contacts it only after you click
   Check connection, choose it, or start a read with it selected. See `companion/piper/README.md`
-- Android: Read Me Offline 1.1.0 or later now plays the note itself, so reading keeps going
-  after Obsidian leaves the screen
+- Android: Read Me Offline now plays the note itself, so reading keeps going after Obsidian
+  leaves the screen. This needs Read Me Offline 1.1.0 or later; an older Read Me shows as
+  unavailable until it is updated
+- Android: while the Read Me Offline bridge is not connected, Settings shows a link to the app
+  on F-Droid and the four pairing steps; the README's Android section gives the same steps
 - A number written as `#1` or `#2026` is now read aloud; real tags are still skipped
 - Many fixes so the spoken text matches what Obsidian displays: comments, callouts, quotes,
   lists, code blocks, raw HTML, footnotes, link reference definitions and frontmatter
