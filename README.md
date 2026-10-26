@@ -377,6 +377,8 @@ Full notices and license texts are in `THIRD_PARTY_NOTICES.md`, and are also app
   unavailable until it is updated
 - Android: while the Read Me Offline bridge is not connected, Settings shows a link to the app
   on F-Droid and the four pairing steps; the README's Android section gives the same steps
+- Android: Settings checks the pairing token itself, so a wrong token shows as rejected instead
+  of Connected, and the engine list updates after Check again
 - A number written as `#1` or `#2026` is now read aloud; real tags are still skipped
 - Many fixes so the spoken text matches what Obsidian displays: comments, callouts, quotes,
   lists, code blocks, raw HTML, footnotes, link reference definitions and frontmatter

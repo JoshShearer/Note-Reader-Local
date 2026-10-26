@@ -390,6 +390,34 @@ console.log("B5 availability is probed on /health with a short timeout and never
 	);
 }
 {
+	const { engine, requests } = engineWith((req) =>
+		req.url.endsWith("/health") ? json(200, HEALTHY) : json(401, { error: "unauthorized" }),
+	);
+	const result = await engine.isAvailable();
+	check(
+		"wrong token: unavailable, and says to copy the token again",
+		!result.available && /rejected the pairing token/.test(result.reason),
+		!result.available ? result.reason : "available",
+	);
+	const auth = requests.find((r) => r.url.endsWith("/status"));
+	check("token is checked with an authorized GET of /status", auth?.method === "GET" && auth.headers.Authorization === `Bearer ${TOKEN}`);
+	check("token check timeout is short (<= 2 s)", (auth?.timeoutMs ?? Infinity) <= 2000);
+	check("wrong token: shows the setup steps", shouldShowBridgeSetup(result));
+	check("wrong token: reason carries no token", !result.available && !result.reason.includes(TOKEN));
+}
+{
+	const { engine } = engineWith((req) =>
+		req.url.endsWith("/health") ? json(200, HEALTHY) : Promise.reject(new TypeError("Failed to fetch")),
+	);
+	const result = await engine.isAvailable();
+	check("bridge gone between /health and /status: unavailable, not thrown", !result.available && /not running/.test(result.reason));
+}
+{
+	const { engine, requests } = engineWith(() => json(200, HEALTHY), { port: 8787, token: "" });
+	await engine.isAvailable();
+	check("no token: /status is not asked", !requests.some((r) => r.url.endsWith("/status")));
+}
+{
 	const { engine } = engineWith(() => json(200, { ...HEALTHY, version: 2 }));
 	const result = await engine.isAvailable();
 	check("another contract version: unavailable", !result.available && /version 2/.test(result.reason));

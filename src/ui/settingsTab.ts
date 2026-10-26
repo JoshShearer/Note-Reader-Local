@@ -82,6 +82,8 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 	private offTimer: (() => void) | null = null;
 	/** Detaches the Timer display from the player's state event. */
 	private offTimerState: (() => void) | null = null;
+	/** Re-asks the Engine section's rows; set while that section is drawn. */
+	private refreshEngineSection: (() => void) | null = null;
 
 	constructor(
 		app: App,
@@ -99,6 +101,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		this.offTimer = null;
 		this.offTimerState?.();
 		this.offTimerState = null;
+		this.refreshEngineSection = null;
 		this.plugin.stopReading();
 		super.hide();
 	}
@@ -155,7 +158,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		const statusBox = containerEl.createDiv({ cls: "local-tts-engine-status" });
 		statusBox.createDiv({ cls: "local-tts-engine-row", text: "Checking installed engines..." });
 
-		new Setting(containerEl)
+		const engineSetting = new Setting(containerEl)
 			.setName("Speech engine")
 			.setDesc(this.engineNetworkClaim())
 			.addDropdown((dropdown) => {
@@ -173,39 +176,62 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 				});
 			});
 
-		if (this.plugin.settings.engine === "auto") {
-			const chosen = new Setting(containerEl).setName("Automatic picked").setDesc("Checking...");
-			void this.plugin.resolveAutomaticChoice().then((resolved) => {
-				if (!containerEl.isConnected) return;
-				const engine = this.plugin.getEngines().find((e) => e.id === resolved.id);
-				chosen.setDesc(`${engine?.label ?? resolved.id} - ${resolved.reason}`);
-			});
-		}
+		const chosen =
+			this.plugin.settings.engine === "auto"
+				? new Setting(containerEl).setName("Automatic picked").setDesc("Checking...")
+				: null;
 
-		void this.plugin.getEngineStatuses().then((statuses) => {
-			if (!containerEl.isConnected) return;
-			statusBox.empty();
-			for (const status of statuses) {
-				const row = statusBox.createDiv({ cls: "local-tts-engine-row" });
-				row.createSpan({ cls: "local-tts-engine-name", text: status.engine.label });
-				row.createSpan({
-					cls: `local-tts-engine-state ${status.available ? "is-ok" : "is-missing"}`,
-					text: status.available ? "ready" : status.reason || "unavailable",
+		// Re-run after a bridge check the user started (renderBridgeSection):
+		// pasting a token or turning the bridge on changes which engine is
+		// ready, and these rows would otherwise keep the answer from when the
+		// tab opened. Only the latest round may write, as in the bridge section.
+		let latestFill = 0;
+		const fill = (): void => {
+			const thisFill = ++latestFill;
+			const current = (): boolean => containerEl.isConnected && thisFill === latestFill;
+			if (chosen) {
+				chosen.setDesc("Checking...");
+				void this.plugin.resolveAutomaticChoice().then((resolved) => {
+					if (!current()) return;
+					const engine = this.plugin.getEngines().find((e) => e.id === resolved.id);
+					chosen.setDesc(`${engine?.label ?? resolved.id} - ${resolved.reason}`);
+					engineSetting.setDesc(this.engineNetworkClaim());
 				});
-				// Every limitation, not just the highlighting one: the point of
-				// declaring capabilities is that the user can see all of them
-				// before picking an engine.
-				if (status.available) {
-					const limits = engineLimitations(status.engine.capabilities, status.engine.label);
-					if (limits.length > 0) {
-						row.createSpan({
-							cls: "local-tts-engine-note",
-							text: limits.map((l) => l.text).join(", "),
-						});
-					}
+			}
+			void this.plugin.getEngineStatuses().then((statuses) => {
+				if (!current()) return;
+				this.drawEngineStatuses(statusBox, statuses);
+			});
+		};
+		this.refreshEngineSection = fill;
+		fill();
+	}
+
+	private drawEngineStatuses(
+		statusBox: HTMLElement,
+		statuses: Awaited<ReturnType<LocalTtsReaderPlugin["getEngineStatuses"]>>,
+	): void {
+		statusBox.empty();
+		for (const status of statuses) {
+			const row = statusBox.createDiv({ cls: "local-tts-engine-row" });
+			row.createSpan({ cls: "local-tts-engine-name", text: status.engine.label });
+			row.createSpan({
+				cls: `local-tts-engine-state ${status.available ? "is-ok" : "is-missing"}`,
+				text: status.available ? "ready" : status.reason || "unavailable",
+			});
+			// Every limitation, not just the highlighting one: the point of
+			// declaring capabilities is that the user can see all of them
+			// before picking an engine.
+			if (status.available) {
+				const limits = engineLimitations(status.engine.capabilities, status.engine.label);
+				if (limits.length > 0) {
+					row.createSpan({
+						cls: "local-tts-engine-note",
+						text: limits.map((l) => l.text).join(", "),
+					});
 				}
 			}
-		});
+		}
 	}
 
 	/**
@@ -232,6 +258,9 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		// last would otherwise show a stale result.
 		let latestCheck = 0;
 		const refresh = (): void => {
+			// The first check runs alongside the Engine section's own; later
+			// ones are the user's, and may have changed what is ready.
+			if (latestCheck > 0) this.refreshEngineSection?.();
 			const bridge = this.plugin.getBridge();
 			if (!bridge) return;
 			const thisCheck = ++latestCheck;
@@ -362,7 +391,7 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 			case "piper":
 				return "This engine sends each sentence to the Piper server on this computer (127.0.0.1); nothing leaves the device.";
 			case "readme":
-				return "This engine hands each sentence to Read Me Offline on this device, over a connection nothing outside the device can reach, and Read Me speaks it with this device's own voices. Read Me Offline only offers voices that need no network.";
+				return "This engine hands the note to Read Me Offline on this device, over a connection nothing outside the device can reach, and Read Me reads it aloud with this device's own voices, also with the screen off. Read Me Offline only offers voices that need no network.";
 			case "webspeech":
 				return "This engine uses your operating system's installed voices. A voice marked \"needs network\" below sends the text being read to a remote service to synthesize it; pick a local voice to keep everything on this device.";
 			default:

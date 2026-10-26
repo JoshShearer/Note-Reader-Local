@@ -236,6 +236,8 @@ const NOT_RUNNING =
 	`Read Me Offline's Obsidian bridge is not running. Install Read Me Offline (${READ_ME_URL}) ` +
 	"and turn on its Obsidian bridge in its Settings.";
 
+const TOKEN_REJECTED = "Read Me Offline rejected the pairing token. Copy it again from Read Me Offline's Settings.";
+
 /** Read Me's `/status`: which session, in what state, at which of its chunks. */
 interface PlayStatus {
 	session: number;
@@ -372,6 +374,23 @@ export class ReadMeBridgeEngine implements SpeechEngine {
 				reason: "Paste the pairing token from Read Me Offline's Settings into this plugin's settings.",
 			};
 		}
+		// `/health` takes no token, so a wrong one would read as available and
+		// hide the setup steps until a read failed. `/status` is the cheapest
+		// authenticated route and changes nothing on Read Me's side. Only a 401
+		// is held against the bridge: anything else odd here is for the read
+		// itself to report.
+		let auth: BridgeResponse;
+		try {
+			auth = await this.transport({
+				method: "GET",
+				url: `${base}/status`,
+				headers: { Authorization: `Bearer ${this.config().token.trim()}` },
+				timeoutMs: HEALTH_TIMEOUT_MS,
+			});
+		} catch {
+			return { available: false, reason: NOT_RUNNING };
+		}
+		if (auth.status === 401) return { available: false, reason: TOKEN_REJECTED };
 		return { available: true };
 	}
 
@@ -591,10 +610,7 @@ export class ReadMeBridgeEngine implements SpeechEngine {
 		const code = errorField(res.body, "error");
 		const reason = errorField(res.body, "reason");
 		if (res.status === 401) {
-			return new EngineUnavailableError(
-				"readme",
-				"Read Me Offline rejected the pairing token. Copy it again from Read Me Offline's Settings.",
-			);
+			return new EngineUnavailableError("readme", TOKEN_REJECTED);
 		}
 		// Only "busy because Read Me is playing" ends the read. A full queue is
 		// transient and an ordinary failure; serialization above should make
