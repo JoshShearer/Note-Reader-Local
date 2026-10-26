@@ -9,6 +9,7 @@ import {
 } from "obsidian";
 import type LocalTtsReaderPlugin from "../main";
 import type { VoiceInfo } from "../audio/types";
+import { READ_ME_FDROID_URL, READ_ME_SETUP_STEPS, shouldShowBridgeSetup } from "../engines/bridge/readMe";
 import {
 	KOKORO_MODEL_METADATA,
 	KOKORO_WEIGHTS,
@@ -219,12 +220,20 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("Read Me Offline bridge").setHeading();
 
 		const status = new Setting(containerEl).setName("Status").setDesc("Checking...");
+		// A plain anchor: no fetch or preload until the user taps it (non-negotiable 6).
+		const setup = new Setting(containerEl).setName("Set up Read Me Offline");
+		setup.descEl.createEl("a", { href: READ_ME_FDROID_URL, text: "Get Read Me Offline" });
+		const steps = setup.descEl.createEl("ol");
+		for (const step of READ_ME_SETUP_STEPS) steps.createEl("li", { text: step });
+		setup.settingEl.toggle(shouldShowBridgeSetup(null));
 		const refresh = (): void => {
 			const bridge = this.plugin.getBridge();
 			if (!bridge) return;
 			status.setDesc("Checking...");
+			setup.settingEl.toggle(shouldShowBridgeSetup(null));
 			void bridge.isAvailable().then((availability) => {
 				if (!containerEl.isConnected) return;
+				setup.settingEl.toggle(shouldShowBridgeSetup(availability));
 				const health = bridge.lastHealth();
 				if (availability.available && health) {
 					const voice = health.voice ? `, voice ${health.voice}` : "";

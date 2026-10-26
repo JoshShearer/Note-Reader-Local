@@ -84,6 +84,26 @@ const SEPARATOR = "\u001e";
 /** Where to send someone who does not have the companion app. Text only; never fetched. */
 export const READ_ME_URL = "https://github.com/JoshShearer/Read-Me";
 
+/** The F-Droid listing, shown as a plain link in Settings. Never fetched; the user's click opens it. */
+export const READ_ME_FDROID_URL = "https://f-droid.org/en/packages/io.loopstring.readme/";
+
+/** What to do in Read Me's Settings to pair, in order. */
+export const READ_ME_SETUP_STEPS: readonly string[] = [
+	'Turn on "Use the bridge".',
+	"Allow the notification.",
+	"Copy the token here.",
+	"Leave Speech engine on Automatic.",
+];
+
+/**
+ * Whether Settings shows the get-the-app link and steps. `null` is a check
+ * still in flight: until one reports the bridge available, the person has not
+ * been told they are connected, so the help stays up.
+ */
+export function shouldShowBridgeSetup(availability: EngineAvailability | null): boolean {
+	return !availability?.available;
+}
+
 export interface BridgeConfig {
 	port: number;
 	/** The pairing token from Read Me's Settings, or "" when none is set. */
