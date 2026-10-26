@@ -32,7 +32,7 @@ What the plugin does touch, all of it disclosed here:
   folder (`<config folder>/local-tts/`) and can be removed from the same settings card. No note
   text is sent; this is a plain file download. If you never press Download, nothing is fetched.
 - **127.0.0.1 on Android, if you install the Read Me Offline app.** On the Android app the
-  plugin checks for the optional [Read Me Offline](https://github.com/JoshShearer/Read-Me)
+  plugin checks for the optional [Read Me Offline](https://f-droid.org/en/packages/io.loopstring.readme/)
   companion on the phone's own loopback address (`127.0.0.1`, port 8787 by default) and, if it
   is there, sends each sentence to it for the phone's built-in speech engine to read. That
   traffic never leaves the device; the host is fixed to loopback and is not configurable.
@@ -123,14 +123,26 @@ facility, its Capacitor bridge has no `TextToSpeech` plugin, and its WebView doe
 
 So there are two engines on Android:
 
-- **Read Me Offline (recommended).** Install the free
-  [Read Me Offline](https://github.com/JoshShearer/Read-Me) app, open it once and pair it with
-  the plugin. The plugin then reads through the phone's built-in speech engine over the
+- **Read Me Offline (recommended).** Install the free Read Me Offline app from
+  [F-Droid](https://f-droid.org/en/packages/io.loopstring.readme/) (source on
+  [GitHub](https://github.com/JoshShearer/Read-Me)), then pair it with the plugin:
+  1. In Read Me Offline's Settings, turn on "Use the bridge".
+  2. Allow the notification.
+  3. Copy the token into the plugin's "Pairing token" field.
+  4. Leave Speech engine on Automatic.
+
+  The plugin's Settings lists the same steps, with the F-Droid link, under Advanced in the
+  "Read Me Offline bridge" section while the bridge is not connected. Once paired, the plugin
+  reads through the phone's built-in speech engine over the
   on-device loopback bridge described under [Privacy and network use](#privacy-and-network-use),
   which is fast enough for 2x playback. Automatic engine selection prefers it when it is
   running. There is no word-level highlight with this engine (the phone's engine reports no
   word timings); the sentence highlight still works. Some vendors, Huawei for example, freeze
   background apps; allow Read Me Offline to run in the background if reads stop part-way.
+
+  Reading with the screen off needs plugin 0.3.0 or later (0.3.0 is the version that adds it;
+  it is the first release in which Read Me Offline plays the note itself) together with Read
+  Me Offline 1.1.0 or later.
 - **Kokoro.** Runs inside Obsidian with no companion app, but is much slower on a phone (see
   below).
 

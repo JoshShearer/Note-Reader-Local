@@ -26,6 +26,9 @@ import {
 	BridgeStoppedError,
 	PLAY_MAX_CHUNKS,
 	HEALTH_TIMEOUT_MS,
+	READ_ME_FDROID_URL,
+	READ_ME_SETUP_STEPS,
+	shouldShowBridgeSetup,
 	ReadMeBridgeEngine,
 	type BridgeRequest,
 	type BridgeResponse,
@@ -563,6 +566,21 @@ check("the token is not a setting (it lives in device-local storage)", !("bridge
 check(
 	"unknown keys survive normalisation (non-negotiable 10)",
 	(normaliseSettings({ bridgePort: 8787, positions: { a: 1 } }) as unknown as Record<string, unknown>).positions !== undefined,
+);
+
+check("setup block shows while the first check is pending", shouldShowBridgeSetup(null) === true);
+check("setup block shows when the bridge is unavailable", shouldShowBridgeSetup({ available: false, reason: "x" }) === true);
+check("setup block hides once a check reports the bridge available", shouldShowBridgeSetup({ available: true }) === false);
+check("the F-Droid link is the listing page", READ_ME_FDROID_URL === "https://f-droid.org/en/packages/io.loopstring.readme/");
+check(
+	"the four setup steps match Read Me's Settings, in order",
+	JSON.stringify(READ_ME_SETUP_STEPS) ===
+		JSON.stringify([
+			'Turn on "Use the bridge".',
+			"Allow the notification.",
+			"Copy the token here.",
+			"Leave Speech engine on Automatic.",
+		]),
 );
 
 console.log("");
