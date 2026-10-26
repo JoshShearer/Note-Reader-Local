@@ -34,7 +34,7 @@ What the plugin does touch, all of it disclosed here:
 - **127.0.0.1 on Android, if you install the Read Me Offline app.** On the Android app the
   plugin checks for the optional [Read Me Offline](https://f-droid.org/en/packages/io.loopstring.readme/)
   companion on the phone's own loopback address (`127.0.0.1`, port 8787 by default) and, if it
-  is there, sends each sentence to it for the phone's built-in speech engine to read. That
+  is there, sends it the text being read for the phone's built-in speech engine to read. That
   traffic never leaves the device; the host is fixed to loopback and is not configurable.
 - **System speech programs on Linux desktop.** The Speech Dispatcher and eSpeak NG engines run
   the `spd-say` and `espeak-ng` programs already installed on your system. Text is passed to
@@ -129,7 +129,7 @@ So there are two engines on Android:
   1. In Read Me Offline's Settings, turn on "Use the bridge".
   2. Allow the notification.
   3. Copy the token into the plugin's "Pairing token" field.
-  4. Leave Speech engine on Automatic.
+  4. Leave the plugin's Speech engine on Automatic.
 
   The plugin's Settings lists the same steps, with the F-Droid link, under Advanced in the
   "Read Me Offline bridge" section while the bridge is not connected. Once paired, the plugin
@@ -140,9 +140,9 @@ So there are two engines on Android:
   word timings); the sentence highlight still works. Some vendors, Huawei for example, freeze
   background apps; allow Read Me Offline to run in the background if reads stop part-way.
 
-  Reading with the screen off needs plugin 0.3.0 or later (0.3.0 is the version that adds it;
-  it is the first release in which Read Me Offline plays the note itself) together with Read
-  Me Offline 1.1.0 or later.
+  From plugin 0.3.0, Read Me Offline plays the note itself, so reading carries on with the
+  screen off. That needs Read Me Offline 1.1.0 or later: with an older Read Me, plugin 0.3.0
+  reports the bridge as unavailable and asks you to update it.
 - **Kokoro.** Runs inside Obsidian with no companion app, but is much slower on a phone (see
   below).
 

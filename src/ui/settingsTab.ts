@@ -226,13 +226,18 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 		const steps = setup.descEl.createEl("ol");
 		for (const step of READ_ME_SETUP_STEPS) steps.createEl("li", { text: step });
 		setup.settingEl.toggle(shouldShowBridgeSetup(null));
+		// A re-check keeps the block as the last check left it, so a connected
+		// bridge does not flash the setup steps in above the fields on every
+		// blur. Only the latest check may write: an earlier, slower one resolving
+		// last would otherwise show a stale result.
+		let latestCheck = 0;
 		const refresh = (): void => {
 			const bridge = this.plugin.getBridge();
 			if (!bridge) return;
+			const thisCheck = ++latestCheck;
 			status.setDesc("Checking...");
-			setup.settingEl.toggle(shouldShowBridgeSetup(null));
 			void bridge.isAvailable().then((availability) => {
-				if (!containerEl.isConnected) return;
+				if (!containerEl.isConnected || thisCheck !== latestCheck) return;
 				setup.settingEl.toggle(shouldShowBridgeSetup(availability));
 				const health = bridge.lastHealth();
 				if (availability.available && health) {
