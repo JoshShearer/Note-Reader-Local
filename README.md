@@ -355,6 +355,18 @@ Full notices and license texts are in `THIRD_PARTY_NOTICES.md`, and are also app
 
 ## Changelog
 
+### 0.3.0
+
+- Linux: optional Piper engine that speaks through a Piper HTTP server you run yourself on
+  127.0.0.1 (port configurable, default 5011). The plugin contacts it only after you click
+  Check connection, choose it, or start a read with it selected. See `companion/piper/README.md`
+- Android: Read Me Offline 1.1.0 or later now plays the note itself, so reading keeps going
+  after Obsidian leaves the screen
+- A number written as `#1` or `#2026` is now read aloud; real tags are still skipped
+- Many fixes so the spoken text matches what Obsidian displays: comments, callouts, quotes,
+  lists, code blocks, raw HTML, footnotes, link reference definitions and frontmatter
+- Faster extraction on lines with long runs of brackets or footnote markers
+
 ### 0.2.1
 
 - Releases now carry GitHub artifact attestations and generated release notes
