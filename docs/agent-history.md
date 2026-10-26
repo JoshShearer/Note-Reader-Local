@@ -1906,6 +1906,25 @@ issue was closed with them open: an offline 41-chunk read to `finished` with no 
 desktop observed live (deployed, no CDP). R-M03 is not recorded as met and the `2 of 16` MUST
 count does not move.
 
+**Superseded in part by ADR 0037 (2026-10-16): Read Me reads the note itself.** The engine now
+owns playback (`ownsPlayback: true`, a `pause`/`resume` pair over `/control`), sends the read to
+`POST /play` with the user's rate and follows `GET /status`; the rate-1.0 buffer route above
+(B1's `rate=1.0`, `/synthesize`) is no longer used. NRL-230 (2026-10-26) added an authorized
+`GET /status` to `isAvailable()` after `/health` passes, because `/health` takes no token and a
+wrong stored token read as Connected; a 401 there is reported as a rejected token.
+
+Measured 2026-10-26 on the reference Pixel 9 Pro XL (Android 17), Read Me Offline 1.1.0
+(`app.marmalade.tts`, voice `kitten-direct-v0_8:Bruno`), plugin 0.3.0 built at `8bda763` and
+written into the phone vault over CDP, a synthetic 61-passage note: with the screen off and
+the device Dozing, `dumpsys audio` showed one started AudioTrack owned by Read Me at every 10 s
+sample for 94 s; the lock screen showed Read Me's media control ("Obsidian note", Reading);
+the session ended normally, with Read Me logging `playback gaps n=60 p50=7 p95=10 max=36
+stalls=0 errors=0 underruns=0`. The NRL-228 setup block and the NRL-230 token check were driven
+through the real settings tab on the same phone (no token, right token, wrong token, restored).
+**Not established:** the same screen-off read on the released 0.3.0 build (NRL-227 stays open
+for it; NRL-230 changed `isAvailable()` after `8bda763`), and the sentence highlight during a
+bridge read, which was not watched. R-M03 is still not recorded as met.
+
 **Supertonic 3 was evaluated and rejected for Android.** `Supertone/supertonic-3` on
 Hugging Face: four ONNX graphs totalling **398,075,273 bytes** (`vector_estimator`
 256,534,781, `vocoder` 101,424,195, `text_encoder` 36,416,150, `duration_predictor`
@@ -1940,6 +1959,14 @@ from it are **byte-identical by sha256** to the build deployed into the Notes va
 exercised over CDP the same day (Kokoro read to `playing`, word highlight advancing, rate
 applied once). Still unobserved: installing it through Obsidian's own installer, which only
 becomes possible once the directory lists it.
+
+**0.3.0 was released on 2026-10-26**, tag `0.3.0` at `5b65558`, `release.yml` run
+`40350691301`: all six jobs `success`. Not a prerelease; assets `main.js` (13,811,810 bytes),
+`manifest.json`, `styles.css` and `multiple.intoto.jsonl`. The three plugin files downloaded
+from it are byte-identical by sha256 to `npm run build` at `5b65558` in the primary, which is
+what `npm run deploy` wrote into the Notes vault the same day (`cmp` identical). That desktop
+deploy was not exercised live (Obsidian not reloaded in the session). Android evidence for
+0.3.0 is in "Android playback throughput, and the native-TTS bridge".
 
 Submission now happens at community.obsidian.md with a linked GitHub account, reading
 `manifest.json` from the default branch HEAD; the old pull request to `obsidian-releases`

@@ -56,9 +56,9 @@ extract.ts ──────────► SpeechChunk[]   text + sourceIndex 
 Player ──────────────► orchestrates: synthesise ahead, play, advance, emit events
       │
       ├─► SpeechEngine.synthesize() ──► SynthResult
-      │        kind: "buffer"   audio + word timings    (kokoro, espeak)
+      │        kind: "buffer"   audio + word timings    (kokoro, espeak, piper)
       │        kind: "live"     engine fires onWord     (webspeech)
-      │        kind: "streamed" engine makes the sound  (speechd)
+      │        kind: "streamed" engine makes the sound  (speechd, readme)
       │
       ├─► words.ts ────────────► WordTiming[]  offsets + ms, apportioned by syllables
       │
@@ -81,11 +81,13 @@ src/
 ├── settings/saveQueue.ts       single-flight coalescing saveData queue, obsidian-free (NRL-58)
 ├── text/extract.ts             markdown → SpeechChunk[] with source offsets; two
 │                               confirmed carries plus one document scalar (ADR 0025)
+├── text/obsidianBlocks.ts      transcription of the block tokenizers Obsidian bundles (remark-parse 8 and friends), with notices
 ├── text/segment.ts             sentence/grapheme/word boundaries, injected SegmenterSource, pure (ADR 0009)
 ├── audio/
 │   ├── types.ts                SpeechEngine, EngineCapabilities, SpeechChunk, VoiceInfo
 │   ├── player.ts               the single playback controller
 │   ├── fallback.ts             playWithFallback(): tries the next engine on a load/first-chunk failure (ADR 0010)
+│   ├── voiceChoice.ts          which voice to use when the stored one is not an exact match; never swaps silently
 │   ├── clip.ts                 clipChunksToSelection(): narrows a queue to a selection by scanning sourceIndex (NRL-57)
 │   ├── words.ts                word spans and timing apportionment
 │   ├── wav.ts                  WAV parsing / duration
@@ -112,6 +114,7 @@ src/
 └── ui/
     ├── settingsTab.ts          all settings rendering
     ├── controlBar.ts           transport controls
+    ├── controlBarCss.ts        the names controlBar.ts and styles.css must agree on, pure
     ├── affordances.ts          capabilities -> which controls to offer, and why not, pure
     ├── highlight.ts             two CodeMirror StateFields (sentence, word) + highlightPlan (ADR 0020) + viewport scroll on the chunk event (ADR 0022) + shouldHighlightLeaf gating both on active-leaf-change (NRL-89)
     ├── highlightColour.ts      highlight colour setting -> CSS variable, pure (ADR 0005)
@@ -263,8 +266,8 @@ whatever `pause()` recorded rather than deciding again:
 
 | route | chosen when | engines | what a resume does |
 |---|---|---|---|
-| `element` | no engine set at all, then `!ownsPlayback` whatever the engine declares | kokoro, espeak | `<audio>.play()`: continues at the exact sample |
-| `engine` | `ownsPlayback` **and** both `pause()` and `resume()` declared | webspeech | `speechSynthesis.resume()`: continues mid-utterance, roughly at the word |
+| `element` | no engine set at all, then `!ownsPlayback` whatever the engine declares | kokoro, espeak, piper | `<audio>.play()`: continues at the exact sample |
+| `engine` | `ownsPlayback` **and** both `pause()` and `resume()` declared | webspeech, readme (ADR 0037: `/control` pause and resume) | `speechSynthesis.resume()`: continues mid-utterance, roughly at the word |
 | `restart` | neither of the above | speechd | re-speaks the **current sentence from its start** |
 
 The row order is the check order, and `element` is first for the reason bullet 5 below
