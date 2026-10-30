@@ -1,0 +1,1 @@
+../claude-workflow/core/commands/update-packages.md
