@@ -342,3 +342,16 @@ Four facts shaped the design, each measured rather than assumed:
   above come from bundling the real modules and running them. No deployment,
   restart or live reading was performed, so audible CJK pacing and following-
   word highlighting on a non-Latin note remain unverified by a human.
+
+
+## Amendment: a sentence is a section
+
+`MIN_CHUNK_CHARS` was 40 and `mergeShort` folded any sentence under it into the
+one before. That kept short sentences from being synthesised alone, but a chunk
+is also what the reader counts ("Section N of M"), previews, skips to, starts
+from and highlights, so four short sentences in a row read as one section. The
+floor is now 8: only a runt (`Dr.`, `e.g.`, a bare `Yes.`) folds forward, and
+every other sentence is its own chunk. The legacy-boundary rule and
+`splitOversized` are unchanged. The cost is more, shorter synthesis jobs; if
+that proves audible, grouping belongs in a synthesis layer that leaves the
+sections alone, not back in the extractor.

@@ -3,20 +3,23 @@ import {
 	Notice,
 	Plugin,
 	TFile,
+	addIcon,
 	type TAbstractFile,
 	type WorkspaceLeaf,
 	getLanguage,
 	moment,
 } from "obsidian";
 import { EditorView } from "@codemirror/view";
+import type { ChangeSet } from "@codemirror/state";
 
 import { Player } from "./audio/player";
 import { describeUnavailable, type EngineAvailability, type SpeechChunk, type SpeechEngine, type VoiceInfo } from "./audio/types";
+import { nextParagraphStart, previousParagraphStart } from "./audio/paragraphs";
 import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
-import { extractChunks } from "./text/extract";
+import { extractChunks, type ExtractOptions } from "./text/extract";
 import { platformSegmenters } from "./text/segment";
 import { resolveStoredVoice } from "./audio/voiceChoice";
-import { applySelectionReadGate, clipChunksToSelection, type SelectionReadPort } from "./audio/clip";
+import { applySelectionReadGate, cursorStartOffset, chunksTouchingSelection, clipChunksToSelection, type SelectionReadPort } from "./audio/clip";
 import { createEngines, findEngine, probeEngines, resolveWeights } from "./engines/registry";
 import { ReadMeBridgeEngine } from "./engines/bridge/readMe";
 import { PiperEngine, confirmManualEngine } from "./engines/piper/piper";
@@ -25,6 +28,7 @@ import { PiperEngine, confirmManualEngine } from "./engines/piper/piper";
 const BRIDGE_TOKEN_KEY = "local-tts-reader:bridge-token";
 import {
 	KokoroEngine,
+	GPU_CAPABLE_WEIGHTS,
 	KOKORO_WEIGHTS,
 	voiceFilePath,
 	type KokoroOptions,
@@ -41,6 +45,7 @@ import {
 import { DEFAULT_SETTINGS, resolveKokoroModelPath, type Settings } from "./settings";
 import { loadPluginData, serialisePluginData, type PluginData } from "./settings/data";
 import { PositionThrottle } from "./settings/positionThrottle";
+import { EditTracker } from "./ui/editTracker";
 import { SaveQueue } from "./settings/saveQueue";
 import { applyVaultDelete, applyVaultRename, type VaultEventPort } from "./settings/vaultEvents";
 import {
@@ -53,6 +58,7 @@ import {
 	highlightPlan,
 	isScrollSuppressed,
 	registerHighlighting,
+	trackEdits,
 	registerScrollSuppression,
 	resetScrollSuppression,
 	scrollTargetForChunk,
@@ -67,13 +73,14 @@ import {
 } from "./ui/highlightColour";
 import {
 	createModelStore,
+	listInstalledVoices,
 	voiceForModelDownload,
 	type ModelDownloadVoice,
 	type VaultModelStore,
 } from "./ui/modelStore";
 import { withLoadingNotice } from "./ui/loadingNotice";
 import { reportError, trace } from "./diagnostics";
-import { LocalTtsSettingTab } from "./ui/settingsTab";
+import { LocalTtsSettingTab, SettingsView, SETTINGS_VIEW_TYPE } from "./ui/settingsView";
 import { ControlBar } from "./ui/controlBar";
 import { controlAffordances } from "./ui/affordances";
 
@@ -102,6 +109,64 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 */
 	private readScope: AbortController | null = null;
 	private controlBar!: ControlBar;
+	/** Copies of the control bar drawn inside the settings pane. */
+	private readonly inlineBars = new Set<ControlBar>();
+	/**
+	 * Edits made to the note being read, since the read started. Every offset
+	 * the player hands back is stamped with the revision it was read at, and is
+	 * mapped through the edits since before anything is drawn or saved.
+	 */
+	private tracker: EditTracker | null = null;
+	/** The editor the read started in; edits to it are tracked whichever note is in front. */
+	private trackedEditor: EditorView | null = null;
+	/** Whether edits during a read re-extract the note (not for a selection read). */
+	private resyncEnabled = false;
+	private resyncTimer: number | null = null;
+	private previewCache: { key: string; source: string; chunks: SpeechChunk[] } | null = null;
+
+	/** Edits made while nothing was playing, waiting for typing to pause. */
+	private idleEdits: { filePath: string; changes: ChangeSet } | null = null;
+	private idleEditTimer: number | null = null;
+
+	/**
+	 * Apply the pending idle edits to the note's saved start, so it stays on the
+	 * same text, then redraw the section line (the total may have changed).
+	 */
+	private flushIdleEdits(): void {
+		if (this.idleEditTimer !== null) window.clearTimeout(this.idleEditTimer);
+		this.idleEditTimer = null;
+		const pending = this.idleEdits;
+		this.idleEdits = null;
+		if (!pending) return;
+		// A read began after these edits were typed: it has its own tracking and
+		// has already written its own position, which these edits do not apply to.
+		const state = this.player.getState();
+		if (state === "preparing" || state === "playing" || state === "paused") return;
+		const position = this.pluginData.positions?.[pending.filePath];
+		if (position) {
+			// Bias to the left: typing at the very start of the start section
+			// stays inside it instead of skipping past what was just typed.
+			position.sourceOffset = pending.changes.mapPos(position.sourceOffset, -1);
+			position.updatedAt = Date.now();
+			this.scheduleIdleSave();
+		}
+		this.refreshSectionPreviews();
+	}
+
+	/**
+	 * Write the shifted position to disk, but not on every typing pause: the
+	 * file is synced with the vault, and the value is only needed next time a
+	 * read starts.
+	 */
+	private scheduleIdleSave(): void {
+		if (this.idleSaveTimer !== null) window.clearTimeout(this.idleSaveTimer);
+		this.idleSaveTimer = window.setTimeout(() => {
+			this.idleSaveTimer = null;
+			void this.saveSettings();
+		}, 10_000);
+	}
+	private idleSaveTimer: number | null = null;
+
 	/**
 	 * Throttled reading-position writes. Its own module because main.ts cannot be
 	 * tested at all (obsidian has no runtime) and the window needs a clock the
@@ -177,7 +242,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			kokoro.onInfo((message) => trace(this.app, this.manifest.dir!, "kokoro", message));
 		}
 
-		this.player = new Player({ bufferAhead: this.settings.bufferAhead });
+		this.player = new Player({ bufferAhead: this.settings.bufferAhead, groupChars: 450 });
 		// The player is the one authority on rate (srs.md R-M16). Seed it from
 		// settings before anything observes it, so the control bar and the
 		// settings slider start from the same value.
@@ -249,13 +314,13 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				clearWordHighlight(this.activeEditor);
 				return;
 			}
-			applyWordHighlight(this.activeEditor, {
-				from: payload.timing.sourceStart,
-				to: payload.timing.sourceEnd,
-			});
+			const range = this.mapRange(payload.rev, payload.timing.sourceStart, payload.timing.sourceEnd);
+			if (range) applyWordHighlight(this.activeEditor, range);
+			else clearWordHighlight(this.activeEditor);
 		});
 
 		this.player.on("progress", (progress) => {
+			console.debug(`[Local TTS Reader] progress: chunk ${progress.chunkIndex + 1}/${progress.total}`);
 			// Track reading position for resume.
 			//
 			// The path comes from the player, not from the active view. The
@@ -273,8 +338,17 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			if (filePath) this.positionThrottle.note(filePath, progress.chunkIndex);
 		});
 
+		this.player.on("generating", (generating) => {
+			this.generating = generating;
+			for (const listener of this.readInfoListeners) listener();
+		});
+
 		this.player.on("state", (state) => {
-			if (state === "finished" || state === "idle") this.clearBothHighlights();
+			console.debug(`[Local TTS Reader] player state: ${state} (chunk ${this.player.getIndex() + 1})`);
+			if (state === "finished" || state === "idle") {
+				this.clearBothHighlights();
+				if (this.readInfo) this.setReadInfo(null);
+			}
 			// Every state change that ends the user's attention closes the window,
 			// which is what makes the final second survive. One place rather than
 			// patching stopReading() and the two toggle() call sites: setState is
@@ -301,6 +375,18 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			this.clearBothHighlights();
 		});
 
+		// For the playback controls: a play triangle beside an I-beam text cursor.
+		addIcon(
+			"local-tts-play-ibeam",
+			'<g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">' +
+				'<polygon points="10 18 56 50 10 82"/>' +
+				'<path d="M72 18h20M72 82h20M82 18v64"/></g>',
+		);
+		// Paragraph skips: two arrows with a bar at the end they point to.
+		const arrows = (shapes: string): string =>
+			'<g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">' + shapes + "</g>";
+		addIcon("local-tts-para-next", arrows('<polygon points="8 24 40 50 8 76"/><polygon points="42 24 74 50 42 76"/><path d="M88 24v52"/>'));
+		addIcon("local-tts-para-prev", arrows('<polygon points="92 24 60 50 92 76"/><polygon points="58 24 26 50 58 76"/><path d="M12 24v52"/>'));
 		this.controlBar = new ControlBar(this);
 		this.refreshEngineAffordances();
 		// Kicked off now, not deferred to onLayoutReady: cheap (no model load,
@@ -308,12 +394,6 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// activeEngine()'s sync cache, which the control bar and the palette's
 		// checkCallback read before anything else has a chance to await it.
 		if (this.settings.engine === "auto") void this.resolveAutomaticChoice();
-
-		this.addRibbonIcon("audio-lines", "Read this note aloud", () => {
-			void this.readActiveNote().catch((err: unknown) => {
-				reportError(this.app, this.manifest.dir!, "readActiveNote failed", err);
-			});
-		});
 
 		this.addCommand({
 			id: "read-note",
@@ -323,6 +403,59 @@ export default class LocalTtsReaderPlugin extends Plugin {
 					reportError(this.app, this.manifest.dir!, "readActiveNote failed", err);
 				});
 			},
+		});
+
+		// Typing with nothing playing: once it pauses, move the saved start along
+		// with the edits and redraw "Section N of M" for the new text.
+		this.registerEditorExtension(
+			EditorView.updateListener.of((update) => {
+				if (!update.docChanged) return;
+				const state = this.player.getState();
+				if (state === "preparing" || state === "playing" || state === "paused") return;
+				// The editor and file only: this runs on every keystroke, and the
+				// note's text is not needed (the changes carry the positions).
+				const current = this.activeNote();
+				if (!current || current.editor !== update.view) return;
+				if (this.idleEdits && this.idleEdits.filePath !== current.filePath) this.flushIdleEdits();
+				this.idleEdits = {
+					filePath: current.filePath,
+					changes: this.idleEdits ? this.idleEdits.changes.compose(update.changes) : update.changes,
+				};
+				if (this.idleEditTimer !== null) window.clearTimeout(this.idleEditTimer);
+				this.idleEditTimer = window.setTimeout(() => this.flushIdleEdits(), 600);
+			}),
+		);
+		this.register(() => {
+			if (this.idleEditTimer !== null) window.clearTimeout(this.idleEditTimer);
+			if (this.idleSaveTimer !== null) {
+				window.clearTimeout(this.idleSaveTimer);
+				void this.saveSettings();
+			}
+		});
+
+		// Ribbon: read the whole note, and play from the cursor or the selection
+		// (the same two actions as the editor context menu).
+		// Both buttons carry the waveform, with a small badge for what they do.
+		const wave =
+			'<g transform="translate(-4 -8) scale(4.17)" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+			'<path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/></g>';
+		const badge = (shape: string): string =>
+			'<circle cx="69" cy="69" r="31" style="fill:var(--background-secondary)"/>' +
+			'<g transform="translate(41.4 41.4) scale(2.3)" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">' +
+			shape +
+			"</g>";
+		addIcon("local-tts-play-note", wave + badge('<polygon points="6 3 20 12 6 21 6 3" fill="currentColor"/>'));
+		addIcon(
+			"local-tts-play-cursor",
+			wave + badge('<path d="M17 22h-1a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4h1M7 22h1a4 4 0 0 0 4-4v-1M7 2h1a4 4 0 0 1 4 4v1"/>'),
+		);
+		this.addRibbonIcon("local-tts-play-note", "Read note aloud (Text-to-speech)", () => {
+			void this.readActiveNote().catch((err: unknown) => {
+				reportError(this.app, this.manifest.dir!, "readActiveNote failed", err);
+			});
+		});
+		this.addRibbonIcon("local-tts-play-cursor", "Play from cursor or selection (Text-to-speech)", () => {
+			this.playFromCursorOrSelection();
 		});
 
 		this.addCommand({
@@ -339,6 +472,34 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				return hasSelection;
 			},
 		});
+
+		this.registerEvent(
+			this.app.workspace.on("editor-menu", (menu, editor) => {
+				// With text selected: read from the sentence the selection starts in
+				// to the end of the sentence it ends in.
+				if (editor.somethingSelected()) {
+					menu.addItem((item) =>
+						item
+							.setTitle("Play selection (Text-to-speech)")
+							.setIcon("play")
+							.onClick(() => {
+								const from = editor.posToOffset(editor.getCursor("from"));
+								const to = editor.posToOffset(editor.getCursor("to"));
+								void this.readSelection(from, to, true);
+							}),
+					);
+					return;
+				}
+				menu.addItem((item) =>
+					item
+						.setTitle("Play from cursor (Text-to-speech)")
+						.setIcon("play")
+						.onClick(() => {
+							void this.readFromCursor(editor.posToOffset(editor.getCursor()));
+						}),
+				);
+			}),
+		);
 
 		this.addCommand({
 			id: "read-from-cursor",
@@ -419,7 +580,15 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			},
 		});
 
+		this.registerView(SETTINGS_VIEW_TYPE, (leaf) => new SettingsView(leaf, this));
 		this.addSettingTab(new LocalTtsSettingTab(this.app, this));
+		this.addCommand({
+			id: "open-settings-view",
+			name: "Open settings sidebar",
+			callback: () => {
+				void this.openSettingsView();
+			},
+		});
 
 		// Loading Kokoro takes seconds, and doing it on the first click is what
 		// makes the plugin feel broken rather than slow. Start it now, in the
@@ -429,6 +598,23 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			void this.warmUpEngine();
 		});
+	}
+
+	/**
+	 * Show the settings pane in the left sidebar, creating it on first use.
+	 *
+	 * An existing pane is revealed rather than duplicated, wherever the user
+	 * has dragged it.
+	 */
+	async openSettingsView(): Promise<void> {
+		const { workspace } = this.app;
+		let leaf = workspace.getLeavesOfType(SETTINGS_VIEW_TYPE)[0] ?? null;
+		if (!leaf) {
+			leaf = workspace.getLeftLeaf(false);
+			if (!leaf) return;
+			await leaf.setViewState({ type: SETTINGS_VIEW_TYPE, active: true });
+		}
+		await workspace.revealLeaf(leaf);
 	}
 
 	/** Load the selected engine's heavy resources ahead of the first request. */
@@ -527,6 +713,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// to start speaking through a disposed plugin.
 		this.readScope?.abort();
 		this.readScope = null;
+		this.cancelResync();
 		// Before the player, and unconditionally: a trailing flush that fired
 		// after dispose would call savePosition on an unloaded plugin. Nothing
 		// cleared the window handle before this - it leaked on every path.
@@ -539,6 +726,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// write itself - onunload() is synchronous and Obsidian gives it no
 		// hook to wait for one; see docs/adr/0026 for the bound this leaves.
 		this.saveQueue?.dispose();
+		for (const bar of this.inlineBars) bar.destroy();
+		this.inlineBars.clear();
 		this.controlBar?.destroy();
 		this.player?.dispose();
 		// Both, or the sentence property outlives the plugin on document.body.
@@ -561,8 +750,28 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * supported way to get at it. The `cm` property is the fallback for older
 	 * builds where the container lookup comes up empty.
 	 */
+	/** The note in front and its editor, without reading its text. */
+	private activeNote(): { editor: EditorView; filePath: string } | null {
+		const recent = this.app.workspace.getMostRecentLeaf()?.view;
+		const view =
+			this.app.workspace.getActiveViewOfType(MarkdownView) ??
+			(recent instanceof MarkdownView ? recent : null);
+		if (!view) return null;
+		const editor =
+			EditorView.findFromDOM(view.containerEl) ??
+			((view.editor as unknown as { cm?: EditorView }).cm ?? null);
+		if (!editor) return null;
+		return { editor, filePath: view.file?.path ?? "" };
+	}
+
 	private currentEditor(): { editor: EditorView; source: string; filePath: string } | null {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		// The settings pane (or any other non-note view) can be the active leaf
+		// while a note is still the one in front; fall back to the most recent
+		// note so the pane's own buttons act on it.
+		const recent = this.app.workspace.getMostRecentLeaf()?.view;
+		const view =
+			this.app.workspace.getActiveViewOfType(MarkdownView) ??
+			(recent instanceof MarkdownView ? recent : null);
 		if (!view) return null;
 
 		const editor =
@@ -574,7 +783,265 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		return { editor, source: view.editor.getValue(), filePath };
 	}
 
+	/** What the read in progress is made of, for the settings pane's Status bubble. */
+	private readInfo: { passages: number; engine: string; runtime: string | null } | null = null;
+	private readonly readInfoListeners = new Set<() => void>();
+
+	getReadInfo(): { passages: number; engine: string; runtime: string | null } | null {
+		return this.readInfo;
+	}
+
+	/** Whether playback is waiting on audio that is not ready. */
+	private generating = false;
+
+	/**
+	 * The first line of the status: what the reader is doing, e.g. "Reading 12
+	 * passages". Null when no read is running.
+	 */
+	readStatusLine(): string | null {
+		const state = this.player.getState();
+		const info = this.getReadInfo();
+		if (!info || (state !== "preparing" && state !== "playing" && state !== "paused")) return null;
+		const what = `${info.passages} passages`;
+		let line = state === "paused" ? `Paused - ${what}` : state === "preparing" ? `Preparing ${what}` : `Reading ${what}`;
+		// Nothing audible yet, or synthesis has fallen behind playback.
+		if (this.getGenerating()) line += " - Generating...";
+		return line;
+	}
+
+	getGenerating(): boolean {
+		return this.generating;
+	}
+
+	/** Be told when the read in progress starts or ends. Returns the function that stops listening. */
+	onReadInfoChange(listener: () => void): () => void {
+		this.readInfoListeners.add(listener);
+		return () => this.readInfoListeners.delete(listener);
+	}
+
+	/** Tell the status line what is being read and by which engine. */
+	private announceRead(passages: number, engine: SpeechEngine): void {
+		this.setReadInfo({ passages, engine: engine.label, runtime: engine.runtimeInfo?.() ?? null });
+	}
+
+	private setReadInfo(info: { passages: number; engine: string; runtime: string | null } | null): void {
+		this.readInfo = info;
+		for (const listener of this.readInfoListeners) listener();
+	}
+
+	/**
+	 * Start following edits to the note being read. A fresh tracker per read, so
+	 * revision numbers mean "edits since this read began".
+	 */
+	private beginEditTracking(editor: EditorView, resync: boolean): void {
+		this.tracker = new EditTracker();
+		this.trackedEditor = editor;
+		this.resyncEnabled = resync;
+		this.cancelResync();
+		trackEdits(editor, (changes) => {
+			if (editor === this.trackedEditor) this.onSourceEdited(changes);
+		});
+	}
+
+	private cancelResync(): void {
+		if (this.resyncTimer !== null) window.clearTimeout(this.resyncTimer);
+		this.resyncTimer = null;
+	}
+
+	/** Stamp chunks with the revision they were extracted at, so their offsets can be carried forward. */
+	private stampRevision(chunks: SpeechChunk[]): void {
+		const rev = this.tracker?.revision ?? 0;
+		for (const chunk of chunks) chunk.rev = rev;
+	}
+
+	/** A range read at `rev`, as it is in the note now; null when it was deleted. */
+	private mapRange(rev: number | undefined, from: number, to: number): { from: number; to: number } | null {
+		const tracker = this.tracker;
+		if (!tracker || rev === undefined) return { from, to };
+		return tracker.mapRange(from, to, rev);
+	}
+
+	/** An offset read at `rev`, as it is in the note now. */
+	private mapOffset(rev: number | undefined, offset: number): number {
+		const tracker = this.tracker;
+		if (!tracker || rev === undefined) return offset;
+		return tracker.map(offset, rev, 1);
+	}
+
+	private onSourceEdited(changes: ChangeSet): void {
+		this.tracker?.record(changes);
+		if (!this.resyncEnabled) return;
+		const state = this.player.getState();
+		if (state !== "preparing" && state !== "playing" && state !== "paused") return;
+		// Typing is a burst of edits: wait for a pause before re-reading.
+		this.cancelResync();
+		this.resyncTimer = window.setTimeout(() => {
+			this.resyncTimer = null;
+			this.resyncQueue();
+		}, 600);
+	}
+
+	/**
+	 * Re-extract the note being read and hand the result to the player, which
+	 * takes it up at the next utterance boundary: edited sentences are read as
+	 * they now are, and sentences added since the read began are read too.
+	 */
+	private resyncQueue(): void {
+		const tracker = this.tracker;
+		const editor = this.trackedEditor;
+		if (!tracker || !editor || !this.resyncEnabled) return;
+		const filePath = this.player.getFilePath();
+		if (!filePath) return;
+		const chunks = extractChunks(editor.state.doc.toString(), this.extractOptions(), platformSegmenters, filePath);
+		const rev = tracker.revision;
+		for (const chunk of chunks) chunk.rev = rev;
+		this.player.queueReplacement(chunks, (last) => {
+			// Where the sentence that just finished ends in the note as it is
+			// now, and the first new sentence reaching past it. Ending at, not
+			// starting after: a sentence that was edited where it ended is read
+			// again in full rather than losing its new tail.
+			const end = tracker.map(last.sourceEnd, last.rev ?? 0, -1, rev);
+			const at = chunks.findIndex((c) => c.sourceEnd > end);
+			return at === -1 ? chunks.length : at;
+		});
+	}
+
+	/** The extraction options as the settings currently have them. */
+	private extractOptions(): ExtractOptions {
+		return {
+			stripTags: this.settings.skipTags,
+			speakUrls: this.settings.speakUrls,
+			skipCodeBlocks: this.settings.skipCodeBlocks,
+			skipInlineCode: this.settings.skipInlineCode,
+			skipTables: this.settings.skipTables,
+			skipHeadings: this.settings.skipHeadings,
+			skipFrontmatter: this.settings.skipFrontmatter,
+			speakImageAlt: this.settings.speakImageAlt,
+			speakEmbeds: this.settings.speakEmbeds,
+			// Not a setting: the UI language, which is what the segmenters are
+			// built with. appLocale() never throws and falls back to "en".
+			locale: appLocale(),
+		};
+	}
+
+	/**
+	 * Which section a read of the open note would start with, without reading.
+	 *
+	 * Mirrors what readActiveNote does before it plays: extract the note and
+	 * land on the first chunk not yet passed, from the stored position. The
+	 * last extraction is kept so redraws do not re-extract an unchanged note.
+	 */
+	private previewChunks(): { filePath: string; chunks: SpeechChunk[]; index: number } | null {
+		const current = this.currentEditor();
+		if (!current) return null;
+		const stored = this.pluginData.positions?.[current.filePath]?.sourceOffset ?? -1;
+		const key = `${current.filePath}|${JSON.stringify(this.extractOptions())}`;
+		let chunks: SpeechChunk[];
+		if (this.previewCache && this.previewCache.key === key && this.previewCache.source === current.source) {
+			chunks = this.previewCache.chunks;
+		} else {
+			chunks = extractChunks(current.source, this.extractOptions(), platformSegmenters, current.filePath);
+			this.previewCache = { key, source: current.source, chunks };
+		}
+		if (chunks.length === 0) return null;
+		let index = 0;
+		if (stored >= 0) {
+			const found = chunks.findIndex((c) => c.sourceEnd > stored);
+			index = found === -1 ? chunks.length - 1 : found;
+		}
+		return { filePath: current.filePath, chunks, index };
+	}
+
+	previewStart(): { index: number; total: number; text: string } | null {
+		const p = this.previewChunks();
+		if (!p) return null;
+		return { index: p.index, total: p.chunks.length, text: p.chunks[p.index]?.text ?? "" };
+	}
+
+	/**
+	 * Move where the next read of the open note will start, by whole sections.
+	 *
+	 * Writes the same position record a read would, so the start survives a
+	 * reload and Play picks it up with no extra path. Landing on the first
+	 * section clears the record instead, which is what "never read" means.
+	 */
+	nudgeStart(delta: number): void {
+		this.flushIdleEdits();
+		const p = this.previewChunks();
+		if (!p) return;
+		this.moveStartTo(p, Math.min(Math.max(p.index + delta, 0), p.chunks.length - 1));
+	}
+
+	/** When the "previous paragraph" button was last pressed. */
+	private lastPreviousParagraphAt = 0;
+
+	/** Move the start (idle) or the reading (playing) to the next or previous paragraph. */
+	jumpParagraph(direction: 1 | -1): void {
+		this.flushIdleEdits();
+		// A second "previous" within a few seconds means the paragraph before, not
+		// the start of the one the first press landed on (reading may already have
+		// moved a sentence into it).
+		const now = Date.now();
+		const quick = direction === -1 && now - this.lastPreviousParagraphAt < 3000;
+		if (direction === -1) this.lastPreviousParagraphAt = now;
+		const state = this.player.getState();
+		if (state === "preparing" || state === "playing" || state === "paused") {
+			const chunks: SpeechChunk[] = [];
+			for (let i = 0; i < this.player.getChunkCount(); i += 1) {
+				const chunk = this.player.getChunk(i);
+				if (chunk) chunks.push(chunk);
+			}
+			const from = this.player.getIndex();
+			const target = direction === 1 ? nextParagraphStart(chunks, from) : previousParagraphStart(chunks, from, !quick);
+			if (target !== null) void this.player.jumpTo(target);
+			return;
+		}
+		const p = this.previewChunks();
+		if (!p) return;
+		const target = direction === 1 ? nextParagraphStart(p.chunks, p.index) : previousParagraphStart(p.chunks, p.index, !quick);
+		if (target !== null) this.moveStartTo(p, target);
+	}
+
+	private moveStartTo(p: { filePath: string; chunks: SpeechChunk[] }, target: number): void {
+		const chunk = p.chunks[target];
+		if (!chunk) return;
+		if (target === 0) this.clearPosition(p.filePath);
+		else this.recordPosition(chunk);
+		this.refreshSectionPreviews();
+		void this.saveSettings();
+	}
+
+	/**
+	 * Go back to the top of the open note. Idle, that moves the start; while a
+	 * read is running it restarts from the top, since "return to the beginning"
+	 * would otherwise do nothing visible.
+	 */
+	async restartFromBeginning(): Promise<void> {
+		this.flushIdleEdits();
+		const p = this.previewChunks();
+		if (!p) return;
+		const state = this.player.getState();
+		const inFlight = state === "preparing" || state === "playing" || state === "paused";
+		// Stop first: the stop flushes the throttled position write, which
+		// would put the old position straight back if the clear came before.
+		if (inFlight) this.stopReading();
+		this.clearPosition(p.filePath);
+		this.refreshSectionPreviews();
+		await this.saveSettings();
+		if (inFlight) await this.readActiveNote();
+	}
+
+	private clearPosition(filePath: string): void {
+		if (this.pluginData.positions) delete this.pluginData.positions[filePath];
+	}
+
+	/** Ask every inline control copy to redraw its section line. */
+	refreshSectionPreviews(): void {
+		for (const bar of this.inlineBars) bar.refreshSection();
+	}
+
 	async readActiveNote(): Promise<void> {
+		this.flushIdleEdits();
 		const t = (step: string, detail?: unknown) =>
 			trace(this.app, this.manifest.dir!, step, detail);
 		t("readActiveNote: entered");
@@ -597,26 +1064,15 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		registerHighlighting(current.editor);
 		registerScrollSuppression(current.editor);
 		resetScrollSuppression(current.editor);
+		this.beginEditTracking(current.editor, true);
 
 		const chunks = extractChunks(
 			current.source,
-			{
-				stripTags: this.settings.skipTags,
-				speakUrls: this.settings.speakUrls,
-				skipCodeBlocks: this.settings.skipCodeBlocks,
-				skipInlineCode: this.settings.skipInlineCode,
-				skipTables: this.settings.skipTables,
-				skipHeadings: this.settings.skipHeadings,
-				skipFrontmatter: this.settings.skipFrontmatter,
-				speakImageAlt: this.settings.speakImageAlt,
-				speakEmbeds: this.settings.speakEmbeds,
-				// Not a setting: the UI language, which is what the segmenters are
-				// built with. appLocale() never throws and falls back to "en".
-				locale: appLocale(),
-			},
+			this.extractOptions(),
 			platformSegmenters,
 			current.filePath,
 		);
+		this.stampRevision(chunks);
 		t("chunks extracted", `${chunks.length}`);
 
 		if (chunks.length === 0) {
@@ -736,10 +1192,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		const timerMs = this.presetToMs(this.settings.timerPreset);
 		if (timerMs > 0) this.player.setTimer(timerMs);
 
-		const runtime = result.engine.runtimeInfo?.();
-		new Notice(
-			`Reading ${chunks.length} passages with ${result.engine.label}${runtime ? ` on ${runtime}` : ""}.`,
-		);
+		// Shown in the settings pane's Status bubble rather than as a pop-up.
+		this.announceRead(chunks.length, result.engine);
 		t("playback started", result.id);
 	}
 
@@ -822,7 +1276,22 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * Web Speech is unaffected: it always sees every voice, unchanged.
 	 */
 
-	private async readSelection(from: number, to: number): Promise<void> {
+	/**
+	 * Play the selection if there is one (whole sentences, first to last), else
+	 * from the cursor. What the context menu and the ribbon button do.
+	 */
+	playFromCursorOrSelection(): void {
+		const editor = this.currentEditor()?.editor;
+		if (!editor) {
+			new Notice("Open a note first.");
+			return;
+		}
+		const sel = editor.state.selection.main;
+		if (sel.empty) void this.readFromCursor(sel.from);
+		else void this.readSelection(sel.from, sel.to, true);
+	}
+
+	private async readSelection(from: number, to: number, wholeSentences = false): Promise<void> {
 		const current = this.currentEditor();
 		if (!current) {
 			new Notice("Open a note first.");
@@ -831,18 +1300,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		const chunks = extractChunks(
 			current.source,
-			{
-				stripTags: this.settings.skipTags,
-				speakUrls: this.settings.speakUrls,
-				skipCodeBlocks: this.settings.skipCodeBlocks,
-				skipInlineCode: this.settings.skipInlineCode,
-				skipTables: this.settings.skipTables,
-				skipHeadings: this.settings.skipHeadings,
-				skipFrontmatter: this.settings.skipFrontmatter,
-				speakImageAlt: this.settings.speakImageAlt,
-				speakEmbeds: this.settings.speakEmbeds,
-				locale: appLocale(),
-			},
+			this.extractOptions(),
 			platformSegmenters,
 			current.filePath,
 		);
@@ -851,7 +1309,9 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// raw-offset arithmetic: markdown stripping breaks the
 		// one-raw-character-to-one-spoken-character assumption that
 		// `from - chunk.sourceStart` needed (non-negotiable 8, NRL-57).
-		const selectedChunks = clipChunksToSelection(chunks, from, to);
+		const selectedChunks = wholeSentences
+			? chunksTouchingSelection(chunks, from, to)
+			: clipChunksToSelection(chunks, from, to);
 
 		// NRL-92: selectedChunks is computed and checked BEFORE the in-flight
 		// read is touched. A selection that turns out to hold nothing
@@ -868,6 +1328,10 @@ export default class LocalTtsReaderPlugin extends Plugin {
 				registerHighlighting(current.editor);
 				registerScrollSuppression(current.editor);
 				resetScrollSuppression(current.editor);
+				// A selection read follows edits for highlighting only: re-reading
+				// the whole note would read past the selection.
+				this.beginEditTracking(current.editor, false);
+				this.stampRevision(selectedChunks);
 			},
 			showEmptyNotice: () => new Notice("No text in selection."),
 		};
@@ -894,13 +1358,14 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			candidates = [{ engine, id: selection, reason: "" }];
 		}
 
-		await playWithFallback(this.player, candidates, selectedChunks, this.settings.rate, this.settings.pitch, {
+		const result = await playWithFallback(this.player, candidates, selectedChunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: (candidate: FallbackCandidate) =>
 				this.prepareCandidate(candidate, isAutomatic, current.filePath, scope.signal),
 		}, -1, scope.signal);
 
 		// A Stopped read must not arm a sleep timer (NRL-48).
 		if (scope.signal.aborted) return;
+		if (result) this.announceRead(selectedChunks.length, result.engine);
 
 		// Initialize sleep timer if preset is not "off"
 		const timerMs = this.presetToMs(this.settings.timerPreset);
@@ -908,6 +1373,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	}
 
 	private async readFromCursor(position: number): Promise<void> {
+		this.flushIdleEdits();
 		const current = this.currentEditor();
 		if (!current) {
 			new Notice("Open a note first.");
@@ -921,29 +1387,22 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		registerHighlighting(current.editor);
 		registerScrollSuppression(current.editor);
 		resetScrollSuppression(current.editor);
+		this.beginEditTracking(current.editor, true);
 
 		const chunks = extractChunks(
 			current.source,
-			{
-				stripTags: this.settings.skipTags,
-				speakUrls: this.settings.speakUrls,
-				skipCodeBlocks: this.settings.skipCodeBlocks,
-				skipInlineCode: this.settings.skipInlineCode,
-				skipTables: this.settings.skipTables,
-				skipHeadings: this.settings.skipHeadings,
-				skipFrontmatter: this.settings.skipFrontmatter,
-				speakImageAlt: this.settings.speakImageAlt,
-				speakEmbeds: this.settings.speakEmbeds,
-				locale: appLocale(),
-			},
+			this.extractOptions(),
 			platformSegmenters,
 			current.filePath,
 		);
+		this.stampRevision(chunks);
 
 		if (chunks.length === 0) {
 			new Notice("Nothing to read in this note.");
 			return;
 		}
+		// A cursor at the end of a line plays that line's last sentence.
+		position = cursorStartOffset(chunks, current.source, position);
 
 		const selection = this.settings.engine;
 		const isAutomatic = selection === "auto";
@@ -964,13 +1423,14 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			candidates = [{ engine, id: selection, reason: "" }];
 		}
 
-		await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
+		const result = await playWithFallback(this.player, candidates, chunks, this.settings.rate, this.settings.pitch, {
 			beforeAttempt: (candidate: FallbackCandidate) =>
 				this.prepareCandidate(candidate, isAutomatic, current.filePath, scope.signal),
 		}, position, scope.signal);
 
 		// A Stopped read must not arm a sleep timer (NRL-48).
 		if (scope.signal.aborted) return;
+		if (result) this.announceRead(chunks.length, result.engine);
 
 		// Initialize sleep timer if preset is not "off"
 		const timerMs = this.presetToMs(this.settings.timerPreset);
@@ -995,6 +1455,22 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * immediately - a Stop, a pause, a rename's handler - has already recorded
 	 * the position in memory; only the disk write is outstanding.
 	 */
+	private recordPosition(chunk: SpeechChunk): void {
+		const filePath = chunk.filePath;
+		const position = {
+			filePath,
+			segmentId: chunk.id,
+			segmentIndex: chunk.sequence,
+			// The note as it is now, not as it was when the chunk was read: the
+			// position is matched against a fresh extraction next time.
+			sourceOffset: this.mapOffset(chunk.rev, chunk.sourceStart),
+			updatedAt: Date.now(),
+		};
+		// Add to the container; never rebuild it (non-negotiable 10).
+		if (!this.pluginData.positions) this.pluginData.positions = {};
+		this.pluginData.positions[filePath] = position;
+	}
+
 	private async savePosition(chunkIndex: number): Promise<void> {
 		if (chunkIndex < 0 || !this.player) return;
 
@@ -1002,22 +1478,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		const chunk = this.player.getChunk(chunkIndex);
 		if (!chunk) return;
 
-		const filePath = chunk.filePath;
-		if (!filePath) return;
-
-		const position = {
-			filePath,
-			segmentId: chunk.id,
-			segmentIndex: chunk.sequence,
-			sourceOffset: chunk.sourceStart,
-			updatedAt: Date.now(),
-		};
-
-		// Add to the container; never rebuild it. A whitelist rebuild here is the
-		// defect non-negotiable 10 exists for: saveSettings() runs on every rate
-		// nudge, so one erases every reading position the user has.
-		if (!this.pluginData.positions) this.pluginData.positions = {};
-		this.pluginData.positions[filePath] = position;
+		if (!chunk.filePath) return;
+		this.recordPosition(chunk);
 		await this.saveSettings();
 	}
 
@@ -1041,7 +1503,36 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 	private async voicesForSelection(engine: SpeechEngine, isAutomatic: boolean): Promise<VoiceInfo[]> {
 		if (isAutomatic && engine instanceof WebSpeechEngine) return await engine.listLocalVoices();
-		return await engine.listVoices();
+		return await this.usableVoices(engine);
+	}
+
+	/**
+	 * The voices an engine can speak with right now. For Kokoro that is the
+	 * ones whose file is on disk: a voice that is not downloaded cannot be
+	 * chosen, because choosing it would only fail on the next read. Every other
+	 * engine's voices are all usable.
+	 */
+	async usableVoices(engine: SpeechEngine): Promise<VoiceInfo[]> {
+		const voices = await engine.listVoices();
+		if (engine.id !== "kokoro") return voices;
+		const have = new Set(
+			(await listInstalledVoices(this.app.vault.adapter, this.kokoroModelPath())).map((v) => v.file),
+		);
+		return voices.filter((v) => {
+			const path = voiceFilePath(v.id);
+			return path !== null && have.has(path.replace(/^voices\//, ""));
+		});
+	}
+
+	/**
+	 * Forget the voice chosen for an engine, e.g. because its file was removed.
+	 * The next read picks again from what is available, with a notice.
+	 */
+	async clearVoice(engineId: string): Promise<void> {
+		const { [engineId]: _gone, ...rest } = this.settings.voiceByEngine;
+		this.settings.voiceByEngine = rest;
+		if (this.settings.voiceId.startsWith(`${engineId}:`)) this.settings.voiceId = "";
+		await this.saveSettings();
 	}
 
 	/**
@@ -1070,18 +1561,44 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		if (voices.length === 0) return;
 		const resolved = resolveStoredVoice(
 			engine,
-			this.settings.voiceId,
+			this.storedVoiceFor(engine),
 			voices,
 			noteLang,
 			appLocale(),
 			this.settings.offlinePreferred,
 		);
 		await engine.selectVoice(resolved.voice);
-		if (resolved.id !== this.settings.voiceId) {
-			this.settings.voiceId = resolved.id;
+		if (resolved.id !== this.settings.voiceId || this.settings.voiceByEngine[engine.id] !== resolved.id) {
+			this.rememberVoice(resolved.id);
 			await this.saveSettings();
 		}
 		if (resolved.notice) new Notice(`Local TTS Reader: ${resolved.notice}`, 8000);
+	}
+
+	/**
+	 * The voice a read would pick for `engine` right now, without choosing it.
+	 *
+	 * Voice ids belong to an engine, so after switching engines the stored id
+	 * matches nothing in the new list. A read resolves that (and saves the
+	 * result); this lets the settings dropdown show the same answer meanwhile
+	 * instead of an empty selection. Nothing is saved and nothing is
+	 * downloaded. The note's own language is not known here, so it is the
+	 * app-language pick, which a read may refine.
+	 */
+	previewVoice(engine: SpeechEngine, voices: VoiceInfo[]): VoiceInfo | null {
+		if (voices.length === 0) return null;
+		try {
+			return resolveStoredVoice(
+				engine,
+				this.storedVoiceFor(engine),
+				voices,
+				undefined,
+				appLocale(),
+				this.settings.offlinePreferred,
+			).voice;
+		} catch {
+			return null;
+		}
 	}
 
 	stopReading(): void {
@@ -1092,6 +1609,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// this for free.
 		this.readScope?.abort();
 		this.readScope = null;
+		this.cancelResync();
 		this.player.stop();
 		this.clearBothHighlights();
 	}
@@ -1189,15 +1707,17 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// One `highlightLayers()` call, not two, so the sentence range and
 		// the scroll decision cannot be computed from different plans.
 		const layers = this.highlightLayers();
+		// Offsets are the note as it was when the chunk was read; carry them
+		// across the edits made since.
+		const sentence = layers.sentence ? this.mapRange(chunk.rev, chunk.sourceStart, chunk.sourceEnd) : null;
 		applyHighlightLayers(
 			this.activeEditor,
-			{
-				sentence: layers.sentence
-					? { from: chunk.sourceStart, to: chunk.sourceEnd }
-					: null,
-				word: null,
-			},
-			scrollTargetForChunk(layers, chunk.sourceStart, isScrollSuppressed(this.activeEditor)),
+			{ sentence, word: null },
+			scrollTargetForChunk(
+				layers,
+				this.mapOffset(chunk.rev, chunk.sourceStart),
+				isScrollSuppressed(this.activeEditor),
+			),
 		);
 	}
 
@@ -1228,6 +1748,13 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 * natural word event, exactly as it does after any settings toggle flip.
 	 */
 	private handleActiveLeafChange(leaf: WorkspaceLeaf | null): void {
+		this.refreshSectionPreviews();
+		// A sidebar leaf (this plugin's settings pane, the file explorer) taking
+		// focus does not move the note out of view, so it must not suspend the
+		// highlight. Before the settings pane lived in a sidebar this could not
+		// happen mid-read; now every click on its controls is a leaf change, and
+		// the note's highlight used to be torn down and never redrawn.
+		if (leaf && leaf.getRoot() !== this.app.workspace.rootSplit) return;
 		const state = this.player.getState();
 		const inFlight = state === "preparing" || state === "playing" || state === "paused";
 		const activeFilePath =
@@ -1267,7 +1794,8 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		// a finished read has no current sentence.
 		const chunk = this.player.getChunk(this.player.getIndex());
 		if (layers.sentence && chunk) {
-			applySentenceHighlight(this.activeEditor, { from: chunk.sourceStart, to: chunk.sourceEnd });
+			const range = this.mapRange(chunk.rev, chunk.sourceStart, chunk.sourceEnd);
+			if (range) applySentenceHighlight(this.activeEditor, range);
 		}
 	}
 
@@ -1427,6 +1955,21 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	private refreshEngineAffordances(): void {
 		const engine = this.activeEngine();
 		this.controlBar.setEngine(engine?.capabilities ?? null, engine?.label ?? "This engine");
+		for (const bar of this.inlineBars) {
+			bar.setEngine(engine?.capabilities ?? null, engine?.label ?? "This engine");
+		}
+	}
+
+	/** Draw a copy of the playback controls into `host`; give it back to `releaseInlineControlBar`. */
+	createInlineControlBar(host: HTMLElement): ControlBar {
+		const bar = new ControlBar(this, host);
+		this.inlineBars.add(bar);
+		return bar;
+	}
+
+	releaseInlineControlBar(bar: ControlBar): void {
+		this.inlineBars.delete(bar);
+		bar.destroy();
 	}
 
 	/**
@@ -1450,8 +1993,14 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	 */
 	async setEngine(id: EngineSelection): Promise<void> {
 		this.settings.engine = id;
-		await this.saveSettings();
 		if (id === "auto") await this.resolveAutomaticChoice();
+		// Each engine has its own voice. Bring back the one chosen for the engine
+		// now in use, so switching away and back loses nothing. An engine never
+		// used keeps the previous id until a read or a pick resolves it.
+		const remembered = this.activeEngine();
+		const voice = remembered ? this.settings.voiceByEngine[remembered.id] : undefined;
+		if (voice) this.settings.voiceId = voice;
+		await this.saveSettings();
 		this.refreshEngineAffordances();
 		void this.warmUpEngine();
 	}
@@ -1468,6 +2017,11 @@ export default class LocalTtsReaderPlugin extends Plugin {
 			device: this.settings.kokoroDevice,
 			threads: this.settings.kokoroThreads,
 			weights: resolveWeights(this.settings.kokoroWeights),
+			// Automatic keeps the GPU open (it prefers whatever is installed);
+			// a build the GPU cannot load does not.
+			gpuEligible:
+				this.settings.kokoroWeights === "auto" ||
+				GPU_CAPABLE_WEIGHTS.includes(resolveWeights(this.settings.kokoroWeights)),
 		};
 	}
 
@@ -1479,6 +2033,15 @@ export default class LocalTtsReaderPlugin extends Plugin {
 	/** Which weights build the engine would load, for the settings tab. */
 	resolvedWeights(): WeightsPreference {
 		return resolveWeights(this.settings.kokoroWeights);
+	}
+
+	/**
+	 * Shut the Kokoro engine down and free the model's memory, without loading
+	 * it again. The next read that uses Kokoro loads it afresh.
+	 */
+	async unloadKokoro(): Promise<void> {
+		this.stopReading();
+		await this.getKokoro()?.dispose();
 	}
 
 	/** Throw away the loaded model, e.g. after downloading a different build. */
@@ -1538,8 +2101,24 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		);
 	}
 
-	async setVoice(voiceId: string): Promise<void> {
+	/** The voice remembered for `engine`, or the one in use when it has none yet. */
+	private storedVoiceFor(engine: SpeechEngine): string {
+		return this.settings.voiceByEngine[engine.id] ?? this.settings.voiceId;
+	}
+
+	/**
+	 * Make `voiceId` the voice in use and file it under its own engine. A voice
+	 * id is `<engine>:<voice>`, so the engine is read off the front of it; an id
+	 * with no engine part is kept as the voice in use and filed nowhere.
+	 */
+	private rememberVoice(voiceId: string): void {
 		this.settings.voiceId = voiceId;
+		const engine = /^([^:]+):/.exec(voiceId)?.[1];
+		if (engine) this.settings.voiceByEngine = { ...this.settings.voiceByEngine, [engine]: voiceId };
+	}
+
+	async setVoice(voiceId: string): Promise<void> {
+		this.rememberVoice(voiceId);
 		await this.saveSettings();
 		const engine = this.activeEngine();
 		const voices = (await engine?.listVoices()) ?? [];

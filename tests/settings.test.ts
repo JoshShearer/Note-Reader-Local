@@ -537,6 +537,34 @@ const kept = normaliseSettings({ piperPort: 6000, positions: { "a.md": 3 }, futu
 check("a piperPort change keeps unknown keys and positions (non-negotiable 10)", kept.futureSetting === "keep-me" && kept.positions !== undefined && kept.piperPort === 6000, JSON.stringify(kept.positions));
 }
 
+// --- per-engine voices ---
+{
+const v = normaliseSettings({ voiceId: "webspeech:David", voiceByEngine: { kokoro: "kokoro:bm_george", bad: 3, empty: "" } });
+check("a stored voice map keeps the other engines' voices", v.voiceByEngine.kokoro === "kokoro:bm_george", JSON.stringify(v.voiceByEngine));
+check("the voice in use is filed under its own engine when the map lacks it", v.voiceByEngine.webspeech === "webspeech:David", JSON.stringify(v.voiceByEngine));
+check("non-string and empty map entries are dropped", v.voiceByEngine.bad === undefined && v.voiceByEngine.empty === undefined, JSON.stringify(v.voiceByEngine));
+const old = normaliseSettings({ voiceId: "espeak:en-gb" });
+check("a save from before the map existed files its current voice", old.voiceByEngine.espeak === "espeak:en-gb", JSON.stringify(old.voiceByEngine));
+const existing = normaliseSettings({ voiceId: "kokoro:af_heart", voiceByEngine: { kokoro: "kokoro:bm_george" } });
+check("an existing entry for the engine in use is not overwritten", existing.voiceByEngine.kokoro === "kokoro:bm_george", JSON.stringify(existing.voiceByEngine));
+check("a garbage map is ignored", normaliseSettings({ voiceByEngine: "x" }).voiceByEngine.kokoro === "kokoro:af_heart");
+}
+
+// --- thread count has a floor but no ceiling ---
+{
+check("a high thread count is kept, not capped at 16", normaliseSettings({ kokoroThreads: 64 }).kokoroThreads === 64, String(normaliseSettings({ kokoroThreads: 64 }).kokoroThreads));
+check("a thread count below one is raised to one", normaliseSettings({ kokoroThreads: 0 }).kokoroThreads === 1);
+check("a garbage thread count falls back to the default", normaliseSettings({ kokoroThreads: "x" }).kokoroThreads === DEFAULT_SETTINGS.kokoroThreads);
+}
+
+// --- the extra Kokoro builds are valid choices ---
+{
+for (const build of ["gpu", "fp16", "fast", "small", "q4", "uint8"]) {
+	check(`kokoroWeights '${build}' round-trips`, normaliseSettings({ kokoroWeights: build }).kokoroWeights === build);
+}
+check("an unknown kokoroWeights falls back to auto", normaliseSettings({ kokoroWeights: "q8f16" }).kokoroWeights === "auto");
+}
+
 if (failures > 0) {
 	console.log(`\n${failures} failure(s)`);
 	process.exit(1);

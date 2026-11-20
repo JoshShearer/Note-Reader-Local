@@ -13,6 +13,12 @@ export interface Settings {
 	engine: EngineSelection;
 	/** Voice id, scoped to the engine (`espeak:en-us`, `kokoro:af_heart`). */
 	voiceId: string;
+	/**
+	 * The last voice chosen for each engine, by engine id. `voiceId` is the one
+	 * in use; this is what lets switching engines back and forth restore each
+	 * engine's own choice instead of losing it.
+	 */
+	voiceByEngine: Record<string, string>;
 	/** Playback rate multiplier. */
 	rate: number;
 	/** Pitch offset, -50..50. */
@@ -92,7 +98,7 @@ export interface Settings {
 	 * download and a memory ceiling, a desktop cares about keeping up with
 	 * playback.
 	 */
-	kokoroWeights: "auto" | "gpu" | "fast" | "small";
+	kokoroWeights: "auto" | "gpu" | "fp16" | "fast" | "small" | "q4" | "uint8";
 	/**
 	 * Loopback port of Read Me Offline's bridge (NRL-130). The host is fixed
 	 * at 127.0.0.1 in the engine and is deliberately not a setting. The
@@ -116,6 +122,8 @@ export const DEFAULT_SETTINGS: Settings = {
 	// of a doomed default of unavailable Kokoro on a fresh install.
 	engine: "auto",
 	voiceId: "kokoro:af_heart",
+	// The default voice, filed under its own engine, as normalisation would.
+	voiceByEngine: { kokoro: "kokoro:af_heart" },
 	rate: 1,
 	pitch: 0,
 	timerPreset: "off",
@@ -199,6 +207,23 @@ const VALID_ENGINE_SELECTIONS: EngineSelection[] = [
 	"piper",
 ];
 
+/**
+ * The per-engine voice map: string values only, plus the voice in use filed
+ * under its own engine if the map does not have one yet, so a save from before
+ * this key existed does not forget the current choice.
+ */
+function normaliseVoiceByEngine(raw: unknown, current: unknown): Record<string, string> {
+	const out: Record<string, string> = {};
+	if (isRecord(raw)) {
+		for (const [engine, voice] of Object.entries(raw)) {
+			if (typeof voice === "string" && voice !== "") out[engine] = voice;
+		}
+	}
+	const engine = typeof current === "string" ? /^([^:]+):/.exec(current)?.[1] : undefined;
+	if (engine && typeof current === "string" && out[engine] === undefined) out[engine] = current;
+	return out;
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -222,6 +247,8 @@ export function normaliseSettings(raw: unknown): Settings {
 	> &
 		Record<string, unknown>;
 
+	const voiceId = typeof data.voiceId === "string" ? data.voiceId : DEFAULT_SETTINGS.voiceId;
+
 	return {
 		...data,
 		// Previously an unvalidated cast that let anything through data.json
@@ -232,7 +259,8 @@ export function normaliseSettings(raw: unknown): Settings {
 		engine: VALID_ENGINE_SELECTIONS.includes(data.engine as EngineSelection)
 			? (data.engine as EngineSelection)
 			: DEFAULT_SETTINGS.engine,
-		voiceId: typeof data.voiceId === "string" ? data.voiceId : DEFAULT_SETTINGS.voiceId,
+		voiceId,
+		voiceByEngine: normaliseVoiceByEngine(data.voiceByEngine, voiceId),
 		rate: clampNumber(data.rate, RATE_MIN, RATE_MAX, DEFAULT_SETTINGS.rate),
 		pitch: clampNumber(data.pitch, -50, 50, DEFAULT_SETTINGS.pitch),
 		timerPreset:
@@ -272,13 +300,20 @@ export function normaliseSettings(raw: unknown): Settings {
 			data.kokoroDevice === "wasm" || data.kokoroDevice === "webgpu"
 				? data.kokoroDevice
 				: DEFAULT_SETTINGS.kokoroDevice,
+		// No upper bound: how many threads make sense is a question about the
+		// machine, not the file, and a high-core-count CPU is a legitimate reason
+		// to ask for many. The Kokoro worker takes the smaller of this and the
+		// cores it actually sees.
 		kokoroThreads: Math.round(
-			clampNumber(data.kokoroThreads, 1, 16, DEFAULT_SETTINGS.kokoroThreads),
+			clampNumber(data.kokoroThreads, 1, Number.MAX_SAFE_INTEGER, DEFAULT_SETTINGS.kokoroThreads),
 		),
 		kokoroWeights:
 			data.kokoroWeights === "fast" ||
 			data.kokoroWeights === "small" ||
-			data.kokoroWeights === "gpu"
+			data.kokoroWeights === "gpu" ||
+			data.kokoroWeights === "fp16" ||
+			data.kokoroWeights === "q4" ||
+			data.kokoroWeights === "uint8"
 				? data.kokoroWeights
 				: DEFAULT_SETTINGS.kokoroWeights,
 		bridgePort: Math.round(clampNumber(data.bridgePort, 1, 65535, DEFAULT_SETTINGS.bridgePort)),

@@ -14,6 +14,10 @@ import { Buffer } from "node:buffer";
 import {
 	KokoroEngine,
 	KOKORO_WEIGHTS,
+	KOKORO_VOICES,
+	describeKokoroVoiceFile,
+	WEIGHTS_KEYS,
+	GPU_CAPABLE_WEIGHTS,
 	KOKORO_MODEL_METADATA,
 	KOKORO_NO_SIMD,
 	KOKORO_RELOAD_REQUIRED,
@@ -231,6 +235,66 @@ console.log("a GPU is used only with weights it can actually load");
 			JSON.stringify({ device: "wasm", path: FAST }),
 		JSON.stringify(await withoutFp32.plannedBackend()),
 	);
+}
+
+console.log("a build the GPU cannot load keeps the GPU out of it");
+{
+	withGpu({ f16: false });
+	const gated = new KokoroEngine(fakeStore([...CORE, GPU, FAST]), {
+		device: "auto",
+		weights: "fast",
+		gpuEligible: false,
+	});
+	check(
+		"gpuEligible: false stays on the CPU even with the fp32 build on disk",
+		JSON.stringify(await gated.plannedBackend()) === JSON.stringify({ device: "wasm", path: FAST }),
+		JSON.stringify(await gated.plannedBackend()),
+	);
+}
+
+console.log("the extra builds and the voice grades");
+{
+	check(
+		"every build points at a file the Hugging Face repo has",
+		JSON.stringify(Object.values(KOKORO_WEIGHTS).map((w) => w.path).sort()) ===
+			JSON.stringify([
+				"onnx/model.onnx",
+				"onnx/model_fp16.onnx",
+				"onnx/model_q4.onnx",
+				"onnx/model_q4f16.onnx",
+				"onnx/model_quantized.onnx",
+				"onnx/model_uint8.onnx",
+			]),
+		JSON.stringify(Object.values(KOKORO_WEIGHTS).map((w) => w.path)),
+	);
+	check("six builds are offered", WEIGHTS_KEYS.length === 6, String(WEIGHTS_KEYS.length));
+	check("only the float builds are GPU-capable", GPU_CAPABLE_WEIGHTS.join() === "gpu,fp16", GPU_CAPABLE_WEIGHTS.join());
+	withGpu(null);
+	const q4 = new KokoroEngine(fakeStore([...CORE, FAST, "onnx/model_q4.onnx"]), { device: "wasm", weights: "q4" });
+	check(
+		"a chosen CPU build is the one loaded when it is on disk",
+		(await q4.plannedBackend())?.path === "onnx/model_q4.onnx",
+		JSON.stringify(await q4.plannedBackend()),
+	);
+	const missing = new KokoroEngine(fakeStore([...CORE, FAST]), { device: "wasm", weights: "uint8" });
+	check(
+		"a chosen build that is not on disk falls back to Fast",
+		(await missing.plannedBackend())?.path === FAST,
+		JSON.stringify(await missing.plannedBackend()),
+	);
+	check(
+		"every voice carries a quality grade",
+		KOKORO_VOICES.every((v) => /^[A-F][+-]?$/.test(v.grade)),
+		JSON.stringify(KOKORO_VOICES.filter((v) => !/^[A-F][+-]?$/.test(v.grade)).map((v) => v.file)),
+	);
+	check("Heart is graded A", KOKORO_VOICES.find((v) => v.file === "af_heart")?.grade === "A");
+	const heart = describeKokoroVoiceFile("af_heart.bin");
+	check(
+		"a voice file describes itself with name, gender and grade",
+		heart?.name === "Heart" && heart.gender === "female" && heart.grade === "A",
+		JSON.stringify(heart),
+	);
+	check("an unknown voice file describes as null", describeKokoroVoiceFile("zz_none.bin") === null);
 }
 
 console.log("an adapter with shader-f16 can use the half-precision build");
@@ -1057,6 +1121,36 @@ console.log("NRL-102: a failed threaded load is not re-attempted for the rest of
 				"T5: a dispose between the failure and the re-read does not resurrect 4 threads",
 				JSON.stringify(initThreads) === "[4,1,1]",
 				JSON.stringify(initThreads),
+			);
+			await engine.dispose();
+		}
+
+		// ---- T6: a missing voice file is a setup error, not a thread failure.
+		// It used to be caught by load()'s retry, which flagged threads as broken
+		// for the whole session and left every later load on one thread.
+		{
+			failThreaded = false;
+			initThreads = [];
+			const engine = new KokoroEngine(
+				threadStore(PRESENT_BOTH.filter((f) => f !== "voices/af_heart.bin")),
+				{ device: "wasm", threads: 4, weights: "fast" },
+			);
+			let thrown: unknown = null;
+			try {
+				await engine.load();
+			} catch (err) {
+				thrown = err;
+			}
+			check("T6a: a missing voice rejects load()", thrown instanceof Error, String(thrown));
+			check(
+				"T6b: it does not mark threads as failed for the session",
+				peek(engine).threadedLoadFailed === false,
+				String(peek(engine).threadedLoadFailed),
+			);
+			check(
+				"T6c: it does not degrade the configured thread count",
+				peek(engine).options.threads === 4,
+				String(peek(engine).options.threads),
 			);
 			await engine.dispose();
 		}

@@ -62,6 +62,39 @@ export function createEngines(
 }
 
 /**
+ * Every engine this plugin knows, in the order the picker lists them, with the
+ * reason it does not exist on a platform that does not build it.
+ *
+ * The settings table lists all of them, built or not: settings are synced
+ * with the vault, so an engine absent here may well be present on another
+ * device, and the reason is what tells the user why it is greyed out.
+ */
+export const KNOWN_ENGINES: Array<{ id: EngineId; label: string; absentReason: string }> = [
+	{ id: "kokoro", label: "Kokoro (local neural)", absentReason: "" },
+	{
+		id: "readme",
+		label: "Read Me Offline (Android voices)",
+		absentReason: "Only available in the Android app, where Read Me Offline can run its bridge.",
+	},
+	{
+		id: "espeak",
+		label: "espeak-ng",
+		absentReason: "Only available in the desktop app on Linux, where the espeak-ng program can be run.",
+	},
+	{
+		id: "speechd",
+		label: "speech-dispatcher",
+		absentReason: "Only available in the desktop app on Linux, where speech-dispatcher can be run.",
+	},
+	{
+		id: "piper",
+		label: "Piper (local server)",
+		absentReason: "Only offered in the desktop app on Linux, where a local Piper server can be run.",
+	},
+	{ id: "webspeech", label: "System voices (Web Speech)", absentReason: "" },
+];
+
+/**
  * Turn the `auto` weights setting into a concrete choice.
  *
  * Lives here because this is the layer that knows about the platform, and the

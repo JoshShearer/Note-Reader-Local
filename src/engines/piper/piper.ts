@@ -241,14 +241,14 @@ const CAPABILITIES: EngineCapabilities = {
 };
 
 export const NOT_CHECKED_REASON =
-	"Not checked yet. Use Check connection under Advanced > Piper server, or start a read.";
+	"Not checked yet. Use Check connection in the Piper settings (the gear beside Piper under Engine), or start a read.";
 
 function validPort(port: number): boolean {
 	return Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
 function invalidPortReason(): string {
-	return "The Piper server port is not a valid port number. Set one between 1 and 65535 under Advanced > Piper server.";
+	return "The Piper server port is not a valid port number. Set one between 1 and 65535 in the Piper settings (the gear beside Piper under Engine).";
 }
 
 function notAnsweringReason(port: number): string {
@@ -259,7 +259,7 @@ function notAnsweringReason(port: number): string {
 }
 
 function notPiperReason(port: number): string {
-	return `Something answered on ${PIPER_HOST}:${port}, but not like a Piper server. Check the port under Advanced > Piper server.`;
+	return `Something answered on ${PIPER_HOST}:${port}, but not like a Piper server. Check the port in the Piper settings (the gear beside Piper under Engine).`;
 }
 
 function noVoicesReason(port: number): string {

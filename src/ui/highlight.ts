@@ -1,4 +1,4 @@
-import { StateEffect, StateField } from "@codemirror/state";
+import { StateEffect, StateField, type ChangeSet } from "@codemirror/state";
 import { RangeSetBuilder } from "@codemirror/state";
 import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
 
@@ -292,6 +292,30 @@ export const wordHighlightField = StateField.define<DecorationSet>({
 	},
 	provide: (field) => EditorView.decorations.from(field),
 });
+
+const editCallbacks = new WeakMap<EditorView, (changes: ChangeSet) => void>();
+const editListenerAttached = new WeakSet<EditorView>();
+
+/**
+ * Call `callback` with every document change made to `editor` from now on.
+ *
+ * The listener is added to the editor once; later calls only swap the
+ * callback, so starting a new read does not stack listeners. A CodeMirror
+ * extension cannot be removed once added, which is why it looks the callback
+ * up each time instead of closing over it.
+ */
+export function trackEdits(editor: EditorView, callback: (changes: ChangeSet) => void): void {
+	editCallbacks.set(editor, callback);
+	if (editListenerAttached.has(editor)) return;
+	editListenerAttached.add(editor);
+	editor.dispatch({
+		effects: StateEffect.appendConfig.of(
+			EditorView.updateListener.of((update) => {
+				if (update.docChanged) editCallbacks.get(update.view)?.(update.changes);
+			}),
+		),
+	});
+}
 
 /** Register the fields on an editor. Safe to call more than once per editor. */
 export function registerHighlighting(editor: EditorView): void {

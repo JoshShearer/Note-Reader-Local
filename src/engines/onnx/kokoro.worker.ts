@@ -38,7 +38,7 @@ export interface InitMessage {
 	 */
 	wasmPaths: { mjs: string; wasm: string };
 	files: ModelFile[];
-	dtype: "fp32" | "fp16" | "q8" | "q4" | "q4f16";
+	dtype: "fp32" | "fp16" | "q8" | "q4" | "q4f16" | "uint8";
 	device: DeviceRequest;
 	/**
 	 * How many WASM threads to ask for. One means the single-threaded build
@@ -271,7 +271,9 @@ async function initInner(msg: InitMessage): Promise<void> {
 		const started = Date.now();
 		try {
 			tts = await KokoroTTS.from_pretrained(msg.modelId, {
-				dtype: msg.dtype,
+				// kokoro-js types the list narrower than transformers.js accepts;
+				// uint8 is a name transformers.js maps to `model_uint8.onnx`.
+				dtype: msg.dtype as "q8",
 				device: attempt.device,
 				progress_callback: (p: unknown) => {
 					const info = p as { status?: string; loaded?: number; total?: number };

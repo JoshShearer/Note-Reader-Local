@@ -83,6 +83,40 @@ export function clipChunksToSelection(
 }
 
 /**
+ * The whole chunks (sentences) a selection touches: from the one containing
+ * its start to the one containing its end, unclipped. A chunk the selection
+ * only borders (ends exactly at its start, or begins exactly at its end) is
+ * not touched.
+ */
+export function chunksTouchingSelection(chunks: readonly SpeechChunk[], from: number, to: number): SpeechChunk[] {
+	const lo = Math.min(from, to);
+	const hi = Math.max(from, to);
+	return chunks.filter((chunk) => chunk.sourceEnd > lo && chunk.sourceStart < hi);
+}
+
+/**
+ * The offset a read from the cursor should start at.
+ *
+ * A read starts at the first sentence that ends after the offset, so a cursor
+ * sitting at the end of a sentence would start the next one. At the end of a
+ * line (only spaces or tabs after the sentence, then a line break or the end of
+ * the note) the sentence just before the cursor is the one on the current line,
+ * so the offset is moved back into it.
+ */
+export function cursorStartOffset(chunks: readonly SpeechChunk[], source: string, position: number): number {
+	let before: SpeechChunk | undefined;
+	for (const chunk of chunks) {
+		if (chunk.sourceEnd <= position) before = chunk;
+		else break;
+	}
+	if (!before) return position;
+	if (!/^[ \t]*$/.test(source.slice(before.sourceEnd, position))) return position;
+	const next = source.charAt(position);
+	if (next !== "" && next !== "\n" && next !== "\r" && position !== before.sourceEnd) return position;
+	return Math.max(before.sourceStart, before.sourceEnd - 1);
+}
+
+/**
  * What a selection-scoped read does to the in-flight one (NRL-92).
  *
  * Mirrors vaultEvents.ts's `VaultEventPort` shape: a narrow, obsidian-free

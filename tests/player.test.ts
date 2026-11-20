@@ -1988,6 +1988,230 @@ console.log("pause and resume on an engine that owns playback prefetch nothing, 
 	}
 }
 
+console.log("sentences of one paragraph are spoken as one utterance, and the cursor follows the words");
+{
+	const src = Array.from({ length: 6 }, (_, i) => `Sentence number ${i} is right here.`).join(" ");
+	const chunks = chunksOf(src);
+	check("fixture: six sentence chunks", chunks.length === 6, String(chunks.length));
+
+	// Off by default: one call per sentence, as before.
+	{
+		const { engine, calls } = makeEngine();
+		const player = new Player({ bufferAhead: 0 });
+		const playing = player.play(engine, chunks, 1, 0);
+		await tick();
+		check("grouping off: the first call is one sentence", calls[0] === chunks[0]!.text, JSON.stringify(calls));
+		player.stop();
+		await playing.catch(() => undefined);
+	}
+
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 0, groupChars: 450 });
+	const seen: number[] = [];
+	const chunkEvents: string[] = [];
+	player.on("progress", (p) => seen.push(p.chunkIndex));
+	player.on("chunk", (c) => chunkEvents.push(c?.text ?? ""));
+	const playing = player.play(engine, chunks, 1, 0);
+	await tick();
+	check("one synthesis call covers the paragraph", calls.length === 1, JSON.stringify(calls.length));
+	check(
+		"the call carries every sentence, joined by a space",
+		calls[0] === chunks.map((c) => c.text).join(" "),
+		calls[0],
+	);
+	check("the cursor starts on the first sentence", player.getIndex() === 0, String(player.getIndex()));
+
+	fakeAudio.advance(0.995);
+	await tick();
+	check("the cursor followed the words to the last sentence", player.getIndex() === 5, String(player.getIndex()));
+	check(
+		"progress visited every sentence, in order",
+		JSON.stringify([...new Set(seen)]) === JSON.stringify([0, 1, 2, 3, 4, 5]),
+		JSON.stringify(seen),
+	);
+	check(
+		"the sentence highlight event followed too",
+		chunkEvents[chunkEvents.length - 1] === chunks[5]!.text,
+		JSON.stringify(chunkEvents.length),
+	);
+
+	frameCallbacks = []; // each step re-arms every callback; a real rAF does not pile them up
+	fakeAudio.advance(1.2, 1.0);
+	await tick();
+	await playing;
+	check("the whole paragraph finishing ends the read", player.getState() === "finished", player.getState());
+	check("the cursor is past the last sentence", player.getIndex() === 6, String(player.getIndex()));
+}
+
+console.log("a blank line keeps paragraphs, and headings, in separate utterances");
+{
+	const src = "Sentence number 0 is right here. Sentence number 1 is right here.\n\nSentence number 2 is right here.";
+	const chunks = chunksOf(src);
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 0, groupChars: 450 });
+	const playing = player.play(engine, chunks, 1, 0);
+	await tick();
+	check(
+		"the first utterance stops at the paragraph break",
+		calls[0] === `${chunks[0]!.text} ${chunks[1]!.text}`,
+		JSON.stringify(calls),
+	);
+	player.stop();
+	await playing.catch(() => undefined);
+}
+
+console.log("a queued replacement takes over at the next utterance boundary");
+{
+	const sentence = (n: string): string => `Sentence ${n} sits in the middle of this note.`;
+	const original = `${sentence("zero")} ${sentence("one")} ${sentence("two")}`;
+	const edited = `${sentence("zero")} ${sentence("one")} ${sentence("added")} ${sentence("two")}`;
+	const oldChunks = chunksOf(original);
+	const newChunks = chunksOf(edited);
+	check("fixture: three sentences, then four", oldChunks.length === 3 && newChunks.length === 4, `${oldChunks.length} ${newChunks.length}`);
+
+	const { engine, calls } = makeEngine();
+	const player = new Player({ bufferAhead: 0 });
+	check("nothing to replace before a read", player.queueReplacement(newChunks, () => 0) === false);
+
+	const playing = player.play(engine, oldChunks, 1, 0);
+	await tick();
+	check("the first sentence is being spoken", calls[0] === oldChunks[0]!.text, JSON.stringify(calls));
+
+	// The note is edited while sentence zero plays: a sentence appears after "one".
+	const queued = player.queueReplacement(newChunks, (last) => newChunks.findIndex((c) => c.sourceEnd > last.sourceEnd));
+	check("a read in progress accepts a replacement", queued === true);
+	check("the sentence being spoken is not cut off", calls.length === 1, JSON.stringify(calls));
+
+	for (let i = 0; i < 4; i++) {
+		frameCallbacks = [];
+		fakeAudio.advance(fakeAudio.currentTime + 1.2, 1.0);
+		await tick();
+	}
+	await playing.catch(() => undefined);
+	check(
+		"the added sentence is spoken, in its place",
+		JSON.stringify(calls) === JSON.stringify([oldChunks[0]!.text, newChunks[1]!.text, newChunks[2]!.text, newChunks[3]!.text]),
+		JSON.stringify(calls),
+	);
+	check("the read finished", player.getState() === "finished", player.getState());
+	check("the queue is the new one", player.getChunkCount() === 4, String(player.getChunkCount()));
+
+	// Without a replacement the original queue plays unchanged.
+	const plain = makeEngine();
+	const second = new Player({ bufferAhead: 0 });
+	const playing2 = second.play(plain.engine, oldChunks, 1, 0);
+	await tick();
+	for (let i = 0; i < 4; i++) {
+		frameCallbacks = [];
+		fakeAudio.advance(fakeAudio.currentTime + 1.2, 1.0);
+		await tick();
+	}
+	await playing2.catch(() => undefined);
+	check("with no replacement the original sentences are spoken", plain.calls.length === 3, JSON.stringify(plain.calls));
+}
+
+console.log("the player says when it is waiting for audio");
+{
+	const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+	const chunks = chunksOf(SRC);
+
+	// An engine that takes a while to answer.
+	const slow = makeEngine();
+	const realSynth = slow.engine.synthesize.bind(slow.engine);
+	let release!: () => void;
+	const gate = new Promise<void>((r) => {
+		release = r;
+	});
+	slow.engine.synthesize = async (req: SynthRequest, signal: AbortSignal): Promise<SynthResult> => {
+		await gate;
+		return realSynth(req, signal);
+	};
+	const player = new Player({ bufferAhead: 0 });
+	const events: boolean[] = [];
+	player.on("generating", (g) => events.push(g));
+	const playing = player.play(slow.engine, chunks, 1, 0);
+
+	await sleep(60);
+	check("a short wait is not announced", events.length === 0, JSON.stringify(events));
+	await sleep(160);
+	check("a longer wait is announced", events.length === 1 && events[0] === true, JSON.stringify(events));
+	release();
+	await tick();
+	check("the wait ends when the audio is ready", events[events.length - 1] === false, JSON.stringify(events));
+	player.stop();
+	await playing.catch(() => undefined);
+
+	// An engine that answers at once never announces a wait.
+	const quick = makeEngine();
+	const player2 = new Player({ bufferAhead: 0 });
+	const quickEvents: unknown[] = [];
+	player2.on("generating", (g) => quickEvents.push(g));
+	const playing2 = player2.play(quick.engine, chunks, 1, 0);
+	await sleep(250);
+	check("an engine that is ready at once announces nothing", quickEvents.length === 0, JSON.stringify(quickEvents));
+	player2.stop();
+	await playing2.catch(() => undefined);
+}
+
+console.log("pausing before any audio is playing holds the first sentence back");
+{
+	const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+	const chunks = chunksOf(SRC);
+	const slow = makeEngine();
+	const realSynth = slow.engine.synthesize.bind(slow.engine);
+	let release!: () => void;
+	const gate = new Promise<void>((r) => {
+		release = r;
+	});
+	slow.engine.synthesize = async (req: SynthRequest, signal: AbortSignal): Promise<SynthResult> => {
+		await gate;
+		return realSynth(req, signal);
+	};
+	const player = new Player({ bufferAhead: 0 });
+	const playing = player.play(slow.engine, chunks, 1, 0);
+	await sleep(20);
+	check("still preparing while the first sentence is made", player.getState() === "preparing", player.getState());
+
+	player.toggle();
+	check("a click while preparing pauses", player.getState() === "paused", player.getState());
+
+	const playsBefore = fakeAudio.playCalls;
+	release();
+	await tick();
+	check("audio that becomes ready while paused is not started", fakeAudio.playCalls === playsBefore, `${fakeAudio.playCalls} vs ${playsBefore}`);
+	check("it stays paused", player.getState() === "paused", player.getState());
+
+	player.toggle();
+	await tick();
+	check("resuming starts the held audio", fakeAudio.playCalls === playsBefore + 1 && player.getState() === "playing", `${fakeAudio.playCalls} ${player.getState()}`);
+	player.stop();
+	await playing.catch(() => undefined);
+
+	// Pause, then resume before the audio is ready: back to preparing, nothing held.
+	const slow2 = makeEngine();
+	const real2 = slow2.engine.synthesize.bind(slow2.engine);
+	let release2!: () => void;
+	const gate2 = new Promise<void>((r) => {
+		release2 = r;
+	});
+	slow2.engine.synthesize = async (req: SynthRequest, signal: AbortSignal): Promise<SynthResult> => {
+		await gate2;
+		return real2(req, signal);
+	};
+	const player2 = new Player({ bufferAhead: 0 });
+	const playing2 = player2.play(slow2.engine, chunks, 1, 0);
+	await sleep(20);
+	player2.toggle();
+	player2.toggle();
+	check("resuming before the audio is ready goes back to preparing", player2.getState() === "preparing", player2.getState());
+	const plays2 = fakeAudio.playCalls;
+	release2();
+	await tick();
+	check("the audio then plays as usual", fakeAudio.playCalls === plays2 + 1 && player2.getState() === "playing", `${fakeAudio.playCalls} ${player2.getState()}`);
+	player2.stop();
+	await playing2.catch(() => undefined);
+}
+
 async function tick(): Promise<void> {
 	for (let i = 0; i < 12; i++) await Promise.resolve();
 	await new Promise((r) => setTimeout(r, 0));

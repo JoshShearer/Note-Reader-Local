@@ -2,6 +2,8 @@ import { App } from "obsidian";
 import {
 	KOKORO_VOICES,
 	KOKORO_WEIGHTS,
+	WEIGHTS_KEYS,
+	type WeightsKey,
 	KOKORO_WEIGHT_PATHS,
 	voiceFilePath,
 	type ModelStore,
@@ -117,6 +119,8 @@ export interface DownloadResult {
 	file?: string;
 	/** On failure, the HTTP status as a string, or the error text. */
 	detail?: string;
+	/** The download was stopped by the user, so it is not an error to report. */
+	cancelled?: boolean;
 }
 
 /**
@@ -142,12 +146,13 @@ export async function downloadModel(
 	weightsPath: string,
 	voiceFile: string,
 	onProgress: (progress: DownloadProgress) => void,
+	signal?: AbortSignal,
 ): Promise<ModelDownloadResult> {
 	// Two stages so a voice failure cannot be reported as the model failing,
 	// and so a model failure never goes on to request a voice (NRL-144).
-	const model = await downloadFiles(app, modelDir, [...MODEL_FILES, weightsPath], onProgress);
+	const model = await downloadFiles(app, modelDir, [...MODEL_FILES, weightsPath], onProgress, signal);
 	if (!model.ok) return { ...model, stage: "model" };
-	const voice = await downloadFiles(app, modelDir, [`voices/${voiceFile}`], onProgress);
+	const voice = await downloadFiles(app, modelDir, [`voices/${voiceFile}`], onProgress, signal);
 	if (!voice.ok) return { ...voice, stage: "voice" };
 	return { ok: true };
 }
@@ -221,6 +226,15 @@ export function describeModelDownload(
 			modelInstalled: true,
 		};
 	}
+	if (result.cancelled) {
+		return {
+			message:
+				result.stage === "voice"
+					? "Download cancelled. The model is installed; pick a voice under Voice to fetch one."
+					: "Download cancelled.",
+			modelInstalled: result.stage === "voice",
+		};
+	}
 	if (result.stage === "voice") {
 		return {
 			message: `Kokoro model installed, but voice ${result.file ?? "file"} could not be downloaded (${result.detail ?? result.error ?? "unknown error"}). Pick a voice under Voice to retry.`,
@@ -242,8 +256,9 @@ export async function downloadVoice(
 	modelDir: string,
 	voiceFile: string,
 	onProgress: (progress: DownloadProgress) => void,
+	signal?: AbortSignal,
 ): Promise<DownloadResult> {
-	return await downloadFiles(app, modelDir, [`voices/${voiceFile}`], onProgress);
+	return await downloadFiles(app, modelDir, [`voices/${voiceFile}`], onProgress, signal);
 }
 
 async function downloadFiles(
@@ -251,6 +266,7 @@ async function downloadFiles(
 	modelDir: string,
 	paths: string[],
 	onProgress: (progress: DownloadProgress) => void,
+	signal?: AbortSignal,
 ): Promise<DownloadResult> {
 	const dir = normaliseVaultPath(modelDir);
 
@@ -270,9 +286,10 @@ async function downloadFiles(
 	}
 
 	for (const path of paths) {
+		if (signal?.aborted) return { ok: false, error: "Download cancelled", file: path, cancelled: true };
 		try {
 			onProgress({ file: path, loaded: 0, total: 0 });
-			const res = await fetch(`${HF_BASE}/${path}`);
+			const res = await fetch(`${HF_BASE}/${path}`, { signal });
 			if (!res.ok) {
 				return {
 					ok: false,
@@ -314,6 +331,7 @@ async function downloadFiles(
 				await app.vault.adapter.writeBinary(normaliseVaultPath(`${dir}/${path}`), buffer);
 			}
 		} catch (err) {
+			if (signal?.aborted) return { ok: false, error: "Download cancelled", file: path, cancelled: true };
 			return {
 				ok: false,
 				error: `Download failed for ${path}: ${errText(err)}`,
@@ -376,7 +394,7 @@ export interface ModelDirAdapter {
 // through a table lookup.
 
 /** The three weights builds a user can download and later remove. */
-export type KokoroBuild = "gpu" | "fast" | "small";
+export type KokoroBuild = WeightsKey;
 
 /** MB for one build's weights file, decimal (bytes / 1_000_000), matching
  *  `WeightsVariant.sizeMb`'s convention. Null if that build is not on disk. */
@@ -390,6 +408,71 @@ export async function getInstalledSizeMb(
 	const stat = await adapter.stat(path);
 	if (!stat) return null;
 	return stat.size / 1_000_000;
+}
+
+/** A voice file on disk, by the name it is stored under (`af_heart.bin`). */
+export interface InstalledVoice {
+	file: string;
+	bytes: number;
+}
+
+/**
+ * The voice files currently on disk, sorted by name.
+ *
+ * Read from the directory rather than derived from the voice table, so a file
+ * a user copied in by hand, or left by an older build, is listed and can be
+ * deleted too. Only `.bin` files count.
+ */
+export async function listInstalledVoices(
+	adapter: Pick<ModelDirAdapter, "stat" | "list">,
+	modelDir: string,
+): Promise<InstalledVoice[]> {
+	const dir = normaliseVaultPath(`${modelDir}/voices`);
+	let listing: { files: string[]; folders: string[] };
+	try {
+		listing = await adapter.list(dir);
+	} catch {
+		return [];
+	}
+	const out: InstalledVoice[] = [];
+	for (const path of listing.files) {
+		const file = path.replace(/^.*\//, "");
+		if (!file.endsWith(".bin")) continue;
+		const stat = await adapter.stat(normaliseVaultPath(`${dir}/${file}`));
+		if (stat) out.push({ file, bytes: stat.size });
+	}
+	return out.sort((a, b) => a.file.localeCompare(b.file));
+}
+
+/**
+ * Delete one voice file and report bytes freed.
+ *
+ * The file name must be a plain `<name>.bin`: anything with a path separator
+ * is refused, so a bad value cannot reach outside the voices folder. The
+ * `voices/` folder is removed too if that was its last file, best-effort.
+ */
+export async function removeVoice(
+	adapter: Pick<ModelDirAdapter, "stat" | "remove" | "list" | "rmdir">,
+	modelDir: string,
+	file: string,
+): Promise<RemoveBuildResult> {
+	if (!/^[^/\\]+\.bin$/.test(file)) return { ok: false, freedBytes: 0, error: "Not a voice file name." };
+	const dir = normaliseVaultPath(`${modelDir}/voices`);
+	const path = normaliseVaultPath(`${dir}/${file}`);
+	const stat = await adapter.stat(path);
+	if (!stat) return { ok: false, freedBytes: 0 };
+	try {
+		await adapter.remove(path);
+	} catch (err) {
+		return { ok: false, freedBytes: 0, error: errText(err) };
+	}
+	try {
+		const listing = await adapter.list(dir);
+		if (listing.files.length === 0 && listing.folders.length === 0) await adapter.rmdir(dir, false);
+	} catch {
+		// Best-effort only.
+	}
+	return { ok: true, freedBytes: stat.size };
 }
 
 export interface RemoveBuildResult {
@@ -502,9 +585,11 @@ export async function getTotalUsage(
 		sharedBytes += await statSize(file);
 	}
 
-	const builds: Record<KokoroBuild, number> = { gpu: 0, fast: 0, small: 0 };
-	for (const key of Object.keys(builds) as KokoroBuild[]) {
+	const builds = {} as Record<KokoroBuild, number>;
+	let buildsTotal = 0;
+	for (const key of WEIGHTS_KEYS) {
 		builds[key] = await statSize(KOKORO_WEIGHTS[key].path);
+		buildsTotal += builds[key];
 	}
 
 	let voicesBytes = 0;
@@ -519,7 +604,6 @@ export async function getTotalUsage(
 		ortBytes += await statSize(`ort/${file}`);
 	}
 
-	const buildsTotal = builds.gpu + builds.fast + builds.small;
 	const totalBytes = sharedBytes + buildsTotal + voicesBytes + ortBytes;
 
 	return { totalBytes, builds, voicesBytes, sharedBytes, ortBytes };

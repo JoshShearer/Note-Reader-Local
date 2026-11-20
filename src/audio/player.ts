@@ -1,6 +1,7 @@
 import { Emitter } from "./emitter";
 import { WAV_MIME } from "./wav";
 import { wordAt } from "./words";
+import { startsParagraph } from "./paragraphs";
 import type { SpeechEngine, SpeechChunk, SynthResult, WordTiming } from "./types";
 
 /**
@@ -34,10 +35,16 @@ type PauseRoute = "element" | "engine" | "restart";
 export interface PlayerEvents extends Record<string, unknown> {
 	state: PlayerState;
 	/** Active word, or null when nothing is highlighted. */
-	word: { chunkIndex: number; wordIndex: number; timing: WordTiming } | null;
+	word: { chunkIndex: number; wordIndex: number; timing: WordTiming; rev?: number } | null;
 	/** Active chunk (sentence) for sentence-level highlighting. */
 	chunk: SpeechChunk | null;
 	progress: { chunkIndex: number; total: number };
+	/**
+	 * Whether the player is waiting for audio that is not ready yet, with
+	 * nothing audible: at the start of a read, or when synthesis has fallen
+	 * behind playback. Emitted only on change.
+	 */
+	generating: boolean;
 	/**
 	 * Playback rate, emitted only when it changes. The control bar and the
 	 * settings slider both observe this rather than each other (srs.md
@@ -61,7 +68,33 @@ export interface PlayerEvents extends Record<string, unknown> {
 export interface PlayerOptions {
 	/** How many upcoming chunks to synthesise ahead of playback. */
 	bufferAhead?: number;
+	/**
+	 * Longest text, in characters, submitted to an engine as one utterance.
+	 *
+	 * The queue holds sentences, which is what the reader counts, previews and
+	 * skips through. Speaking each one as its own utterance pauses after every
+	 * sentence, so consecutive sentences of one paragraph are joined into a
+	 * single utterance up to this length and the sentence cursor follows the
+	 * words as they are spoken. 0 (the default) turns joining off.
+	 */
+	groupChars?: number;
 }
+
+/** An utterance: sentences `first`..`last` of the queue, joined. */
+interface Unit {
+	first: number;
+	last: number;
+	chunk: SpeechChunk;
+}
+
+/**
+ * The first utterance of a run is kept short so speech starts quickly: a
+ * whole paragraph from a slow engine is many seconds before any sound.
+ */
+const FIRST_UNIT_CHARS = 240;
+
+/** How long audio may be missing before the wait is announced; shorter waits are not worth a flicker. */
+const GENERATING_SHOW_MS = 150;
 
 const BUFFER_AHEAD_MIN = 0;
 const BUFFER_AHEAD_MAX = 8;
@@ -96,6 +129,28 @@ export class Player {
 	private timerStartedAt: number = 0;
 
 	private index = 0;
+	/** Sentences joined for synthesis, keyed by the sentence they start at. */
+	private units = new Map<number, Unit>();
+	/** Where the utterance being prepared or spoken starts; -1 when none. */
+	private unitStart = -1;
+	private readonly groupChars: number;
+	/**
+	 * A fresh extraction of the note that takes over at the next utterance
+	 * boundary, set by `queueReplacement`. Only one is kept; a newer one wins.
+	 */
+	private replacement: { chunks: SpeechChunk[]; resume: (last: SpeechChunk) => number } | null = null;
+	/** The utterance playback is waiting on, once the wait is long enough to show. */
+	private awaitingAudio: number | null = null;
+	/** Audio is sounding from the element right now (false in the gaps between utterances). */
+	private audioActive = false;
+	/**
+	 * The user paused while no audio was sounding (before the first sentence, or
+	 * while synthesis was behind). The next utterance is made ready but not
+	 * started until resume().
+	 */
+	private holdStart = false;
+	/** Held audio is ready and waiting for resume(). */
+	private heldForResume = false;
 	private state: PlayerState = "idle";
 	/**
 	 * Session scope: aborted only by stop(). Buffer-engine synthesis and
@@ -129,6 +184,7 @@ export class Player {
 
 	constructor(options: PlayerOptions = {}) {
 		this.bufferAhead = normaliseBufferAhead(options.bufferAhead);
+		this.groupChars = Math.max(0, Math.floor(options.groupChars ?? 0));
 		this.audio = new Audio();
 		this.audio.preload = "auto";
 	}
@@ -185,6 +241,11 @@ export class Player {
 		return this.chunks[index];
 	}
 
+	/** How many chunks the queue holds; 0 before the first play(). */
+	getChunkCount(): number {
+		return this.chunks.length;
+	}
+
 	/**
 	 * Begin reading `chunks`. Replaces any current playback.
 	 *
@@ -232,6 +293,9 @@ export class Player {
 
 		this.engine = engine;
 		this.chunks = chunks;
+		this.units.clear();
+		this.unitStart = -1;
+		this.replacement = null;
 		this.setRate(rate || 1);
 		this.setPitch(pitch);
 		this.index = start;
@@ -263,10 +327,14 @@ export class Player {
 		const session = this.controller?.signal;
 		if (!engine || !session) return;
 
+		let firstOfRun = true;
 		while (this.index < this.chunks.length && token === this.runToken) {
 			if (session.aborted) return;
 
 			const index = this.index;
+			const unit = this.unitAt(index, firstOfRun ? FIRST_UNIT_CHARS : this.groupChars);
+			firstOfRun = false;
+			this.unitStart = index;
 			this.primeBuffer(index);
 
 			const scope = linkedScope(session);
@@ -288,7 +356,7 @@ export class Player {
 				// valid across a replay, so it only answers to the session. On an
 				// engine that owns playback the synthesis IS the utterance, and a
 				// replay has to be able to cut it off.
-				const result = await this.synthesize(index, owns ? signal : session);
+				const result = await this.awaitSynthesis(index, owns ? signal : session, owns);
 				if (token !== this.runToken || signal.aborted) return;
 
 				if (!owns) this.announcePlaying(index);
@@ -311,7 +379,28 @@ export class Player {
 			this.clearWordState();
 			this.revokeUrl(index);
 			if (token !== this.runToken) return;
-			this.index = index + 1;
+			const replacement = this.replacement;
+			if (replacement) {
+				// The note was edited while this utterance was spoken, and a fresh
+				// extraction is waiting. This boundary is the one place the queue
+				// can change without cutting speech off: continue from the
+				// sentence after the one just finished, in the new queue.
+				this.replacement = null;
+				const last = this.chunks[unit.last];
+				const at = last ? replacement.resume(last) : 0;
+				this.chunks = replacement.chunks;
+				this.units.clear();
+				this.pending.clear();
+				this.unitStart = -1;
+				this.index = Math.max(0, Math.min(at, this.chunks.length));
+				if (this.index < this.chunks.length) {
+					this.emitter.emit("progress", { chunkIndex: this.index, total: this.chunks.length });
+				}
+			} else {
+				// The whole utterance is done, whichever sentence the cursor had
+				// reached inside it.
+				this.index = unit.last + 1;
+			}
 		}
 
 		if (token === this.runToken) {
@@ -321,31 +410,110 @@ export class Player {
 	}
 
 	private announcePlaying(index: number): void {
-		this.setState("playing");
+		// Not when the user paused before this audio existed: it stays paused.
+		if (!this.holdStart) this.setState("playing");
 		this.emitter.emit("progress", { chunkIndex: index, total: this.chunks.length });
 		const chunk = this.chunks[index] || null;
 		this.emitter.emit("chunk", chunk);
 	}
 
-	/** Synthesise a chunk, caching the promise so prefetch and playback share it. */
+	/**
+	 * The utterance that starts at sentence `start`.
+	 *
+	 * Built once per start and kept, so prefetch and playback agree on how far
+	 * it reaches. Joining stops at a different block type, at a gap in the
+	 * source wider than a space or one line break (a blank line, a list
+	 * marker, a quote prefix), at `maxChars`, and for a chunk carrying
+	 * segmenter word spans, whose offsets would have to be rebased. An engine
+	 * that reports no timing is never joined: nothing would tell the cursor
+	 * which sentence of the utterance is being spoken.
+	 */
+	private unitAt(start: number, maxChars: number): Unit {
+		const existing = this.units.get(start);
+		if (existing) return existing;
+
+		const first = this.chunks[start];
+		if (!first) throw new Error("Player has nothing to play");
+		let last = start;
+		let length = first.text.length;
+		const joinable =
+			this.groupChars > 0 &&
+			(this.engine?.capabilities.timing ?? "none") !== "none" &&
+			first.blockType !== "heading" &&
+			first.wordSpans === undefined;
+		if (joinable) {
+			for (;;) {
+				const next = this.chunks[last + 1];
+				if (!next) break;
+				if (next.wordSpans !== undefined || startsParagraph(this.chunks, last + 1)) break;
+				if (length + 1 + next.text.length > Math.max(maxChars, first.text.length)) break;
+				length += 1 + next.text.length;
+				last += 1;
+			}
+		}
+
+		const unit: Unit = {
+			first: start,
+			last,
+			chunk: last === start ? first : joinChunks(this.chunks.slice(start, last + 1)),
+		};
+		this.units.set(start, unit);
+		return unit;
+	}
+
+	/**
+	 * Wait for an utterance's audio, telling listeners if the wait is long.
+	 *
+	 * A prefetched utterance is usually ready at once, so "waiting" is only
+	 * announced after a short delay; without it the status would flicker on
+	 * every sentence. An engine that owns playback is excluded: its synthesis is
+	 * the speaking itself, so there is no silent wait to report.
+	 */
+	private async awaitSynthesis(index: number, signal: AbortSignal, owns: boolean): Promise<SynthResult> {
+		const pending = this.synthesize(index, signal);
+		if (owns) return await pending;
+		const timer = window.setTimeout(() => {
+			this.awaitingAudio = index;
+			this.emitGenerating();
+		}, GENERATING_SHOW_MS);
+		try {
+			return await pending;
+		} finally {
+			window.clearTimeout(timer);
+			this.clearGenerating();
+		}
+	}
+
+	private emitGenerating(): void {
+		this.emitter.emit("generating", this.awaitingAudio !== null);
+	}
+
+	/** Stop reporting a wait, if one was being reported. */
+	private clearGenerating(): void {
+		if (this.awaitingAudio === null) return;
+		this.awaitingAudio = null;
+		this.emitGenerating();
+	}
+
+	/** Synthesise the utterance starting at `index`, caching the promise so prefetch and playback share it. */
 	private synthesize(index: number, signal: AbortSignal): Promise<SynthResult> {
 		const existing = this.pending.get(index);
 		if (existing) return existing;
 
 		const engine = this.engine;
-		const chunk = this.chunks[index];
-		if (!engine || !chunk) throw new Error("Player has nothing to play");
+		if (!engine || !this.chunks[index]) throw new Error("Player has nothing to play");
+		const unit = this.unitAt(index, this.groupChars);
 
 		// Only an engine that makes the sound itself needs the rate. For
 		// everything else the player applies it at playback, which keeps a
 		// speed change instant and leaves already-synthesised audio valid.
 		const promise = engine.synthesize(
 			{
-				chunk,
+				chunk: unit.chunk,
 				rate: engine.capabilities.ownsPlayback ? this.rate : 1,
 				pitch: this.pitch,
 				onWord: this.onEngineWord,
-				following: engine.capabilities.ownsPlayback ? () => this.chunks.slice(index + 1) : undefined,
+				following: engine.capabilities.ownsPlayback ? () => this.chunks.slice(unit.last + 1) : undefined,
 			},
 			signal,
 		);
@@ -360,7 +528,7 @@ export class Player {
 		return promise;
 	}
 
-	/** Kick off synthesis for the next few chunks. */
+	/** Kick off synthesis for the next few utterances, starting at the one beginning at `from`. */
 	private primeBuffer(from: number): void {
 		// On an engine that owns playback, synthesize() is the act of speaking
 		// (spd-say, speechSynthesis). A prefetch there starts a second voice
@@ -368,12 +536,42 @@ export class Player {
 		// whatever order they reach the daemon. run() awaits one chunk at a
 		// time, which is the only pacing these engines need.
 		if (this.engine?.capabilities.ownsPlayback) return;
-		for (let i = from; i < Math.min(from + this.bufferAhead + 1, this.chunks.length); i++) {
-			if (this.pending.has(i)) continue;
-			void this.synthesize(i, this.controller?.signal ?? new AbortController().signal).catch(
-				() => undefined,
-			);
+		// A replacement is waiting: audio for the old queue would be thrown away.
+		if (this.replacement) return;
+		let start = from;
+		for (let n = 0; n <= this.bufferAhead && start < this.chunks.length; n++) {
+			if (!this.pending.has(start)) {
+				void this.synthesize(start, this.controller?.signal ?? new AbortController().signal).catch(
+					() => undefined,
+				);
+			}
+			start = this.unitAt(start, this.groupChars).last + 1;
 		}
+	}
+
+	/** Where the utterance in flight starts, or the cursor when nothing is. */
+	private currentUnitStart(): number {
+		return this.unitStart >= 0 ? this.unitStart : this.index;
+	}
+
+	/**
+	 * Move the sentence cursor to the sentence the spoken word is in.
+	 *
+	 * An utterance spans several sentences, so playback no longer tells us which
+	 * one is being read; the words do. Each carries the note offset it came
+	 * from, and the sentence is the last one starting at or before it. Only
+	 * moves forward and only inside the current utterance. Engines reporting no
+	 * timing never produce words, and are never joined (see `unitAt`).
+	 */
+	private followWord(sourceStart: number): void {
+		const unit = this.units.get(this.unitStart);
+		if (!unit || unit.last === unit.first) return;
+		let at = Math.max(this.index, unit.first);
+		while (at < unit.last && this.chunks[at + 1]!.sourceStart <= sourceStart) at += 1;
+		if (at === this.index) return;
+		this.index = at;
+		this.emitter.emit("progress", { chunkIndex: at, total: this.chunks.length });
+		this.emitter.emit("chunk", this.chunks[at] ?? null);
 	}
 
 	private async playBuffer(
@@ -391,9 +589,13 @@ export class Player {
 
 		this.audio.src = url;
 		this.audio.playbackRate = this.rate;
+		console.debug(
+			`[Local TTS Reader] playing chunk ${index + 1}: ${audio.byteLength} bytes, ~${Math.round(durationMs)} ms, rate ${this.rate}`,
+		);
 
 		await new Promise<void>((resolve, reject) => {
 			const cleanup = (): void => {
+				this.audioActive = false;
 				this.audio.removeEventListener("ended", onEnded);
 				this.audio.removeEventListener("error", onError);
 				signal.removeEventListener("abort", onAbort);
@@ -401,6 +603,7 @@ export class Player {
 				this.frame = null;
 			};
 			const onEnded = (): void => {
+				console.debug(`[Local TTS Reader] chunk ${index + 1} ended`);
 				cleanup();
 				resolve();
 			};
@@ -418,14 +621,20 @@ export class Player {
 			this.audio.addEventListener("error", onError, { once: true });
 			signal.addEventListener("abort", onAbort, { once: true });
 
-			this.audio.play().catch((err: unknown) => {
-				cleanup();
-				reject(
-					err instanceof Error
-						? new Error(`Could not start audio playback: ${err.message}`)
-						: new Error("Could not start audio playback"),
-				);
-			});
+			if (this.holdStart) {
+				// Paused before this audio was ready: it waits for resume().
+				this.heldForResume = true;
+			} else {
+				this.audioActive = true;
+				this.audio.play().catch((err: unknown) => {
+					cleanup();
+					reject(
+						err instanceof Error
+							? new Error(`Could not start audio playback: ${err.message}`)
+							: new Error("Could not start audio playback"),
+					);
+				});
+			}
 
 			this.tick();
 		});
@@ -455,6 +664,7 @@ export class Player {
 			const active = wordAt(this.wordTimings, this.audio.currentTime * 1000);
 			if (active !== this.currentWord) {
 				this.currentWord = active;
+				if (active !== -1) this.followWord(this.wordTimings[active]!.sourceStart);
 				this.emitter.emit(
 					"word",
 					active === -1
@@ -463,6 +673,7 @@ export class Player {
 								chunkIndex: this.index,
 								wordIndex: active,
 								timing: this.wordTimings[active]!,
+								rev: this.units.get(this.unitStart)?.chunk.rev,
 							},
 				);
 			}
@@ -496,7 +707,13 @@ export class Player {
 	 * reconciled with the rAF timeline.
 	 */
 	private onEngineWord = (timing: WordTiming): void => {
-		this.emitter.emit("word", { chunkIndex: this.index, wordIndex: -1, timing });
+		this.followWord(timing.sourceStart);
+		this.emitter.emit("word", {
+			chunkIndex: this.index,
+			wordIndex: -1,
+			timing,
+			rev: this.units.get(this.unitStart)?.chunk.rev,
+		});
 	};
 
 	/**
@@ -582,7 +799,26 @@ export class Player {
 		return "restart";
 	}
 
+	/**
+	 * Whether pausing is possible before any audio is sounding. It is for engines
+	 * that hand back audio (the next utterance is held back); an engine that owns
+	 * playback has nothing to hold, so its pause starts only once it is speaking.
+	 */
+	canPauseWhilePreparing(): boolean {
+		return !(this.engine?.capabilities.ownsPlayback ?? false);
+	}
+
 	pause(): void {
+		const owns = this.engine?.capabilities.ownsPlayback ?? false;
+		// Nothing is sounding yet (the first sentence is still being made, or
+		// synthesis has fallen behind): pausing holds the next audio back rather
+		// than stopping anything.
+		if (!owns && !this.audioActive && (this.state === "preparing" || this.state === "playing")) {
+			this.holdStart = true;
+			this.pausedVia = "element";
+			this.setState("paused");
+			return;
+		}
 		if (this.state !== "playing") return;
 		const route = this.pauseRoute();
 
@@ -608,6 +844,18 @@ export class Player {
 		// is nothing here to undo.
 		if (!route) return;
 		this.pausedVia = null;
+
+		if (this.holdStart) {
+			this.holdStart = false;
+			// Resumed before the audio was ready: back to waiting for it.
+			if (!this.heldForResume) {
+				this.setState("preparing");
+				return;
+			}
+			// The audio was ready and held: start it below, like any element resume.
+			this.heldForResume = false;
+			this.audioActive = true;
+		}
 
 		if (route === "restart") {
 			// No priming step on this route, and that is not an omission. It is
@@ -650,7 +898,7 @@ export class Player {
 				// A Look ahead change made while paused was stored but not acted
 				// on, because a paused player should not start work it may never
 				// need. This is that moment.
-				this.primeBuffer(this.index);
+				this.primeBuffer(this.currentUnitStart());
 				this.tick();
 			})
 			.catch((err: unknown) => {
@@ -679,7 +927,7 @@ export class Player {
 	}
 
 	toggle(): void {
-		if (this.state === "playing") this.pause();
+		if (this.state === "playing" || this.state === "preparing") this.pause();
 		else if (this.state === "paused") void this.resume();
 	}
 
@@ -794,11 +1042,29 @@ export class Player {
 		this.bufferAhead = normaliseBufferAhead(count);
 		// Only a state where a queue is live can fill immediately. Anything
 		// else has its own priming moment: resume(), or the next play().
-		if (this.state === "preparing" || this.state === "playing") this.primeBuffer(this.index);
+		if (this.state === "preparing" || this.state === "playing") this.primeBuffer(this.currentUnitStart());
 	}
 
 	getBufferAhead(): number {
 		return this.bufferAhead;
+	}
+
+	/**
+	 * Hand the player a fresh extraction of the note being read, to take over
+	 * when the utterance now playing ends.
+	 *
+	 * The note was edited, so the queue's text and offsets are stale and new
+	 * sentences are missing. Swapping the queue mid-utterance would cut speech
+	 * off or leave the sentence cursor pointing into the wrong array, so the
+	 * swap waits for the boundary. `resume` is asked, with the last sentence of
+	 * the utterance that just finished, which index of `chunks` to continue
+	 * from. Returns false when nothing is being read, so there is nothing to
+	 * replace.
+	 */
+	queueReplacement(chunks: SpeechChunk[], resume: (last: SpeechChunk) => number): boolean {
+		if (this.state === "idle" || this.state === "finished") return false;
+		this.replacement = { chunks, resume };
+		return true;
 	}
 
 	/**
@@ -822,6 +1088,15 @@ export class Player {
 		if (!this.engine || !this.controller) return;
 		if (this.index >= this.chunks.length - 1) return; // At or past last chunk
 		this.index += 1;
+		await this.restartCurrent();
+	}
+
+	/** Jump to the chunk at `index` and speak it from its start. */
+	async jumpTo(index: number): Promise<void> {
+		if (this.state === "idle" || this.state === "finished") return;
+		if (!this.engine || !this.controller) return;
+		if (index < 0 || index >= this.chunks.length || index === this.index) return;
+		this.index = index;
 		await this.restartCurrent();
 	}
 
@@ -868,6 +1143,8 @@ export class Player {
 	 */
 	private tearDownCurrentChunk(): void {
 		this.runToken += 1;
+		this.holdStart = false;
+		this.heldForResume = false;
 		// Whatever was paused is gone now. pause() re-records the route after
 		// calling this; a replay straight out of a pause must not leave the old
 		// one behind for the next resume to act on.
@@ -880,10 +1157,10 @@ export class Player {
 
 		// On an engine that owns playback the cached promise is the utterance
 		// that was just cut off, so it cannot be replayed; speak it again.
-		if (this.engine?.capabilities.ownsPlayback) this.pending.delete(this.index);
+		if (this.engine?.capabilities.ownsPlayback) this.pending.delete(this.currentUnitStart());
 		// The superseded run bailed out before revoking, and playBuffer is
-		// about to register a fresh URL for this index.
-		this.revokeUrl(this.index);
+		// about to register a fresh URL for this utterance.
+		this.revokeUrl(this.currentUnitStart());
 		this.clearWordState();
 		this.emitter.emit("word", null);
 		this.audio.pause();
@@ -899,6 +1176,13 @@ export class Player {
 		this.audio.pause();
 		this.audio.removeAttribute("src");
 		this.pending.clear();
+		this.units.clear();
+		this.unitStart = -1;
+		this.replacement = null;
+		this.holdStart = false;
+		this.heldForResume = false;
+		this.audioActive = false;
+		this.clearGenerating();
 		// Aborting our own promises does not reach an engine that keeps its own
 		// work queue. Without this, restarting playback lands behind every
 		// sentence the user already walked away from.
@@ -956,4 +1240,27 @@ function linkedScope(parent: AbortSignal): LinkedScope {
 		},
 		release,
 	};
+}
+
+/**
+ * Join consecutive sentences into one chunk to submit as a single utterance.
+ *
+ * The offset map gets an entry for the joining space too, or every position
+ * after the join would shift by one and word highlights would land mid-word
+ * (the same rule `mergeShort` follows in extract.ts).
+ */
+function joinChunks(parts: SpeechChunk[]): SpeechChunk {
+	const first = parts[0]!;
+	const last = parts[parts.length - 1]!;
+	let text = first.text;
+	const sourceIndex = [...first.sourceIndex];
+	for (let i = 1; i < parts.length; i++) {
+		const prev = parts[i - 1]!;
+		const part = parts[i]!;
+		const firstOfPart = part.sourceIndex[0] ?? part.sourceStart;
+		sourceIndex.push(firstOfPart > 0 ? firstOfPart - 1 : prev.sourceEnd);
+		sourceIndex.push(...part.sourceIndex);
+		text = `${text} ${part.text}`;
+	}
+	return { ...first, text, sourceIndex, sourceStart: first.sourceStart, sourceEnd: last.sourceEnd };
 }

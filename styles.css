@@ -13,13 +13,19 @@
  * and the word is the filled mark. That also keeps the word looking exactly as
  * it did before this ticket, which is the part users already recognise.
  *
+ * The theme variable is not guaranteed to exist: Obsidian 1.15.1 no longer
+ * defines --text-highlight-bg (its own highlight rule falls back to
+ * --highlight-background-yellow), and an undefined variable with no fallback
+ * makes the whole declaration invalid - no underline, no word mark, nothing
+ * drawn although the decorations are in the DOM. Hence the fallback chain.
+ *
  * No color-mix() or relative colour syntax here, however tempting for a tinted
  * band: Obsidian's Android WebView is Chrome/88 (AGENTS.md, SPIKE-ANDROID-001),
  * and an unsupported colour function computes to nothing rather than degrading.
  */
 
 .local-tts-reader-sentence {
-	border-bottom: 2px solid var(--local-tts-reader-sentence-highlight, var(--text-highlight-bg));
+	border-bottom: 2px solid var(--local-tts-reader-sentence-highlight, var(--text-highlight-bg, var(--highlight-background-yellow, rgba(255, 208, 0, 0.4))));
 	/* Keeps the rule clear of descenders without shifting the line box. */
 	padding-bottom: 1px;
 }
@@ -27,10 +33,10 @@
 /* Drawn over the sentence rule above. */
 
 .local-tts-reader-word {
-	background-color: var(--local-tts-reader-word-highlight, var(--text-highlight-bg));
+	background-color: var(--local-tts-reader-word-highlight, var(--text-highlight-bg, var(--highlight-background-yellow, rgba(255, 208, 0, 0.4))));
 	color: var(--text-normal);
 	border-radius: 3px;
-	box-shadow: 0 0 0 1px var(--local-tts-reader-word-highlight, var(--text-highlight-bg));
+	box-shadow: 0 0 0 1px var(--local-tts-reader-word-highlight, var(--text-highlight-bg, var(--highlight-background-yellow, rgba(255, 208, 0, 0.4))));
 	padding: 1px 0;
 	transition: background-color 90ms linear;
 }
@@ -88,6 +94,11 @@
 	border-top: none;
 	border-radius: 0 0 10px 10px;
 	box-shadow: var(--shadow-s);
+	/* Wraps by group when the window is narrow. */
+	flex-wrap: wrap;
+	justify-content: center;
+	width: max-content;
+	max-width: calc(100vw - 24px);
 	opacity: 0;
 	pointer-events: none;
 	transform: translate(-50%, -100%);
@@ -194,9 +205,7 @@
 
 .local-tts-cb-progress {
 	min-width: 40px;
-	margin-left: 4px;
-	padding-left: 8px;
-	border-left: 1px solid var(--background-modifier-border);
+	padding: 0 4px;
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 }
@@ -333,4 +342,596 @@ body.is-mobile .local-tts-cb-speed-btn {
 
 body.is-mobile.local-tts-control-bar-visible .view-content > .markdown-source-view.mod-cm6 {
 	padding-top: var(--local-tts-control-bar-height, 0px);
+}
+
+/* The settings pane is narrow; let each row wrap its control under its label. */
+/* A column: the playback controls stay put at the top, and only the settings
+   scroll beneath them. An engine page's ribbon is pinned to the top of that
+   scrolling area, so it sits directly under the controls and never changes
+   position. The pane itself has no padding; the controls block and the pages
+   carry their own, and the ribbon spans the full width. */
+.local-tts-settings-view,
+.workspace-leaf-content .view-content.local-tts-settings-view {
+	display: flex;
+	flex-direction: column;
+	/* Obsidian pads every .view-content with a rule of specificity
+	   .workspace-leaf-content .view-content, which a single class loses to. */
+	padding: 0;
+	overflow: hidden;
+}
+.local-tts-settings-controls {
+	flex: 0 0 auto;
+	padding: 10px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+/* Written to out-rank the inline bar's own rule below, which sets a bottom
+   margin and comes later in the file: with equal specificity that later rule
+   won, leaving 12px of margin under the bar on top of the block's padding. */
+.local-tts-settings-controls .local-tts-control-bar.local-tts-control-bar-inline,
+body.is-mobile .local-tts-settings-controls .local-tts-control-bar.local-tts-control-bar-inline {
+	margin-bottom: 0;
+}
+.local-tts-settings-scroll {
+	flex: 1 1 0;
+	min-height: 0;
+	overflow-y: auto;
+}
+.local-tts-page-main {
+	padding: 0 var(--size-4-3) var(--size-4-3);
+}
+.local-tts-settings-view .setting-item {
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+}
+.local-tts-settings-view .setting-item-control {
+	flex-wrap: wrap;
+	justify-content: flex-start;
+	max-width: 100%;
+}
+.local-tts-settings-view .setting-item-info {
+	flex: 1 1 100%;
+}
+
+/* Switches keep their label on the left and sit at the right edge of the row. */
+.local-tts-settings-view .setting-item:has(.checkbox-container) {
+	flex-wrap: nowrap;
+	align-items: center;
+}
+.local-tts-settings-view .setting-item:has(.checkbox-container) .setting-item-info {
+	flex: 1 1 auto;
+}
+.local-tts-settings-view .setting-item:has(.checkbox-container) .setting-item-control {
+	flex: 0 0 auto;
+	justify-content: flex-end;
+	margin-left: auto;
+}
+
+/* Collapsible groups (Content, Advanced) read as their own boxes. */
+.local-tts-settings-view details.local-tts-section {
+	border-radius: var(--radius-m);
+	background: var(--background-secondary);
+	margin: var(--size-4-3) 0;
+	padding: 0;
+}
+.local-tts-settings-view details.local-tts-section > summary {
+	cursor: pointer;
+	padding: var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+}
+/* Hover shades for the title row and for a row inside the section. */
+.local-tts-settings-view details.local-tts-section > summary:hover {
+	background: color-mix(in srgb, var(--background-secondary), var(--text-normal) 12%);
+}
+.local-tts-settings-view details.local-tts-section .setting-item:hover {
+	background: color-mix(in srgb, var(--background-secondary), var(--text-normal) 9%);
+}
+/* Same space above the first row as below the last. Side inset comes from the rows. */
+.local-tts-settings-view details.local-tts-section > div {
+	padding: var(--size-4-3) 0;
+}
+
+/* Every setting row lights up under the pointer. The inline padding keeps the
+   highlight from touching the text. */
+.local-tts-settings-view .setting-item {
+	padding-inline: var(--size-4-2);
+	border-radius: var(--radius-s);
+}
+.local-tts-settings-view .setting-item:hover {
+	background: var(--background-modifier-hover);
+}
+/* A row with a switch toggles it on click, so it should look clickable. */
+.local-tts-settings-view .setting-item:has(.checkbox-container) {
+	cursor: pointer;
+}
+
+/* The copy of the playback controls at the top of the settings pane: always
+   shown, in normal flow, instead of the floating bar's slide-in. */
+.local-tts-control-bar.local-tts-control-bar-inline,
+body.is-mobile .local-tts-control-bar.local-tts-control-bar-inline {
+	position: static;
+	transform: none;
+	opacity: 1;
+	pointer-events: auto;
+	flex-wrap: wrap;
+	justify-content: center;
+	max-width: 100%;
+	margin-bottom: var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: none;
+}
+
+/* Section text under the inline controls, on its own row. */
+.local-tts-cb-preview {
+	flex: 1 1 100%;
+	padding-top: var(--size-4-1);
+	min-width: 0;
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	text-align: left;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.local-tts-cb-preview:empty {
+	display: none;
+}
+
+.local-tts-cb-preview-label {
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.local-tts-control-bar-inline .local-tts-cb-progress {
+	min-width: 0;
+	margin-left: 0;
+	padding: 0 4px;
+	border-left: none;
+	white-space: nowrap;
+}
+
+/* Engine picker: one selectable row per engine. Unavailable rows are greyed
+   but stay selectable, with the reason as the tooltip. */
+.local-tts-engine-table {
+	/* Inset from the box edge, so the table sits inside it. As a child of the
+	   setting row it takes a line of its own below the label. */
+	flex: 0 0 calc(100% - 2 * var(--size-4-2));
+	width: calc(100% - 2 * var(--size-4-2));
+	margin: var(--size-4-2);
+	/* separate, not collapse: collapsed borders ignore border-radius. */
+	border-collapse: separate;
+	border-spacing: 0;
+	border-radius: var(--radius-m);
+	overflow: hidden;
+	font-size: var(--font-ui-small);
+	/* Darker than the box it sits in, in both light and dark themes. The plain
+	   fallback is for engines without color-mix (older Android WebViews). */
+	background: var(--background-modifier-hover);
+	background: color-mix(in srgb, var(--background-secondary), black 14%);
+}
+.local-tts-engine-table th {
+	padding: var(--size-4-1) var(--size-4-2);
+	text-align: left;
+	font-weight: var(--font-medium);
+	color: var(--text-muted);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.local-tts-engine-table td {
+	padding: var(--size-4-2);
+	vertical-align: top;
+}
+.local-tts-engine-option {
+	cursor: pointer;
+}
+.local-tts-engine-option:hover {
+	background: var(--background-modifier-hover);
+}
+.local-tts-engine-option:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+.local-tts-engine-option.is-selected {
+	background: var(--background-modifier-active-hover);
+}
+.local-tts-engine-option.is-unavailable td {
+	opacity: 0.55;
+}
+.local-tts-engine-table td.local-tts-engine-mark {
+	position: relative;
+	width: 2.25em;
+	padding: 0;
+}
+/* Placed from the cell's own centre rather than laid out inline. This cell
+   spans both rows of its entry and other cells in the row carry uneven
+   padding (none below the first row), so any flow-based centring ended up
+   a few pixels low and left. */
+.local-tts-engine-mark::before {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	box-sizing: border-box;
+	width: 14px;
+	height: 14px;
+	transform: translate(-50%, -50%);
+	border: 2px solid var(--text-muted);
+	border-radius: 50%;
+}
+.local-tts-engine-option.is-selected .local-tts-engine-mark::before {
+	border-color: var(--interactive-accent);
+	background: var(--interactive-accent);
+}
+
+/* The Speech engine row holds the table, so let it wrap onto a second line
+   even outside the settings pane. */
+.setting-item:has(> .local-tts-engine-table) {
+	flex-wrap: wrap;
+}
+
+/* Each engine is a tbody of two rows: name and status, then the notes. */
+.local-tts-engine-option > tr:first-child > td {
+	padding-bottom: 0;
+}
+.local-tts-engine-option > tr:last-child > td {
+	/* Same column as the engine name above it, with room between the two. */
+	padding-top: var(--size-4-2);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+/* An engine's page slides in over the main settings. Both pages share one grid
+   cell and move on opposite sides; after the slide the hidden one is dropped
+   from layout so the pane is only as tall as the page showing. overflow-x:
+   clip rather than hidden, so the pinned header can still stick to the pane. */
+.local-tts-pager {
+	display: grid;
+	grid-template-columns: 100%;
+	overflow-x: hidden;
+	overflow-x: clip;
+}
+.local-tts-page {
+	grid-area: 1 / 1;
+	min-width: 0;
+	transition: transform 260ms ease;
+}
+.local-tts-page[hidden] {
+	display: none;
+}
+.local-tts-page-sub {
+	transform: translateX(100%);
+}
+.local-tts-pager.is-sub > .local-tts-page-main {
+	transform: translateX(-100%);
+}
+.local-tts-pager.is-sub > .local-tts-page-sub {
+	transform: translateX(0);
+}
+/* Set from script for prefers-reduced-motion: this file carries no @media, so the
+   flat scanner in tests/highlight.test.ts keeps seeing every rule. */
+.local-tts-pager.is-reduced-motion > .local-tts-page {
+	transition: none;
+}
+
+/* Full width, stuck to the top of the pane. */
+.local-tts-subpage-header {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-3);
+	background: var(--background-primary);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.local-tts-subpage-title {
+	font-weight: var(--font-semibold);
+}
+/* The whole ribbon goes back. */
+.local-tts-subpage-header {
+	cursor: pointer;
+}
+.local-tts-subpage-header:hover {
+	/* Opaque: the page scrolls beneath this ribbon, and a translucent hover
+	   colour would let it show through. The plain colour is the fallback. */
+	background: var(--background-modifier-hover);
+	background: color-mix(in srgb, var(--background-primary), var(--text-normal) 8%);
+}
+.local-tts-subpage-header:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+.local-tts-subpage-back {
+	display: inline-flex;
+	align-items: center;
+}
+.local-tts-subpage-body {
+	padding: var(--size-4-2) var(--size-4-3) var(--size-4-3);
+}
+.local-tts-subpage-empty {
+	padding: var(--size-4-3);
+}
+
+/* The gear sits at the right of an engine's first row. */
+.local-tts-engine-table td.local-tts-engine-gear-cell {
+	width: 2.75em;
+	/* Padding-free, and a 1px height so the button's height: 100% resolves
+	   against the cell, which spans both rows of the entry. */
+	height: 1px;
+	padding: 0;
+}
+.local-tts-engine-gear {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+	border-radius: 0;
+}
+.local-tts-engine-option.is-unavailable {
+	cursor: not-allowed;
+}
+.local-tts-engine-option.is-unavailable .local-tts-engine-gear-cell {
+	opacity: 1;
+}
+
+/* A divider between the gear and the rest of the entry, shown while the entry
+   is under the pointer. Always present but transparent, so nothing shifts. */
+.local-tts-engine-table td.local-tts-engine-gear-cell {
+	border-left: 3px solid transparent;
+}
+/* Only on an entry that has a gear (Automatic has none), while it is under the
+   pointer and always on the selected one. The colour is the table's own
+   un-hovered background, so the line reads as a gap cut into the highlight. */
+.local-tts-engine-option:hover td.local-tts-engine-gear-cell:has(> .local-tts-engine-gear),
+.local-tts-engine-option.is-selected td.local-tts-engine-gear-cell:has(> .local-tts-engine-gear) {
+	border-left-color: var(--background-modifier-hover);
+	border-left-color: color-mix(in srgb, var(--background-secondary), black 14%);
+}
+
+/* The gear is always clickable, even inside an unavailable (not-allowed) entry. */
+.local-tts-engine-option .local-tts-engine-gear-cell,
+.local-tts-engine-option .local-tts-engine-gear {
+	cursor: pointer;
+}
+
+/* The download row holds a table of what has been downloaded, on a line of its
+   own below the label and buttons, in the same darker panel as the engine table. */
+.setting-item:has(> .local-tts-download-table) {
+	flex-wrap: wrap;
+}
+.local-tts-download-table td.local-tts-download-action {
+	width: 1%;
+	white-space: nowrap;
+	text-align: right;
+}
+.local-tts-download-total td {
+	font-weight: var(--font-medium);
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+/* Choice tables (Kokoro model, backend): one selectable row each, the same
+   look as the engine table. */
+.local-tts-choice-row {
+	cursor: pointer;
+}
+.local-tts-choice-row:hover {
+	background: var(--background-modifier-hover);
+}
+.local-tts-choice-row:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+.local-tts-choice-row.is-selected {
+	background: var(--background-modifier-active-hover);
+}
+.local-tts-choice-row.is-selected .local-tts-engine-mark::before {
+	border-color: var(--interactive-accent);
+	background: var(--interactive-accent);
+}
+.local-tts-choice-detail {
+	margin-top: var(--size-4-1);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+.local-tts-choice-table td.local-tts-choice-action {
+	width: 1%;
+	white-space: nowrap;
+	text-align: right;
+}
+
+/* Buttons inside the engine, model and download tables show a hand, including
+   inside rows whose own cursor is something else. */
+.local-tts-engine-table button,
+.local-tts-choice-table button,
+.local-tts-download-table button,
+.local-tts-subpage-back {
+	cursor: pointer;
+}
+.local-tts-engine-table button:disabled,
+.local-tts-choice-table button:disabled,
+.local-tts-download-table button:disabled {
+	cursor: default;
+}
+
+/* A slider that takes the whole width of its row, under the label. */
+.local-tts-wide-slider.setting-item {
+	flex-wrap: wrap;
+}
+.local-tts-wide-slider .setting-item-control {
+	flex: 1 1 100%;
+}
+.local-tts-wide-slider input[type="range"] {
+	width: 100%;
+}
+
+/* Voice table: a not-yet-downloaded voice is dimmed but still choosable (a click fetches it). */
+.local-tts-voice-table .local-tts-choice-row.is-missing td:not(.local-tts-choice-action) {
+	opacity: 0.6;
+}
+.local-tts-voice-table td.local-tts-voice-grade {
+	font-weight: var(--font-medium);
+}
+
+/* A sortable column heading: clickable, and it says which way it is sorted. */
+.local-tts-engine-table th.local-tts-sortable {
+	cursor: pointer;
+	user-select: none;
+	white-space: nowrap;
+}
+.local-tts-engine-table th.local-tts-sortable:hover {
+	color: var(--text-normal);
+}
+.local-tts-engine-table th.local-tts-sortable:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
+/* A build or voice that is not downloaded is dimmed and cannot be picked; its
+   button still works. */
+.local-tts-choice-table .local-tts-choice-row.is-missing {
+	cursor: not-allowed;
+}
+.local-tts-choice-table .local-tts-choice-row.is-missing td:not(.local-tts-choice-action) {
+	opacity: 0.6;
+}
+
+/* Space between the About bubble's paragraphs. */
+.local-tts-about-paragraph + .local-tts-about-paragraph {
+	margin-top: var(--size-4-3);
+}
+
+/* The play button sits in a wrapper so a dashed outline can surround it. While
+   audio is being generated and none is sounding the outline is shown, fading in
+   and out as it appears and goes, with its dashes travelling slowly round the button. */
+.local-tts-cb-play-wrap {
+	position: relative;
+	display: flex;
+}
+.local-tts-cb-generating {
+	position: absolute;
+	inset: -4px;
+	width: calc(100% + 8px);
+	height: calc(100% + 8px);
+	pointer-events: none;
+	opacity: 0;
+	overflow: visible;
+	/* Fades in when it appears and out when it goes, and stays steady between. */
+	transition: opacity 400ms ease;
+}
+.local-tts-cb-generating rect {
+	fill: none;
+	stroke: #e6b800;
+	stroke-width: 2;
+	stroke-dasharray: 5 4;
+	stroke-linecap: round;
+}
+.local-tts-cb-play-wrap.is-generating .local-tts-cb-generating {
+	opacity: 1;
+}
+/* The dashes keep travelling while the outline fades out, so it does not freeze mid-fade. */
+.local-tts-cb-generating rect {
+	animation: local-tts-gen-dash 6s linear infinite;
+}
+@keyframes local-tts-gen-dash {
+	to {
+		stroke-dashoffset: -9;
+	}
+}
+
+/* The floating bar's drag handle, and the bar once it has been moved. */
+.local-tts-cb-handle {
+	display: flex;
+	align-items: center;
+	padding: 0 2px;
+	color: var(--text-faint);
+	cursor: grab;
+	touch-action: none;
+}
+.local-tts-cb-handle:hover {
+	color: var(--text-muted);
+}
+.local-tts-control-bar.is-dragging .local-tts-cb-handle {
+	cursor: grabbing;
+}
+.local-tts-control-bar.is-moved {
+	transform: none;
+	border-top: 1px solid var(--background-modifier-border);
+	border-radius: 10px;
+}
+.local-tts-control-bar.is-dragging {
+	transition: none;
+}
+
+/* The Model box's footer: memory state and the Unload button. */
+.local-tts-model-memory {
+	flex: 0 0 calc(100% - 2 * var(--size-4-2));
+	margin: 0 var(--size-4-2) var(--size-4-2);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-3);
+}
+.local-tts-model-memory button {
+	cursor: pointer;
+	flex: none;
+}
+.local-tts-model-memory button:disabled {
+	cursor: default;
+}
+
+/* Room above the Status bubble, so it does not sit against the scroll box's top edge. */
+.setting-item.local-tts-status-bubble {
+	margin-top: 10px;
+}
+
+/* A running model download: gray "Cancel" button with a progress ring. */
+.local-tts-choice-table button.local-tts-dl-active {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+.local-tts-dl-ring {
+	width: 16px;
+	height: 16px;
+	flex: none;
+}
+.local-tts-dl-ring circle {
+	fill: none;
+	stroke-width: 3;
+}
+.local-tts-dl-track {
+	stroke: var(--background-modifier-border-hover);
+}
+.local-tts-dl-arc {
+	stroke: var(--interactive-accent);
+	stroke-linecap: round;
+}
+.local-tts-dl-ring.is-indeterminate {
+	animation: local-tts-ring-spin 1s linear infinite;
+}
+@keyframes local-tts-ring-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* The groups of the playback controls (the same in the floating bar and the
+   settings copy). A group wraps whole; the separator before a group is dropped
+   when the group starts a row. */
+.local-tts-cb-group:not(.local-tts-cb-speed) {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+.local-tts-cb-section-group {
+	margin-left: 2px;
+	padding-left: 8px;
+	border-left: 1px solid var(--background-modifier-border);
+}
+.local-tts-control-bar .local-tts-cb-row-start {
+	margin-left: 0;
+	padding-left: 0;
+	border-left: none;
 }

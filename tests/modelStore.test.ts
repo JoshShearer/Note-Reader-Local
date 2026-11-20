@@ -18,9 +18,12 @@
 import {
 	getInstalledSizeMb,
 	removeModelBuild,
+	listInstalledVoices,
+	removeVoice,
 	shouldClearPinnedKokoro,
 	getTotalUsage,
 	downloadModel,
+	downloadVoice,
 	voiceForModelDownload,
 	describeModelDownload,
 	type ModelDirAdapter,
@@ -202,6 +205,41 @@ async function run(): Promise<void> {
 			!(await adapter.exists("model/onnx/model_quantized.onnx")),
 		);
 		check("no error reported", result.error === undefined, String(result.error));
+	}
+
+	console.log("listInstalledVoices / removeVoice: individual voice files");
+	{
+		const adapter = new FakeAdapter();
+		adapter.files.set("model/voices/af_heart.bin", new ArrayBuffer(522_240));
+		adapter.files.set("model/voices/bm_george.bin", new ArrayBuffer(522_240));
+		adapter.files.set("model/voices/notes.txt", new ArrayBuffer(10));
+
+		const listed = await listInstalledVoices(adapter, "model");
+		check(
+			"lists only .bin files, sorted",
+			JSON.stringify(listed.map((v) => v.file)) === JSON.stringify(["af_heart.bin", "bm_george.bin"]),
+			JSON.stringify(listed),
+		);
+		check("sizes come from a real stat", listed[0]?.bytes === 522_240, JSON.stringify(listed));
+
+		const removed = await removeVoice(adapter, "model", "af_heart.bin");
+		check("removing one voice reports ok and the bytes freed", removed.ok && removed.freedBytes === 522_240, JSON.stringify(removed));
+		check("that file is gone and the other is untouched", !(await adapter.exists("model/voices/af_heart.bin")) && (await adapter.exists("model/voices/bm_george.bin")));
+		check("the voices folder is kept while files remain", adapter.rmdirCalls.length === 0, JSON.stringify(adapter.rmdirCalls));
+
+		const missing = await removeVoice(adapter, "model", "zz_none.bin");
+		check("a voice that is not there is a no-op", !missing.ok && missing.freedBytes === 0 && missing.error === undefined, JSON.stringify(missing));
+
+		for (const bad of ["../model.bin", "a/b.bin", `a${String.fromCharCode(92)}b.bin`, "af_heart", "af_heart.txt"]) {
+			const refused = await removeVoice(adapter, "model", bad);
+			check(`refuses ${JSON.stringify(bad)}`, !refused.ok && refused.error !== undefined, JSON.stringify(refused));
+		}
+
+		const emptied = new FakeAdapter();
+		emptied.files.set("model/voices/af_heart.bin", new ArrayBuffer(5));
+		await removeVoice(emptied, "model", "af_heart.bin");
+		check("the voices folder goes with its last file", emptied.rmdirCalls.length === 1, JSON.stringify(emptied.rmdirCalls));
+		check("no voices folder means an empty list", (await listInstalledVoices(new FakeAdapter(), "model")).length === 0);
 	}
 
 	console.log(
@@ -419,6 +457,53 @@ async function run(): Promise<void> {
 		);
 		const describedOk = describeModelDownload(allOk.result, null);
 		check("NEW plain success message", describedOk.message === "Kokoro model ready." && describedOk.modelInstalled, JSON.stringify(describedOk));
+	}
+
+	console.log("a download can be cancelled");
+	{
+		const noopApp = {
+			vault: {
+				adapter: {
+					async exists() {
+						return true;
+					},
+					async mkdir() {},
+					async writeBinary() {},
+				},
+			},
+		};
+		const realFetch = globalThis.fetch;
+		try {
+			// Already cancelled: nothing is requested.
+			let requested = 0;
+			globalThis.fetch = (async () => {
+				requested += 1;
+				return new Response(new Uint8Array(8), { status: 200 });
+			}) as typeof fetch;
+			const done = new AbortController();
+			done.abort();
+			const early = await downloadVoice(noopApp as never, "model", "af_heart.bin", () => undefined, done.signal);
+			check("a signal aborted before the start cancels at once", !early.ok && early.cancelled === true, JSON.stringify(early));
+			check("it makes no request", requested === 0, String(requested));
+
+			// Cancelled while a request is in flight.
+			globalThis.fetch = ((_url: string, init?: RequestInit) =>
+				new Promise((_resolve, reject) => {
+					init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+				})) as typeof fetch;
+			const midway = new AbortController();
+			const pending = downloadVoice(noopApp as never, "model", "af_heart.bin", () => undefined, midway.signal);
+			midway.abort();
+			const result = await pending;
+			check("an abort during the request is reported as cancelled", !result.ok && result.cancelled === true, JSON.stringify(result));
+		} finally {
+			globalThis.fetch = realFetch;
+		}
+
+		const atModel = describeModelDownload({ ok: false, cancelled: true, stage: "model", error: "x" }, null);
+		check("cancelled while fetching the model: not installed", atModel.message === "Download cancelled." && !atModel.modelInstalled, JSON.stringify(atModel));
+		const atVoice = describeModelDownload({ ok: false, cancelled: true, stage: "voice", error: "x" }, null);
+		check("cancelled while fetching the voice: the model is installed", atVoice.modelInstalled, JSON.stringify(atVoice));
 	}
 
 	if (failures > 0) {

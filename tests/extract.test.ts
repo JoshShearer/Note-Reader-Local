@@ -1135,8 +1135,20 @@ console.log("NRL-45 link reference definitions (R-M08)");
 	expect("[theref]:   ", ["theref :"]);
 	// A definition may not interrupt a paragraph, so a def-shaped line directly
 	// under a prose line is a paragraph continuation and stays spoken.
-	expect('ZPROSEZ line here.\n[theref]: zdestz.png "ZTITLEZ"', ['ZPROSEZ line here. theref : zdestz.png "ZTITLEZ"']);
-	expect("ZPROSEZ line here.\n[see also]: not a definition", ["ZPROSEZ line here. see also : not a definition"]);
+	expect('ZPROSEZ line here.\n[theref]: zdestz.png "ZTITLEZ"', ['ZPROSEZ line here.', 'theref : zdestz.png "ZTITLEZ"']);
+	expect("ZPROSEZ line here.\n[see also]: not a definition", ["ZPROSEZ line here.", "see also : not a definition"]);
+	// Each sentence is its own section, however short (the reader counts,
+	// previews and skips by chunk), so four short sentences are four chunks.
+	expect(
+		"We were all at home in the living room.\nIt was dark outside.\nThe front door was slightly ajar.\nWe were waiting for someone to arrive.\nI heard a small tap tap tap on the front glass door.",
+		[
+			"We were all at home in the living room.",
+			"It was dark outside.",
+			"The front door was slightly ajar.",
+			"We were waiting for someone to arrive.",
+			"I heard a small tap tap tap on the front glass door.",
+		],
+	);
 	// Second line of a container: the per-line scanner keeps no per-container
 	// paragraph buffer, so the lazy-continuation case is excluded by
 	// !wasContainer and stays spoken (decision Q8).
@@ -6832,8 +6844,8 @@ console.log("NRL-28 Unicode sentence segmentation and grapheme-safe splitting (R
 	const ar3 = "\u0648\u0647\u0630\u0627 \u0627\u0644\u0623\u062e\u064a\u0631.";
 	const ar = [ar1, ar2, ar3].join(" ");
 	check(
-		"NRL-28 Arabic keeps the U+061F boundary and still merges the ASCII one",
-		same(texts(ar), [`${ar1} ${ar2}`, ar3]),
+		"NRL-28 Arabic keeps every boundary: each sentence is its own section",
+		same(texts(ar), [ar1, ar2, ar3]),
 		JSON.stringify(texts(ar)),
 	);
 	check("NRL-28 Arabic offsets stay in lockstep", lockstepBad(ar) === "", lockstepBad(ar));
@@ -6957,7 +6969,13 @@ console.log("NRL-28 Unicode sentence segmentation and grapheme-safe splitting (R
 	// Both of these are one 47-unit chunk on the merge base. The straight form
 	// gets there by finding three legacy boundaries and folding all three;
 	// the curly form by finding none at all.
-	check("NRL-28 straight-quoted English is one chunk, as before", same(texts(straight), [straight]), JSON.stringify(texts(straight).map((c) => c.length)));
+	// Each quoted sentence is now its own section (see the MIN_CHUNK_CHARS note
+	// in extract.ts); only a runt under that floor folds into its neighbour.
+	check(
+		"NRL-28 straight-quoted English: each quoted sentence is its own section",
+		same(texts(straight), ['"First."', '"Second."', '"Third."', "Tail text here now."]),
+		JSON.stringify(texts(straight)),
+	);
 	check("NRL-28 curly-quoted English is one chunk, not four runts", same(texts(curly), [curly]), JSON.stringify(texts(curly).map((c) => c.length)));
 	for (const [id, closer] of [["curly double", "\u201d"], ["curly single", "\u2019"], ["guillemet", "\u00bb"], ["single guillemet", "\u203a"], ["fullwidth paren", "\uff09"]] as const) {
 		const s = `He said \u201cstop.${closer} Then he left the room quietly and slowly.`;

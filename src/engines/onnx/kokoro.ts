@@ -66,7 +66,7 @@ export const KOKORO_MODEL_METADATA = {
 /** Files that must be present for the engine to run. */
 const REQUIRED_FILES = ["config.json", "tokenizer.json"];
 
-export type KokoroDtype = "fp32" | "fp16" | "q8" | "q4" | "q4f16";
+export type KokoroDtype = "fp32" | "fp16" | "q8" | "q4" | "q4f16" | "uint8";
 
 export interface WeightsVariant {
 	path: string;
@@ -90,41 +90,65 @@ export interface WeightsVariant {
  * ceiling matter more than throughput, and the faster one is the desktop
  * default.
  */
-export const KOKORO_WEIGHTS: Record<"gpu" | "fast" | "small", WeightsVariant> = {
+/** The builds a user can pick, in the order the settings table lists them. */
+export const WEIGHTS_KEYS = ["gpu", "fp16", "fast", "small", "q4", "uint8"] as const;
+export type WeightsKey = (typeof WEIGHTS_KEYS)[number];
+
+/** The builds the GPU path can load; every other build runs on the CPU. */
+export const GPU_CAPABLE_WEIGHTS: readonly WeightsKey[] = ["gpu", "fp16"];
+
+export const KOKORO_WEIGHTS: Record<WeightsKey, WeightsVariant> = {
 	gpu: {
 		path: "onnx/model.onnx",
 		dtype: "fp32",
 		sizeMb: 326,
-		label: "GPU (fp32)",
+		label: "GPU full precision (fp32)",
 		description:
-			"~326 MB, highest quality, roughly ten times faster than playback on a discrete GPU. Requires WebGPU support and a compatible graphics card.",
+			"Highest quality, roughly ten times faster than playback on a discrete GPU. Requires WebGPU support and a compatible graphics card.",
+	},
+	fp16: {
+		path: "onnx/model_fp16.onnx",
+		dtype: "fp16",
+		sizeMb: 163,
+		label: "GPU half precision (fp16)",
+		description:
+			"Close to fp32 quality at half the size. Needs a GPU that supports half-precision shaders.",
 	},
 	fast: {
 		path: "onnx/model_q4f16.onnx",
 		dtype: "q4f16",
 		sizeMb: 155,
-		label: "Fast (q4f16)",
-		description: "~155 MB, moderate quality, about real-time synthesis on a desktop CPU. Best balance of quality and speed.",
+		label: "CPU Fast (q4f16)",
+		description: "Moderate quality, about real-time synthesis on a desktop CPU. Best balance of quality and speed.",
 	},
 	small: {
 		path: "onnx/model_quantized.onnx",
 		dtype: "q8",
 		sizeMb: 92,
-		label: "Small (q8)",
-		description: "~92 MB, lower quality, smaller download. Noticeably slower synthesis, meant for phones and bandwidth-constrained devices.",
+		label: "CPU Small (q8)",
+		description: "Lower quality, smaller download. Noticeably slower synthesis, meant for phones and bandwidth-constrained devices.",
+	},
+	q4: {
+		path: "onnx/model_q4.onnx",
+		dtype: "q4",
+		sizeMb: 305,
+		label: "CPU 4-bit (q4)",
+		description:
+			"4-bit weights with full-precision activations: larger than Fast with no known advantage.",
+	},
+	uint8: {
+		path: "onnx/model_uint8.onnx",
+		dtype: "uint8",
+		sizeMb: 177,
+		label: "CPU 8-bit unsigned (uint8)",
+		description: "8-bit unsigned integer weights.",
 	},
 };
 
 /** Which weights to reach for first. Resolved from settings and hardware. */
-export type WeightsPreference = "gpu" | "fast" | "small";
+export type WeightsPreference = WeightsKey;
 
-const ALL_WEIGHTS: Array<{ path: string; dtype: KokoroDtype }> = [
-	KOKORO_WEIGHTS.gpu,
-	KOKORO_WEIGHTS.fast,
-	KOKORO_WEIGHTS.small,
-	{ path: "onnx/model_fp16.onnx", dtype: "fp16" },
-	{ path: "onnx/model_q4.onnx", dtype: "q4" },
-];
+const ALL_WEIGHTS: Array<{ path: string; dtype: KokoroDtype }> = WEIGHTS_KEYS.map((k) => KOKORO_WEIGHTS[k]);
 
 /**
  * What this machine's GPU can actually do.
@@ -217,14 +241,21 @@ export async function probeGpu(): Promise<GpuReport> {
  * better served by dropping back to the CPU entirely.
  */
 function weightsOrder(device: "wasm" | "webgpu", preference: WeightsPreference, f16 = false) {
+	// On the CPU the chosen build goes first (the fp32 build prefers Fast, which
+	// is what runs it well there), then Fast and Small as the fallbacks.
+	const cpuFirst = [
+		...new Set<string>([
+			KOKORO_WEIGHTS[preference === "gpu" ? "fast" : preference].path,
+			KOKORO_WEIGHTS.fast.path,
+			KOKORO_WEIGHTS.small.path,
+		]),
+	];
 	const first: string[] =
 		device === "webgpu"
 			? f16
-				? ["onnx/model_fp16.onnx", KOKORO_WEIGHTS.gpu.path]
+				? [KOKORO_WEIGHTS.fp16.path, KOKORO_WEIGHTS.gpu.path]
 				: [KOKORO_WEIGHTS.gpu.path]
-			: preference === "small"
-				? [KOKORO_WEIGHTS.small.path, KOKORO_WEIGHTS.fast.path]
-				: [KOKORO_WEIGHTS.fast.path, KOKORO_WEIGHTS.small.path];
+			: cpuFirst;
 
 	if (device === "webgpu") {
 		// Only GPU-loadable builds, so a missing one means "use the CPU"
@@ -251,6 +282,13 @@ export interface KokoroOptions {
 	threads: number;
 	/** Which weights build to prefer when more than one is on disk. */
 	weights: WeightsPreference;
+	/**
+	 * Whether the GPU may be used at all. False when the user picked a build
+	 * the GPU cannot load (Fast, Small and the others): with such a build
+	 * chosen, a GPU-capable file that merely happens to be on disk must not
+	 * quietly take over. Unset means eligible.
+	 */
+	gpuEligible?: boolean;
 }
 
 const DEFAULT_OPTIONS: KokoroOptions = { device: "auto", threads: 4, weights: "fast" };
@@ -330,6 +368,12 @@ interface KokoroVoice {
 	name: string;
 	lang: string;
 	gender: "male" | "female" | "neutral";
+	/**
+	 * The overall quality grade the Kokoro project publishes for the voice, A
+	 * (best) to F, copied from kokoro-js's own voice table. It is the project's
+	 * rating of how well the voice was trained, not a measurement made here.
+	 */
+	grade: string;
 }
 
 /**
@@ -342,35 +386,44 @@ export const VOICE_FILE_SIZE_BYTES = 522240;
 
 /** The voices shipped with Kokoro. `af`/`am` are en-US, `bf`/`bm` en-GB. */
 const VOICES: KokoroVoice[] = [
-	{ file: "af_heart", name: "Heart", lang: "en-US", gender: "female" },
-	{ file: "af_alloy", name: "Alloy", lang: "en-US", gender: "female" },
-	{ file: "af_aoede", name: "Aoede", lang: "en-US", gender: "female" },
-	{ file: "af_bella", name: "Bella", lang: "en-US", gender: "female" },
-	{ file: "af_jessica", name: "Jessica", lang: "en-US", gender: "female" },
-	{ file: "af_kore", name: "Kore", lang: "en-US", gender: "female" },
-	{ file: "af_nicole", name: "Nicole", lang: "en-US", gender: "female" },
-	{ file: "af_nova", name: "Nova", lang: "en-US", gender: "female" },
-	{ file: "af_river", name: "River", lang: "en-US", gender: "female" },
-	{ file: "af_sarah", name: "Sarah", lang: "en-US", gender: "female" },
-	{ file: "af_sky", name: "Sky", lang: "en-US", gender: "female" },
-	{ file: "am_adam", name: "Adam", lang: "en-US", gender: "male" },
-	{ file: "am_echo", name: "Echo", lang: "en-US", gender: "male" },
-	{ file: "am_eric", name: "Eric", lang: "en-US", gender: "male" },
-	{ file: "am_fenrir", name: "Fenrir", lang: "en-US", gender: "male" },
-	{ file: "am_liam", name: "Liam", lang: "en-US", gender: "male" },
-	{ file: "am_michael", name: "Michael", lang: "en-US", gender: "male" },
-	{ file: "am_onyx", name: "Onyx", lang: "en-US", gender: "male" },
-	{ file: "am_puck", name: "Puck", lang: "en-US", gender: "male" },
-	{ file: "am_santa", name: "Santa", lang: "en-US", gender: "male" },
-	{ file: "bf_alice", name: "Alice", lang: "en-GB", gender: "female" },
-	{ file: "bf_emma", name: "Emma", lang: "en-GB", gender: "female" },
-	{ file: "bf_isabella", name: "Isabella", lang: "en-GB", gender: "female" },
-	{ file: "bf_lily", name: "Lily", lang: "en-GB", gender: "female" },
-	{ file: "bm_daniel", name: "Daniel", lang: "en-GB", gender: "male" },
-	{ file: "bm_fable", name: "Fable", lang: "en-GB", gender: "male" },
-	{ file: "bm_george", name: "George", lang: "en-GB", gender: "male" },
-	{ file: "bm_lewis", name: "Lewis", lang: "en-GB", gender: "male" },
+	{ file: "af_heart", name: "Heart", lang: "en-US", gender: "female", grade: "A" },
+	{ file: "af_alloy", name: "Alloy", lang: "en-US", gender: "female", grade: "C" },
+	{ file: "af_aoede", name: "Aoede", lang: "en-US", gender: "female", grade: "C+" },
+	{ file: "af_bella", name: "Bella", lang: "en-US", gender: "female", grade: "A-" },
+	{ file: "af_jessica", name: "Jessica", lang: "en-US", gender: "female", grade: "D" },
+	{ file: "af_kore", name: "Kore", lang: "en-US", gender: "female", grade: "C+" },
+	{ file: "af_nicole", name: "Nicole", lang: "en-US", gender: "female", grade: "B-" },
+	{ file: "af_nova", name: "Nova", lang: "en-US", gender: "female", grade: "C" },
+	{ file: "af_river", name: "River", lang: "en-US", gender: "female", grade: "D" },
+	{ file: "af_sarah", name: "Sarah", lang: "en-US", gender: "female", grade: "C+" },
+	{ file: "af_sky", name: "Sky", lang: "en-US", gender: "female", grade: "C-" },
+	{ file: "am_adam", name: "Adam", lang: "en-US", gender: "male", grade: "F+" },
+	{ file: "am_echo", name: "Echo", lang: "en-US", gender: "male", grade: "D" },
+	{ file: "am_eric", name: "Eric", lang: "en-US", gender: "male", grade: "D" },
+	{ file: "am_fenrir", name: "Fenrir", lang: "en-US", gender: "male", grade: "C+" },
+	{ file: "am_liam", name: "Liam", lang: "en-US", gender: "male", grade: "D" },
+	{ file: "am_michael", name: "Michael", lang: "en-US", gender: "male", grade: "C+" },
+	{ file: "am_onyx", name: "Onyx", lang: "en-US", gender: "male", grade: "D" },
+	{ file: "am_puck", name: "Puck", lang: "en-US", gender: "male", grade: "C+" },
+	{ file: "am_santa", name: "Santa", lang: "en-US", gender: "male", grade: "D-" },
+	{ file: "bf_alice", name: "Alice", lang: "en-GB", gender: "female", grade: "D" },
+	{ file: "bf_emma", name: "Emma", lang: "en-GB", gender: "female", grade: "B-" },
+	{ file: "bf_isabella", name: "Isabella", lang: "en-GB", gender: "female", grade: "C" },
+	{ file: "bf_lily", name: "Lily", lang: "en-GB", gender: "female", grade: "D" },
+	{ file: "bm_daniel", name: "Daniel", lang: "en-GB", gender: "male", grade: "D" },
+	{ file: "bm_fable", name: "Fable", lang: "en-GB", gender: "male", grade: "C" },
+	{ file: "bm_george", name: "George", lang: "en-GB", gender: "male", grade: "C" },
+	{ file: "bm_lewis", name: "Lewis", lang: "en-GB", gender: "male", grade: "D+" },
 ];
+
+/** Name and language of a voice by its file name (`af_heart.bin`), or null for a file that is not a known voice. */
+export function describeKokoroVoiceFile(
+	fileName: string,
+): { name: string; lang: string; gender: "male" | "female" | "neutral"; grade: string } | null {
+	const base = fileName.replace(/^.*\//, "").replace(/\.bin$/, "");
+	const voice = VOICES.find((v) => v.file === base);
+	return voice ? { name: voice.name, lang: voice.lang, gender: voice.gender, grade: voice.grade } : null;
+}
 
 export interface ModelStore {
 	/** Absolute path of the model directory, in Obsidian's filesystem form. */
@@ -398,6 +451,15 @@ interface Pending {
 	resolve: (value: { pcm: Float32Array; sampleRate: number }) => void;
 	reject: (err: Error) => void;
 }
+
+/**
+ * A load failure caused by what is or is not on disk, not by the runtime.
+ *
+ * Thread-pool trouble and a missing voice file both reject load(), and only
+ * the first is cured by dropping to one thread. Telling them apart is what
+ * stops a missing file from permanently disabling threads for the session.
+ */
+export class KokoroSetupError extends Error {}
 
 export class KokoroEngine implements SpeechEngine {
 	readonly id: EngineId = "kokoro";
@@ -448,6 +510,13 @@ export class KokoroEngine implements SpeechEngine {
 	 * comment in `dispose()`.
 	 */
 	private threadedLoadFailed = false;
+	/** Precision of the weights the current worker was started with. */
+	private loadedDtype: KokoroDtype | null = null;
+	/**
+	 * A second engine on the q8 weights, created the first time q4f16 returns
+	 * NaN for a passage and used for that passage only.
+	 */
+	private fallback: KokoroEngine | null = null;
 	/**
 	 * The last thread count anybody explicitly ASKED for.
 	 *
@@ -531,6 +600,11 @@ export class KokoroEngine implements SpeechEngine {
 			merged.weights !== this.options.weights;
 		this.options = merged;
 		if (changed && (this.worker || this.ready)) void this.dispose();
+	}
+
+	/** The numeric format of the weights now loaded, or null when nothing is. */
+	loadedWeights(): KokoroDtype | null {
+		return this.loadedDtype;
 	}
 
 	runtimeInfo(): string | null {
@@ -642,7 +716,9 @@ export class KokoroEngine implements SpeechEngine {
 		weights: { path: string; dtype: KokoroDtype };
 		why: string;
 	}> {
-		const wantGpu = this.options.device === "webgpu" || this.options.device === "auto";
+		const wantGpu =
+			(this.options.device === "webgpu" || this.options.device === "auto") &&
+			this.options.gpuEligible !== false;
 		if (wantGpu) {
 			const gpu = await probeGpu();
 			if (gpu.usable) {
@@ -669,7 +745,7 @@ export class KokoroEngine implements SpeechEngine {
 				return { device: "wasm", weights: candidate, why: `CPU with ${candidate.path}` };
 			}
 		}
-		throw new Error("Kokoro weights are missing. Download them from settings.");
+		throw new KokoroSetupError("Kokoro weights are missing. Download them from settings.");
 	}
 
 	async listVoices(): Promise<VoiceInfo[]> {
@@ -740,8 +816,22 @@ export class KokoroEngine implements SpeechEngine {
 	private async bundledRuntimeBlob(name: string, type: string): Promise<string> {
 		const cached = this.blobs.get(name);
 		if (cached) return cached;
-		const bytes = await readBundledRuntime(name);
-		const url = URL.createObjectURL(new Blob([bytes], { type }));
+		let bytes: ArrayBuffer | Uint8Array = await readBundledRuntime(name);
+		if (name === RUNTIME_FILES[2]) {
+			// onnxruntime spawns its thread-pool workers from this same module
+			// URL, and those nested workers never run browser-environment.ts. On
+			// Electron they still see Node's `process`, take the Node branch and
+			// `import("worker_threads")`, which a browser worker cannot resolve.
+			// Hiding the binding first, as the Kokoro worker does for itself,
+			// keeps every worker spawned from the glue on the browser path.
+			const prelude = new TextEncoder().encode(GLUE_PRELUDE);
+			const body = new Uint8Array(bytes);
+			const joined = new Uint8Array(prelude.length + body.length);
+			joined.set(prelude, 0);
+			joined.set(body, prelude.length);
+			bytes = joined;
+		}
+		const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
 		this.blobs.set(name, url);
 		return url;
 	}
@@ -798,6 +888,10 @@ export class KokoroEngine implements SpeechEngine {
 		try {
 			await this.loadOnce();
 		} catch (err) {
+			// A missing file is not a thread failure: retrying single-threaded
+			// cannot cure it, and flagging it would switch threads off for the
+			// rest of the session.
+			if (err instanceof KokoroSetupError) throw err;
 			if (this.options.threads <= 1) throw err;
 			this.infoCb?.(
 				`threaded load failed (${err instanceof Error ? err.message : String(err)}); retrying single-threaded`,
@@ -829,18 +923,19 @@ export class KokoroEngine implements SpeechEngine {
 
 			const weights = await this.store.readOptional(plan.weights.path);
 			if (!weights) {
-				throw new Error("Kokoro weights are missing. Download them from settings.");
+				throw new KokoroSetupError("Kokoro weights are missing. Download them from settings.");
 			}
 			files.push({ path: plan.weights.path, bytes: weights });
 			const dtype = plan.weights.dtype;
+			this.loadedDtype = dtype;
 
 			const voicePath = voiceFilePath(this.voice.id);
 			if (voicePath === null) {
-				throw new Error(`${this.voice.id} is not a Kokoro voice. Pick one in settings.`);
+				throw new KokoroSetupError(`${this.voice.id} is not a Kokoro voice. Pick one in settings.`);
 			}
 			const voiceBytes = await this.store.readOptional(voicePath);
 			if (!voiceBytes) {
-				throw new Error(
+				throw new KokoroSetupError(
 					`Voice file ${voicePath} is not downloaded. Pick a voice in settings to fetch it.`,
 				);
 			}
@@ -974,6 +1069,7 @@ export class KokoroEngine implements SpeechEngine {
 		}
 		this.pending.clear();
 		this.worker?.postMessage({ type: "cancel" } satisfies ToWorker);
+		this.fallback?.cancelPending();
 	}
 
 	/**
@@ -1080,6 +1176,30 @@ export class KokoroEngine implements SpeechEngine {
 		this.recycleSpent = false;
 
 		const sampleRate = pcm.sampleRate || SAMPLE_RATE;
+		let peak = 0;
+		let bad = 0;
+		for (const v of pcm.pcm) {
+			if (Number.isFinite(v)) peak = Math.max(peak, Math.abs(v));
+			else bad += 1;
+		}
+		this.infoCb?.(
+			`synthesized ${pcm.pcm.length} samples at ${sampleRate} Hz (peak ${peak.toFixed(3)}, ${bad} non-finite)`,
+		);
+		if (bad > 0) {
+			const alt = await this.fallbackEngine();
+			if (alt) {
+				this.infoCb?.(`invalid audio from ${this.loadedDtype}; retrying this passage with q8`);
+				alt.voice = this.voice;
+				return await alt.synthesize(req, signal);
+			}
+			// NaN samples convert to digital silence, so without this the
+			// sentence "plays" as several seconds of nothing. Seen with the
+			// q4f16 weights on the WASM CPU path, whose fp16 ops can overflow.
+			throw new Error(
+				`Kokoro produced invalid audio (${bad} of ${pcm.pcm.length} samples were not numbers). ` +
+					`The current weights fail on this passage on this CPU; try the "CPU Small (q8)" weights in settings.`,
+			);
+		}
 		const wav = pcmToWav(float32ToPcm16(pcm.pcm), sampleRate);
 		const info = durationOf(wav, sampleRate);
 		return {
@@ -1091,7 +1211,32 @@ export class KokoroEngine implements SpeechEngine {
 		};
 	}
 
+	/**
+	 * The q8 engine to retry a NaN passage on, or null when there is none.
+	 *
+	 * q4f16 on the WASM path can divide 0 by 0 inside the vocoder's phase
+	 * step and turn a whole passage to NaN, depending on the text. The q8
+	 * build does not use that path. It is slower, so it serves only the
+	 * passages that fail, never the whole read.
+	 */
+	private async fallbackEngine(): Promise<KokoroEngine | null> {
+		if (this.loadedDtype === "q8" || this.loadedDtype === null) return null;
+		if (this.fallback) return this.fallback;
+		if (!(await this.store.exists(KOKORO_WEIGHTS.small.path))) return null;
+		const alt = new KokoroEngine(
+			this.store,
+			{ device: "wasm", threads: this.options.threads, weights: "small" },
+			this.simdSupported,
+		);
+		alt.onInfo((m) => this.infoCb?.(`q8 fallback: ${m}`));
+		this.fallback = alt;
+		return alt;
+	}
+
 	async dispose(): Promise<void> {
+		const alt = this.fallback;
+		this.fallback = null;
+		if (alt) await alt.dispose();
 		for (const entry of this.pending.values()) {
 			entry.reject(new Error("Kokoro engine disposed"));
 		}
@@ -1106,6 +1251,7 @@ export class KokoroEngine implements SpeechEngine {
 		this.ready = null;
 		this.prepared = false;
 		this.runtime = null;
+		this.loadedDtype = null;
 		// A disposed engine has no suspect session left to recycle, and the
 		// next load is an ordinary cold one, so both NRL-101 flags reset here.
 		// This is deliberately the thing that refills the recycle budget after
@@ -1127,6 +1273,13 @@ export class KokoroEngine implements SpeechEngine {
 		this.blobs.clear();
 	}
 }
+
+/**
+ * Prepended to the onnxruntime glue module so its nested thread-pool workers
+ * do not mistake Electron's `process` for a Node host.
+ */
+export const GLUE_PRELUDE =
+	'if("process" in self){Reflect.defineProperty(self,"process",{value:undefined,configurable:true,writable:true});}\n';
 
 /** Kokoro emits float samples; browsers want 16-bit PCM. */
 function float32ToPcm16(input: Float32Array): ArrayBuffer {

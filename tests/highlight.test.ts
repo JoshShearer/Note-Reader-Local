@@ -15,7 +15,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { EditorState } from "@codemirror/state";
+import { ChangeSet, EditorState } from "@codemirror/state";
 import type { Transaction } from "@codemirror/state";
 import {
 	sentenceHighlightField,
@@ -37,6 +37,7 @@ import {
 	isScrollSuppressed,
 } from "../src/ui/highlight.ts";
 import type { HighlightLayers, HighlightToggles } from "../src/ui/highlight.ts";
+import { EditTracker } from "../src/ui/editTracker.ts";
 import {
 	SENTENCE_HIGHLIGHT_VAR,
 	WORD_HIGHLIGHT_VAR,
@@ -415,7 +416,7 @@ console.log("12. Each layer's CSS var matches the name highlightColour.ts writes
 	// silently produce no colour at all, and no other test would move.
 	check(`styles.css reads ${SENTENCE_HIGHLIGHT_VAR}`, CSS.includes(`var(${SENTENCE_HIGHLIGHT_VAR},`));
 	check(`styles.css reads ${WORD_HIGHLIGHT_VAR}`, CSS.includes(`var(${WORD_HIGHLIGHT_VAR},`));
-	check("both fall back to the theme's own highlight", (CSS.match(/var\(--text-highlight-bg\)/g) ?? []).length >= 2);
+	check("both fall back to the theme's own highlight", (CSS.match(/var\(--text-highlight-bg[,)]/g) ?? []).length >= 2);
 }
 
 console.log("13. applySentenceHighlightColour writes and clears its own property");
@@ -1330,6 +1331,56 @@ console.log("22. NRL-129: styles.css reserves the control bar's band on mobile")
 	 * likewise unchanged and still green - that is 22l. Noted here so a reader
 	 * does not conclude those properties went unchecked.
 	 */
+}
+
+console.log("EditTracker: offsets follow the note through edits");
+{
+	// "The cat sat. The dog ran." - the dog sentence is 14..26 (exclusive end).
+	const doc = 26;
+	const ins = (at: number, text: string, len: number) => ChangeSet.of({ from: at, insert: text }, len);
+	const del = (from: number, to: number, len: number) => ChangeSet.of({ from, to }, len);
+	const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+	const before = new EditTracker();
+	before.record(ins(0, "Hello. ", doc));
+	check("text typed before a range shifts it", same(before.mapRange(14, 26, 0), { from: 21, to: 33 }), JSON.stringify(before.mapRange(14, 26, 0)));
+
+	const inside = new EditTracker();
+	inside.record(ins(18, "big ", doc));
+	check("text typed inside a range grows it", same(inside.mapRange(14, 26, 0), { from: 14, to: 30 }), JSON.stringify(inside.mapRange(14, 26, 0)));
+
+	const atStart = new EditTracker();
+	atStart.record(ins(14, "Also: ", doc));
+	check("text typed exactly at the start stays outside the range", same(atStart.mapRange(14, 26, 0), { from: 20, to: 32 }), JSON.stringify(atStart.mapRange(14, 26, 0)));
+
+	const atEnd = new EditTracker();
+	atEnd.record(ins(26, " More.", doc));
+	check("text typed exactly at the end stays outside the range", same(atEnd.mapRange(14, 26, 0), { from: 14, to: 26 }), JSON.stringify(atEnd.mapRange(14, 26, 0)));
+
+	const gone = new EditTracker();
+	gone.record(del(10, doc, doc));
+	check("deleting the whole range maps it to null", gone.mapRange(14, 26, 0) === null, JSON.stringify(gone.mapRange(14, 26, 0)));
+
+	const partly = new EditTracker();
+	partly.record(del(14, 18, doc));
+	check("deleting part of a range shrinks it", same(partly.mapRange(14, 26, 0), { from: 14, to: 22 }), JSON.stringify(partly.mapRange(14, 26, 0)));
+
+	// Two edits in a row compose; a range read after the first only sees the second.
+	const two = new EditTracker();
+	two.record(ins(0, "Hi. ", doc));
+	two.record(ins(0, "Oh. ", doc + 4));
+	check("two edits compose", same(two.mapRange(14, 26, 0), { from: 22, to: 34 }), JSON.stringify(two.mapRange(14, 26, 0)));
+	check("a range read at revision 1 only sees the later edit", same(two.mapRange(18, 30, 1), { from: 22, to: 34 }), JSON.stringify(two.mapRange(18, 30, 1)));
+	check("a range read at the current revision is unchanged", same(two.mapRange(5, 9, two.revision), { from: 5, to: 9 }));
+	check("mapping stops at the requested revision", two.map(14, 0, 1, 1) === 18, String(two.map(14, 0, 1, 1)));
+	check("the revision counts edits", two.revision === 2, String(two.revision));
+
+	// A change that does not line up (a missed edit) turns mapping off rather than guessing.
+	const broken = new EditTracker();
+	broken.record(ins(0, "A", doc));
+	broken.record(ins(0, "B", doc));
+	const kept = broken.map(14, 0, 1);
+	check("an edit that does not line up disables mapping", broken.broken && kept === 14, `${broken.broken} ${kept}`);
 }
 
 if (failures > 0) {

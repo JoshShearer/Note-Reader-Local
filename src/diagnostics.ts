@@ -12,6 +12,9 @@ export function trace(app: App, manifestDir: string, step: string, detail?: unkn
 		? [detail.stack ?? detail.message,
 			(detail as Error & { workerStack?: string }).workerStack].filter(Boolean).join("\n")
 		: String(fallback);
+	// Mirrored to the developer console so a session can be followed live
+	// without opening the log file. Same metadata-only content.
+	console.debug(`[Local TTS Reader] ${step}`, detail ?? "");
 	const body = `[${new Date().toISOString()}] ${manifestDir}: ${step}\n${error}\n\n`;
 	// Serialize read-modify-write operations so simultaneous trace events do not
 	// overwrite each other. Keep the log bounded across long reading sessions.

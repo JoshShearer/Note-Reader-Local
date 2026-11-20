@@ -17,7 +17,7 @@
 import { extractChunks } from "../src/text/extract.ts";
 import { platformSegmenters } from "../src/text/segment.ts";
 import { allocateWordTimings, clipWordSpans, findWords } from "../src/audio/words.ts";
-import { applySelectionReadGate, clipChunksToSelection, type SelectionReadPort } from "../src/audio/clip.ts";
+import { applySelectionReadGate, clipChunksToSelection, cursorStartOffset, type SelectionReadPort } from "../src/audio/clip.ts";
 import type { SpeechChunk } from "../src/audio/types.ts";
 
 let failures = 0;
@@ -58,7 +58,7 @@ console.log("readSelection chunk clipping");
 	const clipped = clipChunksToSelection(chunks, from, to);
 
 	const expectedText = note.substring(from, to);
-	const clippedText = clipped.map((c) => c.text).join("");
+	const clippedText = clipped.map((c) => c.text).join(" ");
 
 	check("GUARD single chunk clipping: text matches selection", clippedText === expectedText, `got "${clippedText}" expected "${expectedText}"`);
 
@@ -114,7 +114,7 @@ console.log("readSelection chunk clipping");
 	const to = note.length;
 	const clipped = clipChunksToSelection(chunks, from, to);
 
-	const clippedText = clipped.map((c) => c.text).join("");
+	const clippedText = clipped.map((c) => c.text).join(" ");
 	check("GUARD exact boundaries: text equals note", clippedText === note, `got "${clippedText}"`);
 	check(
 		"GUARD exact boundaries: no clipping occurred",
@@ -148,7 +148,7 @@ console.log("readSelection chunk clipping");
 	const clipped = clipChunksToSelection(chunks, from, to);
 
 	const expectedText = note.substring(from, to);
-	const clippedText = clipped.map((c) => c.text).join("");
+	const clippedText = clipped.map((c) => c.text).join(" ");
 
 	check("GUARD multiple boundaries: text matches selection", clippedText === expectedText, `got "${clippedText}" expected "${expectedText}"`);
 
@@ -550,6 +550,22 @@ function fakePort(): RecordingPort {
 		JSON.stringify(port.calls),
 	);
 	check("NRL-92 non-empty selection: showEmptyNotice is NEVER called", !port.calls.includes("showEmptyNotice"));
+}
+
+console.log("a cursor at the end of a line plays that line's last sentence");
+{
+	const note = "First one here. Second one here.\nThird one here.";
+	const cs = extractChunks(note, {} as never, platformSegmenters, "n.md");
+	const startOf = (position: number): number => {
+		const at = cursorStartOffset(cs, note, position);
+		return cs.findIndex((c) => c.sourceEnd > at);
+	};
+	const endOfLine1 = note.indexOf("\n");
+	check("at the end of line 1 it plays that line's last sentence", startOf(endOfLine1) === 1, String(startOf(endOfLine1)));
+	check("at the start of line 2 it plays line 2", startOf(endOfLine1 + 1) === 2, String(startOf(endOfLine1 + 1)));
+	check("in the middle of a sentence it plays that sentence", startOf(4) === 0, String(startOf(4)));
+	check("between sentences on one line it plays the next", startOf(note.indexOf("Second")) === 1, String(startOf(note.indexOf("Second"))));
+	check("at the end of the note it plays the last sentence", startOf(note.length) === 2, String(startOf(note.length)));
 }
 
 console.log("");
