@@ -330,6 +330,18 @@ console.log("flipping a content toggle preserves keys nobody recognises (NRL-21)
 	}
 }
 
+console.log("skipPatterns: validated, unknown keys kept (GitHub #271)");
+{
+	const read = (v: unknown) => normaliseSettings({ skipPatterns: v }).skipPatterns as unknown as Json[];
+	check("absent -> []", JSON.stringify(normaliseSettings({}).skipPatterns) === "[]");
+	check("not an array -> []", JSON.stringify(read("x")) === "[]");
+	check("junk entries dropped", JSON.stringify(read([null, 1, "a", {}, { pattern: 3 }, { pattern: "a", enabled: false }])) === '[{"pattern":"a","enabled":false}]', JSON.stringify(read([null, 1, "a", {}, { pattern: 3 }, { pattern: "a", enabled: false }])));
+	check("missing enabled -> true", read([{ pattern: "a" }])[0]?.enabled === true);
+	check("an invalid pattern is kept as typed", read([{ pattern: "(", enabled: true }])[0]?.pattern === "(");
+	check("unknown entry key survives", read([{ pattern: "a", enabled: true, future: 1 }])[0]?.future === 1);
+	check("defaults' array is never handed out", normaliseSettings({}).skipPatterns !== DEFAULT_SETTINGS.skipPatterns);
+}
+
 console.log("engine: EngineSelection widens the type, defaults to auto (NRL-24, docs/adr/0010)");
 {
 	check("DEFAULT_SETTINGS.engine is auto", DEFAULT_SETTINGS.engine === "auto", DEFAULT_SETTINGS.engine);

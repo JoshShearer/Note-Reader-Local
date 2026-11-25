@@ -1937,6 +1937,7 @@ console.log("word timings cover the sentence");
 		skipFrontmatter: true,
 		speakImageAlt: true,
 		speakEmbeds: false,
+		skipPatterns: [],
 		locale: "en",
 	});
 	const chunk = chunks[0]!;
@@ -1995,6 +1996,7 @@ console.log("NRL-47 CJK word timings");
 		skipFrontmatter: true,
 		speakImageAlt: true,
 		speakEmbeds: false,
+		skipPatterns: [],
 		locale: "en",
 	};
 

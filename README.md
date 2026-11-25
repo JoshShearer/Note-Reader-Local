@@ -216,7 +216,7 @@ default engine this group is absent from the tab entirely.
 
 ### Content
 
-Nine toggles, one per exclusion. The three "Speak" rows read positively: on means the text is
+Nine toggles, one per built-in exclusion. The three "Speak" rows read positively: on means the text is
 spoken.
 
 - **Frontmatter** - Skip the note's YAML properties block
@@ -229,6 +229,18 @@ spoken.
 - **Tags** - Skip `#tags`
 - **Tables** - Skip table rows
 - **Headings** - Skip headings instead of reading them
+
+Below them, **Skip patterns** takes any number of regular expressions, each with its own switch.
+Text in the note's markdown that matches an enabled pattern is not spoken, on any engine; the note
+is not changed. `^` and `$` match at line ends and matching is case-sensitive. Examples:
+
+- `\[\d{2}:\d{2}(?::\d{2})?\]` - timestamps such as `[01:23:45]`
+- `\{\{.*?\}\}` - annotations such as `{{internal}}`
+- `^Source:.*$` - a whole `Source:` line
+
+An invalid pattern is flagged in its row and ignored. Patterns run on Obsidian's main thread, so
+one that backtracks heavily can freeze Obsidian on a long note. Removing only one end of an inline
+formula, which is read as the word "equation", can clip that word.
 
 ### Highlighting
 

@@ -27,6 +27,7 @@ import {
 	removeModelBuild,
 	shouldClearPinnedKokoro,
 } from "./modelStore";
+import { compileSkipPattern } from "../text/skipPatterns";
 import { isAcceptableColourInput } from "./highlightColour";
 import { controlAffordances, engineLimitations } from "./affordances";
 
@@ -1179,6 +1180,84 @@ export class LocalTtsSettingTab extends PluginSettingTab {
 					}),
 				);
 		}
+
+		this.renderSkipPatterns(containerEl);
+	}
+
+	/**
+	 * The user's own skip patterns (docs/adr/0041).
+	 *
+	 * Only the list is redrawn on add and remove, never the whole tab, so the
+	 * scroll position and every other row's focus survive. An invalid pattern is
+	 * saved as typed and flagged in its own row; extraction ignores it.
+	 */
+	private renderSkipPatterns(containerEl: HTMLElement): void {
+		const settings = this.plugin.settings;
+		const save = () => this.plugin.saveSettings();
+
+		const header = new Setting(containerEl)
+			.setName("Skip patterns")
+			.setDesc(
+				"Regular expressions for text to leave out, matched against the note's markdown. ^ and $ match at line ends. The note is not changed. A very complex pattern can freeze Obsidian on a long note.",
+			);
+		const listEl = containerEl.createDiv();
+
+		const renderList = (): void => {
+			listEl.empty();
+			settings.skipPatterns.forEach((entry, i) => {
+				const row = new Setting(listEl).setName(`Pattern ${i + 1}`);
+				const errorEl = row.descEl.createDiv({ cls: "mod-warning" });
+				const validate = (): void => {
+					const compiled = compileSkipPattern(entry.pattern);
+					if ("error" in compiled) {
+						errorEl.setText(`${compiled.error}. This pattern is ignored.`);
+						errorEl.show();
+					} else {
+						errorEl.hide();
+					}
+				};
+				validate();
+				row.addText((text) =>
+					text
+						.setPlaceholder("\\{\\{.*?\\}\\}")
+						.setValue(entry.pattern)
+						.onChange(async (value) => {
+							// Not trimmed: a leading or trailing space can be part of it.
+							entry.pattern = value;
+							validate();
+							await save();
+						}),
+				);
+				row.addToggle((toggle) =>
+					toggle
+						.setTooltip("Use this pattern")
+						.setValue(entry.enabled)
+						.onChange(async (value) => {
+							entry.enabled = value;
+							await save();
+						}),
+				);
+				row.addExtraButton((button) =>
+					button
+						.setIcon("trash-2")
+						.setTooltip("Remove this pattern")
+						.onClick(async () => {
+							settings.skipPatterns = settings.skipPatterns.filter((other) => other !== entry);
+							renderList();
+							await save();
+						}),
+				);
+			});
+		};
+		renderList();
+
+		header.addButton((button) =>
+			button.setButtonText("Add pattern").onClick(async () => {
+				settings.skipPatterns = [...settings.skipPatterns, { pattern: "", enabled: true }];
+				renderList();
+				await save();
+			}),
+		);
 	}
 }
 
