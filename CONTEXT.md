@@ -253,8 +253,9 @@ dead-toggle defect has landed twice in two different disguises: a stored key tha
 extraction never read at all (`speakImageAlt`, `speakEmbeds` and `skipFrontmatter` until
 NRL-21) and one row quietly writing two keys (the old shared "Code" switch). An optional
 field with a default is how the first kind hides; a required one makes the compiler name
-every call site. Adding a tenth exclusion means a key, a field and a row, not a clever
-shared control.
+every call site. Adding an exclusion means a key, a field and a row, not a clever
+shared control. The tenth, `skipPatterns`, is a list rather than a switch, and reaches
+extraction as source ranges only (`src/text/skipPatterns.ts`, ADR 0041).
 
 **One player, many engines.** `Player` holds the queue, the index and the state. It is
 the only thing that decides what is spoken next. Engines do not know about each other,

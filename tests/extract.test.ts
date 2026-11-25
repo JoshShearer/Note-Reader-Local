@@ -8,6 +8,7 @@ import {
 	sentenceBoundaries,
 	uax29GraphemeBoundaries,
 } from "../src/text/segment.ts";
+import { compileSkipPattern } from "../src/text/skipPatterns.ts";
 import { findWords } from "../src/audio/words.ts";
 import type { SpeechChunk } from "../src/audio/types.ts";
 import fs from "node:fs";
@@ -30,6 +31,7 @@ const OPTS = {
 	skipFrontmatter: true,
 	speakImageAlt: true,
 	speakEmbeds: false,
+	skipPatterns: [],
 	locale: "en",
 };
 
@@ -9567,6 +9569,63 @@ console.log("NRL-205: a link or image whose (dest \"title\") spans lines of one 
 			}
 		}
 	}
+}
+
+console.log("user skip patterns (GitHub #271, ADR 0041)");
+{
+	type Row = { name: string; src: string; patterns: string[]; want: string; opts?: Partial<typeof OPTS> };
+	const on = (patterns: string[]) => patterns.map((pattern) => ({ pattern, enabled: true }));
+	const rows: Row[] = [
+		{ name: "timestamp", src: "[01:23:45] This is the text to read.", patterns: ["\\[\\d{2}:\\d{2}(?::\\d{2})?\\]"], want: "This is the text to read." },
+		{ name: "annotation", src: "This is {{internal annotation}} important text.", patterns: ["\\{\\{.*?\\}\\}"], want: "This is important text." },
+		{ name: "lenient braces", src: "This is {{internal annotation}} important text.", patterns: ["{{.*?}}"], want: "This is important text." },
+		{ name: "whole line", src: "Before text here.\n\nSource: https://example.com\n\nAfter text here.", patterns: ["^Source:.*$"], want: "Before text here. | After text here.", opts: { speakUrls: true } },
+		{ name: "soft-wrapped line", src: "Before\nSource: x\nafter.", patterns: ["^Source:.*$"], want: "Before after." },
+		{ name: "CRLF line", src: "Before\r\nSource: x\r\nafter.", patterns: ["^Source:.*$"], want: "Before after." },
+		{ name: "two patterns", src: "One [a] two {b} three.", patterns: ["\\[a\\] ", "\\{b\\} "], want: "One two three." },
+		{ name: "overlapping patterns", src: "One abcdef two.", patterns: ["abcd", "cdef"], want: "One two." },
+		{ name: "invalid row is ignored, its neighbour works", src: "One {b} two.", patterns: ["(", "\\{b\\}"], want: "One two." },
+		{ name: "empty pattern", src: "One two.", patterns: [""], want: "One two." },
+		{ name: "zero-width match", src: "One two.", patterns: ["x*"], want: "One two." },
+		{ name: "everything", src: "One two.", patterns: [".*"], want: "" },
+		{ name: "punctuation alone is not an utterance", src: "{{note}}.\n\nText here.", patterns: ["{{.*?}}"], want: "Text here." },
+		{ name: "heading", src: "# Title {x} end", patterns: ["\\{x\\} "], want: "Title end" },
+		{ name: "list", src: "- item {x} end", patterns: ["\\{x\\} "], want: "item end" },
+		{ name: "quote", src: "> quote {x} end", patterns: ["\\{x\\} "], want: "quote end" },
+		{ name: "callout title", src: "> [!note] Title {x} end", patterns: ["\\{x\\} "], want: "Title end" },
+		{ name: "link label", src: "See [a {x} label](https://e.com) now.", patterns: ["\\{x\\} "], want: "See a label now." },
+		{ name: "frontmatter", src: "---\ntitle: A {x} b\n---\nText.", patterns: ["\\{x\\} "], want: "title: A b | Text.", opts: { skipFrontmatter: false } },
+		{ name: "code", src: "```\nkeep {x} this\n```", patterns: ["\\{x\\} "], want: "keep this", opts: { skipCodeBlocks: false } },
+		{ name: "display math", src: "Before.\n\n$$\nx\n$$\n\nAfter.", patterns: ["^\\$\\$[\\s\\S]*?\\$\\$$"], want: "Before. | After." },
+		{ name: "emoji is not split", src: "A \u{1F600} and \u{1F601} b.", patterns: ["\u{1F600}"], want: "A and \u{1F601} b." },
+		// Hiding a delimiter must not un-hide what it delimits: the pattern
+		// removes speech and changes no parse.
+		{ name: "a matched comment opener still hides its body", src: "A <!-- hidden --> b.", patterns: ["<!--"], want: "A b." },
+		{ name: "a matched %% still hides its body", src: "A %%hidden%% b.", patterns: ["%%"], want: "A b." },
+		{ name: "a footnote kept inside %% is still skippable", src: "Before.\n\n%%\n^[hello there]\n%%\n", patterns: ["\\^\\[.*?\\]"], want: "Before." },
+	];
+	for (const { name, src, patterns, want, opts } of rows) {
+		const chunks = extractChunks(src, { ...OPTS, ...opts, skipPatterns: on(patterns) });
+		const got = chunks.map((c) => c.text).join(" | ");
+		check(`skip pattern: ${name}`, got === want, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+		for (const c of chunks) {
+			const paired = c.text.length === c.sourceIndex.length;
+			const real = [...c.sourceIndex.keys()].every((k) => /\s/.test(c.text[k]!) || c.text[k] === src[c.sourceIndex[k]!]);
+			check(`skip pattern: ${name} lockstep`, paired && real, JSON.stringify(c.text));
+		}
+	}
+
+	const src = "This is {{internal annotation}} important text.";
+	const off = extractChunks(src, { ...OPTS, skipPatterns: [{ pattern: "{{.*?}}", enabled: false }] });
+	check("skip pattern: a disabled row changes nothing", JSON.stringify(off) === JSON.stringify(extractChunks(src, OPTS)));
+
+	check("compile: valid", "regex" in compileSkipPattern("a+"));
+	check("compile: invalid is reported", "error" in compileSkipPattern("("));
+	const emoji = compileSkipPattern("^.$");
+	check("compile: . is a whole emoji", "regex" in emoji && emoji.regex.test("\u{1F600}"));
+	// Lenient grammar, matching the trailing half of a pair: both halves go.
+	const half = extractChunks("A \u{1F600} b.", { ...OPTS, skipPatterns: on(["{{|\\uDE00"]) }).map((c) => c.text).join("");
+	check("skip pattern: no lone surrogate survives", !/[\uD800-\uDFFF]/.test(half), JSON.stringify(half));
 }
 
 console.log("");

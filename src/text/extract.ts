@@ -10,6 +10,7 @@ import {
 	sentenceBoundaries,
 	wordBoundaries,
 } from "./segment";
+import { type SkipPattern, skipPatternRanges } from "./skipPatterns";
 
 /**
  * Markdown to speakable text, preserving a mapping back to source offsets.
@@ -6643,6 +6644,8 @@ export interface ExtractOptions {
 	speakImageAlt: boolean;
 	/** An Obsidian embed, spoken as a label for its local reference. */
 	speakEmbeds: boolean;
+	/** User-defined regular expressions whose matches are not spoken (docs/adr/0041). */
+	skipPatterns: readonly SkipPattern[];
 	/**
 	 * The language Obsidian's UI is in, from appLocale(). Not a setting and not
 	 * a detected language: nothing here inspects the note to guess what it is
@@ -6887,6 +6890,8 @@ interface PassShared {
 	hiddenSpans?: Array<[number, number]>;
 	/** `hiddenSpans` less the `%%` block comments (NRL-212). */
 	strictSpans?: Array<[number, number]>;
+	/** What the user's skip patterns match, merged (docs/adr/0041). */
+	userSpans?: Array<[number, number]>;
 	/** The two walker runs, without and with NRL-166 fix round 1's refinements. */
 	leadsPlain?: RendererLeads;
 	leadsRefined?: RendererLeads;
@@ -7031,20 +7036,27 @@ function extractChunksPass(source: string, opts: ExtractOptions, src: SegmenterS
 	const shared = qc.shared;
 	if (shared.hiddenSpans === undefined) {
 		shared.rendererHidden = rendererHiddenText(source, lines.length);
-		shared.hiddenSpans = mergeRanges(shared.rendererHidden?.ranges ?? fallbackHtmlHidden(source));
+		shared.userSpans = mergeRanges(skipPatternRanges(source, opts.skipPatterns));
+		shared.hiddenSpans = mergeRanges([...(shared.rendererHidden?.ranges ?? fallbackHtmlHidden(source)), ...shared.userSpans]);
 		// Everything that hides except a `%%` block comment (NRL-212); merged spans
 		// cannot say what made them, so obsidianBlocks tracks it unmerged.
-		shared.strictSpans = mergeRanges(shared.rendererHidden?.strictRanges ?? shared.hiddenSpans);
+		// The user's spans are in it: a kept footnote they match is still dropped.
+		shared.strictSpans = mergeRanges([...(shared.rendererHidden?.strictRanges ?? shared.hiddenSpans), ...shared.userSpans]);
 	}
 	const rendererHidden = shared.rendererHidden ?? null;
 	// `let`: NRL-218 adds the spans of defined multi-line reference labels below.
 	let hiddenSpans = shared.hiddenSpans;
 	let strictSpans = shared.strictSpans ?? hiddenSpans;
+	const userSpans = shared.userSpans ?? [];
 	// Offsets of the footnote characters the `%%` block lines emit (NRL-212).
 	const keptFootnote = new Set<number>();
 	const speak = (text: string, index: number[], start: number, blockType: BlockType): SpeechChunk[] => {
 		const kept = hiddenSpans.length === 0 ? { text, index } : dropHiddenText(text, index, hiddenSpans, keptFootnote.size === 0 ? undefined : (o) => keptFootnote.has(o), strictSpans);
-		return splitSentences(kept.text, kept.index, start, segmentCtx, blockType);
+		const pieces = splitSentences(kept.text, kept.index, start, segmentCtx, blockType);
+		// `{{note}}.` leaves a bare `.`, which is not worth an utterance. Asked only
+		// of text a user pattern cut, so no other note's chunks change.
+		if (userSpans.length === 0 || !index.some((o) => inSpans(userSpans, o))) return pieces;
+		return pieces.filter((piece) => /[\p{L}\p{N}\p{S}]/u.test(piece.text));
 	};
 	// Whether the renderer opens a `%%` block on each line, where that answer may
 	// overrule ours: our block opener on a line stands only where the renderer

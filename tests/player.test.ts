@@ -187,6 +187,7 @@ function chunksOf(src: string): SpeechChunk[] {
 		skipFrontmatter: true,
 		speakImageAlt: true,
 		speakEmbeds: false,
+		skipPatterns: [],
 		locale: "en",
 	});
 }
@@ -209,6 +210,7 @@ console.log("player exposes the file it is reading and the chunks it holds (NRL-
 			skipFrontmatter: true,
 			speakImageAlt: true,
 			speakEmbeds: false,
+			skipPatterns: [],
 			locale: "en",
 		},
 		platformSegmenters,
@@ -262,6 +264,7 @@ console.log("player exposes the file it is reading and the chunks it holds (NRL-
 			skipFrontmatter: true,
 			speakImageAlt: true,
 			speakEmbeds: false,
+			skipPatterns: [],
 			locale: "en",
 		},
 		platformSegmenters,
@@ -312,6 +315,7 @@ console.log("stop() is synchronous and leaves the queue readable (NRL-51)");
 			skipFrontmatter: true,
 			speakImageAlt: true,
 			speakEmbeds: false,
+			skipPatterns: [],
 			locale: "en",
 		},
 		platformSegmenters,

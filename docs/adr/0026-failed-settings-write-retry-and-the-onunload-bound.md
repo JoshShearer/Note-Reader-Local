@@ -145,3 +145,36 @@ teardown long enough for `dispose()` to reach it, or is already invalidated by t
 `onunload` runs. CDP was not attempted for this ticket. All evidence above is bare-Node,
 against the real `SaveQueue` class, with a fake clock the tests own
 (`tests/vaultPersistence.test.ts` T7-T10).
+
+## Measured loss window (NRL-231), 2026-11-25
+
+Linux desktop only: Obsidian 1.14.5 (Flatpak, Pop!_OS), plugin built from the GitHub #271 branch
+on 2b9ac63, a throwaway profile and vault, driven over CDP. macOS, Windows and Android are not
+measured, so NRL-231 stays open.
+
+Procedure: set `rate` to a value not on disk, call `saveSettings()`, then close the window with
+`getCurrentWindow().close()` (the normal quit path) and read `data.json` once the debugging port
+is gone. A delayed or rejected write is a `saveData` patched on the plugin instance.
+
+| Case | Change on disk after close |
+|---|---|
+| Unmodified `saveData`, closed immediately | 3 of 3 kept |
+| Write delayed 10, 25, 50 ms | 6 of 6 kept |
+| Write delayed 100 ms | 0 of 4 kept |
+| Write delayed 500 ms | 0 of 3 kept |
+| Write delayed 1000 ms | 0 of 1 kept |
+| Write delayed 2000 ms | 2 of 6 kept |
+| One rejection, closed 0 or 250 ms after the save (retry armed) | 0 of 6 kept |
+| One rejection, closed 700 ms after (500 ms retry has fired) | 3 of 3 kept |
+
+Read: with an unmodified write nothing was lost in this path, and a write slower than somewhere
+between 50 and 100 ms can be. The bound above is not reopened on this host. The first run's rates
+(500 ms, the rejections, three of the 2000 ms, three of the 100 ms and all three unmodified closes) did
+not exclude a value already on disk (about 1 in 100). The two kept 2000 ms writes are unexplained;
+one came from the corrected run.
+
+Reading position: closing 300, 1500 and 3000 ms into the first sentence left the in-memory
+position on disk in 6 of 6 closes, but that position did not move within the sentence, so this
+says nothing about losing progress across the throttle window.
+
+Not established: whether a real `saveData()` ever rejects or is ever that slow.

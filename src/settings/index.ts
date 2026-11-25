@@ -1,4 +1,5 @@
 import type { EngineSelection } from "../engines/selection";
+import type { SkipPattern } from "../text/skipPatterns";
 import { isStorableColour } from "../ui/highlightColour";
 
 export interface Settings {
@@ -39,7 +40,7 @@ export interface Settings {
 	 * default. See docs/adr/0001 for why the mix is kept rather than
 	 * normalised.
 	 *
-	 * All nine content keys are read by `extractChunks` and have their own
+	 * All ten content keys are read by `extractChunks` and have their own
 	 * toggle as of NRL-21 (docs/adr/0008). `offlinePreferred` is the one key
 	 * still reserved: stored and migrated, but not yet read by anything and so
 	 * deliberately without a toggle. A toggle appears when its behaviour does,
@@ -60,6 +61,12 @@ export interface Settings {
 	speakImageAlt: boolean;
 	/** Read an `![[embed]]` as a label for its local reference, not its target file. */
 	speakEmbeds: boolean;
+	/**
+	 * Regular expressions whose matches in the raw note are not spoken
+	 * (docs/adr/0041). An invalid one is stored as typed and ignored on a read,
+	 * so a half-typed pattern is neither lost nor fatal.
+	 */
+	skipPatterns: SkipPattern[];
 	/** Prefer voices that need no download. Reserved for voice metadata. */
 	offlinePreferred: boolean;
 
@@ -139,6 +146,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	skipFrontmatter: true,
 	speakImageAlt: true,
 	speakEmbeds: false,
+	skipPatterns: [],
 	offlinePreferred: false,
 	bufferAhead: 2,
 	// Empty means the default location, `local-tts/kokoro` inside the vault's
@@ -180,6 +188,17 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 
 function bool(value: unknown, fallback: boolean): boolean {
 	return typeof value === "boolean" ? value : fallback;
+}
+
+/**
+ * Always a fresh array, so no caller can end up editing the defaults' own.
+ * Entries are spread for the reason the whole object is (non-negotiable 10).
+ */
+function normaliseSkipPatterns(value: unknown): SkipPattern[] {
+	if (!Array.isArray(value)) return [];
+	return value
+		.filter((v): v is Record<string, unknown> & { pattern: string } => isRecord(v) && typeof v.pattern === "string")
+		.map((v) => ({ ...v, pattern: v.pattern, enabled: bool(v.enabled, true) }));
 }
 
 /**
@@ -260,6 +279,7 @@ export function normaliseSettings(raw: unknown): Settings {
 		skipFrontmatter: bool(data.skipFrontmatter, DEFAULT_SETTINGS.skipFrontmatter),
 		speakImageAlt: bool(data.speakImageAlt, DEFAULT_SETTINGS.speakImageAlt),
 		speakEmbeds: bool(data.speakEmbeds, DEFAULT_SETTINGS.speakEmbeds),
+		skipPatterns: normaliseSkipPatterns(data.skipPatterns),
 		offlinePreferred: bool(data.offlinePreferred, DEFAULT_SETTINGS.offlinePreferred),
 		bufferAhead: Math.round(
 			clampNumber(data.bufferAhead, 0, 8, DEFAULT_SETTINGS.bufferAhead),

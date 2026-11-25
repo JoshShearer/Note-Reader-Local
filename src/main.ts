@@ -13,7 +13,7 @@ import { EditorView } from "@codemirror/view";
 import { Player } from "./audio/player";
 import { describeUnavailable, type EngineAvailability, type SpeechChunk, type SpeechEngine, type VoiceInfo } from "./audio/types";
 import { playWithFallback, type FallbackCandidate } from "./audio/fallback";
-import { extractChunks } from "./text/extract";
+import { type ExtractOptions, extractChunks } from "./text/extract";
 import { platformSegmenters } from "./text/segment";
 import { resolveStoredVoice } from "./audio/voiceChoice";
 import { applySelectionReadGate, clipChunksToSelection, type SelectionReadPort } from "./audio/clip";
@@ -600,20 +600,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		const chunks = extractChunks(
 			current.source,
-			{
-				stripTags: this.settings.skipTags,
-				speakUrls: this.settings.speakUrls,
-				skipCodeBlocks: this.settings.skipCodeBlocks,
-				skipInlineCode: this.settings.skipInlineCode,
-				skipTables: this.settings.skipTables,
-				skipHeadings: this.settings.skipHeadings,
-				skipFrontmatter: this.settings.skipFrontmatter,
-				speakImageAlt: this.settings.speakImageAlt,
-				speakEmbeds: this.settings.speakEmbeds,
-				// Not a setting: the UI language, which is what the segmenters are
-				// built with. appLocale() never throws and falls back to "en".
-				locale: appLocale(),
-			},
+			this.extractOptions(),
 			platformSegmenters,
 			current.filePath,
 		);
@@ -810,6 +797,25 @@ export default class LocalTtsReaderPlugin extends Plugin {
 		}
 	}
 
+	/** One place, so the three read commands cannot extract with different options. */
+	private extractOptions(): ExtractOptions {
+		return {
+			stripTags: this.settings.skipTags,
+			speakUrls: this.settings.speakUrls,
+			skipCodeBlocks: this.settings.skipCodeBlocks,
+			skipInlineCode: this.settings.skipInlineCode,
+			skipTables: this.settings.skipTables,
+			skipHeadings: this.settings.skipHeadings,
+			skipFrontmatter: this.settings.skipFrontmatter,
+			speakImageAlt: this.settings.speakImageAlt,
+			speakEmbeds: this.settings.speakEmbeds,
+			skipPatterns: this.settings.skipPatterns,
+			// Not a setting: the UI language, which is what the segmenters are
+			// built with. appLocale() never throws and falls back to "en".
+			locale: appLocale(),
+		};
+	}
+
 	/**
 	 * Voices `selectVoiceIfNeeded` is allowed to substitute from.
 	 *
@@ -831,18 +837,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		const chunks = extractChunks(
 			current.source,
-			{
-				stripTags: this.settings.skipTags,
-				speakUrls: this.settings.speakUrls,
-				skipCodeBlocks: this.settings.skipCodeBlocks,
-				skipInlineCode: this.settings.skipInlineCode,
-				skipTables: this.settings.skipTables,
-				skipHeadings: this.settings.skipHeadings,
-				skipFrontmatter: this.settings.skipFrontmatter,
-				speakImageAlt: this.settings.speakImageAlt,
-				speakEmbeds: this.settings.speakEmbeds,
-				locale: appLocale(),
-			},
+			this.extractOptions(),
 			platformSegmenters,
 			current.filePath,
 		);
@@ -924,18 +919,7 @@ export default class LocalTtsReaderPlugin extends Plugin {
 
 		const chunks = extractChunks(
 			current.source,
-			{
-				stripTags: this.settings.skipTags,
-				speakUrls: this.settings.speakUrls,
-				skipCodeBlocks: this.settings.skipCodeBlocks,
-				skipInlineCode: this.settings.skipInlineCode,
-				skipTables: this.settings.skipTables,
-				skipHeadings: this.settings.skipHeadings,
-				skipFrontmatter: this.settings.skipFrontmatter,
-				speakImageAlt: this.settings.speakImageAlt,
-				speakEmbeds: this.settings.speakEmbeds,
-				locale: appLocale(),
-			},
+			this.extractOptions(),
 			platformSegmenters,
 			current.filePath,
 		);
