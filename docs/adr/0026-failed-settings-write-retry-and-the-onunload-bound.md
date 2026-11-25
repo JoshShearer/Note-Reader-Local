@@ -169,7 +169,7 @@ is gone. A delayed or rejected write is a `saveData` patched on the plugin insta
 
 Read: with an unmodified write nothing was lost in this path, and a write slower than somewhere
 between 50 and 100 ms can be. The bound above is not reopened on this host. The first run's rates
-(500 ms, the rejections, three of the 2000 ms, one unmodified and three of the 100 ms rows) did
+(500 ms, the rejections, three of the 2000 ms, three of the 100 ms and all three unmodified closes) did
 not exclude a value already on disk (about 1 in 100). The two kept 2000 ms writes are unexplained;
 one came from the corrected run.
 
